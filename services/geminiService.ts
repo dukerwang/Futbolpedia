@@ -1,17 +1,64 @@
-import { GoogleGenAI, Chat, Content, Type } from "@google/genai";
+
+import { GoogleGenAI, Chat, Content, Type, ThinkingLevel } from "@google/genai";
 import type { PlayerProfile, Attributes, ChatMessage, PlayerComparison } from '../types';
 import { MASTER_INSTRUCTION_SET } from '../constants';
 
+const supabaseUrl = "https://vnqpluwoxjukoxlnwawo.supabase.co";
+const supabaseKey = "sb_publishable_B8pIUFHdh6dc-JUzJMfVrg_Bc5x5Bi4";
+
+// Safe Initialization of Supabase from the global window object (loaded via script tag in index.html)
+export const supabase = (typeof window !== 'undefined' && (window as any).supabase)
+  ? (window as any).supabase.createClient(supabaseUrl, supabaseKey)
+  : null;
+
+export const isSupabaseReady = () => !!supabase;
+
+export const saveProfileToShare = async (profileData: any) => {
+  if (!supabase) throw new Error("Share service unavailable. Missing Supabase configuration.");
+  const { data, error } = await supabase
+    .from('profiles')
+    .insert([{ player_data: profileData }])
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Supabase Save Error:", error);
+    throw error;
+  }
+  return data.id;
+};
+
+export const getSharedProfile = async (id: string) => {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('player_data')
+      .eq('id', id)
+      .single();
+
+    if (error) {
+      console.error("Supabase Fetch Error:", error);
+      return null;
+    }
+    return data.player_data;
+  } catch (e) {
+    console.error("Error fetching shared profile:", e);
+    return null;
+  }
+};
+
+let currentThinkingLevel: string | null = null;
 let chat: Chat | null = null;
 let currentModel: string | null = null;
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
 const getCurrentSeasonInfo = () => {
     const now = new Date();
-    const year = now.getFullYear();
+    const year = 2026; // Static context for the Futbolpedia 2026 simulation
     const month = now.toLocaleString('default', { month: 'long' });
-    const seasonStartYear = now.getMonth() >= 6 ? year : year - 1; 
-    const currentSeason = `${seasonStartYear}-${(seasonStartYear + 1).toString().slice(-2)}`;
+    const seasonStartYear = 2025; 
+    const currentSeason = `2025-26`;
     return { year, month, seasonStartYear, currentSeason };
 };
 
@@ -20,21 +67,33 @@ export const resetChat = () => {
   currentModel = null;
 };
 
-function initializeChat(model: string, history?: Content[]) {
+// Optimized for Gemini 3 Flash / Pro
+function initializeChat(model: string, history?: Content[], level: "minimal" | "low" | "medium" | "high" = "high") {
+  const levelMap: Record<string, ThinkingLevel> = {
+    minimal: ThinkingLevel.MINIMAL,
+    low: ThinkingLevel.LOW,
+    medium: ThinkingLevel.MEDIUM,
+    high: ThinkingLevel.HIGH
+  };
+
   chat = ai.chats.create({
     model: model,
     config: {
         systemInstruction: MASTER_INSTRUCTION_SET,
         tools: [{googleSearch: {}}],
-        temperature: 0.3,
+        temperature: 1.0, 
+        thinkingConfig: {
+          thinkingLevel: levelMap[level] ,
+        },
     },
     history,
   });
   currentModel = model;
+  currentThinkingLevel = level;
 }
 
 const isPlayerProfile = (content: any): content is PlayerProfile => {
-    return typeof content === 'object' && content !== null && 'basicInfo' in content && 'ratings' in content;
+    return typeof content === 'object' && content !== null && !('players' in content) && 'basicInfo' in content && 'ratings' in content;
 };
 
 const isPlayerComparison = (content: any): content is PlayerComparison => {
@@ -158,7 +217,7 @@ const sanitizeComparisonData = (partialComparison: Partial<PlayerComparison> | n
     };
 };
 
-const sendChatMessage = async (message: string, history: ChatMessage[], model: string, imageData?: string): Promise<string | PlayerProfile | PlayerComparison> => {
+const sendChatMessage = async (message: string, history: ChatMessage[], model: string, imageData?: string, thinkingLevel: "minimal" | "low" | "medium" | "high" = "high"): Promise<string | PlayerProfile | PlayerComparison> => {
   const geminiHistory: Content[] = history
     .map((msg): Content | null => {
       const isUser = msg.sender === 'user';
@@ -192,9 +251,8 @@ const sendChatMessage = async (message: string, history: ChatMessage[], model: s
     })
     .filter((item): item is Content => item !== null);
 
-  if (!chat || currentModel !== model) {
-    console.log(`[System] Initializing chat with model: ${model}`);
-    initializeChat(model, geminiHistory);
+  if (!chat || currentModel !== model || currentThinkingLevel !== thinkingLevel) {
+    initializeChat(model, geminiHistory, thinkingLevel);
   }
 
   try {
@@ -248,110 +306,125 @@ const sendChatMessage = async (message: string, history: ChatMessage[], model: s
   }
 };
 
-export const sendMessageToAI = async (message: string, history: ChatMessage[], imageData?: string): Promise<string | PlayerProfile | PlayerComparison> => {
-    
+export const sendMessageToAI = async (message: string, history: ChatMessage[], imageData?: string, mode: 'default' | 'fast' = 'default'): Promise<string | PlayerProfile | PlayerComparison> => {
+    // 2026 Simulation Context
     const { year, month, currentSeason } = getCurrentSeasonInfo();
-    const previousSeason = `${year - 1}-${year}`; // e.g., 2024-2025
-    console.log(`[GLOBAL WORKFLOW] Decomposing query: "${message}"`);
-
-    // Default to Gemini 3 Flash for Profiles/Ratings as recommended
-    let selectedModel = 'gemini-3-flash-preview';
-
+    
     try {
-        // Only run query expansion if there's no image. 
-        // Image-based analysis usually benefits more from the direct prompt context.
-        let queries: string[] = [];
-        if (!imageData) {
-            const queryGenPrompt = `The user's message is: "${message}".
-Act as a "Tactical Research Assistant." You must generate a list of Google Search queries to gather the complete context.
+        let factualFoundation = "";
+        let selectedModel = 'gemini-3-flash-preview'; 
 
-**INTENT CLASSIFICATION:**
-Determine the best model tier for this request:
-- "Flash": For Player Profiles, Attribute Ratings, Comparison Tables, Rankings, or simple Stats.
-- "Pro": For "Deep Dive" tactical analysis, complex "Why" questions, hypothetical scenarios, or future projections.
+        // 1. INTENT GATES (The Fix: Define these BEFORE triggering search)
+        const isProfileRequest = /rate|profile|scout|evaluate|scouting|who is|analysis on|report|dossier/i.test(message);
+        const isComparison = /compare|vs|versus|better/i.test(message);
+        // We only trigger the heavy "Lead Scout" machinery if it looks like a scouting task
+        const isFormal = isProfileRequest || isComparison;
 
-**STRATEGY:**
-Do not use a single "kitchen sink" query. Break the request down into specific data retrieval tasks.
+        // FAST MODE BYPASS
+        if (mode === 'fast' && !imageData) {
+            const fastPrompt = `
+    <context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+    <instructions>
+    You are in FAST MODE. Skip deep multi-step research. 
+    1. Use the googleSearch tool efficiently if you need data you don't have.
+    2. Answer concisely but accurately.
+    3. Maintain the Futbolpedia identity (Objective, Scout-like).
+    </instructions>
+    <task>${message}</task>`;
+            // Use low thinking level for speed
+            return sendChatMessage(fastPrompt, history, 'gemini-3-flash-preview', undefined, 'low');
+        }
 
-**MANDATORY QUERY TYPES (Generate as needed):**
-1.  **Current Form (The "Now"):** "[Player] stats ${currentSeason} goals assists injury news"
-2.  **Historical Class (The "Anchor"):** "[Player] stats ${previousSeason} goals assists" (CRITICAL for rating accuracy).
-3.  **Team Context (The "Environment"):** "[Club] last 5 match results league table position ${month} ${year}" (To detect crises/form).
-4.  **Narrative (The "Story"):** "[Player] recent analysis pundit criticism transfer news ${month} ${year}"
-5.  **Roster Check (Tactical/Lineup Queries):** If the user asks about tactics or fit, search "[Club] transfers out 2024 2025" and "[Club] squad ${currentSeason}".
+        // DEFAULT MODE LOGIC
+        if (!imageData && mode === 'default') {
+            // ONLY RUN VECTORS IF IT IS A FORMAL REQUEST
+            if (isFormal) {
+                // "Omniscient Scout" Multi-Vector Search Logic
+                const queryGenPrompt = `
+Task: Generate comprehensive search queries for: "${message}".
+Context: Current Date is ${month} ${year}. Season: ${currentSeason}.
+MANDATORY SEARCH VECTORS (Generate 2 queries per vector):
 
-**CONSTRAINT:**
-If the user asks to **COMPARE** two players, you MUST generate the "Current Form" and "Historical Class" queries for **BOTH** players individually.
+VECTOR A (The Anchor & Class): Search for the player's 2024/2025 peak, major awards, and "best player" rankings.
+VECTOR B (The Hard Data): Search for ${currentSeason} stats, G/A per 90, clean sheets, and advanced metrics.
+VECTOR C (The Narrative & Eye Test): Search for recent pundit analysis, fan sentiment (e.g., "criticism", "praise", "flop", "revelation"), and specific match performance reviews from the current month.
+VECTOR D (The Context): Search for "injury history ${year}", "tactical fit [Club Name]", and manager quotes about role or fitness.
 
-**OUTPUT:**
-Return a JSON object with:
-- 'queries': Array of search strings.
-- 'category': String, either "Flash" or "Pro".`;
-            
-            // Using Gemini 3 Flash for Data Processing (RAG)
-            const queryGenResponse = await ai.models.generateContent({
-                model: "gemini-3-flash-preview", 
-                contents: queryGenPrompt,
-                config: {
-                    temperature: 0.0,
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: { 
-                            queries: { type: Type.ARRAY, items: { type: Type.STRING } },
-                            category: { type: Type.STRING, description: "Flash or Pro" }
-                        },
-                        required: ["queries", "category"]
+OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
+
+                const queryGenResponse = await ai.models.generateContent({
+                    model: "gemini-3-flash-preview", 
+                    contents: queryGenPrompt,
+                    config: {
+                        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+                        responseMimeType: "application/json",
                     }
-                }
-            });
-            
-            try {
-                const parsed = JSON.parse((queryGenResponse.text || '').trim());
-                if (parsed) {
-                    if (Array.isArray(parsed.queries)) {
-                        queries = parsed.queries;
-                    }
-                    if (parsed.category === 'Pro') {
-                        selectedModel = 'gemini-3-pro-preview';
-                    }
-                }
-            } catch (e) {
-                console.error("Failed to parse query generation response:", e);
+                });
+                
+                // Robust JSON Cleanup
+                const rawText = queryGenResponse.text || '{}';
+                const cleanJson = rawText.replace(/```json|```/g, '').trim();
+                const parsed = JSON.parse(cleanJson);
+                const queries = (parsed.queries || []);
+                
+                // Concurrency Limit (Safe cap at 8)
+                const SAFE_QUERY_LIMIT = 8;
+                
+                const results = await Promise.all(queries.slice(0, SAFE_QUERY_LIMIT).map(async (q: string) => {
+                   try {
+                       const res = await ai.models.generateContent({
+                           model: "gemini-3-flash-preview",
+                           contents: `[Date: ${month} ${year}] ${q}`,
+                           config: { tools: [{googleSearch: {}}] }
+                       });
+                       return `[QUERY: ${q}]\n${res.text}`;
+                   } catch (e) {
+                       console.warn(`Search failed for: ${q}`);
+                       return `[QUERY: ${q}]\nData unavailable.`;
+                   }
+                }));
+                
+                factualFoundation = results.join('\n\n---\n\n');
+                selectedModel = 'gemini-3-pro-preview';
+            } else {
+                // NON-FORMAL CHAT (The Fallback Fix)
+                // We skip the vector search to prevent hallucinations.
+                // We provide a simple instruction so it acts as a chatbot, not a data engine.
+                factualFoundation = "User is engaging in general conversation. Do not generate a JSON profile. Respond conversationally as the Senior Tactical Columnist.";
+                selectedModel = 'gemini-3-flash-preview';
             }
         }
 
-        // Fallback or Image path
-        if (queries.length === 0 && message.trim()) {
-            queries.push(`${message} stats ${currentSeason}`);
-        }
+        const selectedLevel: "minimal" | "low" | "medium" | "high" = isFormal || selectedModel.includes('pro') ? "high" : "low";
 
-        console.log(`[GLOBAL WORKFLOW] Executing Search Strategy:`, queries);
-        console.log(`[GLOBAL WORKFLOW] Selected Model:`, selectedModel);
+        const finalAnswerPrompt = `
+    <context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+    <factual_foundation>
+    ${factualFoundation}
+    </factual_foundation>
+    
+    <instructions>
+    1. IDENTITY: Senior Tactical Columnist / Lead Scout.
+    2. ANCHOR: Disregard 2024 memory. Use the 2026 factual foundation provided above.
+    3. PROTOCOL M (Temporal Firewall): Strictly verify the YEAR of events. Prioritize January 2026 data.
+    4. PROTOCOL B (Injury Quarantine / "Rodri" Override): If the foundation shows the player started a match in the last 7 days, they are MATCH FIT. Ignore any "injured" status from 2025.
+    5. ROSTER CHECK: If foundation shows a transfer or loan in the 25-26 season, update the basicInfo.club accordingly.
+    6. DATA INTEGRITY: Use foundation data only for 'latestUpdate' and 'basicInfo'. Do not calculate ratings using ranking numbers; ratings must be based on the attribute framework applied to verified ability.
+    <synthesis_mandate>
+    You are prohibited from ignoring the "Narrative" or "Context" vectors.
+    BEFORE rating the player, you must cross-reference:
+    1. Does the "Hard Data" support the "Anchor"? (Is he performing to his class?)
+    2. Does the "Narrative" explain the "Data"? (e.g., Is low output due to "tactical misuse" or "poor form"?)
+    3. Does the "Context" justify a rating protection? (e.g., "Returning from injury" vs "Healthy but poor").
+    If the General Narrative is negative (e.g., "struggling", "out of depth"), you MUST lower the rating attributes (Consistency, Composure) regardless of the player's historical Anchor.
+    </synthesis_mandate>
+    </instructions>
+
+    <task>${message}</task>`;
         
-        let finalAnswerPrompt = `User Query: "${message}"
-${imageData ? "Note: The user has uploaded an image. Please incorporate any visual information from the image into your analysis." : ""}
-
-**FACTUAL FOUNDATION (MANDATORY CONTEXT):**
-${queries.length > 0 ? `Please use your Google Search tool to execute the following queries and treat the results as the "Verified Factual Foundation":
-${queries.map(q => `- ${q}`).join('\n')}` : "No specific web search performed for this image-based query."}
-
-**EXECUTION INSTRUCTIONS:**
-1. **Verify Date:** Today is ${month} ${year}. The active season is ${currentSeason}.
-2. **Apply Protocols:** - **Protocol J (Universal Research):** Use the search data provided.
-   - **Protocol I (Explanation Integrity):** If checking ratings, cite the Section IV Scale exactly.
-   - **Protocol L (Temporal Firewall):** Strict date adherence. Do not cite old matches as new.
-   - **Protocol N (Generational Weapon):** Use correct paths for 96+ ratings.
-   - **Protocol W (Live Roster Firewall):** If tactics/lineup involved, verify player current club status before citing.
-3. **Generate Response:** Produce the JSON or Markdown response strictly adhering to the System Instructions.
-`;
-        
-        return sendChatMessage(finalAnswerPrompt, history, selectedModel, imageData);
-
+        return sendChatMessage(finalAnswerPrompt, history, selectedModel, imageData, selectedLevel);
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error("[GLOBAL WORKFLOW] Failed:", errorMessage);
-        // Fallback to Flash on error
-        return sendChatMessage(message, history, 'gemini-3-flash-preview', imageData);
+        console.error("[GLOBAL WORKFLOW] Failed:", error);
+        return sendChatMessage(message, history, 'gemini-3-flash-preview', imageData, "low");
     }
 };

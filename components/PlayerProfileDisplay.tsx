@@ -51,9 +51,14 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
 
   const renderMarkdown = (text: string | undefined) => {
     if (!text) return { __html: '' };
-    const rawMarkup = marked.parse(text, { gfm: true, breaks: true, async: false }) as string;
-    const sanitizedMarkup = DOMPurify.sanitize(rawMarkup);
-    return { __html: sanitizedMarkup };
+    try {
+      const rawMarkup = marked.parse(text, { gfm: true, breaks: true }) as string;
+      const sanitizedMarkup = DOMPurify.sanitize(rawMarkup);
+      return { __html: sanitizedMarkup };
+    } catch (e) {
+      console.error("Markdown rendering error:", e);
+      return { __html: text };
+    }
   };
 
   return (
@@ -105,14 +110,20 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
         <ProfileSection title="Strengths" icon="📈">
           <ul className="space-y-2 list-inside">
             {strengths.map((s, i) => (
-              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start"><span className="text-green-500 dark:text-green-400 mr-2 mt-1">✓</span>{s}</li>
+              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start">
+                <span className="text-green-500 dark:text-green-400 mr-2 mt-1">✓</span>
+                <span className="markdown-content inline" dangerouslySetInnerHTML={renderMarkdown(s)} />
+              </li>
             ))}
           </ul>
         </ProfileSection>
         <ProfileSection title="Weaknesses" icon="📉">
           <ul className="space-y-2 list-inside">
             {weaknesses.map((w, i) => (
-              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start"><span className="text-red-500 dark:text-red-400 mr-2 mt-1">✗</span>{w}</li>
+              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start">
+                <span className="text-red-500 dark:text-red-400 mr-2 mt-1">✗</span>
+                <span className="markdown-content inline" dangerouslySetInnerHTML={renderMarkdown(w)} />
+              </li>
             ))}
           </ul>
         </ProfileSection>

@@ -170,7 +170,10 @@ export const PlayerComparisonDisplay: React.FC<{ comparison: PlayerComparison }>
                         </h3>
                         <ul className="space-y-2 list-inside">
                             {player1.strengths.map((s, i) => (
-                              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start"><span className="text-green-500 dark:text-green-400 mr-2 mt-1">✓</span>{s}</li>
+                              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start">
+                                <span className="text-green-500 dark:text-green-400 mr-2 mt-1">✓</span>
+                                <span className="markdown-content inline" dangerouslySetInnerHTML={renderMarkdown(s)} />
+                              </li>
                             ))}
                         </ul>
                     </div>
@@ -183,7 +186,10 @@ export const PlayerComparisonDisplay: React.FC<{ comparison: PlayerComparison }>
                         </h3>
                         <ul className="space-y-2 list-inside">
                             {player2.strengths.map((s, i) => (
-                              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start"><span className="text-green-500 dark:text-green-400 mr-2 mt-1">✓</span>{s}</li>
+                              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start">
+                                <span className="text-green-500 dark:text-green-400 mr-2 mt-1">✓</span>
+                                <span className="markdown-content inline" dangerouslySetInnerHTML={renderMarkdown(s)} />
+                              </li>
                             ))}
                         </ul>
                     </div>
@@ -198,7 +204,10 @@ export const PlayerComparisonDisplay: React.FC<{ comparison: PlayerComparison }>
                         </h3>
                         <ul className="space-y-2 list-inside">
                             {player1.weaknesses.map((w, i) => (
-                              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start"><span className="text-red-500 dark:text-red-400 mr-2 mt-1">✗</span>{w}</li>
+                              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start">
+                                <span className="text-red-500 dark:text-red-400 mr-2 mt-1">✗</span>
+                                <span className="markdown-content inline" dangerouslySetInnerHTML={renderMarkdown(w)} />
+                              </li>
                             ))}
                         </ul>
                     </div>
@@ -211,7 +220,10 @@ export const PlayerComparisonDisplay: React.FC<{ comparison: PlayerComparison }>
                         </h3>
                         <ul className="space-y-2 list-inside">
                             {player2.weaknesses.map((w, i) => (
-                              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start"><span className="text-red-500 dark:text-red-400 mr-2 mt-1">✗</span>{w}</li>
+                              <li key={i} className="text-gray-700 dark:text-gray-300 flex items-start">
+                                <span className="text-red-500 dark:text-red-400 mr-2 mt-1">✗</span>
+                                <span className="markdown-content inline" dangerouslySetInnerHTML={renderMarkdown(w)} />
+                              </li>
                             ))}
                         </ul>
                     </div>

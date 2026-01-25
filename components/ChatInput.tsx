@@ -1,15 +1,16 @@
 import React, { useState, useRef, useCallback } from 'react';
 
 interface ChatInputProps {
-  onSendMessage: (message: string, imageData?: string) => void;
+  onSendMessage: (message: string, imageData?: string, mode?: 'default' | 'fast') => void;
   isLoading: boolean;
   loadingMessage: string;
+  onToggleDossier: () => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, loadingMessage }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, loadingMessage, onToggleDossier }) => {
   const [message, setMessage] = useState('');
   const [image, setImage] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const [mode, setMode] = useState<'default' | 'fast'>('default');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback((file: File) => {
@@ -17,11 +18,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
       alert('Please upload an image file.');
       return;
     }
-
     const reader = new FileReader();
-    reader.onload = (e) => {
-      setImage(e.target?.result as string);
-    };
+    reader.onload = (e) => setImage(e.target?.result as string);
     reader.readAsDataURL(file);
   }, []);
 
@@ -30,103 +28,99 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
     if (file) handleFile(file);
   };
 
-  const onDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const onDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) handleFile(file);
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if ((!message.trim() && !image) || isLoading) return;
-    onSendMessage(message, image || undefined);
+    onSendMessage(message, image || undefined, mode);
     setMessage('');
     setImage(null);
   };
 
-  const removeImage = () => setImage(null);
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          handleSubmit(e as any);
+      }
+  }
 
   return (
-    <div className="p-4 border-t border-gray-200 dark:border-gray-700/50 transition-colors duration-300">
-      {image && (
-        <div className="mb-3 relative inline-block">
-          <img src={image} alt="Preview" className="h-24 w-24 object-cover rounded-lg border-2 border-blue-500 shadow-md" />
-          <button 
-            onClick={removeImage}
-            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-lg hover:bg-red-600 transition-colors"
-            title="Remove image"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+    <div className="relative group bg-cream-50 dark:bg-charcoal-surface rounded-none shadow-float dark:shadow-dark-float border-t-2 border-charcoal dark:border-cream-400 overflow-hidden transition-colors duration-300">
+        <div className="flex flex-col relative z-10">
+            {image && (
+                <div className="px-6 pt-4 pb-0 flex items-center gap-2">
+                    <span className="text-xs font-serif italic text-emerald-600 dark:text-emerald-400">Image attached</span>
+                    <button onClick={() => setImage(null)} className="text-charcoal dark:text-cream-400 hover:text-red-500">
+                        <span className="material-symbols-outlined text-[16px]">close</span>
+                    </button>
+                </div>
+            )}
+            
+            <textarea 
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isLoading}
+                className="w-full bg-transparent text-charcoal dark:text-cream-50 placeholder-charcoal/40 dark:placeholder-cream-400/30 text-[18px] font-serif italic px-6 py-5 pr-14 border-none focus:ring-0 resize-none max-h-32 overflow-y-auto leading-relaxed scrollbar-hide outline-none" 
+                placeholder={isLoading ? loadingMessage : "Inquire about player statistics..."}
+                rows={1}
+            />
+            
+            <div className="flex items-center justify-between px-4 pb-3">
+                <div className="flex items-center gap-3">
+                    <button 
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-2 text-cream-800 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50 transition-colors" 
+                        title="Attach image"
+                        disabled={isLoading}
+                    >
+                        <span className="material-symbols-outlined text-[20px] font-light">add_circle</span>
+                    </button>
+                    <input type="file" ref={fileInputRef} onChange={onFileChange} accept="image/*" className="hidden" />
+
+                    <button 
+                        type="button"
+                        onClick={onToggleDossier}
+                        className="p-2 text-cream-800 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50 transition-colors" 
+                        title="Open Dossier"
+                    >
+                        <span className="material-symbols-outlined text-[20px] font-light">database</span>
+                    </button>
+                    
+                    {/* Sliding Pill Toggle */}
+                    <div className="relative flex items-center bg-cream-200 dark:bg-charcoal-light rounded-full p-1 w-24 h-9 cursor-pointer ml-2 border border-cream-300 dark:border-charcoal-border select-none" onClick={() => setMode(mode === 'default' ? 'fast' : 'default')}>
+                         {/* Sliding Background */}
+                         <div 
+                            className={`absolute top-1 bottom-1 w-[46%] bg-white dark:bg-charcoal rounded-full shadow-sm transition-all duration-300 ease-out mx-[2%] ${mode === 'default' ? 'left-0' : 'left-[50%]'}`}
+                         ></div>
+
+                         {/* Labels */}
+                         <div className={`flex-1 flex justify-center items-center z-10 transition-colors duration-300 ${mode === 'default' ? 'text-charcoal dark:text-white' : 'text-charcoal/40 dark:text-cream-400/40'}`}>
+                            <span className="material-symbols-outlined text-[18px]">psychology</span>
+                         </div>
+                         <div className={`flex-1 flex justify-center items-center z-10 transition-colors duration-300 ${mode === 'fast' ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal/40 dark:text-cream-400/40'}`}>
+                            <span className="material-symbols-outlined text-[18px]">bolt</span>
+                         </div>
+                    </div>
+                </div>
+
+                <button 
+                    onClick={handleSubmit}
+                    disabled={isLoading || (!message.trim() && !image)}
+                    className="flex items-center justify-center size-10 bg-charcoal dark:bg-emerald-500 text-cream-50 hover:bg-black dark:hover:bg-emerald-400 transition-all group disabled:opacity-50"
+                >
+                    {isLoading ? (
+                        <div className="size-4 border-2 border-white/50 border-t-white rounded-full animate-spin"></div>
+                    ) : (
+                        <span className="material-symbols-outlined text-[20px] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">arrow_forward</span>
+                    )}
+                </button>
+            </div>
         </div>
-      )}
-      
-      <form 
-        onSubmit={handleSubmit}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        onDrop={onDrop}
-        className={`flex items-center gap-3 p-1 bg-white dark:bg-gray-800 border rounded-full shadow-sm transition-all duration-300 ${
-          isDragging ? 'border-blue-500 scale-[1.01] bg-blue-50 dark:bg-blue-900/10' : 
-          isLoading ? 'border-blue-500/50 dark:border-blue-400/50 animate-pulse' : 
-          'border-gray-300 dark:border-gray-700'
-        }`}
-      >
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className="ml-2 w-10 h-10 flex-shrink-0 flex items-center justify-center text-gray-500 hover:text-blue-500 dark:text-gray-400 dark:hover:text-blue-400 transition-colors"
-          title="Upload image"
-          disabled={isLoading}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-            <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6.75a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6.75v11.25a1.5 1.5 0 0 0 1.5 1.5ZM12 12.75h.008v.008H12v-.008ZM9.75 15.75h.008v.008h-.008v-.008Z" />
-          </svg>
-        </button>
-        <input 
-          type="file" 
-          ref={fileInputRef} 
-          onChange={onFileChange} 
-          accept="image/*" 
-          className="hidden" 
-        />
         
-        <input
-          type="text"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder={isLoading ? loadingMessage : isDragging ? "Drop image here..." : "Ask anything about football..."}
-          className="flex-grow w-full px-2 py-2 bg-transparent border-none text-gray-900 dark:text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-0"
-          disabled={isLoading}
-          aria-label="Chat input"
-        />
-        <button
-          type="submit"
-          className="w-10 h-10 flex-shrink-0 bg-blue-600 text-white font-semibold rounded-full shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-100 dark:focus:ring-offset-gray-800 transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-          disabled={isLoading || (!message.trim() && !image)}
-          aria-label="Send message"
-        >
-          {isLoading ? (
-            <div className="w-5 h-5 border-2 border-white/50 border-t-white rounded-full animate-spin"></div>
-          ) : (
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18" />
-            </svg>
-          )}
-        </button>
-      </form>
+        {/* Decorative Corners */}
+        <div className="absolute -bottom-1 -right-1 w-3 h-3 border-r border-b border-charcoal/20 dark:border-cream-400/20"></div>
+        <div className="absolute -bottom-1 -left-1 w-3 h-3 border-l border-b border-charcoal/20 dark:border-cream-400/20"></div>
     </div>
   );
 };

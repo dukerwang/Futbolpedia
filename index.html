@@ -1,26 +1,73 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
+<script>
+  // Fixes broken "Cannot GET" pages by redirecting to the working Hash route
+  if (window.location.pathname.includes('/player/')) {
+    const id = window.location.pathname.split('/').pop();
+    window.location.replace('/#/player/' + id);
+  }
+</script>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Futbolpedia AI</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+<title>Futbolpedia AI - Editorial Tool</title>
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://futbolpedia-ai.run.app/">
+<meta property="og:title" content="Futbolpedia AI Scouting Report">
+<meta property="og:description" content="AI-generated player evaluation, potential ratings, and tactical analysis.">
+
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/heroicons/2.1.3/24/outline/heroicons.min.css" integrity="sha512-MatZ9nB76EpJSkQso2zccv9zPgr3YNCWpLS1S/y3P2Vn0cLsTKVubf3s/j4V/x2L2n3tmE0y1M2TAnVf23P0TQ==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    
     <script>
       tailwind.config = {
-        darkMode: 'class', // Enable class-based dark mode
+        darkMode: 'class', 
         theme: {
           extend: {
-            fontFamily: {
-              sans: ['Inter', 'sans-serif'],
+            colors: {
+                "cream": {
+                    50: "#FFFEFA",
+                    100: "#FAF9F6", 
+                    200: "#F5F2E9", // Base Cream (Light Mode Bg)
+                    300: "#EBE8DE", // Sand (User Bubble)
+                    400: "#D6D3CA",
+                    800: "#8C8982", 
+                    900: "#1A1F2E", 
+                },
+                "charcoal": {
+                    DEFAULT: "#1A1F2E", // Dark Mode Bg & Text
+                    surface: "#252B3D", 
+                    light: "#2C3344",
+                    border: "#3E4559"
+                },
+                "emerald": {
+                    400: "#34D399", // Sage
+                    500: "#10B981", // Primary Data
+                    600: "#059669",
+                    900: "#064E3B",
+                },
             },
+            fontFamily: {
+              "serif": ["Playfair Display", "serif"],
+              "sans": ["Inter", "sans-serif"],
+              "mono": ["JetBrains Mono", "monospace"],
+            },
+            boxShadow: {
+                "paper": "0 2px 8px rgba(0, 0, 0, 0.05)",
+                "float": "0 8px 30px rgba(0, 0, 0, 0.12)",
+                "right-depth": "8px 0 30px rgba(0, 0, 0, 0.12)",
+                "dark-float": "0 8px 30px rgba(0, 0, 0, 0.4)",
+            },
+            transitionTimingFunction: {
+                'ios-ease': 'cubic-bezier(0.16, 1, 0.3, 1)',
+            }
           },
         },
       }
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script type="importmap">
 {
   "imports": {
@@ -33,28 +80,51 @@
   }
 }
 </script>
+
+<script>
+  // Initial Theme Check
+  if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+    document.documentElement.classList.add('dark');
+  } else {
+    document.documentElement.classList.remove('dark');
+  }
+
+  (function() {
+    const path = window.location.pathname;
+    if (path.includes('/player/')) {
+      console.log("Shared profile detected, initializing app logic...");
+    }
+  })();
+</script>
+
 <style>
-  /* Light mode default styles */
-  .markdown-content h1, .markdown-content h2, .markdown-content h3 { margin-top: 1em; margin-bottom: 0.5em; font-weight: 600; color: #111827; }
-  .markdown-content p { margin-bottom: 1em; line-height: 1.6; }
-  .markdown-content ul { list-style-type: disc; margin-left: 1.5em; margin-bottom: 1em; }
-  .markdown-content ol { list-style-type: decimal; margin-left: 1.5em; margin-bottom: 1em; }
-  .markdown-content li { margin-bottom: 0.25em; }
-  .markdown-content strong { font-weight: 700; color: #111827; }
-  .markdown-content a { color: #2563eb; text-decoration: underline; }
-  .markdown-content code { background-color: #e5e7eb; color: #1f2937; padding: 0.2em 0.4em; margin: 0; font-size: 85%; border-radius: 3px; }
-  .markdown-content pre { background-color: #f3f4f6; color: #1f2937; padding: 1em; border-radius: 5px; overflow-x: auto;}
+  body {
+      transition: background-color 0.3s ease, color 0.3s ease;
+  }
+  ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+      background: transparent; 
+  }
+  ::-webkit-scrollbar-thumb {
+      background: #D6D3CA; 
+      border-radius: 3px;
+  }
+  .dark ::-webkit-scrollbar-thumb {
+      background: #3E4559;
+  }
   
-  /* Dark mode overrides */
-  .dark .markdown-content h1, .dark .markdown-content h2, .dark .markdown-content h3 { color: #ffffff; }
-  .dark .markdown-content strong { color: #ffffff; }
-  .dark .markdown-content a { color: #60a5fa; }
-  .dark .markdown-content code { background-color: #374151; color: #d1d5db; }
-  .dark .markdown-content pre { background-color: #1f2937; color: #d1d5db; }
+  /* Markdown Styles specific to Editorial Theme */
+  .prose p { margin-bottom: 1.25em; line-height: 1.75; font-weight: 300; }
+  .prose strong { font-family: 'Playfair Display', serif; font-weight: 700; }
+  .prose ul { list-style-type: disc; padding-left: 1.5em; margin-bottom: 1em; }
+  .prose h3 { font-family: 'Playfair Display', serif; font-size: 1.25em; font-weight: 700; margin-top: 1.5em; margin-bottom: 0.5em; font-style: italic;}
 </style>
 </head>
-  <body class="bg-gray-100 dark:bg-gray-900 font-sans">
-    <div id="root"></div>
+  <body class="bg-cream-200 dark:bg-charcoal text-charcoal dark:text-cream-100 font-sans antialiased h-[100dvh] flex flex-col overflow-hidden selection:bg-charcoal selection:text-cream-50 dark:selection:bg-emerald-500">
+    <div id="root" class="h-full flex flex-col"></div>
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>

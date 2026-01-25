@@ -2,92 +2,135 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { ChatHistory } from './components/ChatHistory';
 import { ChatInput } from './components/ChatInput';
-import { ErrorMessage } from './components/ErrorMessage';
-import type { ChatMessage } from './types';
-import { sendMessageToAI, resetChat } from './services/geminiService';
-
-type Status = 'idle' | 'loading' | 'error' | 'success';
-type Theme = 'light' | 'dark';
+import { SidePanel } from './components/SidePanel';
+import type { ChatMessage, PlayerProfile } from './types';
+import { sendMessageToAI, resetChat, supabase } from './services/geminiService';
 
 const generateId = () => `id-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 const CHAT_HISTORY_KEY = 'futbolpedia-chat-history';
-const THEME_KEY = 'futbolpedia-theme';
+const ACTIVE_PROFILE_KEY = 'futbolpedia-active-profile';
 
 const App: React.FC = () => {
-  const [status, setStatus] = useState<Status>('idle');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loadingMessage, setLoadingMessage] = useState<string>('Researching your question...');
-  const [theme, setTheme] = useState<Theme>(() => {
-    try {
-      const savedTheme = localStorage.getItem(THEME_KEY);
-      return savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'dark';
-    } catch {
-      return 'dark';
-    }
-  });
+  const [loadingMessage, setLoadingMessage] = useState<string>('Processing...');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  
+  // Sidebar / Dossier State
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [activeProfile, setActiveProfile] = useState<PlayerProfile | null>(null);
 
-  // Apply theme class and save to localStorage
+  // Initialize Theme
   useEffect(() => {
-    const root = window.document.documentElement;
-    if (theme === 'light') {
-      root.classList.remove('dark');
+    if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        setIsDarkMode(true);
+        document.documentElement.classList.add('dark');
     } else {
-      root.classList.add('dark');
+        setIsDarkMode(false);
+        document.documentElement.classList.remove('dark');
     }
-    localStorage.setItem(THEME_KEY, theme);
-  }, [theme]);
+  }, []);
 
-  // Load messages from localStorage on initial render
+  const toggleTheme = () => {
+    if (isDarkMode) {
+        document.documentElement.classList.remove('dark');
+        localStorage.theme = 'light';
+        setIsDarkMode(false);
+    } else {
+        document.documentElement.classList.add('dark');
+        localStorage.theme = 'dark';
+        setIsDarkMode(true);
+    }
+  };
+
+  // Load Shared Profile or Persisted Profile
+  useEffect(() => {
+    const loadData = async () => {
+      const hash = window.location.hash; 
+      
+      // 1. Shared Profile URL Priority
+      if (hash.startsWith('#/player/')) {
+        const shareId = hash.split('/').pop(); 
+        if (shareId) {
+          setIsLoading(true);
+          try {
+            const { data, error } = await supabase
+              .from('profiles')
+              .select('player_data')
+              .eq('id', shareId)
+              .single();
+
+            if (error) throw error;
+
+            if (data?.player_data) {
+                const profile = data.player_data;
+                setMessages([{
+                    id: `shared-${Date.now()}`,
+                    sender: 'ai',
+                    content: "I've retrieved the archived dossier for " + profile.basicInfo.name + ".",
+                }]);
+                setActiveProfile(profile);
+                setIsPanelOpen(true);
+                window.history.replaceState({}, '', window.location.pathname); 
+                // Save to local persistence
+                localStorage.setItem(ACTIVE_PROFILE_KEY, JSON.stringify(profile));
+            }
+          } catch (err) {
+            console.error("Shared profile fetch failed:", err);
+          } finally {
+            setIsLoading(false);
+          }
+          return; // Exit if shared profile found
+        }
+      }
+
+      // 2. Local Persistence Fallback
+      try {
+        const savedProfile = localStorage.getItem(ACTIVE_PROFILE_KEY);
+        if (savedProfile) {
+            setActiveProfile(JSON.parse(savedProfile));
+        }
+      } catch (e) {
+        console.error("Failed to load active profile", e);
+      }
+    };
+    loadData();
+  }, []);
+
+  // Load History
   useEffect(() => {
     try {
       const savedMessages = localStorage.getItem(CHAT_HISTORY_KEY);
-      if (savedMessages) {
+      if (savedMessages && !window.location.hash.includes('/player/')) {
         const parsedMessages = JSON.parse(savedMessages);
-        if (Array.isArray(parsedMessages) && parsedMessages.length > 0) {
-          setMessages(parsedMessages);
-          return;
-        }
+        if (Array.isArray(parsedMessages)) setMessages(parsedMessages);
       }
     } catch (error) {
-      console.error("Failed to load chat history from localStorage:", error);
-      localStorage.removeItem(CHAT_HISTORY_KEY); // Clear corrupted data
+      console.error("Failed to load chat history:", error);
     }
-    
-    // Default message if nothing is loaded
-    setMessages([
-      {
-        id: 'initial-welcome',
-        sender: 'ai',
-        content: "Welcome to Futbolpedia AI! Ask me for a detailed player profile (e.g., \"rate Lionel Messi\") or any other football-related question. You can also upload images for me to analyze!"
-      }
-    ]);
   }, []);
 
-  // Save messages to localStorage whenever they change
+  // Save History
   useEffect(() => {
     if (messages.length > 0) {
       localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages));
     }
   }, [messages]);
   
-  const handleSendMessage = useCallback(async (userMessageText: string, imageData?: string) => {
+  const handleSendMessage = useCallback(async (userMessageText: string, imageData?: string, mode: 'default' | 'fast' = 'default') => {
     if (!userMessageText.trim() && !imageData) return;
 
-    let specificLoadingMessage = 'Researching your question...';
+    // Set Loading State
+    let specificLoadingMessage = 'Consulting archives...';
     const lowerCaseMessage = userMessageText.toLowerCase();
-
-    if (imageData) {
-        specificLoadingMessage = 'Analyzing image...';
-    } else if (lowerCaseMessage.includes('rate') || lowerCaseMessage.includes('profile') || lowerCaseMessage.includes('evaluation')) {
-        specificLoadingMessage = 'Analyzing player data...';
-    } else if (lowerCaseMessage.includes('rank') || lowerCaseMessage.includes('top') || lowerCaseMessage.includes('best')) {
-        specificLoadingMessage = 'Compiling rankings...';
-    } else if (lowerCaseMessage.includes('compare') || lowerCaseMessage.includes('vs')) {
-        specificLoadingMessage = 'Comparing players...';
-    }
+    if (mode === 'fast') specificLoadingMessage = 'Quick lookup...';
+    else if (imageData) specificLoadingMessage = 'Analyzing imagery...';
+    else if (lowerCaseMessage.includes('rate') || lowerCaseMessage.includes('profile')) specificLoadingMessage = 'Scouting player...';
+    
     setLoadingMessage(specificLoadingMessage);
+    setIsLoading(true);
 
+    // Add User Message
     const newUserMessage: ChatMessage = {
       id: generateId(),
       sender: 'user',
@@ -95,61 +138,109 @@ const App: React.FC = () => {
       image: imageData,
     };
     
-    const currentMessages = [...messages, newUserMessage];
-    setMessages(currentMessages);
-    setStatus('loading');
-    setError(null);
+    setMessages(prev => [...prev, newUserMessage]);
 
     try {
-      const aiResponse = await sendMessageToAI(userMessageText, messages, imageData);
-      const newAiMessage: ChatMessage = {
-        id: generateId(),
-        sender: 'ai',
-        content: aiResponse,
-      };
+      const aiResponse = await sendMessageToAI(userMessageText, messages, imageData, mode);
+      
+      let newAiMessage: ChatMessage;
+
+      // Logic: If response is a Profile, open dossier but keep chat text clean
+      if (typeof aiResponse === 'object' && 'basicInfo' in aiResponse) {
+          const profile = aiResponse as PlayerProfile;
+          setActiveProfile(profile);
+          setIsPanelOpen(true); // Auto-open toggle
+          
+          // Persist the new active profile
+          localStorage.setItem(ACTIVE_PROFILE_KEY, JSON.stringify(profile));
+
+          newAiMessage = {
+            id: generateId(),
+            sender: 'ai',
+            content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
+          };
+      } else if (typeof aiResponse === 'object' && 'summary' in aiResponse) {
+          // Comparison - for now treat as text/summary in chat
+           newAiMessage = {
+            id: generateId(),
+            sender: 'ai',
+            content: aiResponse,
+          };
+      } else {
+          newAiMessage = {
+            id: generateId(),
+            sender: 'ai',
+            content: aiResponse,
+          };
+      }
+
       setMessages(prev => [...prev, newAiMessage]);
-      setStatus('success');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      console.error(err);
-      setError(errorMessage);
-      const newErrorMessage: ChatMessage = {
+      setMessages(prev => [...prev, {
         id: generateId(),
         sender: 'ai',
-        content: `Sorry, I encountered an error: ${errorMessage}`
-      }
-      setMessages(prev => [...prev, newErrorMessage]);
-      setStatus('error');
+        content: `Editor's Note: I encountered an issue. ${errorMessage}`
+      }]);
+    } finally {
+        setIsLoading(false);
     }
   }, [messages]);
 
   const handleNewChat = useCallback(() => {
     resetChat();
     localStorage.removeItem(CHAT_HISTORY_KEY);
-    setStatus('idle');
-    setError(null);
-    setLoadingMessage('Researching your question...');
-    setMessages([
-      {
-        id: 'initial-welcome-cleared',
-        sender: 'ai',
-        content: "Welcome to Futbolpedia AI! Ask me for a detailed player profile (e.g., \"rate Lionel Messi\") or any other football-related question. You can also upload images for me to analyze!"
-      }
-    ]);
+    localStorage.removeItem(ACTIVE_PROFILE_KEY);
+    setIsLoading(false);
+    setMessages([]);
+    setActiveProfile(null);
+    setIsPanelOpen(false);
   }, []);
 
-  const handleThemeToggle = useCallback(() => {
-    setTheme(prevTheme => prevTheme === 'light' ? 'dark' : 'light');
-  }, []);
+  const togglePanel = () => {
+      // If we have an active profile, we can toggle. If not, maybe show a hint.
+      if (activeProfile) {
+          setIsPanelOpen(!isPanelOpen);
+      } else if (!isPanelOpen) {
+          // Optional: Could show a toast saying "Generate a profile first"
+          console.log("No profile to show");
+      }
+  };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 transition-colors duration-300">
-      <Header onNewChat={handleNewChat} onThemeToggle={handleThemeToggle} theme={theme} />
-      <main className="flex-1 flex flex-col overflow-hidden container mx-auto w-full max-w-4xl">
-        <ChatHistory messages={messages} isLoading={status === 'loading'} loadingMessage={loadingMessage} />
-        {error && <div className="px-4 pb-4"><ErrorMessage message={error} /></div>}
-        <ChatInput onSendMessage={handleSendMessage} isLoading={status === 'loading'} loadingMessage={loadingMessage} />
-      </main>
+    <div className="flex flex-col h-full bg-cream-200 dark:bg-charcoal text-charcoal dark:text-cream-100 transition-colors duration-300 relative">
+      
+      <Header onNewChat={handleNewChat} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />
+      
+      {/* Slide-out Dossier Panel - LEFT SIDED */}
+      <SidePanel 
+          isOpen={isPanelOpen} 
+          onClose={() => setIsPanelOpen(false)} 
+          profile={activeProfile} 
+      />
+
+      <div className={`flex-1 flex flex-col relative overflow-hidden transition-all duration-500 ease-ios-ease ${isPanelOpen ? 'md:pl-[450px]' : ''}`}>
+          {/* Main Chat Area */}
+          <main className="flex-1 flex flex-col w-full h-full relative min-h-0">
+            <ChatHistory 
+                messages={messages} 
+                isLoading={isLoading} 
+                loadingMessage={loadingMessage} 
+            />
+            
+            {/* Input Container - Sticky Bottom */}
+            <div className="flex-none px-6 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:pb-8 bg-gradient-to-t from-cream-200 dark:from-charcoal via-cream-200/95 dark:via-charcoal/95 to-transparent z-20">
+                <div className="max-w-[800px] mx-auto w-full">
+                    <ChatInput 
+                        onSendMessage={handleSendMessage} 
+                        isLoading={isLoading} 
+                        loadingMessage={loadingMessage} 
+                        onToggleDossier={togglePanel}
+                    />
+                </div>
+            </div>
+          </main>
+      </div>
     </div>
   );
 };
