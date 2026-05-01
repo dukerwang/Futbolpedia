@@ -312,7 +312,7 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     
     try {
         let factualFoundation = "";
-        let selectedModel = 'gemini-3-flash-preview'; 
+        let selectedModel = 'gemini-3.1-flash-preview'; 
 
         // 1. INTENT GATES (The Fix: Define these BEFORE triggering search)
         const isProfileRequest = /rate|profile|scout|evaluate|scouting|who is|analysis on|report|dossier/i.test(message);
@@ -332,7 +332,7 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     </instructions>
     <task>${message}</task>`;
             // Use low thinking level for speed
-            return sendChatMessage(fastPrompt, history, 'gemini-3-flash-preview', undefined, 'low');
+            return sendChatMessage(fastPrompt, history, 'gemini-3.1-flash-preview', undefined, 'low');
         }
 
         // DEFAULT MODE LOGIC
@@ -353,7 +353,7 @@ VECTOR D (The Context): Search for "injury history ${year}", "tactical fit [Club
 OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
 
                 const queryGenResponse = await ai.models.generateContent({
-                    model: "gemini-3-flash-preview", 
+                    model: "gemini-3.1-flash-preview", 
                     contents: queryGenPrompt,
                     config: {
                         thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
@@ -373,7 +373,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
                 const results = await Promise.all(queries.slice(0, SAFE_QUERY_LIMIT).map(async (q: string) => {
                    try {
                        const res = await ai.models.generateContent({
-                           model: "gemini-3-flash-preview",
+                           model: "gemini-3.1-flash-preview",
                            contents: `[Date: ${month} ${year}] ${q}`,
                            config: { tools: [{googleSearch: {}}] }
                        });
@@ -385,13 +385,13 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
                 }));
                 
                 factualFoundation = results.join('\n\n---\n\n');
-                selectedModel = 'gemini-3-pro-preview';
+                selectedModel = 'gemini-3.1-pro-preview';
             } else {
                 // NON-FORMAL CHAT (The Fallback Fix)
                 // We skip the vector search to prevent hallucinations.
                 // We provide a simple instruction so it acts as a chatbot, not a data engine.
                 factualFoundation = "User is engaging in general conversation. Do not generate a JSON profile. Respond conversationally as the Senior Tactical Columnist.";
-                selectedModel = 'gemini-3-flash-preview';
+                selectedModel = 'gemini-3.1-flash-preview';
             }
         }
 
@@ -425,6 +425,6 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
         return sendChatMessage(finalAnswerPrompt, history, selectedModel, imageData, selectedLevel);
     } catch (error) {
         console.error("[GLOBAL WORKFLOW] Failed:", error);
-        return sendChatMessage(message, history, 'gemini-3-flash-preview', imageData, "low");
+        return sendChatMessage(message, history, 'gemini-3.1-flash-preview', imageData, "low");
     }
 };
