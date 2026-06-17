@@ -80,10 +80,32 @@ function initializeChat(model: string, history?: Content[], level: "minimal" | "
     model: model,
     config: {
         systemInstruction: MASTER_INSTRUCTION_SET,
-        tools: [{googleSearch: {}}],
+        tools: [
+            {googleSearch: {}},
+            {
+                functionDeclarations: [
+                    {
+                        name: "get_football_squad",
+                        description: "Gets the current active roster/squad of a football team using API-Football. Use this to verify current players for a club.",
+                        parameters: {
+                            type: Type.OBJECT,
+                            properties: {
+                                team: { type: Type.STRING, description: "The name of the football club (e.g. Real Madrid, Arsenal)" }
+                            },
+                            required: ["team"]
+                        }
+                    }
+                ]
+            }
+        ],
+        // @ts-ignore
+        toolConfig: {
+            // @ts-ignore
+            includeServerSideToolInvocations: true
+        },
         temperature: 1.0, 
         thinkingConfig: {
-          thinkingLevel: levelMap[level] ,
+          thinkingLevel: levelMap[level],
         },
     },
     history,
@@ -217,7 +239,13 @@ const sanitizeComparisonData = (partialComparison: Partial<PlayerComparison> | n
     };
 };
 
-const sendChatMessage = async (message: string, history: ChatMessage[], model: string, imageData?: string, thinkingLevel: "minimal" | "low" | "medium" | "high" = "high"): Promise<string | PlayerProfile | PlayerComparison> => {
+const sendChatMessage = async (
+  message: string, 
+  history: ChatMessage[], 
+  model: string, 
+  imageData?: string, 
+  thinkingLevel: "minimal" | "low" | "medium" | "high" = "high"
+): Promise<string | PlayerProfile | PlayerComparison> => {
   const geminiHistory: Content[] = history
     .map((msg): Content | null => {
       const isUser = msg.sender === 'user';
@@ -267,8 +295,40 @@ const sendChatMessage = async (message: string, history: ChatMessage[], model: s
         });
     }
 
-    const response = await chat!.sendMessage({ message: parts });
+    let response = await chat!.sendMessage({ message: parts });
     
+    // Process function calls
+    while (response.functionCalls && response.functionCalls.length > 0) {
+        const functionCall = response.functionCalls[0];
+        let apiResult: any = {};
+        
+        try {
+            if (functionCall.name === "get_football_squad") {
+                const args = functionCall.args as any;
+                if (args && args.team) {
+                    console.log(`[API-Football] Fetching squad for ${args.team}...`);
+                    const fetchRes = await fetch(`/api/football/squad?team=${encodeURIComponent(args.team)}`);
+                    if (!fetchRes.ok) throw new Error("API responded with an error.");
+                    apiResult = await fetchRes.json();
+                } else {
+                    apiResult = { error: "Missing team argument" };
+                }
+            } else {
+                apiResult = { error: "Unknown function" };
+            }
+        } catch (e: any) {
+            console.error("[Function Call Error]", e);
+            apiResult = { error: e.message };
+        }
+        
+        response = await chat!.sendMessage({ message: [{
+            functionResponse: {
+                name: functionCall.name,
+                response: apiResult
+            }
+        }]});
+    }
+
     const text = response.text;
 
     if (typeof text !== 'string') {
@@ -312,11 +372,12 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     
     try {
         let factualFoundation = "";
-        let selectedModel = 'gemini-3.1-flash-preview'; 
+        let selectedModel = 'gemini-3-flash-preview'; 
 
         // 1. INTENT GATES (The Fix: Define these BEFORE triggering search)
-        const isProfileRequest = /rate|profile|scout|evaluate|scouting|who is|analysis on|report|dossier/i.test(message);
+        const isProfileRequest = /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good|rank|tier)\b/i.test(message) || /analysis on|report on|who is/i.test(message);
         const isComparison = /compare|vs|versus|better/i.test(message);
+        const isHistorical = /prime|history|historical|all time|all-time|peak/i.test(message);
         // We only trigger the heavy "Lead Scout" machinery if it looks like a scouting task
         const isFormal = isProfileRequest || isComparison;
 
@@ -332,7 +393,7 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     </instructions>
     <task>${message}</task>`;
             // Use low thinking level for speed
-            return sendChatMessage(fastPrompt, history, 'gemini-3.1-flash-preview', undefined, 'low');
+            return sendChatMessage(fastPrompt, history, 'gemini-3-flash-preview', undefined, 'low');
         }
 
         // DEFAULT MODE LOGIC
@@ -340,10 +401,10 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
             // ONLY RUN VECTORS IF IT IS A FORMAL REQUEST
             if (isFormal) {
                 // "Omniscient Scout" Multi-Vector Search Logic
-                const queryGenPrompt = `
+                let queryGenPrompt = `
 Task: Generate comprehensive search queries for: "${message}".
 Context: Current Date is ${month} ${year}. Season: ${currentSeason}.
-MANDATORY SEARCH VECTORS (Generate 2 queries per vector):
+MANDATORY SEARCH VECTORS (Generate exactly 1 highly precise query per vector):
 
 VECTOR A (The Anchor & Class): Search for the player's 2024/2025 peak, major awards, and "best player" rankings.
 VECTOR B (The Hard Data): Search for ${currentSeason} stats, G/A per 90, clean sheets, and advanced metrics.
@@ -352,8 +413,21 @@ VECTOR D (The Context): Search for "injury history ${year}", "tactical fit [Club
 
 OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
 
+                if (isHistorical) {
+                    queryGenPrompt = `
+Task: Generate comprehensive search queries for evaluating the PEAK/PRIME of: "${message}".
+MANDATORY SEARCH VECTORS (Generate exactly 1 highly precise query per vector):
+
+VECTOR A (The Anchor & Class): Search for the player's absolute peak season, major awards, and "best player" rankings during their prime.
+VECTOR B (The Hard Data): Search for their best season stats, G/A per 90, clean sheets, and advanced metrics from their prime years.
+VECTOR C (The Narrative & Eye Test): Search for pundit analysis, fan sentiment, and specific match performance reviews from their peak era.
+VECTOR D (The Context): Search for tactical fit and manager quotes about their role during their most dominant period.
+
+OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
+                }
+
                 const queryGenResponse = await ai.models.generateContent({
-                    model: "gemini-3.1-flash-preview", 
+                    model: "gemini-3-flash-preview", 
                     contents: queryGenPrompt,
                     config: {
                         thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
@@ -373,7 +447,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
                 const results = await Promise.all(queries.slice(0, SAFE_QUERY_LIMIT).map(async (q: string) => {
                    try {
                        const res = await ai.models.generateContent({
-                           model: "gemini-3.1-flash-preview",
+                           model: "gemini-3-flash-preview",
                            contents: `[Date: ${month} ${year}] ${q}`,
                            config: { tools: [{googleSearch: {}}] }
                        });
@@ -390,26 +464,21 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
                 // NON-FORMAL CHAT (The Fallback Fix)
                 // We skip the vector search to prevent hallucinations.
                 // We provide a simple instruction so it acts as a chatbot, not a data engine.
-                factualFoundation = "User is engaging in general conversation. Do not generate a JSON profile. Respond conversationally as the Senior Tactical Columnist.";
-                selectedModel = 'gemini-3.1-flash-preview';
+                factualFoundation = "User is engaging in general conversation. Do not generate a JSON profile. Respond conversationally as the Senior Tactical Columnist. You have access to the googleSearch tool—use it if the user asks a question requiring current stats, squad info, injuries, or recent news.";
+                selectedModel = 'gemini-3-flash-preview';
             }
         }
 
         const selectedLevel: "minimal" | "low" | "medium" | "high" = isFormal || selectedModel.includes('pro') ? "high" : "low";
 
-        const finalAnswerPrompt = `
-    <context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
-    <factual_foundation>
-    ${factualFoundation}
-    </factual_foundation>
-    
-    <instructions>
+        let finalInstructions = `
     1. IDENTITY: Senior Tactical Columnist / Lead Scout.
     2. ANCHOR: Disregard 2024 memory. Use the 2026 factual foundation provided above.
-    3. PROTOCOL M (Temporal Firewall): Strictly verify the YEAR of events. Prioritize January 2026 data.
+    3. PROTOCOL M (Temporal Firewall): Strictly verify the YEAR of events. Prioritize ${month} ${year} data.
     4. PROTOCOL B (Injury Quarantine / "Rodri" Override): If the foundation shows the player started a match in the last 7 days, they are MATCH FIT. Ignore any "injured" status from 2025.
     5. ROSTER CHECK: If foundation shows a transfer or loan in the 25-26 season, update the basicInfo.club accordingly.
     6. DATA INTEGRITY: Use foundation data only for 'latestUpdate' and 'basicInfo'. Do not calculate ratings using ranking numbers; ratings must be based on the attribute framework applied to verified ability.
+    7. GENERATIONAL WEAPON RULE: The "Generational Weapon" (Protocol C) ONLY applies to 96+ players. Do NOT cite it or require it for any player projected at 95 or below.
     <synthesis_mandate>
     You are prohibited from ignoring the "Narrative" or "Context" vectors.
     BEFORE rating the player, you must cross-reference:
@@ -418,6 +487,25 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
     3. Does the "Context" justify a rating protection? (e.g., "Returning from injury" vs "Healthy but poor").
     If the General Narrative is negative (e.g., "struggling", "out of depth"), you MUST lower the rating attributes (Consistency, Composure) regardless of the player's historical Anchor.
     </synthesis_mandate>
+        `;
+
+        if (isHistorical) {
+            finalInstructions = `
+    1. IDENTITY: Senior Tactical Columnist / Lead Scout.
+    2. ANCHOR: Evaluate the player strictly on their PEAK/PRIME according to the factual foundation.
+    3. EXEMPTION FROM TEMPORAL FIREWALL: Disregard their 2026 status (retired, manager, etc.). Rate them as if they are in their prime competing against modern standards.
+    4. DATA INTEGRITY: Use foundation data for 'latestUpdate' to describe their peak era achievements. Do not calculate ratings using ranking numbers; ratings must be based on the attribute framework applied to verified ability.
+            `;
+        }
+
+        const finalAnswerPrompt = `
+    <context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+    <factual_foundation>
+    ${factualFoundation}
+    </factual_foundation>
+    
+    <instructions>
+    ${finalInstructions}
     </instructions>
 
     <task>${message}</task>`;
@@ -425,6 +513,6 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
         return sendChatMessage(finalAnswerPrompt, history, selectedModel, imageData, selectedLevel);
     } catch (error) {
         console.error("[GLOBAL WORKFLOW] Failed:", error);
-        return sendChatMessage(message, history, 'gemini-3.1-flash-preview', imageData, "low");
+        return sendChatMessage(message, history, 'gemini-3-flash-preview', imageData, "low");
     }
 };

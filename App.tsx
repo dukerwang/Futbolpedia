@@ -15,7 +15,7 @@ const App: React.FC = () => {
   const [loadingMessage, setLoadingMessage] = useState<string>('Processing...');
   const [isLoading, setIsLoading] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
-  
+
   // Sidebar / Dossier State
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [activeProfile, setActiveProfile] = useState<PlayerProfile | null>(null);

@@ -16,7 +16,7 @@ Through a highly specialized prompt engineering framework and a custom React int
 
 - **Frontend:** React 19, TypeScript, Vite
 - **Styling:** Tailwind CSS (Dark/Light mode support)
-- **AI & Data Generation:** Google Gemini GenAI SDK (`@google/genai`) using `gemini-3.1-pro-preview` and `gemini-3.1-flash-preview`
+- **AI & Data Generation:** Google Gemini GenAI SDK (`@google/genai`) using `gemini-3.1-pro-preview` and `gemini-3-flash-preview`
 - **Database & State Management:** Supabase (for profile sharing and URL persistence), standard React Hooks, `localStorage`
 - **Parsing/Rendering:** DOMPurify, Marked
 
