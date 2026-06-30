@@ -75,6 +75,7 @@ async function startServer() {
       const targetUrl = `https://generativelanguage.googleapis.com/${req.params.path}`;
       // SDK sends the key as x-goog-api-key header; server key overrides if set
       const apiKey = GEMINI_API_KEY || (req.headers["x-goog-api-key"] as string);
+      console.log(`[Gemini Proxy] → ${req.method} ${targetUrl} | key=${apiKey ? `set(${apiKey.length}chars)` : "MISSING"} | query=${JSON.stringify(req.query)}`);
       const response = await axios({
         method: req.method as any,
         url: targetUrl,
