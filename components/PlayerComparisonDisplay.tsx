@@ -1,6 +1,7 @@
 import React from 'react';
 import type { PlayerComparison, PlayerProfile, Attributes, GoalkeeperAttributes } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
+import { useTypewriter } from './useTypewriter';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -52,8 +53,9 @@ const AttributeComparisonRow: React.FC<{ label: string; p1_rating: number; p2_ra
     );
 };
 
-export const PlayerComparisonDisplay: React.FC<{ comparison: PlayerComparison }> = ({ comparison }) => {
+export const PlayerComparisonDisplay: React.FC<{ comparison: PlayerComparison; isNew?: boolean }> = ({ comparison, isNew = false }) => {
     const { summary, players } = comparison;
+    const typedSummary = useTypewriter(summary, isNew, 8, 6);
     
     // This component is optimized for 2 players. If more, it will only show the first two.
     if (!players || players.length < 2) {
@@ -108,7 +110,7 @@ export const PlayerComparisonDisplay: React.FC<{ comparison: PlayerComparison }>
                   <span className="mr-3 text-2xl">🔍</span>
                   Analytical Summary
                 </h3>
-                <div className="markdown-content text-gray-700 dark:text-gray-300" dangerouslySetInnerHTML={renderMarkdown(summary)} />
+                <div className="markdown-content text-gray-700 dark:text-gray-300" dangerouslySetInnerHTML={renderMarkdown(typedSummary)} />
             </div>
 
             <div className="bg-white dark:bg-gray-800/70 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-gray-700/50">

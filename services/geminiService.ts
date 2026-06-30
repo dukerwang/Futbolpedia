@@ -1,7 +1,6 @@
-
 import { GoogleGenAI, Chat, Content, Type, ThinkingLevel } from "@google/genai";
 import type { PlayerProfile, Attributes, ChatMessage, PlayerComparison } from '../types';
-import { MASTER_INSTRUCTION_SET } from '../constants';
+import { MASTER_INSTRUCTION_SET, getMasterInstructions, SIMULATION_YEAR, SIMULATION_SEASON } from '../constants';
 
 const supabaseUrl = "https://vnqpluwoxjukoxlnwawo.supabase.co";
 const supabaseKey = "sb_publishable_B8pIUFHdh6dc-JUzJMfVrg_Bc5x5Bi4";
@@ -48,27 +47,122 @@ export const getSharedProfile = async (id: string) => {
   }
 };
 
+const FLASH_MODEL = 'gemini-3.5-flash';
+
+// ─── Q1: Structured output schemas ────────────────────────────────────────────
+// These are passed to generateContent as responseSchema for formal synthesis,
+// guaranteeing schema-valid JSON and eliminating all regex-repair / detection logic.
+const OUTFIELD_ATTRIBUTES_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+        finishing: { type: Type.NUMBER }, firstTouch: { type: Type.NUMBER },
+        dribbling: { type: Type.NUMBER }, vision: { type: Type.NUMBER },
+        retention: { type: Type.NUMBER }, combinationPlay: { type: Type.NUMBER },
+        delivery: { type: Type.NUMBER }, progressivePassing: { type: Type.NUMBER },
+        footballIQ: { type: Type.NUMBER }, offensivePositioning: { type: Type.NUMBER },
+        defensivePositioning: { type: Type.NUMBER }, tackling: { type: Type.NUMBER },
+        interceptions: { type: Type.NUMBER }, pressingIntensity: { type: Type.NUMBER },
+        speed: { type: Type.NUMBER }, acceleration: { type: Type.NUMBER },
+        agility: { type: Type.NUMBER }, strength: { type: Type.NUMBER },
+        aerialProwess: { type: Type.NUMBER }, stamina: { type: Type.NUMBER },
+        composure: { type: Type.NUMBER }, clutch: { type: Type.NUMBER },
+        leadership: { type: Type.NUMBER }, consistency: { type: Type.NUMBER },
+        flair: { type: Type.NUMBER },
+    },
+    required: [
+        'finishing','firstTouch','dribbling','vision','retention','combinationPlay',
+        'delivery','progressivePassing','footballIQ','offensivePositioning',
+        'defensivePositioning','tackling','interceptions','pressingIntensity',
+        'speed','acceleration','agility','strength','aerialProwess','stamina',
+        'composure','clutch','leadership','consistency','flair',
+    ],
+};
+
+const GK_ATTRIBUTES_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+        reflexes: { type: Type.NUMBER }, handling: { type: Type.NUMBER },
+        distribution: { type: Type.NUMBER }, commandOfArea: { type: Type.NUMBER },
+        GKpositioning: { type: Type.NUMBER }, sweeping: { type: Type.NUMBER },
+        ballPlaying: { type: Type.NUMBER },
+    },
+};
+
+const PLAYER_PROFILE_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+        basicInfo: {
+            type: Type.OBJECT,
+            properties: {
+                name: { type: Type.STRING }, age: { type: Type.NUMBER },
+                nationality: { type: Type.STRING }, club: { type: Type.STRING },
+                position: { type: Type.STRING }, height: { type: Type.STRING },
+                weight: { type: Type.STRING },
+            },
+            required: ['name','age','nationality','club','position','height','weight'],
+        },
+        ratings: {
+            type: Type.OBJECT,
+            properties: { overall: { type: Type.NUMBER }, potential: { type: Type.NUMBER } },
+            required: ['overall','potential'],
+        },
+        strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+        weaknesses: { type: Type.ARRAY, items: { type: Type.STRING } },
+        attributes: OUTFIELD_ATTRIBUTES_SCHEMA,
+        goalkeeperAttributes: GK_ATTRIBUTES_SCHEMA, // optional — sanitizer removes for non-GKs
+        shortBio: { type: Type.STRING },
+        playstyleAndRole: {
+            type: Type.OBJECT,
+            properties: {
+                playstyle: {
+                    type: Type.OBJECT,
+                    properties: {
+                        archetype: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                    },
+                    required: ['archetype','description'],
+                },
+                bestRoles: { type: Type.ARRAY, items: { type: Type.STRING } },
+            },
+            required: ['playstyle','bestRoles'],
+        },
+        latestUpdate: { type: Type.STRING },
+    },
+    required: ['basicInfo','ratings','strengths','weaknesses','attributes','shortBio','playstyleAndRole','latestUpdate'],
+};
+
+const PLAYER_COMPARISON_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+        summary: { type: Type.STRING },
+        players: { type: Type.ARRAY, items: PLAYER_PROFILE_SCHEMA },
+    },
+    required: ['summary','players'],
+};
+// ──────────────────────────────────────────────────────────────────────────────
+
 let currentThinkingLevel: string | null = null;
+let currentSystemInstruction: string | null = null;
 let chat: Chat | null = null;
 let currentModel: string | null = null;
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
+// Q3: Use shared simulation constants so the year is consistent everywhere.
+// The real month is kept for search-query grounding (more precise than "June").
 const getCurrentSeasonInfo = () => {
     const now = new Date();
-    const year = 2026; // Static context for the Futbolpedia 2026 simulation
     const month = now.toLocaleString('default', { month: 'long' });
-    const seasonStartYear = 2025; 
-    const currentSeason = `2025-26`;
-    return { year, month, seasonStartYear, currentSeason };
+    return { year: SIMULATION_YEAR, month, currentSeason: SIMULATION_SEASON };
 };
 
 export const resetChat = () => {
   chat = null;
   currentModel = null;
+  currentThinkingLevel = null;
+  currentSystemInstruction = null;
 };
 
-// Optimized for Gemini 3 Flash / Pro
-function initializeChat(model: string, history?: Content[], level: "minimal" | "low" | "medium" | "high" = "high") {
+function initializeChat(model: string, history?: Content[], level: "minimal" | "low" | "medium" | "high" = "medium", systemInstruction?: string) {
   const levelMap: Record<string, ThinkingLevel> = {
     minimal: ThinkingLevel.MINIMAL,
     low: ThinkingLevel.LOW,
@@ -76,10 +170,14 @@ function initializeChat(model: string, history?: Content[], level: "minimal" | "
     high: ThinkingLevel.HIGH
   };
 
+  // Temperature scaled by thinking level: deeper analysis = lower temp to reduce hallucination.
+  const temperature = level === 'high' ? 0.6 : level === 'medium' ? 0.7 : level === 'low' ? 0.8 : 0.85;
+  const instruction = systemInstruction ?? MASTER_INSTRUCTION_SET;
+
   chat = ai.chats.create({
     model: model,
     config: {
-        systemInstruction: MASTER_INSTRUCTION_SET,
+        systemInstruction: instruction,
         tools: [
             {googleSearch: {}},
             {
@@ -103,7 +201,7 @@ function initializeChat(model: string, history?: Content[], level: "minimal" | "
             // @ts-ignore
             includeServerSideToolInvocations: true
         },
-        temperature: 1.0, 
+        temperature,
         thinkingConfig: {
           thinkingLevel: levelMap[level],
         },
@@ -112,6 +210,7 @@ function initializeChat(model: string, history?: Content[], level: "minimal" | "
   });
   currentModel = model;
   currentThinkingLevel = level;
+  currentSystemInstruction = instruction;
 }
 
 const isPlayerProfile = (content: any): content is PlayerProfile => {
@@ -211,6 +310,18 @@ const sanitizeProfileData = (partialProfile: Partial<PlayerProfile> | null): Pla
         delete sanitized.goalkeeperAttributes;
     }
 
+    // Normalize zero-ish height/weight strings the model produces when it
+    // misapplies Protocol P to string fields ("0'0\"" → "N/A", "0 lbs" → "N/A").
+    const isZeroMeasurement = (s: string): boolean =>
+        /^0['"]?0?['"]?$/.test(s.trim()) || /^0\s*(lbs|kg|cm)?$/i.test(s.trim());
+
+    if (!sanitized.basicInfo.height || sanitized.basicInfo.height === 'N/A' || isZeroMeasurement(sanitized.basicInfo.height)) {
+        sanitized.basicInfo.height = 'N/A';
+    }
+    if (!sanitized.basicInfo.weight || sanitized.basicInfo.weight === 'N/A' || isZeroMeasurement(sanitized.basicInfo.weight)) {
+        sanitized.basicInfo.weight = 'N/A';
+    }
+
     const clean = (str: string): string => (str || '').replace(/\s*\[[\d\s,]+\]\s*/g, ' ').trim();
 
     sanitized.shortBio = clean(sanitized.shortBio);
@@ -239,12 +350,51 @@ const sanitizeComparisonData = (partialComparison: Partial<PlayerComparison> | n
     };
 };
 
+// ─── Q1: Structured synthesis ──────────────────────────────────────────────────
+// Uses generateContent + responseSchema instead of the chat API so Gemini enforces
+// schema validity at the API level. No tools are needed here — the full factual
+// foundation is already in the prompt. Throws on failure so the caller can fall
+// back to the chat path.
+const synthesizeFormalResponse = async (
+    prompt: string,
+    isComparisonRequest: boolean,
+    systemInstruction: string,
+): Promise<PlayerProfile | PlayerComparison> => {
+    const schema = isComparisonRequest ? PLAYER_COMPARISON_SCHEMA : PLAYER_PROFILE_SCHEMA;
+
+    // No thinkingConfig here — ThinkingLevel.MEDIUM + responseSchema conflict on Gemini 3.5 Flash,
+    // causing the call to fail or produce malformed output. The responseSchema already enforces
+    // structure at the API level; thinking tokens add nothing and actively corrupt JSON output.
+    const response = await ai.models.generateContent({
+        model: FLASH_MODEL,
+        contents: prompt,
+        config: {
+            systemInstruction,
+            temperature: 0.7,
+            responseMimeType: 'application/json',
+            responseSchema: schema,
+        },
+    });
+
+    const text = response.text;
+    if (!text) throw new Error('Structured synthesis returned no text');
+
+    const parsed = JSON.parse(text);
+
+    if (isComparisonRequest) {
+        return sanitizeComparisonData(parsed as Partial<PlayerComparison>);
+    }
+    return sanitizeProfileData(parsed as Partial<PlayerProfile>);
+};
+// ──────────────────────────────────────────────────────────────────────────────
+
 const sendChatMessage = async (
   message: string, 
   history: ChatMessage[], 
   model: string, 
   imageData?: string, 
-  thinkingLevel: "minimal" | "low" | "medium" | "high" = "high"
+  thinkingLevel: "minimal" | "low" | "medium" | "high" = "medium",
+  systemInstruction?: string
 ): Promise<string | PlayerProfile | PlayerComparison> => {
   const geminiHistory: Content[] = history
     .map((msg): Content | null => {
@@ -255,7 +405,15 @@ const sendChatMessage = async (
         parts.push({ text: msg.content });
       } else if (isPlayerProfile(msg.content) || isPlayerComparison(msg.content)) {
         if (!isUser) {
-           parts.push({ text: JSON.stringify(msg.content) });
+          // Compress profiles to a short summary to prevent anchor bias in follow-up questions.
+          if (isPlayerProfile(msg.content)) {
+            const p = msg.content as PlayerProfile;
+            parts.push({ text: `[Profile generated: ${p.basicInfo?.name}, ${p.ratings?.overall} OVR (Pot: ${p.ratings?.potential}), ${p.basicInfo?.club}, ${p.basicInfo?.position}]` });
+          } else {
+            const c = msg.content as PlayerComparison;
+            const names = c.players?.map(p => `${p.basicInfo?.name} (${p.ratings?.overall} OVR)`).join(' vs ') ?? 'comparison';
+            parts.push({ text: `[Comparison generated: ${names}]` });
+          }
         }
       }
 
@@ -279,8 +437,9 @@ const sendChatMessage = async (
     })
     .filter((item): item is Content => item !== null);
 
-  if (!chat || currentModel !== model || currentThinkingLevel !== thinkingLevel) {
-    initializeChat(model, geminiHistory, thinkingLevel);
+  const resolvedInstruction = systemInstruction ?? MASTER_INSTRUCTION_SET;
+  if (!chat || currentModel !== model || currentThinkingLevel !== thinkingLevel || currentSystemInstruction !== resolvedInstruction) {
+    initializeChat(model, geminiHistory, thinkingLevel, resolvedInstruction);
   }
 
   try {
@@ -348,15 +507,21 @@ const sendChatMessage = async (
     }
 
     if (jsonText.startsWith('{') && jsonText.endsWith('}')) {
-      try {
-        const parsedJson = JSON.parse(jsonText);
-        const foundComparison = findComparisonData(parsedJson);
-        if (foundComparison) return sanitizeComparisonData(foundComparison);
-        const foundProfile = findProfileData(parsedJson);
-        if (foundProfile) return sanitizeProfileData(foundProfile);
-      } catch (e) {
-        console.warn("Attempted to parse as JSON but failed, treating as text:", e);
-      }
+        // Strip thinking artifact patterns (e.g. "2.4]." token fragments from Flash thinking)
+        const repaired = jsonText.replace(/[\d.]*\]\.?"+\s*/g, '').replace(/\s{2,}/g, ' ');
+        for (const candidate of [jsonText, repaired]) {
+            try {
+                const parsedJson = JSON.parse(candidate);
+                const foundComparison = findComparisonData(parsedJson);
+                if (foundComparison) return sanitizeComparisonData(foundComparison);
+                const foundProfile = findProfileData(parsedJson);
+                if (foundProfile) return sanitizeProfileData(foundProfile);
+                break;
+            } catch (e) {
+                // try repaired version next
+            }
+        }
+        console.warn("All JSON parse attempts failed, treating as text.");
     }
     return text;
   } catch (error) {
@@ -367,91 +532,154 @@ const sendChatMessage = async (
 };
 
 export const sendMessageToAI = async (message: string, history: ChatMessage[], imageData?: string, mode: 'default' | 'fast' = 'default'): Promise<string | PlayerProfile | PlayerComparison> => {
-    // 2026 Simulation Context
     const { year, month, currentSeason } = getCurrentSeasonInfo();
-    
+
+    // Detect EAFC-specific queries to conditionally inject the FC Playstyles directory.
+    const isEAFCRequest = /\b(playstyle\+?|fc\s*card|eafc|ea\s*fc)\b/i.test(message);
+    const systemInstruction = getMasterInstructions(isEAFCRequest);
+
     try {
         let factualFoundation = "";
-        let selectedModel = 'gemini-3-flash-preview'; 
 
-        // 1. INTENT GATES (The Fix: Define these BEFORE triggering search)
-        const isProfileRequest = /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good|rank|tier)\b/i.test(message) || /analysis on|report on|who is/i.test(message);
+        // ── Intent detection ────────────────────────────────────────────────────
+        const isProfileRequest = /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good|rank|tier|analyze|breakdown)\b/i.test(message) || /analysis on|report on|break down/i.test(message);
         const isComparison = /compare|vs|versus|better/i.test(message);
-        const isHistorical = /prime|history|historical|all time|all-time|peak/i.test(message);
-        // We only trigger the heavy "Lead Scout" machinery if it looks like a scouting task
+        const isHistorical = /\bprime\b|\bpeak\b|\ball[- ]time\b|\bhistorical\b/i.test(message);
+        const isCurrentStateQuery = /\b(squad|roster|lineup|line.?up|formation|manager|coach|signings?|transfers?|this season|playing for|who(?:'s| is) (?:at|managing)|how (?:does|do) .+ play)\b/i.test(message);
         const isFormal = isProfileRequest || isComparison;
 
-        // FAST MODE BYPASS
+        // ── Fast mode bypass ────────────────────────────────────────────────────
         if (mode === 'fast' && !imageData) {
-            const fastPrompt = `
-    <context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+            const fastPrompt = isFormal
+                ? `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
     <instructions>
-    You are in FAST MODE. Skip deep multi-step research. 
+    You are in FAST MODE. Use a single googleSearch to gather current data, then generate the response immediately.
+    CRITICAL: You MUST output the COMPLETE Player Profile or Comparison JSON schema with ALL required fields.
+    The "attributes" object (all 25 values) and "playstyleAndRole" are MANDATORY — do not abbreviate or omit any fields.
+    Follow the schema exactly as defined in the system instruction. Output pure JSON only, no preamble.
+    </instructions>
+    <task>${message}</task>`
+                : `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+    <instructions>
+    You are in FAST MODE. Skip deep multi-step research.
     1. Use the googleSearch tool efficiently if you need data you don't have.
     2. Answer concisely but accurately.
     3. Maintain the Futbolpedia identity (Objective, Scout-like).
     </instructions>
     <task>${message}</task>`;
-            // Use low thinking level for speed
-            return sendChatMessage(fastPrompt, history, 'gemini-3-flash-preview', undefined, 'low');
+            return sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, isFormal ? 'medium' : 'low', systemInstruction);
         }
 
-        // DEFAULT MODE LOGIC
+        // ── Default mode: pipeline ──────────────────────────────────────────────
         if (!imageData && mode === 'default') {
-            // ONLY RUN VECTORS IF IT IS A FORMAL REQUEST
             if (isFormal) {
-                // "Omniscient Scout" Multi-Vector Search Logic
+                // ── E2: 5→4 vectors for single-player queries (merge D+E into Status+Fitness) ──
+                // Standard single-player profile: was A,B,C,D,E — now A,B,C,D(merged status+fitness).
+                // The triangulation mandate (Protocol Q) requires stats + narrative + physical context.
+                // D and E were both "current-state" signals, so merging them loses no triangulation leg.
                 let queryGenPrompt = `
-Task: Generate comprehensive search queries for: "${message}".
+Task: Generate search queries for: "${message}".
 Context: Current Date is ${month} ${year}. Season: ${currentSeason}.
-MANDATORY SEARCH VECTORS (Generate exactly 1 highly precise query per vector):
+MANDATORY SEARCH VECTORS (exactly 1 precise query per vector, exactly 4 total):
 
-VECTOR A (The Anchor & Class): Search for the player's 2024/2025 peak, major awards, and "best player" rankings.
-VECTOR B (The Hard Data): Search for ${currentSeason} stats, G/A per 90, clean sheets, and advanced metrics.
-VECTOR C (The Narrative & Eye Test): Search for recent pundit analysis, fan sentiment (e.g., "criticism", "praise", "flop", "revelation"), and specific match performance reviews from the current month.
-VECTOR D (The Context): Search for "injury history ${year}", "tactical fit [Club Name]", and manager quotes about role or fitness.
+VECTOR A (Anchor & Class): Search for the player's 2024/2025 peak, major awards, and "best player" rankings.
+VECTOR B (Hard Data): Search for ${currentSeason} stats, G/A per 90, clean sheets, and advanced metrics.
+VECTOR C (Narrative & Eye Test): Search for recent pundit analysis, fan sentiment (e.g., "criticism", "praise", "flop", "revelation"), and specific match performance reviews from the current month.
+VECTOR D (Status & Fitness): Search for the player's current club, any transfer or loan news in ${year}, injury status, manager quotes about their role, and tactical fit in ${currentSeason}.
 
-OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
+OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
 
-                if (isHistorical) {
+                if (isHistorical && isComparison) {
                     queryGenPrompt = `
-Task: Generate comprehensive search queries for evaluating the PEAK/PRIME of: "${message}".
-MANDATORY SEARCH VECTORS (Generate exactly 1 highly precise query per vector):
+Task: Generate search queries to compare the PRIME/PEAK of the two players in: "${message}".
+MANDATORY: Exactly 4 queries — 2 per player at their respective peaks.
 
-VECTOR A (The Anchor & Class): Search for the player's absolute peak season, major awards, and "best player" rankings during their prime.
-VECTOR B (The Hard Data): Search for their best season stats, G/A per 90, clean sheets, and advanced metrics from their prime years.
-VECTOR C (The Narrative & Eye Test): Search for pundit analysis, fan sentiment, and specific match performance reviews from their peak era.
-VECTOR D (The Context): Search for tactical fit and manager quotes about their role during their most dominant period.
+PLAYER 1 — VECTOR A: Absolute peak season stats, major awards, and "best player" rankings during prime.
+PLAYER 1 — VECTOR B: Pundit analysis and match performance reviews from their peak era.
+PLAYER 2 — VECTOR A: Absolute peak season stats, major awards, and "best player" rankings during prime.
+PLAYER 2 — VECTOR B: Pundit analysis and match performance reviews from their peak era.
 
-OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
+OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
+                } else if (isHistorical) {
+                    queryGenPrompt = `
+Task: Generate search queries for evaluating the PEAK/PRIME of: "${message}".
+MANDATORY SEARCH VECTORS (exactly 1 precise query per vector):
+
+VECTOR A (Anchor & Class): Absolute peak season, major awards, and "best player" rankings during prime.
+VECTOR B (Hard Data): Best season stats, G/A per 90, clean sheets, and advanced metrics from prime years.
+VECTOR C (Narrative & Eye Test): Pundit analysis, fan sentiment, and match performance reviews from peak era.
+VECTOR D (Context): Tactical fit and manager quotes about their role during their most dominant period.
+
+OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
+                } else if (isComparison && !isHistorical) {
+                    queryGenPrompt = `
+Task: Generate search queries to compare the two players in: "${message}".
+Context: Current Date is ${month} ${year}. Season: ${currentSeason}.
+MANDATORY: Exactly 4 queries — 2 per player. Identify the two players from the request.
+
+PLAYER 1 — VECTOR A: Their ${currentSeason} stats, goals, assists, and hard performance data.
+PLAYER 1 — VECTOR B: Recent pundit analysis, form, current club/status, and tactical role (${month} ${year}).
+PLAYER 2 — VECTOR A: Their ${currentSeason} stats, goals, assists, and hard performance data.
+PLAYER 2 — VECTOR B: Recent pundit analysis, form, current club/status, and tactical role (${month} ${year}).
+
+OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                 }
 
+                // LOW thinking for query generation: costs almost nothing but meaningfully improves
+                // query specificity vs MINIMAL (correct club names, season labels, etc.).
+                // responseSchema forces {"queries":[...]} — without it the model maps the VECTOR A/B/C/D
+                // labels to JSON keys (e.g. {"vectorA":"..."}) and parsed.queries returns undefined → [].
                 const queryGenResponse = await ai.models.generateContent({
-                    model: "gemini-3-flash-preview", 
+                    model: FLASH_MODEL,
                     contents: queryGenPrompt,
                     config: {
-                        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+                        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
                         responseMimeType: "application/json",
+                        responseSchema: {
+                            type: Type.OBJECT,
+                            properties: {
+                                queries: { type: Type.ARRAY, items: { type: Type.STRING } },
+                            },
+                            required: ['queries'],
+                        },
                     }
                 });
                 
-                // Robust JSON Cleanup
                 const rawText = queryGenResponse.text || '{}';
                 const cleanJson = rawText.replace(/```json|```/g, '').trim();
                 const parsed = JSON.parse(cleanJson);
-                const queries = (parsed.queries || []);
+                const queries: string[] = (parsed.queries || []);
+
+                if (queries.length === 0) {
+                    throw new Error("Query generation returned no search queries. Cannot produce a grounded profile.");
+                }
                 
-                // Concurrency Limit (Safe cap at 8)
                 const SAFE_QUERY_LIMIT = 8;
-                
+
+                // ── Q2: Capture grounding source URLs from each search ──────────────────
+                // groundingChunks contain the actual web sources Gemini used. Feeding them
+                // into the extraction + synthesis steps anchors the model to real citations
+                // rather than training memory, improving anti-hallucination.
                 const results = await Promise.all(queries.slice(0, SAFE_QUERY_LIMIT).map(async (q: string) => {
                    try {
                        const res = await ai.models.generateContent({
-                           model: "gemini-3-flash-preview",
+                           model: FLASH_MODEL,
                            contents: `[Date: ${month} ${year}] ${q}`,
-                           config: { tools: [{googleSearch: {}}] }
+                           config: {
+                               tools: [{googleSearch: {}}],
+                               thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+                           }
                        });
-                       return `[QUERY: ${q}]\n${res.text}`;
+
+                       // Extract verified source URLs from grounding metadata
+                       const chunks = (res as any).candidates?.[0]?.groundingMetadata?.groundingChunks;
+                       const sources: string = chunks
+                           ?.filter((c: any) => c.web?.uri)
+                           ?.slice(0, 3) // cap to 3 sources per query to control token growth
+                           ?.map((c: any) => c.web.title ? `${c.web.title} (${c.web.uri})` : c.web.uri)
+                           ?.join(' | ') ?? '';
+
+                       return `[QUERY: ${q}]\n${res.text}${sources ? `\n[SOURCES: ${sources}]` : ''}`;
                    } catch (e) {
                        console.warn(`Search failed for: ${q}`);
                        return `[QUERY: ${q}]\nData unavailable.`;
@@ -459,26 +687,97 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
                 }));
                 
                 factualFoundation = results.join('\n\n---\n\n');
-                selectedModel = 'gemini-3.1-pro-preview';
             } else {
-                // NON-FORMAL CHAT (The Fallback Fix)
-                // We skip the vector search to prevent hallucinations.
-                // We provide a simple instruction so it acts as a chatbot, not a data engine.
-                factualFoundation = "User is engaging in general conversation. Do not generate a JSON profile. Respond conversationally as the Senior Tactical Columnist. You have access to the googleSearch tool—use it if the user asks a question requiring current stats, squad info, injuries, or recent news.";
-                selectedModel = 'gemini-3-flash-preview';
+                // Non-formal chat
+                if (isCurrentStateQuery) {
+                    try {
+                        const contextRes = await ai.models.generateContent({
+                            model: FLASH_MODEL,
+                            contents: `[Date: ${month} ${year}] ${message}`,
+                            config: { tools: [{ googleSearch: {} }] }
+                        });
+                        factualFoundation = `[CURRENT STATE CONTEXT — ${month} ${year}]\nDo NOT generate a JSON profile. Answer conversationally using the grounded data below.\n${contextRes.text || ''}`;
+                    } catch (e) {
+                        console.warn('[Context Search] Failed for non-formal query:', e);
+                        factualFoundation = "Current state search unavailable. Answer conversationally but flag any current-status claims as potentially unverified.";
+                    }
+                } else {
+                    factualFoundation = "User is engaging in general conversation. Do not generate a JSON profile. Respond conversationally as the Senior Tactical Columnist. You have access to the googleSearch tool—use it if the user asks a question requiring current stats, squad info, injuries, or recent news.";
+                }
             }
         }
 
-        const selectedLevel: "minimal" | "low" | "medium" | "high" = isFormal || selectedModel.includes('pro') ? "high" : "low";
+        // ── Extraction step ─────────────────────────────────────────────────────
+        // Distill raw search results into a verified fact object before synthesis.
+        // This surfaces data gaps explicitly (Protocol P) rather than letting the
+        // model fill them silently from training data.
+        let verifiedFactsBlock = '';
+        if (isFormal && factualFoundation && !factualFoundation.startsWith('User is engaging')) {
+            try {
+                // Misc: cap at 8k chars (was 14k) — tail of search snippets is usually
+                // redundant boilerplate. 8k preserves all meaningful signal.
+                const extractionPrompt = `You are a data extractor. Given these football search results, extract ONLY facts that are explicitly stated. Set any field to null if not found — never infer or guess.
+
+SEARCH RESULTS:
+${factualFoundation.substring(0, 8000)}
+
+QUERY CONTEXT: "${message}"
+
+Return ONLY this JSON (no preamble, no markdown):
+{
+  "playerName": "string or null",
+  "currentClub": "string or null (use most recent transfer if found)",
+  "age": "number or null",
+  "position": "string or null",
+  "nationality": "string or null",
+  "season2526Stats": "string summarising key stats found, or null",
+  "recentForm": "string describing recent results or form, or null",
+  "injuryStatus": "string — state fit/playing if they appeared recently, or describe injury if confirmed, or null",
+  "recentMatchDate": "the most recent match date found in the results as YYYY-MM-DD or 'Month YYYY', or null — this anchors Protocol M temporal verification",
+  "majorAwards": ["array of confirmed awards and rankings found"],
+  "tacticalRole": "string about current role or manager quotes, or null",
+  "verifiedSources": ["array of source URLs or titles from the SOURCES fields in the search results, if present"],
+  "dataGaps": ["list of fields where search results contained no data — e.g. 'season2526Stats', 'injuryStatus'"]
+}`;
+                const extractionRes = await ai.models.generateContent({
+                    model: FLASH_MODEL,
+                    contents: extractionPrompt,
+                    config: {
+                        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+                        responseMimeType: 'application/json',
+                    }
+                });
+                const rawExtraction = (extractionRes.text || '{}').replace(/```json|```/g, '').trim();
+                const parsedFacts = JSON.parse(rawExtraction);
+                verifiedFactsBlock = `
+    <verified_facts>
+    These facts were explicitly confirmed in the search results. Use them for basicInfo and latestUpdate.
+    CRITICAL — DATA GAPS: The 'dataGaps' array below lists fields with no search evidence. Protocol P is MANDATORY for these:
+    • If 'season2526Stats' is in dataGaps → set all Technical and Physical attributes to 0.
+    • If 'recentForm' is in dataGaps → set Consistency and Stamina to 0.
+    • If 'injuryStatus' is in dataGaps → apply Protocol B default (assume fit, do not report injury).
+    • Use 'recentMatchDate' to anchor Protocol M temporal verification before writing latestUpdate.
+    • 'verifiedSources' lists the real web sources used — cite these when writing latestUpdate if specific match events are mentioned.
+    ${JSON.stringify(parsedFacts, null, 2)}
+    </verified_facts>`;
+            } catch (e) {
+                console.warn('[Extraction Step] Failed, proceeding with raw foundation only:', e);
+            }
+        }
+
+        // MEDIUM thinking for formal requests: HIGH on Flash leaks thinking token fragments
+        // ("2.4]." etc.) into JSON output, breaking parse. MEDIUM gives solid reasoning without artifacts.
+        const selectedLevel: "minimal" | "low" | "medium" | "high" = isFormal ? "medium" : "low";
 
         let finalInstructions = `
     1. IDENTITY: Senior Tactical Columnist / Lead Scout.
-    2. ANCHOR: Disregard 2024 memory. Use the 2026 factual foundation provided above.
-    3. PROTOCOL M (Temporal Firewall): Strictly verify the YEAR of events. Prioritize ${month} ${year} data.
-    4. PROTOCOL B (Injury Quarantine / "Rodri" Override): If the foundation shows the player started a match in the last 7 days, they are MATCH FIT. Ignore any "injured" status from 2025.
-    5. ROSTER CHECK: If foundation shows a transfer or loan in the 25-26 season, update the basicInfo.club accordingly.
-    6. DATA INTEGRITY: Use foundation data only for 'latestUpdate' and 'basicInfo'. Do not calculate ratings using ranking numbers; ratings must be based on the attribute framework applied to verified ability.
-    7. GENERATIONAL WEAPON RULE: The "Generational Weapon" (Protocol C) ONLY applies to 96+ players. Do NOT cite it or require it for any player projected at 95 or below.
+    2. TRAINING MEMORY PROHIBITION: Your pre-trained knowledge of player club affiliations, squad compositions, manager names, transfer history, and injury statuses is potentially months or years out of date. You are PROHIBITED from stating any current-state fact (club, squad, manager, fitness, role) unless it is explicitly confirmed in the <factual_foundation> or <verified_facts> blocks above. If search data is absent for a current-state claim, write "no current data available" — never default to training memory.
+    3. ANCHOR: Use only the factual foundation and verified facts above. They supersede all training knowledge.
+    4. PROTOCOL M (Temporal Firewall): Strictly verify the YEAR of events. Prioritize ${month} ${year} data. Use 'recentMatchDate' from verified_facts as your temporal anchor before writing latestUpdate.
+    5. PROTOCOL B (Injury Quarantine / "Rodri" Override): If the foundation shows the player started a match in the last 7 days, they are MATCH FIT. Ignore any "injured" status from 2025.
+    6. ROSTER CHECK: If foundation shows a transfer or loan in the 25-26 season, update the basicInfo.club accordingly.
+    7. DATA INTEGRITY: Use foundation data only for 'latestUpdate' and 'basicInfo'. Do not calculate ratings using ranking numbers; ratings must be based on the attribute framework applied to verified ability.
+    8. GENERATIONAL WEAPON RULE: Protocol C ONLY applies to 96+ players. Do NOT cite it or require it for any player projected at 95 or below.
     <synthesis_mandate>
     You are prohibited from ignoring the "Narrative" or "Context" vectors.
     BEFORE rating the player, you must cross-reference:
@@ -487,6 +786,13 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
     3. Does the "Context" justify a rating protection? (e.g., "Returning from injury" vs "Healthy but poor").
     If the General Narrative is negative (e.g., "struggling", "out of depth"), you MUST lower the rating attributes (Consistency, Composure) regardless of the player's historical Anchor.
     </synthesis_mandate>
+    9. STRING FIELD NULLS: Protocol P's "set to 0" rule applies ONLY to the 25 numerical values inside the 'attributes' object. For string fields in 'basicInfo' — specifically 'height' and 'weight' — if the search data contains no verified figure, output the string "N/A". Never output "0'0\"" or "0 lbs" as a zero-value substitute for missing data.
+    10. PRE-OUTPUT VERIFICATION — confirm each before generating JSON:
+       • (E) latestUpdate contains no stat claim without a specific number from the foundation
+       • (M) Every match/club reference year is ${year}, not pulled from memory
+       • (J) Only defined tier names used — no invented labels
+       • (P) Numerical attributes lacking search evidence are set to 0; string fields use "N/A"
+       • (C) Generational Weapon NOT applied to any player at 95 or below
         `;
 
         if (isHistorical) {
@@ -495,6 +801,18 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
     2. ANCHOR: Evaluate the player strictly on their PEAK/PRIME according to the factual foundation.
     3. EXEMPTION FROM TEMPORAL FIREWALL: Disregard their 2026 status (retired, manager, etc.). Rate them as if they are in their prime competing against modern standards.
     4. DATA INTEGRITY: Use foundation data for 'latestUpdate' to describe their peak era achievements. Do not calculate ratings using ranking numbers; ratings must be based on the attribute framework applied to verified ability.
+    5. GENERATIONAL WEAPON RULE: Protocol C ONLY applies to 96+ players. Do NOT cite it or require it for any player projected at 95 or below.
+    <synthesis_mandate>
+    BEFORE rating the player, you must cross-reference all three search signals:
+    1. Does the "Hard Data" support the "Anchor"? (Did his stats reflect his class?)
+    2. Does the "Narrative" explain the "Data"? (e.g., tactical role vs raw output)
+    3. Does the "Context" support or challenge the rating? (e.g., era, competition level)
+    </synthesis_mandate>
+    6. PRE-OUTPUT VERIFICATION — confirm each before generating JSON:
+       • (J) Only defined tier names used — no invented labels
+       • (P) All attributes lacking search evidence are set to 0
+       • (C) Generational Weapon NOT applied to any player at 95 or below
+       • (A) Potential projection ONLY if player was under 25 AND already 90+ during their prime
             `;
         }
 
@@ -503,16 +821,34 @@ OUTPUT: JSON with a single 'queries' array containing strictly strings.`;
     <factual_foundation>
     ${factualFoundation}
     </factual_foundation>
-    
+    ${verifiedFactsBlock}
     <instructions>
     ${finalInstructions}
     </instructions>
 
     <task>${message}</task>`;
-        
-        return sendChatMessage(finalAnswerPrompt, history, selectedModel, imageData, selectedLevel);
+
+        // ── Q1: Route formal default-mode requests through structured synthesis ──
+        // synthesizeFormalResponse uses generateContent + responseSchema so Gemini
+        // guarantees schema-valid JSON. No tools needed — the foundation is in the prompt.
+        // Falls back to sendChatMessage (existing path) if the API rejects the schema.
+        if (isFormal && !imageData && mode === 'default' && isProfileRequest) {
+            try {
+                return await synthesizeFormalResponse(finalAnswerPrompt, isComparison, systemInstruction);
+            } catch (e) {
+                console.warn('[Structured Synthesis] Failed, falling back to chat path:', e);
+                // CRITICAL: use 'minimal' here, NOT selectedLevel ('medium').
+                // Medium thinking leaks artifact tokens into JSON, corrupting it so
+                // findProfileData fails and the raw JSON string gets displayed in chat.
+                return sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, 'minimal', systemInstruction);
+            }
+        }
+
+        return sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, selectedLevel, systemInstruction);
     } catch (error) {
         console.error("[GLOBAL WORKFLOW] Failed:", error);
-        return sendChatMessage(message, history, 'gemini-3-flash-preview', imageData, "low");
+        // MINIMAL thinking in the fallback: LOW thinking leaks citation tokens ([2.1.3] etc.)
+        // into JSON output, corrupting the structure and preventing profile detection.
+        return sendChatMessage(message, history, FLASH_MODEL, imageData, "minimal", getMasterInstructions(false));
     }
 };

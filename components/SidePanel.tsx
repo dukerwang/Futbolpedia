@@ -3,13 +3,17 @@ import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { ShareButton } from './ShareButton';
 import { supabase } from '../services/geminiService';
 
 interface SidePanelProps {
   isOpen: boolean;
   onClose: () => void;
   profile: PlayerProfile | null;
+  allProfiles: PlayerProfile[];
+  onSelectProfile: (profile: PlayerProfile | null) => void;
+  onBackToHome: () => void;
+  onRenameDossier?: (oldName: string, newName: string) => void;
+  onDeleteDossier?: (playerName: string) => void;
 }
 
 const getTierColorClass = (rating: number) => {
@@ -37,10 +41,28 @@ const AttributeLine: React.FC<{ label: string; rating: number }> = ({ label, rat
     );
 };
 
-export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, profile }) => {
+export const SidePanel: React.FC<SidePanelProps> = ({ 
+  isOpen, 
+  onClose, 
+  profile,
+  allProfiles = [],
+  onSelectProfile,
+  onBackToHome,
+  onRenameDossier,
+  onDeleteDossier
+}) => {
   const [shareStatus, setShareStatus] = useState<'idle' | 'saving' | 'copied'>('idle');
   const [isDesktop, setIsDesktop] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
+  
+  // Dossier list editing states
+  const [editingName, setEditingName] = useState<string | null>(null);
+  const [editNameText, setEditNameText] = useState('');
+  const [confirmDeleteName, setConfirmDeleteName] = useState<string | null>(null);
+
+  const currentIndex = profile && allProfiles
+    ? allProfiles.findIndex(p => p.basicInfo.name.toLowerCase() === profile.basicInfo.name.toLowerCase())
+    : -1;
   
   // Mobile Gesture State
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -54,15 +76,15 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, profile }
     return () => window.removeEventListener('resize', checkDesktop);
   }, []);
 
-  // Animation Trigger
+  // Animation Trigger (now based on isOpen state to support home page transitions too)
   useEffect(() => {
-    if (profile) {
+    if (isOpen) {
         const timer = setTimeout(() => setIsVisible(true), 50);
         return () => clearTimeout(timer);
     } else {
         setIsVisible(false);
     }
-  }, [profile]);
+  }, [isOpen]);
 
   const getTierText = (rating: number) => {
       if (rating >= 96) return "Generational Icon";
@@ -186,7 +208,199 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, profile }
       }
   };
 
-  if (!profile) return null;
+  const handleStartRename = (name: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingName(name);
+    setEditNameText(name);
+  };
+
+  const handleSaveRename = (oldName: string, e: React.FormEvent) => {
+    e.preventDefault();
+    if (editNameText.trim() && onRenameDossier) {
+      onRenameDossier(oldName, editNameText.trim());
+    }
+    setEditingName(null);
+  };
+
+  const handleCancelRename = () => {
+    setEditingName(null);
+  };
+
+  const handleDeleteClick = (name: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirmDeleteName === name) {
+      if (onDeleteDossier) {
+        onDeleteDossier(name);
+      }
+      setConfirmDeleteName(null);
+    } else {
+      setConfirmDeleteName(name);
+      // Automatically reset confirmation after 3 seconds
+      setTimeout(() => {
+        setConfirmDeleteName(prev => prev === name ? null : prev);
+      }, 3000);
+    }
+  };
+
+  // Prevent render if not open and not visible
+  if (!isOpen && !isVisible) return null;
+
+  // Render Dossier Library Home if active profile is null
+  if (!profile) {
+    return (
+      <>
+        {!isDesktop && isOpen && (
+            <div 
+                className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 md:hidden animate-fade-in"
+                onClick={onClose}
+            />
+        )}
+
+        <div 
+            style={getPanelStyle()}
+            className={`fixed z-[60] bg-cream-100 dark:bg-charcoal border-r border-cream-300/80 dark:border-charcoal-border/80 shadow-right-depth dark:shadow-dark-float flex flex-col
+                inset-x-0 bottom-0 h-[92vh] rounded-t-2xl transition-transform duration-500 ease-ios-ease will-change-transform
+                md:inset-y-0 md:left-0 md:h-full md:w-[450px] md:rounded-none
+            `}
+        >
+            {/* Header Area */}
+            <div className="flex justify-between items-center px-8 py-6 border-b border-cream-300 dark:border-charcoal-border bg-cream-50 dark:bg-charcoal-surface rounded-t-2xl md:rounded-none sticky top-0 z-50">
+                <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[22px] text-emerald-600 dark:text-emerald-400">folder_shared</span>
+                    <h3 className="text-sm font-serif font-bold text-charcoal dark:text-white uppercase tracking-widest">
+                        Dossier Library
+                    </h3>
+                </div>
+                <button
+                    onClick={onClose}
+                    className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-red-500 hover:bg-cream-200 dark:hover:bg-charcoal-light rounded-full transition-colors"
+                    title="Close Panel"
+                >
+                    <span className="material-symbols-outlined text-[18px] block">close</span>
+                </button>
+            </div>
+
+            {/* Scrollable Dossiers List */}
+            <div className="flex-1 overflow-y-auto px-6 py-6 space-y-3 bg-cream-100 dark:bg-charcoal">
+                {allProfiles.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-64 opacity-40 text-center px-4 select-none">
+                        <span className="material-symbols-outlined text-[40px] mb-2">folder_open</span>
+                        <p className="text-sm font-serif italic">No dossiers generated yet</p>
+                        <p className="text-xs font-sans mt-2 max-w-[280px] leading-relaxed mx-auto text-charcoal/60 dark:text-cream-400">
+                            Ask Futbolpedia to rate or scout a player to compile a scouting dossier here.
+                        </p>
+                    </div>
+                ) : (
+                    allProfiles.map((p) => {
+                        const isEditing = editingName === p.basicInfo.name;
+                        const isDeleting = confirmDeleteName === p.basicInfo.name;
+                        const formattedDate = new Date(p.createdAt || Date.now()).toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric'
+                        });
+
+                        return (
+                            <div
+                                key={p.basicInfo.name}
+                                onClick={() => {
+                                    if (!isEditing) {
+                                        onSelectProfile(p);
+                                    }
+                                }}
+                                className="group relative flex flex-col p-4 rounded-xl border transition-all duration-300 cursor-pointer bg-white dark:bg-charcoal-surface/30 border-cream-300/60 dark:border-charcoal-border hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 shadow-sm"
+                            >
+                                {isEditing ? (
+                                    <form
+                                        onSubmit={(e) => handleSaveRename(p.basicInfo.name, e)}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="flex items-center gap-1.5 w-full"
+                                    >
+                                        <input
+                                            type="text"
+                                            value={editNameText}
+                                            onChange={(e) => setEditNameText(e.target.value)}
+                                            autoFocus
+                                            onBlur={() => {
+                                                // Wait for form actions to proceed
+                                                setTimeout(() => {
+                                                    setEditingName(null);
+                                                }, 200);
+                                            }}
+                                            className="flex-1 px-3 py-1.5 text-xs font-serif bg-cream-100 dark:bg-charcoal border border-emerald-500/50 rounded focus:outline-none focus:ring-1 focus:ring-emerald-500 text-charcoal dark:text-cream-50"
+                                        />
+                                        <button
+                                            type="submit"
+                                            className="p-1 text-emerald-600 hover:text-emerald-500 active:scale-95 transition-transform"
+                                            title="Save name"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px] block font-bold">check</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleCancelRename}
+                                            className="p-1 text-red-500 hover:text-red-400 active:scale-95 transition-transform"
+                                            title="Cancel"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px] block">close</span>
+                                        </button>
+                                    </form>
+                                ) : (
+                                    <div className="flex justify-between items-center pr-12">
+                                        <div className="flex flex-col">
+                                            <h4 className="font-serif font-bold text-sm tracking-tight text-charcoal dark:text-cream-50 line-clamp-1">
+                                                {p.basicInfo.name}
+                                            </h4>
+                                            <div className="flex items-center gap-1.5 mt-1 text-[10px] font-mono text-charcoal/50 dark:text-cream-400 font-medium">
+                                                <span>{formattedDate}</span>
+                                                <span className="size-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20"></span>
+                                                <span>{formatPosition(p.basicInfo.position)}</span>
+                                                <span className="size-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20"></span>
+                                                <span className="line-clamp-1 max-w-[120px]">{p.basicInfo.club}</span>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-1 bg-cream-200/50 dark:bg-charcoal-light/40 px-2.5 py-1 rounded-lg border border-cream-300/40 dark:border-charcoal-border shrink-0 ml-2">
+                                            <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">{p.ratings.overall}</span>
+                                            <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider">OVR</span>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {!isEditing && (
+                                    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity bg-gradient-to-l from-white dark:from-charcoal-surface via-white dark:via-charcoal-surface to-transparent pl-4 py-1.5 rounded-r-xl">
+                                        <button
+                                            onClick={(e) => handleStartRename(p.basicInfo.name, e)}
+                                            className="p-1 text-charcoal/50 dark:text-cream-400/60 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40 rounded transition-all"
+                                            title="Rename Dossier"
+                                        >
+                                            <span className="material-symbols-outlined text-[14px] block">edit</span>
+                                        </button>
+                                        <button
+                                            onClick={(e) => handleDeleteClick(p.basicInfo.name, e)}
+                                            className={`p-1 rounded transition-all ${
+                                                isDeleting
+                                                    ? 'bg-red-500/10 text-red-600 border border-red-500/30 hover:bg-red-500 hover:text-white px-2'
+                                                    : 'text-charcoal/50 dark:text-cream-400/60 hover:text-red-500 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40'
+                                            }`}
+                                            title={isDeleting ? "Click again to confirm delete" : "Delete Dossier"}
+                                        >
+                                            {isDeleting ? (
+                                                <span className="text-[9px] font-sans font-bold uppercase tracking-wider">Confirm</span>
+                                            ) : (
+                                                <span className="material-symbols-outlined text-[14px] block">delete</span>
+                                            )}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })
+                )}
+            </div>
+        </div>
+      </>
+    );
+  }
 
   const categories = profile.goalkeeperAttributes ? GK_ATTRIBUTE_CATEGORIES : ATTRIBUTE_CATEGORIES;
   const attrSource = profile.goalkeeperAttributes ? profile.goalkeeperAttributes : profile.attributes;
@@ -219,55 +433,98 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, profile }
                     <div className="w-16 h-1.5 bg-charcoal/20 dark:bg-cream-400/20 rounded-full"></div>
                 </div>
 
-                <div className="flex justify-between items-start px-8 pt-8 pb-4">
-                    <div>
-                        <h2 className="text-3xl font-serif font-bold text-charcoal dark:text-white leading-tight">{profile.basicInfo.name}</h2>
-                        <p className="text-emerald-600 dark:text-emerald-400 font-serif italic text-lg leading-tight mt-1 mb-1">
+                <div className="flex justify-between items-start px-8 pt-6 pb-4">
+                    <div className="flex-1 pr-4">
+                        <h2 className="text-2xl font-serif font-bold text-charcoal dark:text-white leading-tight">{profile.basicInfo.name}</h2>
+                        <p className="text-emerald-600 dark:text-emerald-400 font-serif italic text-base leading-tight mt-1 mb-1">
                             {profile.playstyleAndRole?.playstyle?.archetype}
                         </p>
-                        <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-charcoal/60 dark:text-cream-400 font-sans">
+                        <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-charcoal/60 dark:text-cream-400 font-sans">
                                 <span className="font-semibold text-charcoal dark:text-cream-200">{formatPosition(profile.basicInfo.position)}</span>
                                 <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                <span>{profile.basicInfo.club}</span>
+                                <span className="line-clamp-1">{profile.basicInfo.club}</span>
                                 {profile.basicInfo.height && profile.basicInfo.height !== 'N/A' && (
                                     <>
                                         <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
                                         <span>{profile.basicInfo.height}</span>
                                     </>
                                 )}
-                                {profile.basicInfo.weight && profile.basicInfo.weight !== 'N/A' && (
-                                    <>
-                                        <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                        <span>{profile.basicInfo.weight}</span>
-                                    </>
-                                )}
                         </div>
                     </div>
                     
-                    <div className="flex flex-col items-end text-right">
-                            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1">{getTierText(profile.ratings.overall)}</span>
-                            <div className="flex gap-4">
+                    <div className="flex flex-col items-end text-right shrink-0">
+                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getTierText(profile.ratings.overall)}</span>
+                        
+                        <div className="flex gap-4">
                             <div className="flex flex-col items-center">
-                                <span className={`text-3xl font-mono font-bold leading-none ${profile.ratings.overall >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-white'}`}>{profile.ratings.overall}</span>
-                                <span className="text-[9px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">OVR</span>
+                                <span className={`text-2xl font-mono font-bold leading-none ${profile.ratings.overall >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-white'}`}>{profile.ratings.overall}</span>
+                                <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">OVR</span>
                             </div>
                             <div className="flex flex-col items-center">
-                                <span className="text-3xl font-mono font-bold leading-none text-charcoal/60 dark:text-cream-200">{profile.ratings.potential}</span>
-                                <span className="text-[9px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">POT</span>
+                                <span className="text-2xl font-mono font-bold leading-none text-charcoal/60 dark:text-cream-200">{profile.ratings.potential}</span>
+                                <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">POT</span>
                             </div>
                         </div>
+
+                        {/* Navigation Arrows placed in the blank space under OVR and POT, but above share/close buttons */}
+                        {allProfiles.length > 1 && currentIndex !== -1 && (
+                            <div className="flex items-center bg-cream-200/60 dark:bg-charcoal-light/35 rounded-lg p-0.5 border border-cream-300/60 dark:border-charcoal-border select-none mt-4">
+                                <button 
+                                    disabled={currentIndex === 0}
+                                    onClick={() => onSelectProfile(allProfiles[currentIndex - 1])}
+                                    className="p-1 rounded text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-white hover:bg-cream-200 dark:hover:bg-charcoal-light disabled:opacity-20 disabled:pointer-events-none transition-all active:scale-95"
+                                    title="Previous Dossier"
+                                >
+                                    <span className="material-symbols-outlined text-[15px] font-bold block">arrow_back</span>
+                                </button>
+                                
+                                <span className="text-[10px] font-mono font-bold px-2 text-charcoal/70 dark:text-cream-300">
+                                    {currentIndex + 1}/{allProfiles.length}
+                                </span>
+
+                                <button 
+                                    disabled={currentIndex === allProfiles.length - 1}
+                                    onClick={() => onSelectProfile(allProfiles[currentIndex + 1])}
+                                    className="p-1 rounded text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-white hover:bg-cream-200 dark:hover:bg-charcoal-light disabled:opacity-20 disabled:pointer-events-none transition-all active:scale-95"
+                                    title="Next Dossier"
+                                >
+                                    <span className="material-symbols-outlined text-[15px] font-bold block">arrow_forward</span>
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                {/* Toolbar */}
-                <div className="flex justify-between items-center px-6 pb-6">
+                {/* Toolbar / Inline Back, Share and Close */}
+                <div className="flex justify-between items-center px-8 pb-5">
+                    <div className="flex items-center">
                         <span className="text-[10px] uppercase tracking-widest text-charcoal/40 dark:text-cream-400/40 font-bold">Confidential Dossier</span>
-                    <div className="flex gap-1">
-                        <button onClick={handleShare} className="p-2 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors" title="Share Profile">
-                            <span className="material-symbols-outlined text-[20px]">{shareStatus === 'copied' ? 'check' : 'share'}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                        {/* Inline Back to Dossier Home Button */}
+                        <button 
+                            onClick={onBackToHome}
+                            className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center gap-1 rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 px-2 py-1"
+                            title="Back to Dossier Home"
+                        >
+                            <span className="material-symbols-outlined text-[18px] block">arrow_back</span>
+                            <span className="text-[10px] font-sans font-bold uppercase tracking-wider">Back</span>
                         </button>
-                        <button onClick={onClose} className="p-2 text-charcoal/60 dark:text-cream-400 hover:text-red-500 transition-colors" title="Close">
-                            <span className="material-symbols-outlined text-[20px]">close</span>
+
+                        <button 
+                            onClick={handleShare} 
+                            className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30" 
+                            title="Share Profile"
+                        >
+                            <span className="material-symbols-outlined text-[18px] block">{shareStatus === 'copied' ? 'check' : 'share'}</span>
+                        </button>
+                        <button 
+                            onClick={onClose} 
+                            className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-red-500 transition-colors rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30" 
+                            title="Close"
+                        >
+                            <span className="material-symbols-outlined text-[18px] block">close</span>
                         </button>
                     </div>
                 </div>
@@ -283,31 +540,31 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, profile }
                 {/* 1. Scout Summary */}
                 <div>
                         <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Scout Summary</h3>
-                        <div className="prose prose-sm dark:prose-invert leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light text-justify" dangerouslySetInnerHTML={renderMarkdown(profile.shortBio)} />
+                        <div className="prose prose-sm dark:prose-invert leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light text-justify font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.shortBio)} />
                 </div>
 
                 {/* 2. Tactical Brief */}
                 {profile.playstyleAndRole?.playstyle?.description && (
                      <div>
-                         <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">
-                             <span className="flex items-center gap-2">Tactical Brief</span>
-                         </h3>
-                         <div className="prose prose-sm dark:prose-invert leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light text-justify" dangerouslySetInnerHTML={renderMarkdown(profile.playstyleAndRole.playstyle.description)} />
+                          <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">
+                              <span className="flex items-center gap-2">Tactical Brief</span>
+                          </h3>
+                          <div className="prose prose-sm dark:prose-invert leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light text-justify font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.playstyleAndRole.playstyle.description)} />
                      </div>
                 )}
 
                 {/* 3. Best Roles */}
                 {profile.playstyleAndRole?.bestRoles && profile.playstyleAndRole.bestRoles.length > 0 && (
                      <div>
-                         <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Effective Roles</h3>
-                         <div className="flex flex-wrap gap-2">
-                             {profile.playstyleAndRole.bestRoles.map((role, idx) => (
-                                 <span key={idx} className="px-3 py-1 bg-white dark:bg-charcoal-light border border-cream-300 dark:border-charcoal-border rounded-full text-xs font-bold text-charcoal/80 dark:text-cream-200">
-                                     {role}
-                                 </span>
-                             ))}
-                         </div>
-                     </div>
+                          <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Effective Roles</h3>
+                          <div className="flex flex-wrap gap-2">
+                              {profile.playstyleAndRole.bestRoles.map((role, idx) => (
+                                  <span key={idx} className="px-3 py-1 bg-white dark:bg-charcoal-light border border-cream-300 dark:border-charcoal-border rounded-full text-xs font-bold text-charcoal/80 dark:text-cream-200 font-sans">
+                                      {role}
+                                  </span>
+                              ))}
+                          </div>
+                      </div>
                 )}
 
                 {/* 4. Strengths & Weaknesses */}
@@ -316,7 +573,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, profile }
                             <h4 className="flex items-center gap-2 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-widest mb-3">
                             Key Strengths
                             </h4>
-                            <ul className="text-sm text-charcoal dark:text-cream-200 space-y-2 list-none pl-0">
+                            <ul className="text-sm text-charcoal dark:text-cream-200 space-y-2 list-none pl-0 font-sans">
                             {profile.strengths.map((s,i) => (
                                 <li key={i} className="flex gap-3">
                                     <span className="text-emerald-500 font-bold">•</span>
@@ -329,7 +586,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, profile }
                             <h4 className="flex items-center gap-2 text-[11px] font-bold text-red-700 dark:text-red-400 uppercase tracking-widest mb-3">
                             Areas to Improve
                             </h4>
-                            <ul className="text-sm text-charcoal dark:text-cream-200 space-y-2 list-none pl-0">
+                            <ul className="text-sm text-charcoal dark:text-cream-200 space-y-2 list-none pl-0 font-sans">
                             {profile.weaknesses.map((w,i) => (
                                 <li key={i} className="flex gap-3">
                                     <span className="text-red-500 font-bold">•</span>
@@ -363,10 +620,10 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, profile }
                     </div>
                 </div>
 
-                    {/* 6. Latest Update */}
+                {/* 6. Latest Update */}
                 <div className="bg-cream-50 dark:bg-charcoal-surface p-5 border-l-4 border-charcoal dark:border-cream-400 shadow-sm">
                     <h3 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-2">Latest Intelligence</h3>
-                    <div className="text-xs text-charcoal dark:text-cream-200 leading-relaxed" dangerouslySetInnerHTML={renderMarkdown(profile.latestUpdate)} />
+                    <div className="text-xs text-charcoal dark:text-cream-200 leading-relaxed font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.latestUpdate)} />
                 </div>
 
                 {/* Bottom Spacer */}

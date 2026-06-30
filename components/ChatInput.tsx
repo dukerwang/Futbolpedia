@@ -4,10 +4,9 @@ interface ChatInputProps {
   onSendMessage: (message: string, imageData?: string, mode?: 'default' | 'fast') => void;
   isLoading: boolean;
   loadingMessage: string;
-  onToggleDossier: () => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, loadingMessage, onToggleDossier }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, loadingMessage }) => {
   const [message, setMessage] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const [mode, setMode] = useState<'default' | 'fast'>('default');
@@ -77,15 +76,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
                         <span className="material-symbols-outlined text-[20px] font-light">add_circle</span>
                     </button>
                     <input type="file" ref={fileInputRef} onChange={onFileChange} accept="image/*" className="hidden" />
-
-                    <button 
-                        type="button"
-                        onClick={onToggleDossier}
-                        className="p-2 text-cream-800 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50 transition-colors" 
-                        title="Open Dossier"
-                    >
-                        <span className="material-symbols-outlined text-[20px] font-light">database</span>
-                    </button>
                     
                     {/* Sliding Pill Toggle */}
                     <div className="relative flex items-center bg-cream-200 dark:bg-charcoal-light rounded-full p-1 w-24 h-9 cursor-pointer ml-2 border border-cream-300 dark:border-charcoal-border select-none" onClick={() => setMode(mode === 'default' ? 'fast' : 'default')}>

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { ChatMessage as ChatMessageType, PlayerComparison } from '../types';
 import { PlayerComparisonDisplay } from './PlayerComparisonDisplay';
+import { useTypewriter } from './useTypewriter';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -9,9 +10,23 @@ const isPlayerComparison = (content: any): content is PlayerComparison => {
 };
 
 export const ChatMessage: React.FC<{ message: ChatMessageType }> = ({ message }) => {
-    const { sender, content } = message;
+    const { sender, content, timestamp } = message;
     const isUser = sender === 'user';
     const [copied, setCopied] = useState(false);
+
+    // Determine if the message is newly received (created within the last 10 seconds)
+    const isNew = !isUser && timestamp ? (Date.now() - timestamp < 10000) : false;
+
+    // Get the base text to render
+    let textToRender = '';
+    if (typeof content === 'string') {
+        textToRender = content;
+    } else if (typeof content === 'object' && content !== null && 'basicInfo' in content) {
+        textToRender = `**Dossier Generated: ${content.basicInfo.name}**\n\n${content.shortBio}`;
+    }
+
+    // Call typewriter hook at top level
+    const typedText = useTypewriter(textToRender, isNew, 8, 6);
 
     const handleCopy = () => {
         let textToCopy = '';
@@ -56,21 +71,14 @@ export const ChatMessage: React.FC<{ message: ChatMessageType }> = ({ message })
                      <div className="flex items-baseline justify-between border-b border-cream-300 dark:border-charcoal-border pb-2 mb-4">
                         <span className="text-[10px] font-sans font-bold text-charcoal/60 dark:text-cream-400 uppercase tracking-widest">Comparative Analysis</span>
                     </div>
-                    <PlayerComparisonDisplay comparison={content} />
+                    <PlayerComparisonDisplay comparison={content} isNew={isNew} />
                 </div>
             </div>
         );
     }
 
     const renderContent = () => {
-        let textToRender = '';
-        if (typeof content === 'string') {
-            textToRender = content;
-        } else if (typeof content === 'object' && 'basicInfo' in content) {
-             textToRender = `**Dossier Generated: ${content.basicInfo.name}**\n\n${content.shortBio}`;
-        }
-
-        const rawMarkup = marked.parse(textToRender, { gfm: true, breaks: true }) as string;
+        const rawMarkup = marked.parse(typedText, { gfm: true, breaks: true }) as string;
         const sanitizedMarkup = DOMPurify.sanitize(rawMarkup);
         return { __html: sanitizedMarkup };
     };

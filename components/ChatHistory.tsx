@@ -35,13 +35,27 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({ messages, isLoading, l
         {messages.map(msg => <ChatMessage key={msg.id} message={msg} />)}
         
         {isLoading && (
-             <div className="w-full flex gap-6 py-6 opacity-60 animate-pulse">
-                 {/* Lighter Gray background as requested */}
-                 <div className="size-10 rounded-full bg-cream-400/50 dark:bg-charcoal-light flex items-center justify-center shrink-0 mt-1 shadow-sm">
-                    <span className="font-serif font-bold italic text-xl text-charcoal dark:text-cream-200">F</span>
+             <div className="w-full flex gap-6 py-6 border-b border-cream-300/30 dark:border-charcoal-border/30">
+                 <div className="size-10 rounded-full bg-charcoal dark:bg-cream-400 text-cream-50 dark:text-charcoal flex items-center justify-center shrink-0 mt-1 shadow-md animate-pulse">
+                    <span className="font-serif font-bold italic text-xl">F</span>
                 </div>
-                <div className="flex items-center">
-                    <span className="text-sm font-serif italic text-charcoal dark:text-cream-100">{loadingMessage}</span>
+                <div className="flex flex-col gap-1.5 flex-1 justify-center">
+                    <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-sans font-bold text-charcoal/60 dark:text-cream-400 uppercase tracking-widest">
+                            Analyst Thinking
+                        </span>
+                        {/* Three bouncing progress dots */}
+                        <div className="flex items-center gap-1 ml-1 h-3">
+                            <span className="size-1.5 rounded-full bg-charcoal/60 dark:bg-cream-400/60 animate-bounce" style={{ animationDelay: '0ms' }}></span>
+                            <span className="size-1.5 rounded-full bg-charcoal/60 dark:bg-cream-400/60 animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                            <span className="size-1.5 rounded-full bg-charcoal/60 dark:bg-cream-400/60 animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                        </div>
+                    </div>
+                    <div className="flex items-center">
+                        <span className="text-sm font-serif italic text-charcoal/70 dark:text-cream-100/70">
+                            {loadingMessage}
+                        </span>
+                    </div>
                 </div>
             </div>
         )}

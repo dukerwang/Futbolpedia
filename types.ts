@@ -71,6 +71,7 @@ export interface PlayerProfile {
   shortBio: string;
   playstyleAndRole: PlaystyleAndRole;
   latestUpdate: string;
+  createdAt?: number;
 }
 
 export interface PlayerComparison {
@@ -83,4 +84,14 @@ export interface ChatMessage {
   sender: 'user' | 'ai';
   content: string | PlayerProfile | PlayerComparison | ReactNode;
   image?: string; // base64 encoded image string
+  timestamp?: number;
+}
+
+export interface Conversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: number;
+  activeProfile: PlayerProfile | null;
+  allProfiles: PlayerProfile[];
 }
