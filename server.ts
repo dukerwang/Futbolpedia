@@ -73,12 +73,14 @@ async function startServer() {
     try {
       const proxyPath = Array.isArray(req.params.path) ? req.params.path.join('/') : req.params.path;
       const targetUrl = `https://generativelanguage.googleapis.com/${proxyPath}`;
-      // validateStatus:true prevents axios from throwing on 4xx/5xx so all responses
-      // (including Google error JSON) stream cleanly back to the SDK.
+      // Strip AI Studio internal params (e.g. __applet_proxy) before forwarding to Google.
+      const params = Object.fromEntries(
+        Object.entries(req.query).filter(([key]) => !key.startsWith('__'))
+      );
       const response = await axios({
         method: req.method as any,
         url: targetUrl,
-        params: req.query,
+        params,
         data: req.method !== "GET" ? req.body : undefined,
         headers: {
           "Content-Type": "application/json",
