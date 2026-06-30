@@ -19,6 +19,7 @@ async function startServer() {
   const API_KEY = process.env.API_FOOTBALL_KEY;
   const API_URL = "https://v3.football.api-sports.io";
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  console.log(`[startup] GEMINI_API_KEY set: ${!!GEMINI_API_KEY} (${GEMINI_API_KEY ? GEMINI_API_KEY.slice(0, 6) + '...' : 'MISSING'})`);
 
   app.get("/api/football/squad", async (req, res) => {
     try {
@@ -68,8 +69,9 @@ async function startServer() {
   });
 
   // AI Studio's service worker intercepts browser requests to generativelanguage.googleapis.com
-  // and redirects them here. This route forwards them back to Google, forwarding the
-  // x-goog-api-key header that the SDK already attached.
+  // and redirects them here. This route forwards them back to Google using the server-side
+  // GEMINI_API_KEY. We ignore the incoming x-goog-api-key header because AI Studio's service
+  // worker injects its own internal key there, which has different/lower quota than the user's key.
   app.all("/gemini-api-proxy/*path", async (req, res) => {
     try {
       const proxyPath = Array.isArray(req.params.path) ? req.params.path.join('/') : req.params.path;
@@ -78,6 +80,7 @@ async function startServer() {
       const params = Object.fromEntries(
         Object.entries(req.query).filter(([key]) => !key.startsWith('__'))
       );
+      console.log(`[gemini-proxy] ${req.method} ${proxyPath} key=${GEMINI_API_KEY ? GEMINI_API_KEY.slice(0,6) + '...' : 'MISSING'}`);
       const response = await axios({
         method: req.method as any,
         url: targetUrl,
@@ -85,11 +88,13 @@ async function startServer() {
         data: req.method !== "GET" ? req.body : undefined,
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key": (req.headers["x-goog-api-key"] as string) || GEMINI_API_KEY || "",
+          // Always use the server-side key — never trust the incoming header from AI Studio's SW.
+          "x-goog-api-key": GEMINI_API_KEY || "",
         },
         responseType: "stream",
         validateStatus: () => true,
       });
+      console.log(`[gemini-proxy] response status: ${response.status}`);
       res.status(response.status);
       const forward = ["content-type", "x-goog-safety-encoding", "cache-control"];
       forward.forEach(h => { if (response.headers[h]) res.setHeader(h, response.headers[h]); });
