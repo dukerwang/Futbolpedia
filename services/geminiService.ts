@@ -197,7 +197,12 @@ let currentThinkingLevel: string | null = null;
 let currentSystemInstruction: string | null = null;
 let chat: Chat | null = null;
 let currentModel: string | null = null;
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+const ai = new GoogleGenAI({
+  apiKey: process.env.API_KEY as string,
+  httpOptions: {
+    baseUrl: `${window.location.origin}/gemini-api-proxy`,
+  },
+});
 
 // Q3: Use shared simulation constants so the year is consistent everywhere.
 // The real month is kept for search-query grounding (more precise than "June").

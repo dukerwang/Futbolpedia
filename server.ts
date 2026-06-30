@@ -66,16 +66,19 @@ async function startServer() {
       }
   });
 
-  // Google AI Studio registers a service worker in the browser that intercepts
-  // all requests to generativelanguage.googleapis.com and redirects them to
-  // /gemini-api-proxy/* on the same origin. This route fulfills those requests.
+  // Proxy for Gemini API — the browser SDK is pointed at this route via httpOptions.baseUrl
+  // so all Gemini traffic flows server-side. The server injects the API key, keeping it
+  // off the client bundle and making the app work identically in AI Studio and Cloud Run.
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
   app.all("/gemini-api-proxy/*path", async (req, res) => {
     try {
       const targetUrl = `https://generativelanguage.googleapis.com/${req.params.path}`;
+      const params: Record<string, any> = { ...req.query };
+      if (GEMINI_API_KEY) params.key = GEMINI_API_KEY;
       const response = await axios({
         method: req.method as any,
         url: targetUrl,
-        params: req.query,
+        params,
         data: req.method !== "GET" ? req.body : undefined,
         headers: { "Content-Type": "application/json" },
         responseType: "stream",
