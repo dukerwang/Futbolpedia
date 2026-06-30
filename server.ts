@@ -66,16 +66,12 @@ async function startServer() {
       }
   });
 
-  // Proxy for Gemini API — the browser SDK is pointed at this route via httpOptions.baseUrl
-  // so all Gemini traffic flows server-side. The server injects the API key, keeping it
-  // off the client bundle and making the app work identically in AI Studio and Cloud Run.
-  const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  // AI Studio's service worker intercepts browser requests to generativelanguage.googleapis.com
+  // and redirects them here. This route forwards them back to Google, forwarding the
+  // x-goog-api-key header that the SDK already attached.
   app.all("/gemini-api-proxy/*path", async (req, res) => {
     try {
       const targetUrl = `https://generativelanguage.googleapis.com/${req.params.path}`;
-      // SDK sends the key as x-goog-api-key header; server key overrides if set
-      const apiKey = GEMINI_API_KEY || (req.headers["x-goog-api-key"] as string);
-      console.log(`[Gemini Proxy] → ${req.method} ${targetUrl} | key=${apiKey ? `set(${apiKey.length}chars)` : "MISSING"} | query=${JSON.stringify(req.query)}`);
       const response = await axios({
         method: req.method as any,
         url: targetUrl,
@@ -83,7 +79,7 @@ async function startServer() {
         data: req.method !== "GET" ? req.body : undefined,
         headers: {
           "Content-Type": "application/json",
-          ...(apiKey ? { "x-goog-api-key": apiKey } : {}),
+          ...(req.headers["x-goog-api-key"] ? { "x-goog-api-key": req.headers["x-goog-api-key"] } : {}),
         },
         responseType: "stream",
       });
@@ -93,19 +89,11 @@ async function startServer() {
       response.data.pipe(res);
     } catch (error: any) {
       if (error.response) {
-        // Collect the error body — streaming piping after a throw isn't reliable
         const chunks: Buffer[] = [];
         error.response.data.on("data", (c: Buffer) => chunks.push(c));
-        error.response.data.on("end", () => {
-          const body = Buffer.concat(chunks).toString("utf-8");
-          console.error(`[Gemini Proxy] ${error.response.status} from Google:`, body);
-          res.status(error.response.status).send(body);
-        });
-        error.response.data.on("error", () => {
-          res.status(error.response.status).json({ error: { message: error.message, code: error.response.status, status: "" } });
-        });
+        error.response.data.on("end", () => res.status(error.response.status).send(Buffer.concat(chunks)));
+        error.response.data.on("error", () => res.status(error.response.status).end());
       } else {
-        console.error("[Gemini Proxy] No response:", error.message);
         res.status(500).json({ error: "Gemini proxy error", details: error.message });
       }
     }
