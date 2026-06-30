@@ -66,6 +66,34 @@ async function startServer() {
       }
   });
 
+  // Google AI Studio registers a service worker in the browser that intercepts
+  // all requests to generativelanguage.googleapis.com and redirects them to
+  // /gemini-api-proxy/* on the same origin. This route fulfills those requests.
+  app.all("/gemini-api-proxy/*path", async (req, res) => {
+    try {
+      const targetUrl = `https://generativelanguage.googleapis.com/${req.params.path}`;
+      const response = await axios({
+        method: req.method as any,
+        url: targetUrl,
+        params: req.query,
+        data: req.method !== "GET" ? req.body : undefined,
+        headers: { "Content-Type": "application/json" },
+        responseType: "stream",
+      });
+      res.status(response.status);
+      const forward = ["content-type", "x-goog-safety-encoding", "cache-control"];
+      forward.forEach(h => { if (response.headers[h]) res.setHeader(h, response.headers[h]); });
+      response.data.pipe(res);
+    } catch (error: any) {
+      if (error.response) {
+        res.status(error.response.status);
+        error.response.data.pipe(res);
+      } else {
+        res.status(500).json({ error: "Gemini proxy error", details: error.message });
+      }
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
