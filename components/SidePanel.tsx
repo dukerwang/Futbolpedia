@@ -59,6 +59,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editNameText, setEditNameText] = useState('');
   const [confirmDeleteName, setConfirmDeleteName] = useState<string | null>(null);
+  const [sharingName, setSharingName] = useState<string | null>(null);
+  const [sharedName, setSharedName] = useState<string | null>(null);
 
   const currentIndex = profile && allProfiles
     ? allProfiles.findIndex(p => p.basicInfo.name.toLowerCase() === profile.basicInfo.name.toLowerCase())
@@ -243,6 +245,29 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     }
   };
 
+  const handleShareDossierItem = async (p: PlayerProfile, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (sharingName || !supabase) return;
+    setSharingName(p.basicInfo.name);
+    try {
+      const slug = toPlayerSlug(p.basicInfo.name);
+      const { error } = await supabase
+        .from('player_profiles')
+        .upsert(
+          { player_slug: slug, player_data: p, updated_at: new Date().toISOString() },
+          { onConflict: 'player_slug' }
+        );
+      if (error) throw error;
+      await navigator.clipboard.writeText(`${window.location.origin}/#/p/${slug}`);
+      setSharedName(p.basicInfo.name);
+      setTimeout(() => setSharedName(null), 2000);
+    } catch (err) {
+      console.error('Failed to share dossier:', err);
+    } finally {
+      setSharingName(null);
+    }
+  };
+
   // Prevent render if not open and not visible
   if (!isOpen && !isVisible) return null;
 
@@ -369,6 +394,20 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
                                 {!isEditing && (
                                     <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity bg-gradient-to-l from-white dark:from-charcoal-surface via-white dark:via-charcoal-surface to-transparent pl-4 py-1.5 rounded-r-xl">
+                                        <button
+                                            onClick={(e) => handleShareDossierItem(p, e)}
+                                            disabled={sharingName === p.basicInfo.name}
+                                            className={`p-1 rounded transition-all ${
+                                                sharedName === p.basicInfo.name
+                                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                                    : 'text-charcoal/50 dark:text-cream-400/60 hover:text-blue-500 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40'
+                                            }`}
+                                            title="Share Dossier"
+                                        >
+                                            <span className="material-symbols-outlined text-[14px] block">
+                                                {sharingName === p.basicInfo.name ? 'hourglass_empty' : sharedName === p.basicInfo.name ? 'check' : 'link'}
+                                            </span>
+                                        </button>
                                         <button
                                             onClick={(e) => handleStartRename(p.basicInfo.name, e)}
                                             className="p-1 text-charcoal/50 dark:text-cream-400/60 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40 rounded transition-all"
