@@ -51,9 +51,9 @@ async function startServer() {
 
   app.get("/api/football/proxy/*endpoint", async (req, res) => {
       try {
-          const endpoint = req.params.endpoint;
+          const endpoint = Array.isArray(req.params.endpoint) ? req.params.endpoint.join('/') : req.params.endpoint;
           const query = req.query;
-          
+
           const response = await axios.get(`${API_URL}/${endpoint}`, {
               params: query,
               headers: { "x-apisports-key": API_KEY }
