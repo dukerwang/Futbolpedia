@@ -3,7 +3,7 @@ import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { supabase } from '../services/geminiService';
+import { supabase, toPlayerSlug } from '../services/geminiService';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -106,14 +106,15 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     if (!profile || !supabase) return;
     setShareStatus('saving');
     try {
-        const { data: savedRow, error } = await supabase
-        .from('profiles')
-        .insert([{ player_data: profile }])
-        .select()
-        .single();
-
+        const slug = toPlayerSlug(profile.basicInfo.name);
+        const { error } = await supabase
+          .from('player_profiles')
+          .upsert(
+            { player_slug: slug, player_data: profile, updated_at: new Date().toISOString() },
+            { onConflict: 'player_slug' }
+          );
         if (error) throw error;
-        const shareUrl = `${window.location.origin}/#/player/${savedRow.id}`;
+        const shareUrl = `${window.location.origin}/#/p/${slug}`;
         await navigator.clipboard.writeText(shareUrl);
         setShareStatus('copied');
         setTimeout(() => setShareStatus('idle'), 2000);

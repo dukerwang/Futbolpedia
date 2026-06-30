@@ -5,7 +5,7 @@ import { ChatInput } from './components/ChatInput';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import type { ChatMessage, PlayerProfile, Conversation } from './types';
-import { sendMessageToAI, resetChat, supabase } from './services/geminiService';
+import { sendMessageToAI, resetChat, getCachedDossier, getSharedConversation } from './services/geminiService';
 
 const generateId = () => `id-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 const CHAT_HISTORY_KEY = 'futbolpedia-chat-history';
@@ -218,66 +218,92 @@ const App: React.FC = () => {
     // Mark as initialized so synchronization effect can run safely
     isInitializedRef.current = true;
 
-    // Handle shared profile via Hash URL
+    // Handle shared content via URL hash (#/p/<slug> for dossiers, #/c/<code> for conversations)
     const loadSharedProfile = async () => {
       const hash = window.location.hash;
-      if (hash.startsWith('#/player/')) {
-        const shareId = hash.split('/').pop();
-        if (shareId) {
-          setIsLoading(true);
-          try {
-            const { data, error } = await supabase
-              .from('profiles')
-              .select('player_data')
-              .eq('id', shareId)
-              .single();
 
-            if (error) throw error;
-
-            if (data?.player_data) {
-              const profile = data.player_data as PlayerProfile;
-              
-              // Add a shared notification message
-              const sharedMsg: ChatMessage = {
-                id: `shared-${Date.now()}`,
-                sender: 'ai',
-                content: `I've retrieved the archived dossier for **${profile.basicInfo.name}**.`,
-                timestamp: Date.now(),
-              };
-
-              setMessages(prev => [...prev, sharedMsg]);
-              setActiveProfile(profile);
-              
-              const profileWithDate = {
-                ...profile,
-                createdAt: profile.createdAt || Date.now()
-              };
-
-              setGlobalDossiers(prev => {
-                const exists = prev.some(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
-                if (!exists) {
-                  const updated = [...prev, profileWithDate];
-                  localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
-                  return updated;
-                }
-                return prev;
-              });
-
-              setAllProfiles(prev => {
-                const exists = prev.some(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
-                if (!exists) {
-                  return [...prev, profileWithDate];
-                }
-                return prev;
-              });
-              setIsPanelOpen(true);
-              window.history.replaceState({}, '', window.location.pathname);
-            }
-          } catch (err) {
-            console.error("Shared profile fetch failed:", err);
-          } finally {
-            setIsLoading(false);
+      if (hash.startsWith('#/p/')) {
+        const slug = hash.slice(4);
+        if (!slug) return;
+        setIsLoading(true);
+        try {
+          const profile = await getCachedDossier(slug, false);
+          if (profile) {
+            setMessages(prev => [...prev, {
+              id: `shared-${Date.now()}`,
+              sender: 'ai',
+              content: `I've retrieved the archived dossier for **${profile.basicInfo.name}**.`,
+              timestamp: Date.now(),
+            }]);
+            setActiveProfile(profile);
+            const profileWithDate = { ...profile, createdAt: profile.createdAt || Date.now() };
+            setGlobalDossiers(prev => {
+              const exists = prev.some(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
+              if (!exists) {
+                const updated = [...prev, profileWithDate];
+                localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
+                return updated;
+              }
+              return prev;
+            });
+            setAllProfiles(prev => {
+              const exists = prev.some(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
+              if (!exists) return [...prev, profileWithDate];
+              return prev;
+            });
+            setIsPanelOpen(true);
+            window.history.replaceState({}, '', window.location.pathname);
           }
+        } catch (err) {
+          console.error("Shared profile fetch failed:", err);
+        } finally {
+          setIsLoading(false);
+        }
+
+      } else if (hash.startsWith('#/c/')) {
+        const code = hash.slice(4);
+        if (!code) return;
+        setIsLoading(true);
+        try {
+          const sharedConv = await getSharedConversation(code);
+          if (sharedConv) {
+            // Fork into a new local conversation
+            const importedId = generateId();
+            const importedConv: Conversation = {
+              ...sharedConv,
+              id: importedId,
+              title: sharedConv.title ? `${sharedConv.title} (shared)` : 'Shared Briefing',
+              createdAt: Date.now(),
+            };
+            setConversations(prev => {
+              const updated = [importedConv, ...prev];
+              localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
+              return updated;
+            });
+            setActiveConversationId(importedId);
+            localStorage.setItem('futbolpedia-active-conversation-id', importedId);
+            setMessages(importedConv.messages);
+            setActiveProfile(importedConv.activeProfile);
+            setAllProfiles(importedConv.allProfiles);
+            // Merge any dossiers from the shared conversation
+            if (importedConv.allProfiles?.length > 0) {
+              setGlobalDossiers(prev => {
+                let updated = [...prev];
+                importedConv.allProfiles.forEach(prof => {
+                  const exists = updated.some(p => p.basicInfo.name.toLowerCase() === prof.basicInfo.name.toLowerCase());
+                  if (!exists) updated.push({ ...prof, createdAt: prof.createdAt || Date.now() });
+                });
+                localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
+                return updated;
+              });
+            }
+            setIsConversationsOpen(true);
+            window.history.replaceState({}, '', window.location.pathname);
+          }
+        } catch (err) {
+          console.error("Shared conversation fetch failed:", err);
+        } finally {
+          setIsLoading(false);
         }
       }
     };

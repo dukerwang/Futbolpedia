@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { Conversation } from '../types';
+import { shareConversation } from '../services/geminiService';
 
 interface ConversationsPanelProps {
   isOpen: boolean;
@@ -26,6 +27,8 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
   const [editTitle, setEditTitle] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
+  const [sharingId, setSharingId] = useState<string | null>(null);
+  const [sharedId, setSharedId] = useState<string | null>(null);
 
   useEffect(() => {
     const checkDesktop = () => setIsDesktop(window.matchMedia('(min-width: 768px)').matches);
@@ -64,6 +67,23 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
       setTimeout(() => {
         setConfirmDeleteId(current => current === id ? null : current);
       }, 3000);
+    }
+  };
+
+  const handleShareClick = async (conv: Conversation, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (sharingId) return;
+    setSharingId(conv.id);
+    try {
+      const code = await shareConversation(conv);
+      const url = `${window.location.origin}/#/c/${code}`;
+      await navigator.clipboard.writeText(url);
+      setSharedId(conv.id);
+      setTimeout(() => setSharedId(null), 2000);
+    } catch (err) {
+      console.error('Failed to share conversation:', err);
+    } finally {
+      setSharingId(null);
     }
   };
 
@@ -220,6 +240,20 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
                   {/* Actions Drawer - displayed on hover or if active */}
                   {!isEditing && (
                     <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity bg-gradient-to-l from-white dark:from-charcoal-surface via-white dark:via-charcoal-surface to-transparent pl-4 py-1.5 rounded-r-xl">
+                      <button
+                        onClick={(e) => handleShareClick(conv, e)}
+                        disabled={sharingId === conv.id}
+                        className={`p-1 rounded transition-all ${
+                          sharedId === conv.id
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-charcoal/50 dark:text-cream-400/60 hover:text-blue-500 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40'
+                        }`}
+                        title="Share Briefing"
+                      >
+                        <span className="material-symbols-outlined text-[14px] block">
+                          {sharingId === conv.id ? 'hourglass_empty' : sharedId === conv.id ? 'check' : 'link'}
+                        </span>
+                      </button>
                       <button
                         onClick={(e) => handleStartRename(conv, e)}
                         className="p-1 text-charcoal/50 dark:text-cream-400/60 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40 rounded transition-all"

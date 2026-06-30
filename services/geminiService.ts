@@ -2,8 +2,8 @@ import { GoogleGenAI, Chat, Content, Type, ThinkingLevel } from "@google/genai";
 import type { PlayerProfile, Attributes, ChatMessage, PlayerComparison } from '../types';
 import { MASTER_INSTRUCTION_SET, getMasterInstructions, SIMULATION_YEAR, SIMULATION_SEASON } from '../constants';
 
-const supabaseUrl = "https://vnqpluwoxjukoxlnwawo.supabase.co";
-const supabaseKey = "sb_publishable_B8pIUFHdh6dc-JUzJMfVrg_Bc5x5Bi4";
+const supabaseUrl = "https://hrocnbcavstmjysptjdk.supabase.co";
+const supabaseKey = "sb_publishable_NKyG9miYqS8JgdpgWuXm9A_tc3vaVCL";
 
 // Safe Initialization of Supabase from the global window object (loaded via script tag in index.html)
 export const supabase = (typeof window !== 'undefined' && (window as any).supabase)
@@ -12,37 +12,89 @@ export const supabase = (typeof window !== 'undefined' && (window as any).supaba
 
 export const isSupabaseReady = () => !!supabase;
 
-export const saveProfileToShare = async (profileData: any) => {
-  if (!supabase) throw new Error("Share service unavailable. Missing Supabase configuration.");
-  const { data, error } = await supabase
-    .from('profiles')
-    .insert([{ player_data: profileData }])
-    .select()
-    .single();
+const CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
-  if (error) {
-    console.error("Supabase Save Error:", error);
-    throw error;
-  }
-  return data.id;
+export const toPlayerSlug = (name: string): string =>
+  name.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+// Extracts a candidate player slug from a user message for cache lookup.
+// Returns null if the message is too vague or ambiguous to extract a name.
+const extractCandidateSlug = (message: string): string | null => {
+  const candidate = message
+    .replace(/\b(give me a?n?|create|generate|can you|please)\b/gi, '')
+    .replace(/\b(rate|rating|profile|scout(?:ing)?(?: report)?|evaluate|dossier|how good is|rank(?:ing)?|tier|analyze|analysis|breakdown|report|brief(?:ing)?)\b/gi, '')
+    .replace(/\b(on|for|about|of|a|an|the|me)\b/gi, '')
+    .replace(/[?!.,]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!candidate || candidate.length < 2 || candidate.split(' ').length > 6) return null;
+  return toPlayerSlug(candidate);
 };
 
-export const getSharedProfile = async (id: string) => {
+// Fetches a cached dossier from Supabase. When checkTTL is true (default),
+// returns null if the entry is older than 14 days so the pipeline regenerates it.
+// Pass checkTTL=false for share link loads where staleness is acceptable.
+export const getCachedDossier = async (slug: string, checkTTL = true): Promise<PlayerProfile | null> => {
   if (!supabase) return null;
   try {
     const { data, error } = await supabase
-      .from('profiles')
-      .select('player_data')
-      .eq('id', id)
+      .from('player_profiles')
+      .select('player_data, updated_at')
+      .eq('player_slug', slug)
       .single();
+    if (error || !data) return null;
+    if (checkTTL && Date.now() - new Date(data.updated_at).getTime() > CACHE_TTL_MS) return null;
+    return data.player_data as PlayerProfile;
+  } catch {
+    return null;
+  }
+};
 
-    if (error) {
-      console.error("Supabase Fetch Error:", error);
-      return null;
-    }
-    return data.player_data;
+const upsertCachedDossier = async (slug: string, profile: PlayerProfile): Promise<void> => {
+  if (!supabase) return;
+  try {
+    await supabase
+      .from('player_profiles')
+      .upsert(
+        { player_slug: slug, player_data: profile, updated_at: new Date().toISOString() },
+        { onConflict: 'player_slug' }
+      );
   } catch (e) {
-    console.error("Error fetching shared profile:", e);
+    console.warn('[Cache] Upsert failed:', e);
+  }
+};
+
+// Omit confusable characters (0/O, 1/I/L) from share codes.
+const SHARE_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+const generateShareCode = (): string =>
+  Array.from({ length: 6 }, () => SHARE_CODE_CHARS[Math.floor(Math.random() * SHARE_CODE_CHARS.length)]).join('');
+
+export const shareConversation = async (conv: import('../types').Conversation): Promise<string> => {
+  if (!supabase) throw new Error("Database not available.");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const code = generateShareCode();
+    const { error } = await supabase
+      .from('shared_conversations')
+      .insert({ share_code: code, conversation_data: conv });
+    if (!error) return code;
+    // Retry only on unique-constraint collisions
+    if (!error.message?.includes('unique') && !error.message?.includes('duplicate')) throw error;
+  }
+  throw new Error("Failed to generate a unique share code after 3 attempts.");
+};
+
+export const getSharedConversation = async (code: string): Promise<import('../types').Conversation | null> => {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from('shared_conversations')
+      .select('conversation_data')
+      .eq('share_code', code.toUpperCase())
+      .single();
+    if (error || !data) return null;
+    return data.conversation_data as import('../types').Conversation;
+  } catch {
     return null;
   }
 };
@@ -548,6 +600,17 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
         const isCurrentStateQuery = /\b(squad|roster|lineup|line.?up|formation|manager|coach|signings?|transfers?|this season|playing for|who(?:'s| is) (?:at|managing)|how (?:does|do) .+ play)\b/i.test(message);
         const isFormal = isProfileRequest || isComparison;
 
+        // ── Dossier cache check ─────────────────────────────────────────────
+        // Single-player profile requests check Supabase before running the pipeline.
+        // Cache entries are valid for 14 days; stale entries fall through to regenerate.
+        if (isProfileRequest && !isComparison && mode === 'default' && !imageData) {
+            const candidateSlug = extractCandidateSlug(message);
+            if (candidateSlug) {
+                const cached = await getCachedDossier(candidateSlug);
+                if (cached) return cached;
+            }
+        }
+
         // ── Fast mode bypass ────────────────────────────────────────────────────
         if (mode === 'fast' && !imageData) {
             const fastPrompt = isFormal
@@ -834,7 +897,12 @@ Return ONLY this JSON (no preamble, no markdown):
         // Falls back to sendChatMessage (existing path) if the API rejects the schema.
         if (isFormal && !imageData && mode === 'default' && isProfileRequest) {
             try {
-                return await synthesizeFormalResponse(finalAnswerPrompt, isComparison, systemInstruction);
+                const result = await synthesizeFormalResponse(finalAnswerPrompt, isComparison, systemInstruction);
+                if (!isComparison && 'basicInfo' in result) {
+                    const canonicalSlug = toPlayerSlug((result as PlayerProfile).basicInfo.name);
+                    upsertCachedDossier(canonicalSlug, result as PlayerProfile);
+                }
+                return result;
             } catch (e) {
                 console.warn('[Structured Synthesis] Failed, falling back to chat path:', e);
                 // CRITICAL: use 'minimal' here, NOT selectedLevel ('medium').
