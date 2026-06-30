@@ -73,14 +73,17 @@ async function startServer() {
   app.all("/gemini-api-proxy/*path", async (req, res) => {
     try {
       const targetUrl = `https://generativelanguage.googleapis.com/${req.params.path}`;
-      const params: Record<string, any> = { ...req.query };
-      if (GEMINI_API_KEY) params.key = GEMINI_API_KEY;
+      // SDK sends the key as x-goog-api-key header; server key overrides if set
+      const apiKey = GEMINI_API_KEY || (req.headers["x-goog-api-key"] as string);
       const response = await axios({
         method: req.method as any,
         url: targetUrl,
-        params,
+        params: req.query,
         data: req.method !== "GET" ? req.body : undefined,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(apiKey ? { "x-goog-api-key": apiKey } : {}),
+        },
         responseType: "stream",
       });
       res.status(response.status);
@@ -89,9 +92,19 @@ async function startServer() {
       response.data.pipe(res);
     } catch (error: any) {
       if (error.response) {
-        res.status(error.response.status);
-        error.response.data.pipe(res);
+        // Collect the error body — streaming piping after a throw isn't reliable
+        const chunks: Buffer[] = [];
+        error.response.data.on("data", (c: Buffer) => chunks.push(c));
+        error.response.data.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf-8");
+          console.error(`[Gemini Proxy] ${error.response.status} from Google:`, body);
+          res.status(error.response.status).send(body);
+        });
+        error.response.data.on("error", () => {
+          res.status(error.response.status).json({ error: { message: error.message, code: error.response.status, status: "" } });
+        });
       } else {
+        console.error("[Gemini Proxy] No response:", error.message);
         res.status(500).json({ error: "Gemini proxy error", details: error.message });
       }
     }
