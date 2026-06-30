@@ -18,6 +18,7 @@ async function startServer() {
 
   const API_KEY = process.env.API_FOOTBALL_KEY;
   const API_URL = "https://v3.football.api-sports.io";
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
 
   app.get("/api/football/squad", async (req, res) => {
     try {
@@ -84,7 +85,7 @@ async function startServer() {
         data: req.method !== "GET" ? req.body : undefined,
         headers: {
           "Content-Type": "application/json",
-          ...(req.headers["x-goog-api-key"] ? { "x-goog-api-key": req.headers["x-goog-api-key"] } : {}),
+          "x-goog-api-key": (req.headers["x-goog-api-key"] as string) || GEMINI_API_KEY || "",
         },
         responseType: "stream",
         validateStatus: () => true,
