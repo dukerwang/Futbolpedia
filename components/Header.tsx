@@ -46,17 +46,17 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="material-symbols-outlined text-[20px] block">forum</span>
             </button>
 
-            {allProfilesCount > 0 && (
-                <button
-                    onClick={onToggleDossier}
-                    className={`relative p-2 rounded-full transition-colors ${
-                        isPanelOpen 
-                        ? 'bg-emerald-500 text-white hover:bg-emerald-600' 
-                        : 'text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light'
-                    }`}
-                    title={isPanelOpen ? "Close Dossier Panel" : "Open Dossier Panel"}
-                >
-                    <span className="material-symbols-outlined text-[20px] block">folder_shared</span>
+            <button
+                onClick={onToggleDossier}
+                className={`relative p-2 rounded-full transition-colors ${
+                    isPanelOpen 
+                    ? 'bg-emerald-500 text-white hover:bg-emerald-600' 
+                    : 'text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light'
+                }`}
+                title={isPanelOpen ? "Close Dossier Panel" : "Open Dossier Panel"}
+            >
+                <span className="material-symbols-outlined text-[20px] block">folder_shared</span>
+                {allProfilesCount > 0 && (
                     <span className={`absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-mono font-bold shadow-sm transition-colors ${
                         isPanelOpen 
                         ? 'bg-charcoal dark:bg-cream-200 text-cream-50 dark:text-charcoal' 
@@ -64,8 +64,8 @@ export const Header: React.FC<HeaderProps> = ({
                     }`}>
                         {allProfilesCount}
                     </span>
-                </button>
-            )}
+                )}
+            </button>
 
             <button 
                 onClick={toggleTheme} 
