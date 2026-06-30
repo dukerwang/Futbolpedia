@@ -9,7 +9,7 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: "10mb" }));
 
   // API Routes
   app.get("/api/health", (req, res) => {
@@ -72,6 +72,8 @@ async function startServer() {
   app.all("/gemini-api-proxy/*path", async (req, res) => {
     try {
       const targetUrl = `https://generativelanguage.googleapis.com/${req.params.path}`;
+      // validateStatus:true prevents axios from throwing on 4xx/5xx so all responses
+      // (including Google error JSON) stream cleanly back to the SDK.
       const response = await axios({
         method: req.method as any,
         url: targetUrl,
@@ -82,20 +84,15 @@ async function startServer() {
           ...(req.headers["x-goog-api-key"] ? { "x-goog-api-key": req.headers["x-goog-api-key"] } : {}),
         },
         responseType: "stream",
+        validateStatus: () => true,
       });
       res.status(response.status);
       const forward = ["content-type", "x-goog-safety-encoding", "cache-control"];
       forward.forEach(h => { if (response.headers[h]) res.setHeader(h, response.headers[h]); });
       response.data.pipe(res);
     } catch (error: any) {
-      if (error.response) {
-        const chunks: Buffer[] = [];
-        error.response.data.on("data", (c: Buffer) => chunks.push(c));
-        error.response.data.on("end", () => res.status(error.response.status).send(Buffer.concat(chunks)));
-        error.response.data.on("error", () => res.status(error.response.status).end());
-      } else {
-        res.status(500).json({ error: "Gemini proxy error", details: error.message });
-      }
+      // Only genuine network errors reach here (not HTTP 4xx/5xx)
+      res.status(500).json({ error: "Gemini proxy error", details: error.message });
     }
   });
 
