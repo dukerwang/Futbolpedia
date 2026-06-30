@@ -70,6 +70,7 @@ async function startServer() {
   // and redirects them here. This route forwards them back to Google, forwarding the
   // x-goog-api-key header that the SDK already attached.
   app.all("/gemini-api-proxy/*path", async (req, res) => {
+    console.log('[Gemini Proxy] hit:', req.method, req.params.path);
     try {
       const targetUrl = `https://generativelanguage.googleapis.com/${req.params.path}`;
       // validateStatus:true prevents axios from throwing on 4xx/5xx so all responses
