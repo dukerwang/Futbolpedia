@@ -717,37 +717,47 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                     throw new Error("Query generation returned no search queries. Cannot produce a grounded profile.");
                 }
                 
-                const SAFE_QUERY_LIMIT = 8;
+                const SAFE_QUERY_LIMIT = 4;
 
                 // ── Q2: Capture grounding source URLs from each search ──────────────────
-                // groundingChunks contain the actual web sources Gemini used. Feeding them
-                // into the extraction + synthesis steps anchors the model to real citations
-                // rather than training memory, improving anti-hallucination.
-                const results = await Promise.all(queries.slice(0, SAFE_QUERY_LIMIT).map(async (q: string) => {
-                   try {
-                       const res = await ai.models.generateContent({
-                           model: FLASH_MODEL,
-                           contents: `[Date: ${month} ${year}] ${q}`,
-                           config: {
-                               tools: [{googleSearch: {}}],
-                               thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-                           }
-                       });
+                // Searches run sequentially with a 600ms gap between each to avoid
+                // saturating per-minute quota. Cloud Run proxies all calls through one
+                // server IP, so 4 simultaneous requests reliably hit the RPM limit.
+                const runSearch = async (q: string, attempt = 0): Promise<string> => {
+                    try {
+                        const res = await ai.models.generateContent({
+                            model: FLASH_MODEL,
+                            contents: `[Date: ${month} ${year}] ${q}`,
+                            config: {
+                                tools: [{googleSearch: {}}],
+                                thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+                            }
+                        });
+                        const chunks = (res as any).candidates?.[0]?.groundingMetadata?.groundingChunks;
+                        const sources: string = chunks
+                            ?.filter((c: any) => c.web?.uri)
+                            ?.slice(0, 3)
+                            ?.map((c: any) => c.web.title ? `${c.web.title} (${c.web.uri})` : c.web.uri)
+                            ?.join(' | ') ?? '';
+                        return `[QUERY: ${q}]\n${res.text}${sources ? `\n[SOURCES: ${sources}]` : ''}`;
+                    } catch (e: any) {
+                        const is429 = e?.status === 429 || String(e?.message).includes('429') || String(e?.message).includes('RESOURCE_EXHAUSTED');
+                        if (is429 && attempt < 2) {
+                            await new Promise(r => setTimeout(r, (attempt + 1) * 3000));
+                            return runSearch(q, attempt + 1);
+                        }
+                        console.warn(`Search failed for: ${q}`, e);
+                        return `[QUERY: ${q}]\nData unavailable.`;
+                    }
+                };
 
-                       // Extract verified source URLs from grounding metadata
-                       const chunks = (res as any).candidates?.[0]?.groundingMetadata?.groundingChunks;
-                       const sources: string = chunks
-                           ?.filter((c: any) => c.web?.uri)
-                           ?.slice(0, 3) // cap to 3 sources per query to control token growth
-                           ?.map((c: any) => c.web.title ? `${c.web.title} (${c.web.uri})` : c.web.uri)
-                           ?.join(' | ') ?? '';
-
-                       return `[QUERY: ${q}]\n${res.text}${sources ? `\n[SOURCES: ${sources}]` : ''}`;
-                   } catch (e) {
-                       console.warn(`Search failed for: ${q}`);
-                       return `[QUERY: ${q}]\nData unavailable.`;
-                   }
-                }));
+                const results: string[] = [];
+                for (const q of queries.slice(0, SAFE_QUERY_LIMIT)) {
+                    results.push(await runSearch(q));
+                    if (results.length < queries.slice(0, SAFE_QUERY_LIMIT).length) {
+                        await new Promise(r => setTimeout(r, 600));
+                    }
+                }
                 
                 factualFoundation = results.join('\n\n---\n\n');
             } else {
@@ -905,6 +915,7 @@ Return ONLY this JSON (no preamble, no markdown):
                 return result;
             } catch (e) {
                 console.warn('[Structured Synthesis] Failed, falling back to chat path:', e);
+                await new Promise(r => setTimeout(r, 1500));
                 // CRITICAL: use 'minimal' here, NOT selectedLevel ('medium').
                 // Medium thinking leaks artifact tokens into JSON, corrupting it so
                 // findProfileData fails and the raw JSON string gets displayed in chat.
