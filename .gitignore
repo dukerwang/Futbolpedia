@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# design-sync
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+.design-sync/tailwind-output.css
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
