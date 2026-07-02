@@ -197,7 +197,11 @@ let currentThinkingLevel: string | null = null;
 let currentSystemInstruction: string | null = null;
 let chat: Chat | null = null;
 let currentModel: string | null = null;
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+// Lazy singleton: constructing eagerly at module scope means any environment
+// that imports this file without process.env populated (design-sync preview
+// bundles, tests, etc.) crashes on import even when it never calls the AI.
+let _ai: GoogleGenAI | null = null;
+const getAi = (): GoogleGenAI => (_ai ??= new GoogleGenAI({ apiKey: process.env.API_KEY as string }));
 
 // Q3: Use shared simulation constants so the year is consistent everywhere.
 // The real month is kept for search-query grounding (more precise than "June").
@@ -226,7 +230,7 @@ function initializeChat(model: string, history?: Content[], level: "minimal" | "
   const temperature = level === 'high' ? 0.6 : level === 'medium' ? 0.7 : level === 'low' ? 0.8 : 0.85;
   const instruction = systemInstruction ?? MASTER_INSTRUCTION_SET;
 
-  chat = ai.chats.create({
+  chat = getAi().chats.create({
     model: model,
     config: {
         systemInstruction: instruction,
@@ -417,7 +421,7 @@ const synthesizeFormalResponse = async (
     // No thinkingConfig here — ThinkingLevel.MEDIUM + responseSchema conflict on Gemini 3.5 Flash,
     // causing the call to fail or produce malformed output. The responseSchema already enforces
     // structure at the API level; thinking tokens add nothing and actively corrupt JSON output.
-    const response = await ai.models.generateContent({
+    const response = await getAi().models.generateContent({
         model: FLASH_MODEL,
         contents: prompt,
         config: {
@@ -692,7 +696,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                 // query specificity vs MINIMAL (correct club names, season labels, etc.).
                 // responseSchema forces {"queries":[...]} — without it the model maps the VECTOR A/B/C/D
                 // labels to JSON keys (e.g. {"vectorA":"..."}) and parsed.queries returns undefined → [].
-                const queryGenResponse = await ai.models.generateContent({
+                const queryGenResponse = await getAi().models.generateContent({
                     model: FLASH_MODEL,
                     contents: queryGenPrompt,
                     config: {
@@ -725,7 +729,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                 // server IP, so 4 simultaneous requests reliably hit the RPM limit.
                 const runSearch = async (q: string, attempt = 0): Promise<string> => {
                     try {
-                        const res = await ai.models.generateContent({
+                        const res = await getAi().models.generateContent({
                             model: FLASH_MODEL,
                             contents: `[Date: ${month} ${year}] ${q}`,
                             config: {
@@ -764,7 +768,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                 // Non-formal chat
                 if (isCurrentStateQuery) {
                     try {
-                        const contextRes = await ai.models.generateContent({
+                        const contextRes = await getAi().models.generateContent({
                             model: FLASH_MODEL,
                             contents: `[Date: ${month} ${year}] ${message}`,
                             config: { tools: [{ googleSearch: {} }] }
@@ -812,7 +816,7 @@ Return ONLY this JSON (no preamble, no markdown):
   "verifiedSources": ["array of source URLs or titles from the SOURCES fields in the search results, if present"],
   "dataGaps": ["list of fields where search results contained no data — e.g. 'season2526Stats', 'injuryStatus'"]
 }`;
-                const extractionRes = await ai.models.generateContent({
+                const extractionRes = await getAi().models.generateContent({
                     model: FLASH_MODEL,
                     contents: extractionPrompt,
                     config: {
