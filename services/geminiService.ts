@@ -712,8 +712,32 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     const systemInstruction = getMasterInstructions(isEAFCRequest);
 
     // ── Intent detection (hoisted so the global catch can guard formal requests) ──
-    const isProfileRequest = /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good|rank|tier|analyze|breakdown)\b/i.test(message) || /analysis on|report on|break down/i.test(message);
-    const isComparison = /compare|vs|versus|better/i.test(message);
+    // A message can CONTAIN dossier keywords ("rate", "rating", "dossier", "profile") while
+    // actually being a QUESTION or CHALLENGE about a rating we already gave — e.g. "why did
+    // you rate him 84?", "how does that make sense?", "I didn't ask for another dossier,
+    // answer the question". Those must be answered conversationally (Mode A), NOT trigger a
+    // fresh dossier. Keyword matching alone cannot tell a request apart from a rebuttal, so we
+    // detect explanation/challenge intent explicitly and let it VETO formal routing. Without
+    // this, "you rate palestra an 84…" matches \brate\b and "…another palestra dossier" matches
+    // \bdossier\b, both wrongly regenerating a dossier instead of answering the user.
+    const isExplanationOrChallenge =
+        /\bwhy\b/i.test(message) ||
+        /\bhow come\b/i.test(message) ||
+        /\byou (rate|rated|gave|ranked|rank|scored|score|said|think|put|claimed?)\b/i.test(message) ||
+        /\byour (rating|ranking|rank|score|assessment|take|analysis|reasoning|logic|answer)\b/i.test(message) ||
+        /\b(explain|justify)\b/i.test(message) ||
+        /\b(make|makes|made|making) (no |any )?sense\b/i.test(message) ||
+        /\b(didn'?t|did not|never) ask(ed)?\b/i.test(message) ||
+        /\banswer (the|my|this) (question|q)\b/i.test(message) ||
+        /\bdon'?t (generate|make|create|give|want|need)\b/i.test(message) ||
+        /\b(have|had|got) a (question|problem|issue)\b/i.test(message) ||
+        /\b(i disagree|you'?re wrong|that'?s wrong|too (high|low)|overrated|underrated)\b/i.test(message);
+
+    const rawProfileRequest = /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good|rank|tier|analyze|breakdown)\b/i.test(message) || /analysis on|report on|break down/i.test(message);
+    const rawComparison = /compare|vs|versus|better/i.test(message);
+    // A challenge/explanation vetoes formal (dossier/comparison) routing → answered in Mode A.
+    const isProfileRequest = rawProfileRequest && !isExplanationOrChallenge;
+    const isComparison = rawComparison && !isExplanationOrChallenge;
     const isHistorical = /\bprime\b|\bpeak\b|\ball[- ]time\b|\bhistorical\b/i.test(message);
     const isCurrentStateQuery = /\b(squad|roster|lineup|line.?up|formation|manager|coach|signings?|transfers?|this season|playing for|who(?:'s| is) (?:at|managing)|how (?:does|do) .+ play)\b/i.test(message);
     const isFormal = isProfileRequest || isComparison;
@@ -1105,6 +1129,20 @@ Return ONLY this JSON (no preamble, no markdown):
     ${getFormalSynthesisQualityReminders()}
     7. Also confirm before output: (J) only defined tier names used — no invented labels; (A) potential projection ONLY if player was under 25 AND already 90+ during their prime.
             `;
+        }
+
+        // Conversational turn (general chat, or a question/challenge about a rating we already
+        // gave). Overrides the formal profile-generation instructions above so the model answers
+        // in Markdown prose and does NOT emit a JSON profile — which would otherwise be parsed
+        // back into a dossier card. Must come AFTER the isHistorical branch to win.
+        if (!isFormal) {
+            finalInstructions = `
+    1. IDENTITY: Senior Tactical Columnist / Lead Scout.
+    2. CONVERSATIONAL TURN — NOT a dossier request. Respond in natural Markdown prose. You are STRICTLY PROHIBITED from outputting a JSON profile or comparison object here, no matter what player names appear in the message.
+    3. If the user is questioning, challenging, or disagreeing with a rating you gave earlier, engage their actual argument directly and honestly — defend the rating with specific reasoning, or concede and revise it if they make a fair point. Address their specific claim (e.g. league strength, sample size, minutes played), do not dodge it.
+    4. Protocol J (Explanation Integrity): cite ONLY the real Section III tier scale — never invent tier names — and keep Overall (current) distinct from Potential (future).
+    5. Use the factual foundation / search tool for any current-state fact; never assert current status from memory.
+    6. Be sharp, specific, and concise. No filler, no restating the question.`;
         }
 
         const finalAnswerPrompt = `
