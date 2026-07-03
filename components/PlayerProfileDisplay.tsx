@@ -145,7 +145,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
                     <p className="font-bold text-lg text-gray-900 dark:text-white">{playstyleAndRole.playstyle.archetype}</p>
                 </div>
                 <div className="border-t border-gray-200 dark:border-gray-700/50 pt-4">
-                    <h4 className="font-semibold text-md text-gray-800 dark:text-gray-200">Tactical Role & Impact</h4>
+                    <h4 className="font-semibold text-md text-gray-800 dark:text-gray-200">Player Identity</h4>
                     <div className="markdown-content text-gray-700 dark:text-gray-300 mt-2" dangerouslySetInnerHTML={renderMarkdown(playstyleAndRole.playstyle.description)} />
                 </div>
                 <div className="border-t border-gray-200 dark:border-gray-700/50 pt-4">

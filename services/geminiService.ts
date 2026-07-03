@@ -339,6 +339,71 @@ const createDefaultProfile = (): PlayerProfile => {
     };
 };
 
+// ─── Basic-info normalization (Protocol S safety net) ──────────────────────────
+// The prompt asks the model for canonical formats, but we also normalize
+// deterministically so the UI never shows "LB" next to "Left Back" or "Barca"
+// next to "FC Barcelona" across different dossiers.
+const POSITION_CANON: Record<string, string> = {
+    gk: 'Goalkeeper (GK)', goalkeeper: 'Goalkeeper (GK)', keeper: 'Goalkeeper (GK)',
+    rb: 'Right Back (RB)', rightback: 'Right Back (RB)',
+    lb: 'Left Back (LB)', leftback: 'Left Back (LB)',
+    cb: 'Centre-Back (CB)', centreback: 'Centre-Back (CB)', centerback: 'Centre-Back (CB)', centraldefender: 'Centre-Back (CB)',
+    rwb: 'Right Wing-Back (RWB)', rightwingback: 'Right Wing-Back (RWB)',
+    lwb: 'Left Wing-Back (LWB)', leftwingback: 'Left Wing-Back (LWB)',
+    cdm: 'Defensive Midfielder (CDM)', dm: 'Defensive Midfielder (CDM)', defensivemidfielder: 'Defensive Midfielder (CDM)', holdingmidfielder: 'Defensive Midfielder (CDM)',
+    cm: 'Central Midfielder (CM)', centralmidfielder: 'Central Midfielder (CM)', centremidfielder: 'Central Midfielder (CM)',
+    cam: 'Attacking Midfielder (CAM)', am: 'Attacking Midfielder (CAM)', attackingmidfielder: 'Attacking Midfielder (CAM)',
+    rm: 'Right Midfielder (RM)', rightmidfielder: 'Right Midfielder (RM)',
+    lm: 'Left Midfielder (LM)', leftmidfielder: 'Left Midfielder (LM)',
+    rw: 'Right Winger (RW)', rightwinger: 'Right Winger (RW)', rightwing: 'Right Winger (RW)',
+    lw: 'Left Winger (LW)', leftwinger: 'Left Winger (LW)', leftwing: 'Left Winger (LW)',
+    cf: 'Centre-Forward (CF)', centreforward: 'Centre-Forward (CF)', centerforward: 'Centre-Forward (CF)',
+    st: 'Striker (ST)', striker: 'Striker (ST)',
+    ss: 'Second Striker (SS)', secondstriker: 'Second Striker (SS)',
+};
+
+const CLUB_CANON: Record<string, string> = {
+    barca: 'FC Barcelona', fcbarcelona: 'FC Barcelona', barcelona: 'FC Barcelona',
+    realmadrid: 'Real Madrid', madrid: 'Real Madrid', losblancos: 'Real Madrid',
+    atleti: 'Atlético Madrid', atleticomadrid: 'Atlético Madrid', atletico: 'Atlético Madrid',
+    manu: 'Manchester United', manutd: 'Manchester United', manunited: 'Manchester United', mufc: 'Manchester United', manchesterunited: 'Manchester United',
+    mancity: 'Manchester City', mcfc: 'Manchester City', manchestercity: 'Manchester City',
+    spurs: 'Tottenham Hotspur', tottenham: 'Tottenham Hotspur', tottenhamhotspur: 'Tottenham Hotspur',
+    chelsea: 'Chelsea', chelseafc: 'Chelsea', cfc: 'Chelsea',
+    liverpool: 'Liverpool', lfc: 'Liverpool',
+    arsenal: 'Arsenal', gunners: 'Arsenal', arsenalfc: 'Arsenal',
+    bayern: 'Bayern Munich', bayernmunich: 'Bayern Munich', fcbayern: 'Bayern Munich', fcbayernmunich: 'Bayern Munich',
+    dortmund: 'Borussia Dortmund', bvb: 'Borussia Dortmund', borussiadortmund: 'Borussia Dortmund',
+    psg: 'Paris Saint-Germain', parissaintgermain: 'Paris Saint-Germain',
+    juve: 'Juventus', juventus: 'Juventus',
+    inter: 'Inter Milan', internazionale: 'Inter Milan', intermilan: 'Inter Milan',
+    acmilan: 'AC Milan',
+};
+
+const normalizePosition = (raw: string): string => {
+    if (!raw || raw === 'N/A') return raw || 'N/A';
+    const parts = raw.split(/\s*(?:\/|,|\bor\b|\band\b)\s*/i).map(s => s.trim()).filter(Boolean);
+    const mapped = parts.map(part => {
+        const key = part.toLowerCase().replace(/\([^)]*\)/g, '').replace(/[^a-z]/g, '');
+        return POSITION_CANON[key] || part;
+    });
+    const seen = new Set<string>();
+    const unique = mapped.filter(m => {
+        const k = m.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+    });
+    return unique.join(' / ') || raw;
+};
+
+const normalizeClub = (raw: string): string => {
+    if (!raw || raw === 'N/A') return raw || 'N/A';
+    const key = raw.toLowerCase().replace(/[^a-z]/g, '');
+    return CLUB_CANON[key] || raw.trim();
+};
+// ──────────────────────────────────────────────────────────────────────────────
+
 const sanitizeProfileData = (partialProfile: Partial<PlayerProfile> | null): PlayerProfile => {
     const defaults = createDefaultProfile();
     if (!partialProfile) return defaults;
@@ -378,6 +443,10 @@ const sanitizeProfileData = (partialProfile: Partial<PlayerProfile> | null): Pla
         sanitized.basicInfo.weight = 'N/A';
     }
 
+    // Protocol S: enforce canonical position/club formatting regardless of model output.
+    sanitized.basicInfo.position = normalizePosition(sanitized.basicInfo.position);
+    sanitized.basicInfo.club = normalizeClub(sanitized.basicInfo.club);
+
     const clean = (str: string): string => (str || '').replace(/\s*\[[\d\s,]+\]\s*/g, ' ').trim();
 
     sanitized.shortBio = clean(sanitized.shortBio);
@@ -406,11 +475,42 @@ const sanitizeComparisonData = (partialComparison: Partial<PlayerComparison> | n
     };
 };
 
+// Robustly recover a structured profile/comparison from a raw model text blob.
+// Handles markdown fences, thinking-artifact tokens, and trailing commas. Returns
+// null if the text is not (or is too corrupted to be) a valid profile/comparison.
+const extractStructuredFromText = (text: string | undefined): PlayerProfile | PlayerComparison | null => {
+    if (!text) return null;
+    let jsonText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const firstOpen = jsonText.indexOf('{');
+    const lastClose = jsonText.lastIndexOf('}');
+    if (firstOpen === -1 || lastClose === -1 || lastClose <= firstOpen) return null;
+    const core = jsonText.substring(firstOpen, lastClose + 1);
+
+    const candidates = [
+        core,
+        // Strip Flash thinking-artifact fragments (e.g. "2.4]." leaking into JSON).
+        core.replace(/[\d.]*\]\.?"+\s*/g, '').replace(/\s{2,}/g, ' '),
+        // Remove trailing commas before a closing brace/bracket.
+        core.replace(/,\s*([}\]])/g, '$1'),
+    ];
+    for (const candidate of candidates) {
+        try {
+            const parsed = JSON.parse(candidate);
+            const foundComparison = findComparisonData(parsed);
+            if (foundComparison) return sanitizeComparisonData(foundComparison);
+            const foundProfile = findProfileData(parsed);
+            if (foundProfile) return sanitizeProfileData(foundProfile);
+        } catch {
+            // try the next repaired candidate
+        }
+    }
+    return null;
+};
+
 // ─── Q1: Structured synthesis ──────────────────────────────────────────────────
 // Uses generateContent + responseSchema instead of the chat API so Gemini enforces
 // schema validity at the API level. No tools are needed here — the full factual
-// foundation is already in the prompt. Throws on failure so the caller can fall
-// back to the chat path.
+// foundation is already in the prompt. Throws on failure so the caller can fall back.
 const synthesizeFormalResponse = async (
     prompt: string,
     isComparisonRequest: boolean,
@@ -418,9 +518,8 @@ const synthesizeFormalResponse = async (
 ): Promise<PlayerProfile | PlayerComparison> => {
     const schema = isComparisonRequest ? PLAYER_COMPARISON_SCHEMA : PLAYER_PROFILE_SCHEMA;
 
-    // No thinkingConfig here — ThinkingLevel.MEDIUM + responseSchema conflict on Gemini 3.5 Flash,
-    // causing the call to fail or produce malformed output. The responseSchema already enforces
-    // structure at the API level; thinking tokens add nothing and actively corrupt JSON output.
+    // No thinkingConfig — ThinkingLevel + responseSchema conflict on Gemini Flash,
+    // producing malformed output. The responseSchema enforces structure at the API level.
     const response = await getAi().models.generateContent({
         model: FLASH_MODEL,
         contents: prompt,
@@ -436,11 +535,9 @@ const synthesizeFormalResponse = async (
     if (!text) throw new Error('Structured synthesis returned no text');
 
     const parsed = JSON.parse(text);
-
-    if (isComparisonRequest) {
-        return sanitizeComparisonData(parsed as Partial<PlayerComparison>);
-    }
-    return sanitizeProfileData(parsed as Partial<PlayerProfile>);
+    return isComparisonRequest
+        ? sanitizeComparisonData(parsed as Partial<PlayerComparison>)
+        : sanitizeProfileData(parsed as Partial<PlayerProfile>);
 };
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -554,31 +651,9 @@ const sendChatMessage = async (
         throw new Error("The AI model failed to return a valid text response. Please try again.");
     }
 
-    let jsonText = text.trim();
-    const firstOpen = jsonText.indexOf('{');
-    const lastClose = jsonText.lastIndexOf('}');
-
-    if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
-        jsonText = jsonText.substring(firstOpen, lastClose + 1);
-    }
-
-    if (jsonText.startsWith('{') && jsonText.endsWith('}')) {
-        // Strip thinking artifact patterns (e.g. "2.4]." token fragments from Flash thinking)
-        const repaired = jsonText.replace(/[\d.]*\]\.?"+\s*/g, '').replace(/\s{2,}/g, ' ');
-        for (const candidate of [jsonText, repaired]) {
-            try {
-                const parsedJson = JSON.parse(candidate);
-                const foundComparison = findComparisonData(parsedJson);
-                if (foundComparison) return sanitizeComparisonData(foundComparison);
-                const foundProfile = findProfileData(parsedJson);
-                if (foundProfile) return sanitizeProfileData(foundProfile);
-                break;
-            } catch (e) {
-                // try repaired version next
-            }
-        }
-        console.warn("All JSON parse attempts failed, treating as text.");
-    }
+    const structured = extractStructuredFromText(text);
+    if (structured) return structured;
+    console.warn("All JSON parse attempts failed, treating as text.");
     return text;
   } catch (error) {
     console.error("Gemini API call failed:", error);
@@ -594,15 +669,15 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     const isEAFCRequest = /\b(playstyle\+?|fc\s*card|eafc|ea\s*fc)\b/i.test(message);
     const systemInstruction = getMasterInstructions(isEAFCRequest);
 
+    // ── Intent detection (hoisted so the global catch can guard formal requests) ──
+    const isProfileRequest = /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good|rank|tier|analyze|breakdown)\b/i.test(message) || /analysis on|report on|break down/i.test(message);
+    const isComparison = /compare|vs|versus|better/i.test(message);
+    const isHistorical = /\bprime\b|\bpeak\b|\ball[- ]time\b|\bhistorical\b/i.test(message);
+    const isCurrentStateQuery = /\b(squad|roster|lineup|line.?up|formation|manager|coach|signings?|transfers?|this season|playing for|who(?:'s| is) (?:at|managing)|how (?:does|do) .+ play)\b/i.test(message);
+    const isFormal = isProfileRequest || isComparison;
+
     try {
         let factualFoundation = "";
-
-        // ── Intent detection ────────────────────────────────────────────────────
-        const isProfileRequest = /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good|rank|tier|analyze|breakdown)\b/i.test(message) || /analysis on|report on|break down/i.test(message);
-        const isComparison = /compare|vs|versus|better/i.test(message);
-        const isHistorical = /\bprime\b|\bpeak\b|\ball[- ]time\b|\bhistorical\b/i.test(message);
-        const isCurrentStateQuery = /\b(squad|roster|lineup|line.?up|formation|manager|coach|signings?|transfers?|this season|playing for|who(?:'s| is) (?:at|managing)|how (?:does|do) .+ play)\b/i.test(message);
-        const isFormal = isProfileRequest || isComparison;
 
         // ── Dossier cache check ─────────────────────────────────────────────
         // Single-player profile requests check Supabase before running the pipeline.
@@ -634,7 +709,54 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     3. Maintain the Futbolpedia identity (Objective, Scout-like).
     </instructions>
     <task>${message}</task>`;
-            return sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, isFormal ? 'medium' : 'low', systemInstruction);
+
+            // FORMAL fast requests: the chat path (regex JSON parsing) is what leaks raw JSON,
+            // so we avoid it entirely. One quick grounding search, then STRUCTURED synthesis
+            // (responseSchema) — which is guaranteed valid JSON and can never leak. Still fast
+            // (2 calls vs default's ~7). A guarded chat fallback only runs if synthesis fails,
+            // and even then a corrupted string is salvaged or replaced with a clean error.
+            if (isFormal) {
+                let fastFoundation = '';
+                try {
+                    const searchRes = await getAi().models.generateContent({
+                        model: FLASH_MODEL,
+                        contents: `[Date: ${month} ${year}] Current profile for ${message}: ${currentSeason} stats, playing style, technical/physical strengths and weaknesses, current club, and status.`,
+                        config: { tools: [{ googleSearch: {} }], thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } },
+                    });
+                    fastFoundation = searchRes.text || '';
+                } catch (e) {
+                    console.warn('[Fast Mode] Grounding search failed, synthesizing from prompt only:', e);
+                }
+
+                const fastSynthPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+    <factual_foundation>
+    ${fastFoundation}
+    </factual_foundation>
+    <instructions>
+    Generate the COMPLETE Player ${isComparison ? 'Comparison' : 'Profile'} JSON per the schema. Populate all 25 attributes from the player's established ability (Protocols P & R). Use the foundation above for current-status facts (club, form, injuries).
+    </instructions>
+    <task>${message}</task>`;
+
+                try {
+                    const result = await synthesizeFormalResponse(fastSynthPrompt, isComparison, systemInstruction);
+                    if (!isComparison && 'basicInfo' in result) {
+                        upsertCachedDossier(toPlayerSlug((result as PlayerProfile).basicInfo.name), result as PlayerProfile);
+                    }
+                    return result;
+                } catch (e) {
+                    console.warn('[Fast Mode] Structured synthesis failed, guarded chat fallback:', e);
+                    const fb = await sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, 'low', systemInstruction);
+                    const structured = typeof fb === 'string' ? extractStructuredFromText(fb) : fb;
+                    if (structured && typeof structured === 'object') {
+                        if (!isComparison && 'basicInfo' in structured) {
+                            upsertCachedDossier(toPlayerSlug((structured as PlayerProfile).basicInfo.name), structured as PlayerProfile);
+                        }
+                        return structured;
+                    }
+                    throw new Error("The scouting report came back malformed. Please try that request again in a moment.");
+                }
+            }
+            return sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, 'low', systemInstruction);
         }
 
         // ── Default mode: pipeline ──────────────────────────────────────────────
@@ -651,7 +773,7 @@ MANDATORY SEARCH VECTORS (exactly 1 precise query per vector, exactly 4 total):
 
 VECTOR A (Anchor & Class): Search for the player's 2024/2025 peak, major awards, and "best player" rankings.
 VECTOR B (Hard Data): Search for ${currentSeason} stats, G/A per 90, clean sheets, and advanced metrics.
-VECTOR C (Narrative & Eye Test): Search for recent pundit analysis, fan sentiment (e.g., "criticism", "praise", "flop", "revelation"), and specific match performance reviews from the current month.
+VECTOR C (Scouting Profile & Eye Test): Search for the player's scouting report — playing style, specific technical/physical/mental strengths and weaknesses, and recent pundit/analyst breakdowns of HOW he plays (this grounds the 25 ability attributes).
 VECTOR D (Status & Fitness): Search for the player's current club, any transfer or loan news in ${year}, injury status, manager quotes about their role, and tactical fit in ${currentSeason}.
 
 OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
@@ -829,9 +951,9 @@ Return ONLY this JSON (no preamble, no markdown):
                 verifiedFactsBlock = `
     <verified_facts>
     These facts were explicitly confirmed in the search results. Use them for basicInfo and latestUpdate.
-    CRITICAL — DATA GAPS: The 'dataGaps' array below lists fields with no search evidence. Protocol P is MANDATORY for these:
-    • If 'season2526Stats' is in dataGaps → set all Technical and Physical attributes to 0.
-    • If 'recentForm' is in dataGaps → set Consistency and Stamina to 0.
+    DATA GAPS — handle as CONFIDENCE signals, NOT as attribute erasers (Protocol P):
+    • Missing 'season2526Stats' or 'recentForm' → do NOT zero any attribute. Rate ability from the player's established class/scouting profile and simply keep latestUpdate free of any specific unverified stat number.
+    • The ONLY time an attribute is 0 is when the player is unidentifiable / has no scouting footprint anywhere. A recognizable professional must have all 25 attributes populated with real, differentiated values.
     • If 'injuryStatus' is in dataGaps → apply Protocol B default (assume fit, do not report injury).
     • Use 'recentMatchDate' to anchor Protocol M temporal verification before writing latestUpdate.
     • 'verifiedSources' lists the real web sources used — cite these when writing latestUpdate if specific match events are mentioned.
@@ -863,12 +985,15 @@ Return ONLY this JSON (no preamble, no markdown):
     3. Does the "Context" justify a rating protection? (e.g., "Returning from injury" vs "Healthy but poor").
     If the General Narrative is negative (e.g., "struggling", "out of depth"), you MUST lower the rating attributes (Consistency, Composure) regardless of the player's historical Anchor.
     </synthesis_mandate>
-    9. STRING FIELD NULLS: Protocol P's "set to 0" rule applies ONLY to the 25 numerical values inside the 'attributes' object. For string fields in 'basicInfo' — specifically 'height' and 'weight' — if the search data contains no verified figure, output the string "N/A". Never output "0'0\"" or "0 lbs" as a zero-value substitute for missing data.
-    10. PRE-OUTPUT VERIFICATION — confirm each before generating JSON:
+    9. ATTRIBUTES ARE ABILITY, NOT BOX-SCORE (Protocol P): Populate all 25 numerical attributes with real, considered values drawn from the player's established class and scouting profile. Missing current-season stats lowers confidence — it does NOT justify a 0. Only an unidentifiable / footprint-less player may receive 0s. For string fields in 'basicInfo' — specifically 'height' and 'weight' — if the search data contains no verified figure, output the string "N/A". Never output "0'0\"" or "0 lbs".
+    10. ATTRIBUTE DIFFERENTIATION (Protocol R): Rate each attribute on its own merit — do NOT cluster attributes around the Overall. Elite strengths must spike high and genuine weaknesses must stay visibly low, even for a high-Overall player. The Overall is a position-weighted synthesis of key attributes, never a floor that drags every attribute upward.
+    11. BASIC INFO FORMATTING (Protocol S): 'position' must be a specific role in "Full Name (ABBR)" form (e.g., "Left Back (LB)", "Right Winger (RW)") — never a generic label like "Defender". 'club' must be the club's standard media name (e.g., "Real Madrid", "Chelsea") — never a nickname/shorthand ("Barca", "Spurs"). Always fill name, age, nationality, club, and position for any real player.
+    12. PRE-OUTPUT VERIFICATION — confirm each before generating JSON:
        • (E) latestUpdate contains no stat claim without a specific number from the foundation
        • (M) Every match/club reference year is ${year}, not pulled from memory
        • (J) Only defined tier names used — no invented labels
-       • (P) Numerical attributes lacking search evidence are set to 0; string fields use "N/A"
+       • (P) Every attribute is populated from established ability; 0 only for an unidentifiable player; string fields use "N/A"
+       • (R) The attribute set has genuine spread (clear peaks and troughs), not a flat band near the Overall
        • (C) Generational Weapon NOT applied to any player at 95 or below
         `;
 
@@ -905,33 +1030,58 @@ Return ONLY this JSON (no preamble, no markdown):
 
     <task>${message}</task>`;
 
-        // ── Q1: Route formal default-mode requests through structured synthesis ──
-        // synthesizeFormalResponse uses generateContent + responseSchema so Gemini
-        // guarantees schema-valid JSON. No tools needed — the foundation is in the prompt.
-        // Falls back to sendChatMessage (existing path) if the API rejects the schema.
-        if (isFormal && !imageData && mode === 'default' && isProfileRequest) {
+        // ── Q1: Route ALL formal default-mode requests (profiles AND comparisons) ──
+        // through structured synthesis. synthesizeFormalResponse uses responseSchema so
+        // Gemini guarantees schema-valid JSON and retries transient rate limits internally.
+        // A formal request must resolve to a structured object — it must NEVER return a
+        // raw JSON string to the UI. If every path fails we throw a clean error so the
+        // user sees an "Editor's Note" instead of raw braces.
+        if (isFormal && !imageData && mode === 'default') {
+            const cacheIfProfile = (result: PlayerProfile | PlayerComparison) => {
+                if (!isComparison && 'basicInfo' in result) {
+                    upsertCachedDossier(toPlayerSlug((result as PlayerProfile).basicInfo.name), result as PlayerProfile);
+                }
+            };
+
             try {
                 const result = await synthesizeFormalResponse(finalAnswerPrompt, isComparison, systemInstruction);
-                if (!isComparison && 'basicInfo' in result) {
-                    const canonicalSlug = toPlayerSlug((result as PlayerProfile).basicInfo.name);
-                    upsertCachedDossier(canonicalSlug, result as PlayerProfile);
-                }
+                cacheIfProfile(result);
                 return result;
             } catch (e) {
-                console.warn('[Structured Synthesis] Failed, falling back to chat path:', e);
+                console.warn('[Structured Synthesis] Failed after retries, attempting chat fallback:', e);
                 await new Promise(r => setTimeout(r, 1500));
-                // CRITICAL: use 'minimal' here, NOT selectedLevel ('medium').
-                // Medium thinking leaks artifact tokens into JSON, corrupting it so
-                // findProfileData fails and the raw JSON string gets displayed in chat.
-                return sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, 'minimal', systemInstruction);
+                // Last-resort chat fallback. MINIMAL thinking — medium leaks artifact tokens
+                // into JSON. Salvage/guard the result so a corrupted string is never rendered.
+                try {
+                    const fallback = await sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, 'minimal', systemInstruction);
+                    const structured = typeof fallback === 'string' ? extractStructuredFromText(fallback) : fallback;
+                    if (structured && typeof structured === 'object') {
+                        cacheIfProfile(structured);
+                        return structured;
+                    }
+                } catch (fallbackErr) {
+                    console.warn('[Chat Fallback] Failed:', fallbackErr);
+                }
+                throw new Error("The scouting report came back malformed. Please try that request again in a moment.");
             }
         }
 
         return sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, selectedLevel, systemInstruction);
     } catch (error) {
         console.error("[GLOBAL WORKFLOW] Failed:", error);
-        // MINIMAL thinking in the fallback: LOW thinking leaks citation tokens ([2.1.3] etc.)
-        // into JSON output, corrupting the structure and preventing profile detection.
+        // For a formal request, never leak raw JSON: attempt one guarded structured
+        // recovery, otherwise surface a clean error the UI renders as an "Editor's Note".
+        if (isFormal && !imageData) {
+            try {
+                const recovered = await sendChatMessage(message, history, FLASH_MODEL, imageData, "minimal", getMasterInstructions(false));
+                const structured = typeof recovered === 'string' ? extractStructuredFromText(recovered) : recovered;
+                if (structured && typeof structured === 'object') return structured;
+            } catch (recoveryErr) {
+                console.warn('[Global Recovery] Failed:', recoveryErr);
+            }
+            throw error instanceof Error ? error : new Error("The scouting report could not be generated. Please try again.");
+        }
+        // MINIMAL thinking: LOW leaks citation tokens ([2.1.3] etc.) into JSON output.
         return sendChatMessage(message, history, FLASH_MODEL, imageData, "minimal", getMasterInstructions(false));
     }
 };
