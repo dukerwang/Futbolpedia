@@ -473,16 +473,43 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     <div className="w-16 h-1.5 bg-charcoal/20 dark:bg-cream-400/20 rounded-full"></div>
                 </div>
 
-                <div className="flex justify-between items-start px-8 pt-6 pb-4">
-                    <div className="flex-1 pr-4">
-                        <h2 className="text-2xl font-serif font-bold text-charcoal dark:text-white leading-tight">{profile.basicInfo.name}</h2>
-                        <p className="text-emerald-600 dark:text-emerald-400 font-serif italic text-base leading-tight mt-1 mb-1">
-                            {profile.playstyleAndRole?.playstyle?.archetype}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-charcoal/60 dark:text-cream-400 font-sans">
+                <div className="px-8 pt-6 pb-4">
+                    <div className="flex justify-between items-start">
+                        <div className="flex-1 pr-4">
+                            <h2 className="text-2xl font-serif font-bold text-charcoal dark:text-white leading-tight">{profile.basicInfo.name}</h2>
+                            <p className="text-emerald-600 dark:text-emerald-400 font-serif italic text-base leading-tight mt-1 mb-1">
+                                {profile.playstyleAndRole?.playstyle?.archetype}
+                            </p>
+                        </div>
+
+                        <div className="flex flex-col items-end text-right shrink-0">
+                            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getTierText(profile.ratings.overall)}</span>
+
+                            <div className="flex gap-4">
+                                <div className="flex flex-col items-center">
+                                    <span className={`text-2xl font-mono font-bold leading-none ${profile.ratings.overall >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-white'}`}>{profile.ratings.overall}</span>
+                                    <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">OVR</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                    <span className="text-2xl font-mono font-bold leading-none text-charcoal/60 dark:text-cream-200">{profile.ratings.potential}</span>
+                                    <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">POT</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Bio stats and dossier navigation share one line so they stay visually balanced */}
+                    <div className="flex justify-between items-center mt-2">
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs text-charcoal/60 dark:text-cream-400 font-sans">
                                 <span className="font-semibold text-charcoal dark:text-cream-200">{formatPosition(profile.basicInfo.position)}</span>
                                 <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
                                 <span className="line-clamp-1">{profile.basicInfo.club}</span>
+                                {profile.basicInfo.age != null && (
+                                    <>
+                                        <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
+                                        <span>{profile.basicInfo.age}</span>
+                                    </>
+                                )}
                                 {profile.basicInfo.height && profile.basicInfo.height !== 'N/A' && (
                                     <>
                                         <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
@@ -490,25 +517,9 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                     </>
                                 )}
                         </div>
-                    </div>
-                    
-                    <div className="flex flex-col items-end text-right shrink-0">
-                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getTierText(profile.ratings.overall)}</span>
-                        
-                        <div className="flex gap-4">
-                            <div className="flex flex-col items-center">
-                                <span className={`text-2xl font-mono font-bold leading-none ${profile.ratings.overall >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-white'}`}>{profile.ratings.overall}</span>
-                                <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">OVR</span>
-                            </div>
-                            <div className="flex flex-col items-center">
-                                <span className="text-2xl font-mono font-bold leading-none text-charcoal/60 dark:text-cream-200">{profile.ratings.potential}</span>
-                                <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">POT</span>
-                            </div>
-                        </div>
 
-                        {/* Navigation Arrows placed in the blank space under OVR and POT, but above share/close buttons */}
                         {allProfiles.length > 1 && currentIndex !== -1 && (
-                            <div className="flex items-center bg-cream-200/60 dark:bg-charcoal-light/35 rounded-lg p-0.5 border border-cream-300/60 dark:border-charcoal-border select-none mt-4">
+                            <div className="flex items-center bg-cream-200/60 dark:bg-charcoal-light/35 rounded-lg p-0.5 border border-cream-300/60 dark:border-charcoal-border select-none shrink-0 ml-3">
                                 <button 
                                     disabled={currentIndex === 0}
                                     onClick={() => onSelectProfile(allProfiles[currentIndex - 1])}
