@@ -4,6 +4,7 @@ import { ChatHistory } from './components/ChatHistory';
 import { ChatInput } from './components/ChatInput';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
+import { WhatsNewPopup } from './components/WhatsNewPopup';
 import type { ChatMessage, PlayerProfile, Conversation } from './types';
 import { sendMessageToAI, resetChat, getCachedDossier, getSharedConversation } from './services/geminiService';
 
@@ -572,6 +573,7 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-cream-200 dark:bg-charcoal text-charcoal dark:text-cream-100 transition-colors duration-300 relative">
+      <WhatsNewPopup />
       
       <Header 
         onNewChat={handleNewConversation} 

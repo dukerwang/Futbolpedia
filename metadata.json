@@ -1,5 +1,6 @@
 {
   "name": "Futbolpedia AI",
   "description": "An AI-powered football analyst that provides objective, data-driven player ratings and in-depth profiles using a comprehensive 25-attribute framework.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
