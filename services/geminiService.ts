@@ -713,10 +713,13 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     try {
         let factualFoundation = "";
 
-        // ── Dossier cache check ─────────────────────────────────────────────
-        // Single-player profile requests check Supabase before running the pipeline.
-        // Cache entries are valid for 14 days; stale entries fall through to regenerate.
-        if (isProfileRequest && !isComparison && mode === 'default' && !imageData) {
+        // ── Dossier cache check (both modes) ────────────────────────────────
+        // Single-player profile requests check Supabase before running any pipeline.
+        // Applies to fast mode too: a cached dossier is instant AND higher quality than a
+        // fresh fast-mode generation, so there is no reason for fast mode to regenerate a
+        // player that is already cached. Cache entries are valid for 14 days; stale entries
+        // fall through to regenerate via whichever mode was requested.
+        if (isProfileRequest && !isComparison && !imageData) {
             const candidateSlug = extractCandidateSlug(message);
             if (candidateSlug) {
                 const cached = await getCachedDossier(candidateSlug);
@@ -813,24 +816,33 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
         // ── Default mode: pipeline ──────────────────────────────────────────────
         if (!imageData && mode === 'default') {
             if (isFormal) {
-                // ── E2: 5→4 vectors for single-player queries (merge D+E into Status+Fitness) ──
-                // Standard single-player profile: was A,B,C,D,E — now A,B,C,D(merged status+fitness).
-                // The triangulation mandate (Protocol Q) requires stats + narrative + physical context.
-                // D and E were both "current-state" signals, so merging them loses no triangulation leg.
-                let queryGenPrompt = `
-Task: Generate search queries for: "${message}".
-Context: Current Date is ${month} ${year}. Season: ${currentSeason}.
-MANDATORY SEARCH VECTORS (exactly 1 precise query per vector, exactly 4 total):
+                let queries: string[];
 
-VECTOR A (Anchor & Class): Search for the player's 2024/2025 peak, major awards, and "best player" rankings.
-VECTOR B (Hard Data): Search for ${currentSeason} stats, G/A per 90, clean sheets, and advanced metrics.
-VECTOR C (Scouting Profile & Eye Test): Search for the player's scouting report — playing style, specific technical/physical/mental strengths and weaknesses, and recent pundit/analyst breakdowns of HOW he plays (this grounds the 25 ability attributes).
-VECTOR D (Status & Fitness): Search for the player's current club, any transfer or loan news in ${year}, injury status, manager quotes about their role, and tactical fit in ${currentSeason}.
+                // ── Standard single-player dossier: skip the query-generation LLM call ──
+                // A profile request already NAMES the player, so the four search vectors are
+                // deterministic templates — building them in code removes a full serial round
+                // trip (the query-gen phase) from the critical path with no loss of search depth
+                // or triangulation. This mirrors fast mode, which has always templated its
+                // grounding queries inline without any quality regression. The query-gen call is
+                // still used for comparison/historical requests below, where it earns its cost by
+                // disambiguating the two players / peak eras from a looser prompt.
+                //
+                // Vectors mirror the previous generated set 1:1 (E2: 5→4, D = merged status+fitness):
+                //   A Anchor & Class · B Hard Data · C Scouting Profile & Eye Test · D Status & Fitness
+                if (!isComparison && !isHistorical) {
+                    queries = [
+                        `${message} — 2024/2025 peak season, major awards, and "best player" rankings`,
+                        `${message} — ${currentSeason} season stats: goals, assists, G/A per 90, clean sheets, and advanced metrics`,
+                        `${message} — scouting report: playing style, specific technical/physical/mental strengths and weaknesses, and pundit/analyst breakdowns of HOW he plays`,
+                        `${message} — current club, any ${year} transfer or loan news, injury status, manager quotes about his role, and tactical fit in ${currentSeason}`,
+                    ];
+                } else {
+                    // Comparison / historical: keep the query-gen call so both players (and, for
+                    // historical requests, their respective peak eras) are correctly identified.
+                    let queryGenPrompt: string;
 
-OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
-
-                if (isHistorical && isComparison) {
-                    queryGenPrompt = `
+                    if (isHistorical && isComparison) {
+                        queryGenPrompt = `
 Task: Generate search queries to compare the PRIME/PEAK of the two players in: "${message}".
 MANDATORY: Exactly 4 queries — 2 per player at their respective peaks.
 
@@ -840,8 +852,8 @@ PLAYER 2 — VECTOR A: Absolute peak season stats, major awards, and "best playe
 PLAYER 2 — VECTOR B: Pundit analysis and match performance reviews from their peak era.
 
 OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
-                } else if (isHistorical) {
-                    queryGenPrompt = `
+                    } else if (isHistorical) {
+                        queryGenPrompt = `
 Task: Generate search queries for evaluating the PEAK/PRIME of: "${message}".
 MANDATORY SEARCH VECTORS (exactly 1 precise query per vector):
 
@@ -851,8 +863,9 @@ VECTOR C (Narrative & Eye Test): Pundit analysis, fan sentiment, and match perfo
 VECTOR D (Context): Tactical fit and manager quotes about their role during their most dominant period.
 
 OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
-                } else if (isComparison && !isHistorical) {
-                    queryGenPrompt = `
+                    } else {
+                        // isComparison && !isHistorical
+                        queryGenPrompt = `
 Task: Generate search queries to compare the two players in: "${message}".
 Context: Current Date is ${month} ${year}. Season: ${currentSeason}.
 MANDATORY: Exactly 4 queries — 2 per player. Identify the two players from the request.
@@ -863,43 +876,44 @@ PLAYER 2 — VECTOR A: Their ${currentSeason} stats, goals, assists, and hard pe
 PLAYER 2 — VECTOR B: Recent pundit analysis, form, current club/status, and tactical role (${month} ${year}).
 
 OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
-                }
-
-                // LOW thinking for query generation: costs almost nothing but meaningfully improves
-                // query specificity vs MINIMAL (correct club names, season labels, etc.).
-                // responseSchema forces {"queries":[...]} — without it the model maps the VECTOR A/B/C/D
-                // labels to JSON keys (e.g. {"vectorA":"..."}) and parsed.queries returns undefined → [].
-                const queryGenResponse = await getAi().models.generateContent({
-                    model: FLASH_MODEL,
-                    contents: queryGenPrompt,
-                    config: {
-                        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-                        responseMimeType: "application/json",
-                        responseSchema: {
-                            type: Type.OBJECT,
-                            properties: {
-                                queries: { type: Type.ARRAY, items: { type: Type.STRING } },
-                            },
-                            required: ['queries'],
-                        },
                     }
-                });
-                
-                const rawText = queryGenResponse.text || '{}';
-                const cleanJson = rawText.replace(/```json|```/g, '').trim();
-                const parsed = JSON.parse(cleanJson);
-                const queries: string[] = (parsed.queries || []);
 
-                if (queries.length === 0) {
-                    throw new Error("Query generation returned no search queries. Cannot produce a grounded profile.");
+                    // LOW thinking for query generation: costs almost nothing but meaningfully improves
+                    // query specificity vs MINIMAL (correct club names, season labels, etc.).
+                    // responseSchema forces {"queries":[...]} — without it the model maps the VECTOR A/B/C/D
+                    // labels to JSON keys (e.g. {"vectorA":"..."}) and parsed.queries returns undefined → [].
+                    const queryGenResponse = await getAi().models.generateContent({
+                        model: FLASH_MODEL,
+                        contents: queryGenPrompt,
+                        config: {
+                            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                            responseMimeType: "application/json",
+                            responseSchema: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    queries: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                },
+                                required: ['queries'],
+                            },
+                        }
+                    });
+
+                    const rawText = queryGenResponse.text || '{}';
+                    const cleanJson = rawText.replace(/```json|```/g, '').trim();
+                    const parsed = JSON.parse(cleanJson);
+                    queries = (parsed.queries || []);
+
+                    if (queries.length === 0) {
+                        throw new Error("Query generation returned no search queries. Cannot produce a grounded profile.");
+                    }
                 }
-                
+
                 const SAFE_QUERY_LIMIT = 4;
 
                 // ── Q2: Capture grounding source URLs from each search ──────────────────
-                // Runs in batches of 2 concurrent calls (see BATCH_SIZE below), not fully
-                // parallel — Cloud Run proxies all calls through one server IP, and 4
-                // simultaneous requests reliably hit the RPM limit. Retries once on 429.
+                // All searches fire concurrently (see below). Retries with backoff on 429 as
+                // a cheap safety net for transient errors, even though the project's quota has
+                // ~100x headroom over a single dossier's burst.
                 const runSearch = async (q: string, attempt = 0): Promise<string> => {
                     try {
                         const res = await getAi().models.generateContent({
@@ -928,22 +942,16 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                     }
                 };
 
-                // Latency fix: 4 fully sequential calls (the previous approach) is the single
-                // biggest contributor to default mode's ~1 minute response time. Running all 4
-                // at once reliably hit the Cloud Run single-IP RPM limit, so this batches 2
-                // concurrent calls at a time — roughly halves search-phase wall time vs. fully
-                // serial, while only doubling (not quadrupling) simultaneous request load.
-                const BATCH_SIZE = 2;
+                // Latency fix: the search phase is the single biggest contributor to default
+                // mode's response time. All 4 grounded searches now run FULLY IN PARALLEL,
+                // collapsing the phase to a single wave (~one search's wall time instead of two
+                // batched waves). The earlier 2-at-a-time batching existed to dodge a low
+                // free-tier RPM cap; on the current plan the quota is 1,000 RPM / 2M TPM, so a
+                // 4-request burst per dossier is negligible (would need ~140 concurrent dossiers
+                // in one minute to threaten the RPM ceiling). No depth is traded — still 4 vectors.
                 const queriesToRun = queries.slice(0, SAFE_QUERY_LIMIT);
-                const results: string[] = [];
-                for (let i = 0; i < queriesToRun.length; i += BATCH_SIZE) {
-                    const batch = queriesToRun.slice(i, i + BATCH_SIZE);
-                    results.push(...await Promise.all(batch.map(q => runSearch(q))));
-                    if (i + BATCH_SIZE < queriesToRun.length) {
-                        await new Promise(r => setTimeout(r, 800));
-                    }
-                }
-                
+                const results = await Promise.all(queriesToRun.map(q => runSearch(q)));
+
                 factualFoundation = results.join('\n\n---\n\n');
             } else {
                 // Non-formal chat
