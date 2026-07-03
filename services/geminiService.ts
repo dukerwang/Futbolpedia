@@ -525,8 +525,13 @@ const synthesizeFormalResponse = async (
 ): Promise<PlayerProfile | PlayerComparison> => {
     const schema = isComparisonRequest ? PLAYER_COMPARISON_SCHEMA : PLAYER_PROFILE_SCHEMA;
 
-    // No thinkingConfig — ThinkingLevel + responseSchema conflict on Gemini Flash,
-    // producing malformed output. The responseSchema enforces structure at the API level.
+    // thinkingLevel: LOW — with no thinkingConfig, Flash runs dynamic thinking (~2900
+    // thinking tokens measured), which was ~74% of synthesis decode time. Capping it to LOW
+    // keeps enough reasoning for rating quality while cutting the hidden thinking cost. The
+    // historical concern was that ThinkingLevel + responseSchema could leak thinking-token
+    // fragments into the JSON; if that resurfaces, JSON.parse throws and the caller falls back
+    // to the guarded chat path, so this degrades safely rather than breaking. The token log
+    // below reports thoughts count so this can be verified against the previous ~2900 baseline.
     const response = await getAi().models.generateContent({
         model: FLASH_MODEL,
         contents: prompt,
@@ -535,6 +540,7 @@ const synthesizeFormalResponse = async (
             temperature: 0.7,
             responseMimeType: 'application/json',
             responseSchema: schema,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         },
     });
 
