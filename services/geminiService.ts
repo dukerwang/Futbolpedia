@@ -710,6 +710,19 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     const isCurrentStateQuery = /\b(squad|roster|lineup|line.?up|formation|manager|coach|signings?|transfers?|this season|playing for|who(?:'s| is) (?:at|managing)|how (?:does|do) .+ play)\b/i.test(message);
     const isFormal = isProfileRequest || isComparison;
 
+    // ── Per-phase timing instrumentation ────────────────────────────────────
+    // Logs each pipeline phase's wall time to the console so real bottlenecks can be
+    // measured instead of estimated. Set FUTBOLPEDIA_PERF=false on window to silence.
+    const perfEnabled = typeof window === 'undefined' || (window as any).FUTBOLPEDIA_PERF !== false;
+    const perfStart = (typeof performance !== 'undefined' ? performance : Date).now();
+    let perfPrev = perfStart;
+    const perf = (label: string) => {
+        if (!perfEnabled) return;
+        const now = (typeof performance !== 'undefined' ? performance : Date).now();
+        console.log(`[Perf] ${label}: +${Math.round(now - perfPrev)}ms (total ${Math.round(now - perfStart)}ms) [${mode}]`);
+        perfPrev = now;
+    };
+
     try {
         let factualFoundation = "";
 
@@ -775,6 +788,7 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
                 } catch (e) {
                     console.warn('[Fast Mode] Grounding search failed, synthesizing from prompt only:', e);
                 }
+                perf('search phase (2 parallel)');
 
                 // Pulls the SAME quality-reminder function as default mode (see
                 // getFormalSynthesisQualityReminders) so fast mode's writing/rating quality
@@ -793,6 +807,7 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
 
                 try {
                     const result = await synthesizeFormalResponse(fastSynthPrompt, isComparison, systemInstruction);
+                    perf('synthesis');
                     if (!isComparison && 'basicInfo' in result) {
                         upsertCachedDossier(toPlayerSlug((result as PlayerProfile).basicInfo.name), result as PlayerProfile);
                     }
@@ -906,6 +921,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                     if (queries.length === 0) {
                         throw new Error("Query generation returned no search queries. Cannot produce a grounded profile.");
                     }
+                    perf('query generation');
                 }
 
                 const SAFE_QUERY_LIMIT = 4;
@@ -915,6 +931,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                 // a cheap safety net for transient errors, even though the project's quota has
                 // ~100x headroom over a single dossier's burst.
                 const runSearch = async (q: string, attempt = 0): Promise<string> => {
+                    const searchStart = (typeof performance !== 'undefined' ? performance : Date).now();
                     try {
                         const res = await getAi().models.generateContent({
                             model: FLASH_MODEL,
@@ -924,6 +941,10 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                                 thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
                             }
                         });
+                        if (perfEnabled) {
+                            const ms = Math.round(((typeof performance !== 'undefined' ? performance : Date).now()) - searchStart);
+                            console.log(`[Perf]   search "${q.slice(0, 48)}…": ${ms}ms${attempt ? ` (attempt ${attempt + 1})` : ''}`);
+                        }
                         const chunks = (res as any).candidates?.[0]?.groundingMetadata?.groundingChunks;
                         const sources: string = chunks
                             ?.filter((c: any) => c.web?.uri)
@@ -953,6 +974,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                 const results = await Promise.all(queriesToRun.map(q => runSearch(q)));
 
                 factualFoundation = results.join('\n\n---\n\n');
+                perf(`search phase (${queriesToRun.length} parallel)`);
             } else {
                 // Non-formal chat
                 if (isCurrentStateQuery) {
@@ -1029,6 +1051,7 @@ Return ONLY this JSON (no preamble, no markdown):
             } catch (e) {
                 console.warn('[Extraction Step] Failed, proceeding with raw foundation only:', e);
             }
+            perf('extraction');
         }
 
         // MEDIUM thinking for formal requests: HIGH on Flash leaks thinking token fragments
@@ -1103,6 +1126,7 @@ Return ONLY this JSON (no preamble, no markdown):
 
             try {
                 const result = await synthesizeFormalResponse(finalAnswerPrompt, isComparison, systemInstruction);
+                perf('synthesis');
                 cacheIfProfile(result);
                 return result;
             } catch (e) {
