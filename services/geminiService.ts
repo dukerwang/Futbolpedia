@@ -541,6 +541,14 @@ const synthesizeFormalResponse = async (
     const text = response.text;
     if (!text) throw new Error('Structured synthesis returned no text');
 
+    // Diagnostic: reveals whether synthesis wall time is spent on THINKING (dynamic
+    // thinking when thinkingConfig is omitted) vs OUTPUT generation, and whether implicit
+    // prompt caching is hitting the large systemInstruction. Guides where to optimize next.
+    const u = (response as any).usageMetadata;
+    if (u) {
+        console.log(`[Perf] synthesis tokens — prompt: ${u.promptTokenCount ?? '?'}, cached: ${u.cachedContentTokenCount ?? 0}, thoughts: ${u.thoughtsTokenCount ?? 0}, output: ${u.candidatesTokenCount ?? '?'}, total: ${u.totalTokenCount ?? '?'}`);
+    }
+
     const parsed = JSON.parse(text);
     return isComparisonRequest
         ? sanitizeComparisonData(parsed as Partial<PlayerComparison>)
