@@ -343,23 +343,27 @@ const createDefaultProfile = (): PlayerProfile => {
 // The prompt asks the model for canonical formats, but we also normalize
 // deterministically so the UI never shows "LB" next to "Left Back" or "Barca"
 // next to "FC Barcelona" across different dossiers.
+// Plain canonical names — deliberately WITHOUT a "(ABBR)" suffix. The dossier UI
+// (SidePanel.formatPosition) maps these exact plain names down to short abbreviations
+// for display (e.g. "Left Back" → "LB"); appending "(LB)" here breaks that lookup and
+// is what caused overly long, un-abbreviated position badges in the UI.
 const POSITION_CANON: Record<string, string> = {
-    gk: 'Goalkeeper (GK)', goalkeeper: 'Goalkeeper (GK)', keeper: 'Goalkeeper (GK)',
-    rb: 'Right Back (RB)', rightback: 'Right Back (RB)',
-    lb: 'Left Back (LB)', leftback: 'Left Back (LB)',
-    cb: 'Centre-Back (CB)', centreback: 'Centre-Back (CB)', centerback: 'Centre-Back (CB)', centraldefender: 'Centre-Back (CB)',
-    rwb: 'Right Wing-Back (RWB)', rightwingback: 'Right Wing-Back (RWB)',
-    lwb: 'Left Wing-Back (LWB)', leftwingback: 'Left Wing-Back (LWB)',
-    cdm: 'Defensive Midfielder (CDM)', dm: 'Defensive Midfielder (CDM)', defensivemidfielder: 'Defensive Midfielder (CDM)', holdingmidfielder: 'Defensive Midfielder (CDM)',
-    cm: 'Central Midfielder (CM)', centralmidfielder: 'Central Midfielder (CM)', centremidfielder: 'Central Midfielder (CM)',
-    cam: 'Attacking Midfielder (CAM)', am: 'Attacking Midfielder (CAM)', attackingmidfielder: 'Attacking Midfielder (CAM)',
-    rm: 'Right Midfielder (RM)', rightmidfielder: 'Right Midfielder (RM)',
-    lm: 'Left Midfielder (LM)', leftmidfielder: 'Left Midfielder (LM)',
-    rw: 'Right Winger (RW)', rightwinger: 'Right Winger (RW)', rightwing: 'Right Winger (RW)',
-    lw: 'Left Winger (LW)', leftwinger: 'Left Winger (LW)', leftwing: 'Left Winger (LW)',
-    cf: 'Centre-Forward (CF)', centreforward: 'Centre-Forward (CF)', centerforward: 'Centre-Forward (CF)',
-    st: 'Striker (ST)', striker: 'Striker (ST)',
-    ss: 'Second Striker (SS)', secondstriker: 'Second Striker (SS)',
+    gk: 'Goalkeeper', goalkeeper: 'Goalkeeper', keeper: 'Goalkeeper',
+    rb: 'Right Back', rightback: 'Right Back',
+    lb: 'Left Back', leftback: 'Left Back',
+    cb: 'Centre-Back', centreback: 'Centre-Back', centerback: 'Centre-Back', centraldefender: 'Centre-Back',
+    rwb: 'Right Wing-Back', rightwingback: 'Right Wing-Back',
+    lwb: 'Left Wing-Back', leftwingback: 'Left Wing-Back',
+    cdm: 'Defensive Midfielder', dm: 'Defensive Midfielder', defensivemidfielder: 'Defensive Midfielder', holdingmidfielder: 'Defensive Midfielder',
+    cm: 'Central Midfielder', centralmidfielder: 'Central Midfielder', centremidfielder: 'Central Midfielder',
+    cam: 'Attacking Midfielder', am: 'Attacking Midfielder', attackingmidfielder: 'Attacking Midfielder',
+    rm: 'Right Midfielder', rightmidfielder: 'Right Midfielder',
+    lm: 'Left Midfielder', leftmidfielder: 'Left Midfielder',
+    rw: 'Right Winger', rightwinger: 'Right Winger', rightwing: 'Right Winger',
+    lw: 'Left Winger', leftwinger: 'Left Winger', leftwing: 'Left Winger',
+    cf: 'Centre Forward', centreforward: 'Centre Forward', centerforward: 'Centre Forward',
+    st: 'Striker', striker: 'Striker',
+    ss: 'Second Striker', secondstriker: 'Second Striker',
 };
 
 const CLUB_CANON: Record<string, string> = {
@@ -382,10 +386,13 @@ const CLUB_CANON: Record<string, string> = {
 
 const normalizePosition = (raw: string): string => {
     if (!raw || raw === 'N/A') return raw || 'N/A';
+    // Strip any parenthetical abbreviation the model may still attach despite instructions
+    // (e.g. "Left Back (LB)") so the lookup key matches, and so it never leaks into output.
     const parts = raw.split(/\s*(?:\/|,|\bor\b|\band\b)\s*/i).map(s => s.trim()).filter(Boolean);
     const mapped = parts.map(part => {
-        const key = part.toLowerCase().replace(/\([^)]*\)/g, '').replace(/[^a-z]/g, '');
-        return POSITION_CANON[key] || part;
+        const withoutParens = part.replace(/\([^)]*\)/g, '').trim();
+        const key = withoutParens.toLowerCase().replace(/[^a-z]/g, '');
+        return POSITION_CANON[key] || withoutParens || part;
     });
     const seen = new Set<string>();
     const unique = mapped.filter(m => {
@@ -393,8 +400,8 @@ const normalizePosition = (raw: string): string => {
         if (seen.has(k)) return false;
         seen.add(k);
         return true;
-    });
-    return unique.join(' / ') || raw;
+    }).slice(0, 2); // Protocol S: at most two roles
+    return unique.join('/') || raw;
 };
 
 const normalizeClub = (raw: string): string => {
@@ -550,18 +557,20 @@ const synthesizeFormalResponse = async (
 const getFormalSynthesisQualityReminders = (): string => `
     ATTRIBUTE POPULATION (Protocol P): Populate all 25 numerical attributes with real, considered values drawn from the player's established class and scouting profile. Missing current-season stats lowers confidence — it does NOT justify a 0. Only an unidentifiable / footprint-less player may receive 0s. For 'height'/'weight', use "N/A" if unverified — never "0'0\"" or "0 lbs".
     ATTRIBUTE DIFFERENTIATION (Protocol R): Rate each attribute on its own merit — do NOT cluster attributes around the Overall. Elite strengths must spike high and genuine weaknesses must stay visibly low, even for a high-Overall player. The Overall is a position-weighted synthesis of key attributes, never a floor that drags every attribute upward.
-    BASIC INFO FORMATTING (Protocol S): 'position' must be a specific role in "Full Name (ABBR)" form (e.g., "Left Back (LB)") — never generic ("Defender"). 'club' must be the standard media name (e.g., "Real Madrid") — never a nickname ("Barca"). Always populate name, age, nationality, club, and position.
+    BASIC INFO — POSITION (Protocol S): Select 'position' ONLY from this closed list, output as the PLAIN NAME with NO parenthetical abbreviation attached: Goalkeeper, Centre-Back, Left Back, Right Back, Left Wing-Back, Right Wing-Back, Defensive Midfielder, Central Midfielder, Attacking Midfielder, Left Midfielder, Right Midfielder, Left Winger, Right Winger, Striker, Centre Forward, Second Striker. For a genuine dual role, join exactly two with "/" and nothing else (e.g., "Central Midfielder/Right Back"). Never a generic label ("Defender", "Forward", "Midfielder").
+    BASIC INFO — CLUB (Protocol S): The standard media name (e.g., "Real Madrid") — never a nickname ("Barca"). Always populate name, age, nationality, club, and position.
+    EFFECTIVE ROLES (bestRoles): Short (1-4 word) standard tactical role labels (e.g., "False 9", "Deep-Lying Playmaker", "Inverted Winger") — not full sentences, not the position list above.
     ARCHETYPE NAMING (Protocol D): An evocative, specific 3-5 word title capturing the player's exact playing identity — never a generic positional label.
     STRENGTHS/WEAKNESSES FORMAT (Protocol L): Each entry MUST follow "**Bold Title:** Analytical sentence with specific evidence." Ground titles and sentences in real, specific traits — not vague labels.
-    NARRATIVE DEPTH (Protocol L): shortBio and playstyle.description are minimum 80 words each. Include nicknames if well-known. Cite a specific match/moment/stat if the foundation contains one — otherwise describe established reputation in specific, non-generic language WITHOUT inventing a match or number (Protocol E).
-    TACTICO VIEW (Protocol T): playstyle.description portrays the player's intrinsic footballing identity — habits, technical signature, decision-making — NOT a specific club's tactical system.
+    SHORT BIO — UNIQUE, ACCURATE, CURRENT (Protocols I & L): Minimum 80 words. Goal: a fresh, high-quality snapshot of who the player is RIGHT NOW — current standing, form, situation — worded differently for every player; quality and accuracy come first. Break out of the one reused mould — "Affectionately known as '[nickname]'... following a [transfer]... silenced/defied skeptics by [stat]... enters [new season] under [new manager]" — and never use the crutch phrases "silenced/defied skeptics." A nickname is OPTIONAL; include one only if genuinely famous, never invent or force it as the opener. Vary both the opening (a plain stat/achievement, a defining moment, a direct identity statement, a real tension) and the closing across profiles.
+    TACTICAL BRIEF — ACCURATE IDENTITY, NOT ACTION LOG (Protocol T): playstyle.description must capture WHO the player is as a footballer — his true type, defining qualities, how he compares to the norm for his role, and his genuine limitations — as accurately as a world-class scout would. There is NO required opening template; open in whatever way most sharply captures THIS player and vary it across profiles. Make the reader come away knowing what mould he belongs to. Do NOT write it as a chronological chain of "He does X. He does Y. He does Z." actions (a play-by-play), and do NOT anchor it to one club's tactical system. Concrete habits are welcome as evidence, but identity is the payload.
     PRE-OUTPUT VERIFICATION:
        • (P) Every attribute populated from established ability; 0 only for an unidentifiable player; string fields use "N/A"
        • (R) The attribute set has genuine spread (clear peaks and troughs), not a flat band near the Overall
-       • (S) position/club formatted per spec; all basicInfo fields populated
+       • (S) position is from the closed list, plain name, max two joined by "/", no "(ABBR)"; all basicInfo fields populated
        • (D) Archetype is specific and evocative, not a generic label
-       • (L) Strengths/weaknesses use the bold-title format; bio/playstyle meet the word minimum with real evidence, not filler
-       • (T) Playstyle description is a player-identity portrait, not a club-system breakdown
+       • (L) Strengths/weaknesses use the bold-title format; bio meets the word minimum with real, current evidence, worded uniquely — not the one reused mould and not the "silenced skeptics" crutch
+       • (T) playstyle.description gives an accurate footballing-identity portrait (reader knows the player's type), NOT a chain of "He [verb]s" actions, with no required opening template and no club-system framing
        • (C) Generational Weapon NOT applied to any player at 95 or below
 `;
 // ──────────────────────────────────────────────────────────────────────────────
