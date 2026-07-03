@@ -541,6 +541,31 @@ const synthesizeFormalResponse = async (
 };
 // ──────────────────────────────────────────────────────────────────────────────
 
+// ─── Shared formal-synthesis quality reminders ─────────────────────────────────
+// Single source of truth for the narrative/attribute/formatting rules that must hold
+// no matter which pipeline produces the final JSON — default mode's deep multi-vector
+// research, its historical/prime variant, or fast mode's lighter single-search path.
+// Update protocol wording HERE ONLY: every prompt pulls from this function, so the
+// paths can no longer drift out of sync (which caused two separate bugs previously).
+const getFormalSynthesisQualityReminders = (): string => `
+    ATTRIBUTE POPULATION (Protocol P): Populate all 25 numerical attributes with real, considered values drawn from the player's established class and scouting profile. Missing current-season stats lowers confidence — it does NOT justify a 0. Only an unidentifiable / footprint-less player may receive 0s. For 'height'/'weight', use "N/A" if unverified — never "0'0\"" or "0 lbs".
+    ATTRIBUTE DIFFERENTIATION (Protocol R): Rate each attribute on its own merit — do NOT cluster attributes around the Overall. Elite strengths must spike high and genuine weaknesses must stay visibly low, even for a high-Overall player. The Overall is a position-weighted synthesis of key attributes, never a floor that drags every attribute upward.
+    BASIC INFO FORMATTING (Protocol S): 'position' must be a specific role in "Full Name (ABBR)" form (e.g., "Left Back (LB)") — never generic ("Defender"). 'club' must be the standard media name (e.g., "Real Madrid") — never a nickname ("Barca"). Always populate name, age, nationality, club, and position.
+    ARCHETYPE NAMING (Protocol D): An evocative, specific 3-5 word title capturing the player's exact playing identity — never a generic positional label.
+    STRENGTHS/WEAKNESSES FORMAT (Protocol L): Each entry MUST follow "**Bold Title:** Analytical sentence with specific evidence." Ground titles and sentences in real, specific traits — not vague labels.
+    NARRATIVE DEPTH (Protocol L): shortBio and playstyle.description are minimum 80 words each. Include nicknames if well-known. Cite a specific match/moment/stat if the foundation contains one — otherwise describe established reputation in specific, non-generic language WITHOUT inventing a match or number (Protocol E).
+    TACTICO VIEW (Protocol T): playstyle.description portrays the player's intrinsic footballing identity — habits, technical signature, decision-making — NOT a specific club's tactical system.
+    PRE-OUTPUT VERIFICATION:
+       • (P) Every attribute populated from established ability; 0 only for an unidentifiable player; string fields use "N/A"
+       • (R) The attribute set has genuine spread (clear peaks and troughs), not a flat band near the Overall
+       • (S) position/club formatted per spec; all basicInfo fields populated
+       • (D) Archetype is specific and evocative, not a generic label
+       • (L) Strengths/weaknesses use the bold-title format; bio/playstyle meet the word minimum with real evidence, not filler
+       • (T) Playstyle description is a player-identity portrait, not a club-system breakdown
+       • (C) Generational Weapon NOT applied to any player at 95 or below
+`;
+// ──────────────────────────────────────────────────────────────────────────────
+
 const sendChatMessage = async (
   message: string, 
   history: ChatMessage[], 
@@ -711,29 +736,46 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     <task>${message}</task>`;
 
             // FORMAL fast requests: the chat path (regex JSON parsing) is what leaks raw JSON,
-            // so we avoid it entirely. One quick grounding search, then STRUCTURED synthesis
-            // (responseSchema) — which is guaranteed valid JSON and can never leak. Still fast
-            // (2 calls vs default's ~7). A guarded chat fallback only runs if synthesis fails,
-            // and even then a corrupted string is salvaged or replaced with a clean error.
+            // so we avoid it entirely. Two quick grounding searches run IN PARALLEL — not
+            // sequentially — then STRUCTURED synthesis (responseSchema, guaranteed valid JSON,
+            // can never leak). Running the searches concurrently means this two-vector
+            // triangulation costs no extra wall-clock time over a single search, while closing
+            // most of the data-depth gap with default mode's 4-vector pipeline. Still only
+            // ~3 calls total vs. default's ~7, and the slow part (search) isn't serialized.
             if (isFormal) {
                 let fastFoundation = '';
                 try {
-                    const searchRes = await getAi().models.generateContent({
-                        model: FLASH_MODEL,
-                        contents: `[Date: ${month} ${year}] Current profile for ${message}: ${currentSeason} stats, playing style, technical/physical strengths and weaknesses, current club, and status.`,
-                        config: { tools: [{ googleSearch: {} }], thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } },
-                    });
-                    fastFoundation = searchRes.text || '';
+                    const [anchorRes, profileRes] = await Promise.allSettled([
+                        getAi().models.generateContent({
+                            model: FLASH_MODEL,
+                            contents: `[Date: ${month} ${year}] ${message}: player's class/reputation anchor, major awards, current club, transfer/injury status.`,
+                            config: { tools: [{ googleSearch: {} }], thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } },
+                        }),
+                        getAi().models.generateContent({
+                            model: FLASH_MODEL,
+                            contents: `[Date: ${month} ${year}] ${message}: scouting profile — playing style, specific technical/physical/mental strengths and weaknesses, notable career moments or nicknames, ${currentSeason} form and stats.`,
+                            config: { tools: [{ googleSearch: {} }], thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } },
+                        }),
+                    ]);
+                    const anchorText = anchorRes.status === 'fulfilled' ? anchorRes.value.text : '';
+                    const profileText = profileRes.status === 'fulfilled' ? profileRes.value.text : '';
+                    fastFoundation = [anchorText, profileText].filter(Boolean).join('\n\n---\n\n');
                 } catch (e) {
                     console.warn('[Fast Mode] Grounding search failed, synthesizing from prompt only:', e);
                 }
 
+                // Pulls the SAME quality-reminder function as default mode (see
+                // getFormalSynthesisQualityReminders) so fast mode's writing/rating quality
+                // can never drift out of sync with default mode again — only the depth of the
+                // factual foundation differs between the two pipelines, not the standards applied to it.
                 const fastSynthPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
     <factual_foundation>
     ${fastFoundation}
     </factual_foundation>
     <instructions>
-    Generate the COMPLETE Player ${isComparison ? 'Comparison' : 'Profile'} JSON per the schema. Populate all 25 attributes from the player's established ability (Protocols P & R). Use the foundation above for current-status facts (club, form, injuries).
+    Generate the COMPLETE Player ${isComparison ? 'Comparison' : 'Profile'} JSON per the schema.
+    ${getFormalSynthesisQualityReminders()}
+    Use the foundation above for current-status facts (club, form, injuries) — do not invent unverified figures.
     </instructions>
     <task>${message}</task>`;
 
@@ -846,9 +888,9 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                 const SAFE_QUERY_LIMIT = 4;
 
                 // ── Q2: Capture grounding source URLs from each search ──────────────────
-                // Searches run sequentially with a 600ms gap between each to avoid
-                // saturating per-minute quota. Cloud Run proxies all calls through one
-                // server IP, so 4 simultaneous requests reliably hit the RPM limit.
+                // Runs in batches of 2 concurrent calls (see BATCH_SIZE below), not fully
+                // parallel — Cloud Run proxies all calls through one server IP, and 4
+                // simultaneous requests reliably hit the RPM limit. Retries once on 429.
                 const runSearch = async (q: string, attempt = 0): Promise<string> => {
                     try {
                         const res = await getAi().models.generateContent({
@@ -877,11 +919,19 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                     }
                 };
 
+                // Latency fix: 4 fully sequential calls (the previous approach) is the single
+                // biggest contributor to default mode's ~1 minute response time. Running all 4
+                // at once reliably hit the Cloud Run single-IP RPM limit, so this batches 2
+                // concurrent calls at a time — roughly halves search-phase wall time vs. fully
+                // serial, while only doubling (not quadrupling) simultaneous request load.
+                const BATCH_SIZE = 2;
+                const queriesToRun = queries.slice(0, SAFE_QUERY_LIMIT);
                 const results: string[] = [];
-                for (const q of queries.slice(0, SAFE_QUERY_LIMIT)) {
-                    results.push(await runSearch(q));
-                    if (results.length < queries.slice(0, SAFE_QUERY_LIMIT).length) {
-                        await new Promise(r => setTimeout(r, 600));
+                for (let i = 0; i < queriesToRun.length; i += BATCH_SIZE) {
+                    const batch = queriesToRun.slice(i, i + BATCH_SIZE);
+                    results.push(...await Promise.all(batch.map(q => runSearch(q))));
+                    if (i + BATCH_SIZE < queriesToRun.length) {
+                        await new Promise(r => setTimeout(r, 800));
                     }
                 }
                 
@@ -985,16 +1035,9 @@ Return ONLY this JSON (no preamble, no markdown):
     3. Does the "Context" justify a rating protection? (e.g., "Returning from injury" vs "Healthy but poor").
     If the General Narrative is negative (e.g., "struggling", "out of depth"), you MUST lower the rating attributes (Consistency, Composure) regardless of the player's historical Anchor.
     </synthesis_mandate>
-    9. ATTRIBUTES ARE ABILITY, NOT BOX-SCORE (Protocol P): Populate all 25 numerical attributes with real, considered values drawn from the player's established class and scouting profile. Missing current-season stats lowers confidence — it does NOT justify a 0. Only an unidentifiable / footprint-less player may receive 0s. For string fields in 'basicInfo' — specifically 'height' and 'weight' — if the search data contains no verified figure, output the string "N/A". Never output "0'0\"" or "0 lbs".
-    10. ATTRIBUTE DIFFERENTIATION (Protocol R): Rate each attribute on its own merit — do NOT cluster attributes around the Overall. Elite strengths must spike high and genuine weaknesses must stay visibly low, even for a high-Overall player. The Overall is a position-weighted synthesis of key attributes, never a floor that drags every attribute upward.
-    11. BASIC INFO FORMATTING (Protocol S): 'position' must be a specific role in "Full Name (ABBR)" form (e.g., "Left Back (LB)", "Right Winger (RW)") — never a generic label like "Defender". 'club' must be the club's standard media name (e.g., "Real Madrid", "Chelsea") — never a nickname/shorthand ("Barca", "Spurs"). Always fill name, age, nationality, club, and position for any real player.
-    12. PRE-OUTPUT VERIFICATION — confirm each before generating JSON:
-       • (E) latestUpdate contains no stat claim without a specific number from the foundation
-       • (M) Every match/club reference year is ${year}, not pulled from memory
-       • (J) Only defined tier names used — no invented labels
-       • (P) Every attribute is populated from established ability; 0 only for an unidentifiable player; string fields use "N/A"
-       • (R) The attribute set has genuine spread (clear peaks and troughs), not a flat band near the Overall
-       • (C) Generational Weapon NOT applied to any player at 95 or below
+    9. QUALITY & FORMATTING (shared rules — see below).
+    ${getFormalSynthesisQualityReminders()}
+    10. Also confirm before output: (E) latestUpdate contains no stat claim without a specific number from the foundation; (M) every match/club reference year is ${year}, not pulled from memory; (J) only defined tier names used — no invented labels.
         `;
 
         if (isHistorical) {
@@ -1010,11 +1053,9 @@ Return ONLY this JSON (no preamble, no markdown):
     2. Does the "Narrative" explain the "Data"? (e.g., tactical role vs raw output)
     3. Does the "Context" support or challenge the rating? (e.g., era, competition level)
     </synthesis_mandate>
-    6. PRE-OUTPUT VERIFICATION — confirm each before generating JSON:
-       • (J) Only defined tier names used — no invented labels
-       • (P) All attributes lacking search evidence are set to 0
-       • (C) Generational Weapon NOT applied to any player at 95 or below
-       • (A) Potential projection ONLY if player was under 25 AND already 90+ during their prime
+    6. QUALITY & FORMATTING (shared rules — see below).
+    ${getFormalSynthesisQualityReminders()}
+    7. Also confirm before output: (J) only defined tier names used — no invented labels; (A) potential projection ONLY if player was under 25 AND already 90+ during their prime.
             `;
         }
 
