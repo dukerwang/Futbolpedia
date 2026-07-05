@@ -372,7 +372,7 @@ const App: React.FC = () => {
     setMessages(prev => [...prev, newUserMessage]);
 
     try {
-      const aiResponse = await sendMessageToAI(userMessageText, messages, imageData, mode);
+      const aiResponse = await sendMessageToAI(userMessageText, messages, imageData, mode, allProfiles, globalDossiers);
       
       let newAiMessage: ChatMessage;
 
@@ -417,7 +417,7 @@ const App: React.FC = () => {
     } finally {
         setIsLoading(false);
     }
-  }, [messages]);
+  }, [messages, allProfiles, globalDossiers]);
 
   const handleSelectProfile = useCallback((profile: PlayerProfile | null) => {
     setActiveProfile(profile);

@@ -1,5 +1,5 @@
 import { GoogleGenAI, Chat, Content, Type, ThinkingLevel } from "@google/genai";
-import type { PlayerProfile, Attributes, ChatMessage, PlayerComparison } from '../types';
+import type { PlayerProfile, Attributes, GoalkeeperAttributes, ChatMessage, PlayerComparison } from '../types';
 import { MASTER_INSTRUCTION_SET, getMasterInstructions, SIMULATION_YEAR, SIMULATION_SEASON } from '../constants';
 
 const supabaseUrl = "https://hrocnbcavstmjysptjdk.supabase.co";
@@ -589,13 +589,241 @@ const getFormalSynthesisQualityReminders = (): string => `
 `;
 // ──────────────────────────────────────────────────────────────────────────────
 
+// ─── Dossier → history serialization ───────────────────────────────────────────
+// Follow-up questions route through sendChatMessage, which rebuilds the conversation
+// as Gemini history. Previously an AI dossier was flattened to a single summary line
+// (name + OVR + potential + club + position), so the model lost its own attribute
+// ratings, strengths, weaknesses and playstyle on the next turn and would answer with
+// contradictory numbers pulled from training memory. We now serialize the FULL dossier
+// so the model treats its prior analysis as authoritative context and stays consistent.
+// (New dossier generation is unaffected — it runs through synthesizeFormalResponse,
+// a generateContent call that never receives this history, so there is no anchor-bias risk.)
+const ATTRIBUTE_LABELS: Record<keyof Attributes, string> = {
+    finishing: 'Finishing', firstTouch: 'First Touch', dribbling: 'Dribbling',
+    vision: 'Vision', retention: 'Retention', combinationPlay: 'Combination Play',
+    delivery: 'Delivery', progressivePassing: 'Progressive Passing', footballIQ: 'Football IQ',
+    offensivePositioning: 'Offensive Positioning', defensivePositioning: 'Defensive Positioning',
+    tackling: 'Tackling', interceptions: 'Interceptions', pressingIntensity: 'Pressing Intensity',
+    speed: 'Speed', acceleration: 'Acceleration', agility: 'Agility', strength: 'Strength',
+    aerialProwess: 'Aerial Prowess', stamina: 'Stamina', composure: 'Composure',
+    clutch: 'Clutch', leadership: 'Leadership', consistency: 'Consistency', flair: 'Flair',
+};
+
+const GK_ATTRIBUTE_LABELS: Record<keyof GoalkeeperAttributes, string> = {
+    reflexes: 'Reflexes', handling: 'Handling', distribution: 'Distribution',
+    commandOfArea: 'Command of Area', GKpositioning: 'GK Positioning',
+    sweeping: 'Sweeping', ballPlaying: 'Ball Playing',
+};
+
+const serializeProfileForHistory = (p: PlayerProfile): string => {
+    const bi = p.basicInfo;
+    const attrs = p.goalkeeperAttributes
+        ? Object.entries(p.goalkeeperAttributes)
+            .map(([k, v]) => `${GK_ATTRIBUTE_LABELS[k as keyof GoalkeeperAttributes] ?? k} ${v}`)
+            .join(', ')
+        : Object.entries(p.attributes)
+            .map(([k, v]) => `${ATTRIBUTE_LABELS[k as keyof Attributes] ?? k} ${v}`)
+            .join(', ');
+    const roles = p.playstyleAndRole?.bestRoles?.join(', ') || 'N/A';
+    return [
+        `[DOSSIER YOU (Futbolpedia) PREVIOUSLY GENERATED — this is your authored analysis; stay consistent with it unless you explicitly revise a value and say so]`,
+        `Name: ${bi?.name} | Age: ${bi?.age} | Nationality: ${bi?.nationality} | Club: ${bi?.club} | Position: ${bi?.position}`,
+        `Overall: ${p.ratings?.overall} | Potential: ${p.ratings?.potential}`,
+        `Archetype: ${p.playstyleAndRole?.playstyle?.archetype} | Best Roles: ${roles}`,
+        `${p.goalkeeperAttributes ? 'Goalkeeper Attributes' : 'Attributes'} (0-99): ${attrs}`,
+        p.strengths?.length ? `Strengths: ${p.strengths.join(' ')}` : '',
+        p.weaknesses?.length ? `Weaknesses: ${p.weaknesses.join(' ')}` : '',
+        p.playstyleAndRole?.playstyle?.description ? `Playstyle: ${p.playstyleAndRole.playstyle.description}` : '',
+        p.shortBio ? `Bio: ${p.shortBio}` : '',
+        p.latestUpdate ? `Latest Update: ${p.latestUpdate}` : '',
+    ].filter(Boolean).join('\n');
+};
+
+const serializeComparisonForHistory = (c: PlayerComparison): string => {
+    const players = (c.players || []).map(serializeProfileForHistory).join('\n\n');
+    return [
+        `[COMPARISON YOU (Futbolpedia) PREVIOUSLY GENERATED — stay consistent with these ratings unless you explicitly revise them]`,
+        c.summary ? `Summary: ${c.summary}` : '',
+        players,
+    ].filter(Boolean).join('\n\n');
+};
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ─── Prior-dossier reuse ("law") for formal follow-ups ─────────────────────────
+// A follow-up that references a player already dossiered in THIS conversation must
+// reuse that dossier's ratings instead of regenerating blind (which produced the
+// contradictory Overall/potential the user reported). We only ever treat a dossier
+// as "law" if it is genuinely populated (Overall > 0) — a failed/placeholder dossier
+// must never lock downstream turns to garbage.
+const isConfidentDossier = (p: PlayerProfile): boolean =>
+    !!p?.basicInfo?.name && p.basicInfo.name !== 'N/A' && (p.ratings?.overall ?? 0) > 0;
+
+// Dossiers embedded in message content (comparisons store the full object; standalone
+// profiles store only a text stub — see App.tsx).
+const collectDossiersFromHistory = (history: ChatMessage[]): PlayerProfile[] => {
+    const out: PlayerProfile[] = [];
+    for (const msg of history) {
+        if (msg.sender !== 'ai') continue;
+        if (isPlayerProfile(msg.content)) {
+            if (isConfidentDossier(msg.content)) out.push(msg.content);
+        } else if (isPlayerComparison(msg.content)) {
+            for (const p of (msg.content as PlayerComparison).players || []) {
+                if (isConfidentDossier(p)) out.push(p);
+            }
+        }
+    }
+    return out;
+};
+
+// Merges history-embedded dossiers with conversation.allProfiles (the canonical store
+// for standalone profiles generated in this thread). Later sources win per player slug.
+const mergeConversationDossiers = (
+    history: ChatMessage[],
+    conversationProfiles: PlayerProfile[] = [],
+): PlayerProfile[] => {
+    const bySlug = new Map<string, PlayerProfile>();
+    for (const p of collectDossiersFromHistory(history)) {
+        bySlug.set(toPlayerSlug(p.basicInfo.name), p);
+    }
+    for (const p of conversationProfiles) {
+        if (isConfidentDossier(p)) bySlug.set(toPlayerSlug(p.basicInfo.name), p);
+    }
+    return [...bySlug.values()];
+};
+
+const dossierSlugsCoveredInHistory = (history: ChatMessage[]): Set<string> => {
+    const slugs = new Set<string>();
+    for (const msg of history) {
+        if (msg.sender !== 'ai') continue;
+        if (isPlayerProfile(msg.content)) {
+            slugs.add(toPlayerSlug(msg.content.basicInfo.name));
+        } else if (isPlayerComparison(msg.content)) {
+            for (const p of (msg.content as PlayerComparison).players || []) {
+                slugs.add(toPlayerSlug(p.basicInfo.name));
+            }
+        }
+    }
+    return slugs;
+};
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Identifies which prior dossiers the current message refers to — by full name, by a
+// distinctive (4+ char) name token, or via a pronoun (he/him/his/they), which resolves
+// to the most recently generated dossier. Most-recent dossier wins per player.
+const findReferencedDossiers = (message: string, dossiers: PlayerProfile[]): PlayerProfile[] => {
+    if (dossiers.length === 0) return [];
+    const lower = message.toLowerCase();
+    const matched = new Map<string, PlayerProfile>();
+
+    for (const d of dossiers) {
+        const name = d.basicInfo.name.toLowerCase();
+        const tokens = name.split(/\s+/).filter(t => t.length >= 4);
+        const hit =
+            lower.includes(name) ||
+            tokens.some(t => new RegExp(`\\b${escapeRegExp(t)}\\b`).test(lower));
+        if (hit) matched.set(toPlayerSlug(d.basicInfo.name), d); // later iterations (newer) overwrite
+    }
+
+    // Pronoun with no explicit name → resolve to the most recent dossier (the "active" player).
+    if (matched.size === 0 && /\b(he|him|his|they|them|their)\b/i.test(message)) {
+        const latest = dossiers[dossiers.length - 1];
+        matched.set(toPlayerSlug(latest.basicInfo.name), latest);
+    }
+
+    return [...matched.values()];
+};
+
+const buildLockedDossiersBlock = (dossiers: PlayerProfile[]): string => {
+    if (dossiers.length === 0) return '';
+    const body = dossiers.map(serializeProfileForHistory).join('\n\n');
+    return `
+    <locked_dossiers>
+    The player(s) below were ALREADY rated earlier in this conversation. These dossiers are LAW: reuse the EXACT Overall, Potential, and all attribute values shown — do NOT recompute or drift them. Prose may be reworded, but every number must match. Only a player NOT listed here may be rated fresh from the factual foundation.
+    ${body}
+    </locked_dossiers>`;
+};
+
+// User explicitly wants dossiers from their cross-conversation archive (globalDossiers).
+const wantsSavedDossierAccess = (message: string): boolean =>
+    /\b(my|saved|archived|other|previous)\s+(dossiers?|profiles?|scouts?|ratings?)\b/i.test(message) ||
+    /\bdossiers?\s+(i|I've|I have|I've got)\b/i.test(message) ||
+    /\b(from|in)\s+my\s+(saved|archive|dossiers?|library|collection)\b/i.test(message) ||
+    /\b(pull up|look up|check|use|reference|show|open|view|load)\s+(my|a|the)\s+(saved|archived)\b/i.test(message) ||
+    /\b(what|which|list|show)\b[\s\S]{0,40}\b(dossiers?|profiles?)\b/i.test(message) &&
+        /\b(have|saved|got|my|archive)\b/i.test(message) ||
+    /\blist\s+(my\s+)?(saved\s+)?dossiers\b/i.test(message);
+
+// Listing the archive (names/OVRs only) — not opening a specific player's full dossier.
+const wantsSavedDossierInventory = (message: string): boolean =>
+    /\b(what|which|list|show)\b/i.test(message) &&
+    /\b(dossiers?|profiles?)\b/i.test(message) &&
+    /\b(have|saved|got|my|archive|collection)\b/i.test(message) &&
+    !/\b(rate|scout|profile|evaluate|analyze|breakdown|dossier)\s+(for|on|of)\b/i.test(message);
+
+const serializeSavedProfileForContext = (p: PlayerProfile): string =>
+    serializeProfileForHistory(p).replace(
+        '[DOSSIER YOU (Futbolpedia) PREVIOUSLY GENERATED — this is your authored analysis; stay consistent with it unless you explicitly revise a value and say so]',
+        "[USER'S SAVED DOSSIER — from their archive (generated in another conversation). Treat as authoritative when they ask you to reference saved/archived profiles.]",
+    );
+
+const buildSavedDossiersBlock = (dossiers: PlayerProfile[], inventoryOnly: boolean): string => {
+    const confident = dossiers.filter(isConfidentDossier);
+    if (confident.length === 0) return '';
+    if (inventoryOnly) {
+        const rows = confident
+            .map(p => `- ${p.basicInfo.name}: ${p.ratings.overall} OVR (Pot ${p.ratings.potential}), ${p.basicInfo.club}, ${p.basicInfo.position}`)
+            .join('\n');
+        return `
+    <saved_dossier_archive>
+    The user asked about dossiers they have saved on file (${confident.length} total). Index only — summarize this list conversationally if they want an overview; if they name a player, use their full saved dossier when provided.
+    ${rows}
+    </saved_dossier_archive>`;
+    }
+    const body = confident.map(serializeSavedProfileForContext).join('\n\n');
+    return `
+    <saved_dossiers>
+    The user explicitly asked you to reference dossier(s) from their saved archive (profiles generated in other conversations). Use these exact ratings and attributes — do NOT regenerate or contradict them unless they ask for a fresh rating.
+    ${body}
+    </saved_dossiers>`;
+};
+
+// Returns saved dossiers to inject when the user explicitly requests archive access.
+// Skips players already covered by this conversation's dossiers (those take precedence).
+const resolveSavedDossiersForRequest = (
+    message: string,
+    savedDossiers: PlayerProfile[],
+    conversationDossiers: PlayerProfile[],
+): { dossiers: PlayerProfile[]; inventoryOnly: boolean } => {
+    const confident = savedDossiers.filter(isConfidentDossier);
+    if (confident.length === 0 || !wantsSavedDossierAccess(message)) {
+        return { dossiers: [], inventoryOnly: false };
+    }
+
+    const convSlugs = new Set(conversationDossiers.map(p => toPlayerSlug(p.basicInfo.name)));
+    const referenced = findReferencedDossiers(message, confident);
+    const inventoryOnly = wantsSavedDossierInventory(message) && referenced.length === 0;
+
+    if (inventoryOnly) return { dossiers: confident, inventoryOnly: true };
+
+    if (referenced.length > 0) {
+        const notInConversation = referenced.filter(p => !convSlugs.has(toPlayerSlug(p.basicInfo.name)));
+        return { dossiers: notInConversation.length > 0 ? notInConversation : referenced, inventoryOnly: false };
+    }
+
+    // "my saved dossiers" with no specific player → show inventory
+    return { dossiers: confident, inventoryOnly: true };
+};
+// ──────────────────────────────────────────────────────────────────────────────
+
 const sendChatMessage = async (
   message: string, 
   history: ChatMessage[], 
   model: string, 
   imageData?: string, 
   thinkingLevel: "minimal" | "low" | "medium" | "high" = "medium",
-  systemInstruction?: string
+  systemInstruction?: string,
+  conversationProfiles: PlayerProfile[] = [],
 ): Promise<string | PlayerProfile | PlayerComparison> => {
   const geminiHistory: Content[] = history
     .map((msg): Content | null => {
@@ -606,14 +834,12 @@ const sendChatMessage = async (
         parts.push({ text: msg.content });
       } else if (isPlayerProfile(msg.content) || isPlayerComparison(msg.content)) {
         if (!isUser) {
-          // Compress profiles to a short summary to prevent anchor bias in follow-up questions.
+          // Serialize the FULL dossier into history so follow-up questions have complete
+          // context of the analysis and never contradict its own ratings/attributes.
           if (isPlayerProfile(msg.content)) {
-            const p = msg.content as PlayerProfile;
-            parts.push({ text: `[Profile generated: ${p.basicInfo?.name}, ${p.ratings?.overall} OVR (Pot: ${p.ratings?.potential}), ${p.basicInfo?.club}, ${p.basicInfo?.position}]` });
+            parts.push({ text: serializeProfileForHistory(msg.content as PlayerProfile) });
           } else {
-            const c = msg.content as PlayerComparison;
-            const names = c.players?.map(p => `${p.basicInfo?.name} (${p.ratings?.overall} OVR)`).join(' vs ') ?? 'comparison';
-            parts.push({ text: `[Comparison generated: ${names}]` });
+            parts.push({ text: serializeComparisonForHistory(msg.content as PlayerComparison) });
           }
         }
       }
@@ -637,6 +863,18 @@ const sendChatMessage = async (
       return null;
     })
     .filter((item): item is Content => item !== null);
+
+  // Standalone profiles live on conversation.allProfiles, not in msg.content — inject
+  // them here so follow-up chat turns still see the full dossier.
+  const covered = dossierSlugsCoveredInHistory(history);
+  for (const p of conversationProfiles) {
+    if (!isConfidentDossier(p)) continue;
+    if (covered.has(toPlayerSlug(p.basicInfo.name))) continue;
+    geminiHistory.push({
+      role: 'model',
+      parts: [{ text: serializeProfileForHistory(p) }],
+    });
+  }
 
   const resolvedInstruction = systemInstruction ?? MASTER_INSTRUCTION_SET;
   if (!chat || currentModel !== model || currentThinkingLevel !== thinkingLevel || currentSystemInstruction !== resolvedInstruction) {
@@ -710,7 +948,14 @@ const sendChatMessage = async (
   }
 };
 
-export const sendMessageToAI = async (message: string, history: ChatMessage[], imageData?: string, mode: 'default' | 'fast' = 'default'): Promise<string | PlayerProfile | PlayerComparison> => {
+export const sendMessageToAI = async (
+    message: string,
+    history: ChatMessage[],
+    imageData?: string,
+    mode: 'default' | 'fast' = 'default',
+    conversationProfiles: PlayerProfile[] = [],
+    savedDossiers: PlayerProfile[] = [],
+): Promise<string | PlayerProfile | PlayerComparison> => {
     const { year, month, currentSeason } = getCurrentSeasonInfo();
 
     // Detect EAFC-specific queries to conditionally inject the FC Playstyles directory.
@@ -748,6 +993,31 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     const isCurrentStateQuery = /\b(squad|roster|lineup|line.?up|formation|manager|coach|signings?|transfers?|this season|playing for|who(?:'s| is) (?:at|managing)|how (?:does|do) .+ play)\b/i.test(message);
     const isFormal = isProfileRequest || isComparison;
 
+    // ── Prior-dossier reuse ("law") ──────────────────────────────────────────────
+    // Formal follow-ups that reference a player already dossiered in this conversation
+    // must reuse that dossier rather than regenerate a contradictory one. We collect
+    // the confident (populated) dossiers and the ones the message references, then feed
+    // them into synthesis as locked, authoritative context (and short-circuit a plain
+    // re-request outright). This is what keeps ratings consistent across the whole thread.
+    const conversationDossiers = mergeConversationDossiers(history, conversationProfiles);
+    const savedResult = resolveSavedDossiersForRequest(message, savedDossiers, conversationDossiers);
+    const savedDossiersBlock = buildSavedDossiersBlock(savedResult.dossiers, savedResult.inventoryOnly);
+
+    let referencedDossiers = isFormal ? findReferencedDossiers(message, conversationDossiers) : [];
+    // Saved archive dossiers the user explicitly asked for also lock formal synthesis.
+    if (!savedResult.inventoryOnly) {
+        for (const p of savedResult.dossiers) {
+            const slug = toPlayerSlug(p.basicInfo.name);
+            if (!referencedDossiers.some(x => toPlayerSlug(x.basicInfo.name) === slug)) {
+                referencedDossiers.push(p);
+            }
+        }
+    }
+    const lockedDossiersBlock = buildLockedDossiersBlock(referencedDossiers);
+    // A refresh/variation request opts OUT of the exact short-circuit so the user can
+    // deliberately regenerate (e.g. "rate him again but at striker", "update his profile").
+    const wantsRegeneration = /\b(update|refresh|latest|redo|re-?rate|re-?evaluate|recheck|instead|current form)\b/i.test(message);
+
     // ── Per-phase timing instrumentation ────────────────────────────────────
     // Logs each pipeline phase's wall time to the console so real bottlenecks can be
     // measured instead of estimated. Set FUTBOLPEDIA_PERF=false on window to silence.
@@ -771,6 +1041,21 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
         // player that is already cached. Cache entries are valid for 14 days; stale entries
         // fall through to regenerate via whichever mode was requested.
         if (isProfileRequest && !isComparison && !imageData) {
+            // In-conversation lock takes priority over the Supabase cache: a plain re-request
+            // for a single player already dossiered in THIS thread returns that exact dossier,
+            // so nothing contradicts it. Refresh/variation requests fall through to regenerate.
+            if (!isHistorical && !wantsRegeneration && referencedDossiers.length === 1) {
+                return referencedDossiers[0];
+            }
+            // Saved archive: return a locally stored dossier when explicitly requested
+            // (e.g. "pull up my saved Haaland dossier") — before hitting Supabase cache.
+            if (!isHistorical && !wantsRegeneration && wantsSavedDossierAccess(message)) {
+                const savedMatch = findReferencedDossiers(message, savedDossiers.filter(isConfidentDossier));
+                const convSlugs = new Set(conversationDossiers.map(p => toPlayerSlug(p.basicInfo.name)));
+                if (savedMatch.length === 1 && !convSlugs.has(toPlayerSlug(savedMatch[0].basicInfo.name))) {
+                    return savedMatch[0];
+                }
+            }
             const candidateSlug = extractCandidateSlug(message);
             if (candidateSlug) {
                 const cached = await getCachedDossier(candidateSlug);
@@ -836,6 +1121,8 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
     <factual_foundation>
     ${fastFoundation}
     </factual_foundation>
+    ${lockedDossiersBlock}
+    ${savedDossiersBlock}
     <instructions>
     Generate the COMPLETE Player ${isComparison ? 'Comparison' : 'Profile'} JSON per the schema.
     ${getFormalSynthesisQualityReminders()}
@@ -852,7 +1139,7 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
                     return result;
                 } catch (e) {
                     console.warn('[Fast Mode] Structured synthesis failed, guarded chat fallback:', e);
-                    const fb = await sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, 'low', systemInstruction);
+                    const fb = await sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, 'low', systemInstruction, conversationProfiles);
                     const structured = typeof fb === 'string' ? extractStructuredFromText(fb) : fb;
                     if (structured && typeof structured === 'object') {
                         if (!isComparison && 'basicInfo' in structured) {
@@ -863,7 +1150,7 @@ export const sendMessageToAI = async (message: string, history: ChatMessage[], i
                     throw new Error("The scouting report came back malformed. Please try that request again in a moment.");
                 }
             }
-            return sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, 'low', systemInstruction);
+            return sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, 'low', systemInstruction, conversationProfiles);
         }
 
         // ── Default mode: pipeline ──────────────────────────────────────────────
@@ -1145,10 +1432,12 @@ Return ONLY this JSON (no preamble, no markdown):
             finalInstructions = `
     1. IDENTITY: Senior Tactical Columnist / Lead Scout.
     2. CONVERSATIONAL TURN — NOT a dossier request. Respond in natural Markdown prose. You are STRICTLY PROHIBITED from outputting a JSON profile or comparison object here, no matter what player names appear in the message.
-    3. If the user is questioning, challenging, or disagreeing with a rating you gave earlier, engage their actual argument directly and honestly — defend the rating with specific reasoning, or concede and revise it if they make a fair point. Address their specific claim (e.g. league strength, sample size, minutes played), do not dodge it.
-    4. Protocol J (Explanation Integrity): cite ONLY the real Section III tier scale — never invent tier names — and keep Overall (current) distinct from Potential (future).
-    5. Use the factual foundation / search tool for any current-state fact; never assert current status from memory.
-    6. Be sharp, specific, and concise. No filler, no restating the question.`;
+    3. DOSSIER CONTINUITY: The conversation history contains the full dossier(s) you previously generated (marked "DOSSIER YOU (Futbolpedia) PREVIOUSLY GENERATED"). Those Overall/Potential ratings, the 25 attributes, strengths, weaknesses and playstyle are YOUR authored analysis and are authoritative. When the user asks a follow-up, ground your answer in those exact numbers — do NOT quote a different Overall or contradict an attribute you already assigned. If you genuinely need to change a value, say so explicitly ("I'd revise his Overall from 84 to 82 because…") rather than silently citing a different figure.
+    4. SAVED ARCHIVE: When <saved_dossiers> is present, the user asked to reference profiles from their cross-conversation library — use those exact saved ratings and attributes, do not regenerate them. When <saved_dossier_archive> is present (index only), summarize what dossiers they have on file; if they then name a player, answer from that player's saved data when available.
+    5. If the user is questioning, challenging, or disagreeing with a rating you gave earlier, engage their actual argument directly and honestly — defend the rating with specific reasoning, or concede and revise it if they make a fair point. Address their specific claim (e.g. league strength, sample size, minutes played), do not dodge it.
+    6. Protocol J (Explanation Integrity): cite ONLY the real Section III tier scale — never invent tier names — and keep Overall (current) distinct from Potential (future).
+    7. Use the factual foundation / search tool for any current-state fact; never assert current status from memory.
+    8. Be sharp, specific, and concise. No filler, no restating the question.`;
         }
 
         const finalAnswerPrompt = `
@@ -1157,6 +1446,8 @@ Return ONLY this JSON (no preamble, no markdown):
     ${factualFoundation}
     </factual_foundation>
     ${verifiedFactsBlock}
+    ${lockedDossiersBlock}
+    ${savedDossiersBlock}
     <instructions>
     ${finalInstructions}
     </instructions>
@@ -1187,7 +1478,7 @@ Return ONLY this JSON (no preamble, no markdown):
                 // Last-resort chat fallback. MINIMAL thinking — medium leaks artifact tokens
                 // into JSON. Salvage/guard the result so a corrupted string is never rendered.
                 try {
-                    const fallback = await sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, 'minimal', systemInstruction);
+                    const fallback = await sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, 'minimal', systemInstruction, conversationProfiles);
                     const structured = typeof fallback === 'string' ? extractStructuredFromText(fallback) : fallback;
                     if (structured && typeof structured === 'object') {
                         cacheIfProfile(structured);
@@ -1200,14 +1491,14 @@ Return ONLY this JSON (no preamble, no markdown):
             }
         }
 
-        return sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, selectedLevel, systemInstruction);
+        return sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, selectedLevel, systemInstruction, conversationProfiles);
     } catch (error) {
         console.error("[GLOBAL WORKFLOW] Failed:", error);
         // For a formal request, never leak raw JSON: attempt one guarded structured
         // recovery, otherwise surface a clean error the UI renders as an "Editor's Note".
         if (isFormal && !imageData) {
             try {
-                const recovered = await sendChatMessage(message, history, FLASH_MODEL, imageData, "minimal", getMasterInstructions(false));
+                const recovered = await sendChatMessage(message, history, FLASH_MODEL, imageData, "minimal", getMasterInstructions(false), conversationProfiles);
                 const structured = typeof recovered === 'string' ? extractStructuredFromText(recovered) : recovered;
                 if (structured && typeof structured === 'object') return structured;
             } catch (recoveryErr) {
@@ -1216,6 +1507,6 @@ Return ONLY this JSON (no preamble, no markdown):
             throw error instanceof Error ? error : new Error("The scouting report could not be generated. Please try again.");
         }
         // MINIMAL thinking: LOW leaks citation tokens ([2.1.3] etc.) into JSON output.
-        return sendChatMessage(message, history, FLASH_MODEL, imageData, "minimal", getMasterInstructions(false));
+        return sendChatMessage(message, history, FLASH_MODEL, imageData, "minimal", getMasterInstructions(false), conversationProfiles);
     }
 };
