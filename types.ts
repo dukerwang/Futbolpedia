@@ -74,15 +74,10 @@ export interface PlayerProfile {
   createdAt?: number;
 }
 
-export interface PlayerComparison {
-  summary: string;
-  players: PlayerProfile[];
-}
-
 export interface ChatMessage {
   id: string;
   sender: 'user' | 'ai';
-  content: string | PlayerProfile | PlayerComparison | ReactNode;
+  content: string | PlayerProfile | ReactNode;
   image?: string; // base64 encoded image string
   timestamp?: number;
 }

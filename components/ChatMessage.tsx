@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
-import type { ChatMessage as ChatMessageType, PlayerComparison } from '../types';
-import { PlayerComparisonDisplay } from './PlayerComparisonDisplay';
+import type { ChatMessage as ChatMessageType } from '../types';
 import { useTypewriter } from './useTypewriter';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
-const isPlayerComparison = (content: any): content is PlayerComparison => {
-    return typeof content === 'object' && content !== null && 'summary' in content && Array.isArray(content.players);
+/** Legacy chats may still store old comparison objects — render summary as prose. */
+const getLegacyComparisonSummary = (content: unknown): string | null => {
+    if (typeof content !== 'object' || content === null) return null;
+    if (!('summary' in content) || !('players' in content)) return null;
+    const summary = (content as { summary?: unknown }).summary;
+    return typeof summary === 'string' ? summary : null;
 };
 
 export const ChatMessage: React.FC<{ message: ChatMessageType }> = ({ message }) => {
@@ -23,6 +26,9 @@ export const ChatMessage: React.FC<{ message: ChatMessageType }> = ({ message })
         textToRender = content;
     } else if (typeof content === 'object' && content !== null && 'basicInfo' in content) {
         textToRender = `**Dossier Generated: ${content.basicInfo.name}**\n\n${content.shortBio}`;
+    } else {
+        const legacySummary = getLegacyComparisonSummary(content);
+        if (legacySummary) textToRender = legacySummary;
     }
 
     // Call typewriter hook at top level
@@ -31,7 +37,11 @@ export const ChatMessage: React.FC<{ message: ChatMessageType }> = ({ message })
     const handleCopy = () => {
         let textToCopy = '';
         if (typeof content === 'string') textToCopy = content;
-        else if (typeof content === 'object' && 'basicInfo' in content) textToCopy = `Player Profile: ${content.basicInfo.name}\n${content.shortBio}`;
+        else if (typeof content === 'object' && content !== null && 'basicInfo' in content) textToCopy = `Player Profile: ${content.basicInfo.name}\n${content.shortBio}`;
+        else {
+            const legacySummary = getLegacyComparisonSummary(content);
+            if (legacySummary) textToCopy = legacySummary;
+        }
         
         navigator.clipboard.writeText(textToCopy);
         setCopied(true);
@@ -53,25 +63,6 @@ export const ChatMessage: React.FC<{ message: ChatMessageType }> = ({ message })
                 </div>
                  <div className="size-10 rounded-full bg-[#EBE8DE] dark:bg-charcoal-light border border-cream-400 dark:border-charcoal-border shrink-0 mt-1 flex items-center justify-center">
                     <span className="material-symbols-outlined text-charcoal/50 dark:text-cream-400/50">person</span>
-                </div>
-            </div>
-        );
-    }
-
-    // AI Message
-    
-    // Comparison
-    if (isPlayerComparison(content)) {
-        return (
-            <div className="w-full flex gap-6 py-6 animate-fade-in">
-                 <div className="size-10 rounded-full bg-charcoal dark:bg-cream-400 text-cream-50 dark:text-charcoal flex items-center justify-center shrink-0 mt-1 shadow-md">
-                     <span className="font-serif font-bold italic text-xl">F</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                     <div className="flex items-baseline justify-between border-b border-cream-300 dark:border-charcoal-border pb-2 mb-4">
-                        <span className="text-[10px] font-sans font-bold text-charcoal/60 dark:text-cream-400 uppercase tracking-widest">Comparative Analysis</span>
-                    </div>
-                    <PlayerComparisonDisplay comparison={content} isNew={isNew} />
                 </div>
             </div>
         );

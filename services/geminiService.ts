@@ -1,5 +1,5 @@
 import { GoogleGenAI, Chat, Content, Type, ThinkingLevel } from "@google/genai";
-import type { PlayerProfile, Attributes, GoalkeeperAttributes, ChatMessage, PlayerComparison } from '../types';
+import type { PlayerProfile, Attributes, GoalkeeperAttributes, ChatMessage } from '../types';
 import { MASTER_INSTRUCTION_SET, getMasterInstructions, SIMULATION_YEAR, SIMULATION_SEASON } from '../constants';
 
 const supabaseUrl = "https://hrocnbcavstmjysptjdk.supabase.co";
@@ -183,14 +183,6 @@ const PLAYER_PROFILE_SCHEMA = {
     required: ['basicInfo','ratings','strengths','weaknesses','attributes','shortBio','playstyleAndRole','latestUpdate'],
 };
 
-const PLAYER_COMPARISON_SCHEMA = {
-    type: Type.OBJECT,
-    properties: {
-        summary: { type: Type.STRING },
-        players: { type: Type.ARRAY, items: PLAYER_PROFILE_SCHEMA },
-    },
-    required: ['summary','players'],
-};
 // ──────────────────────────────────────────────────────────────────────────────
 
 let currentThinkingLevel: string | null = null;
@@ -273,10 +265,6 @@ const isPlayerProfile = (content: any): content is PlayerProfile => {
     return typeof content === 'object' && content !== null && !('players' in content) && 'basicInfo' in content && 'ratings' in content;
 };
 
-const isPlayerComparison = (content: any): content is PlayerComparison => {
-    return typeof content === 'object' && content !== null && 'summary' in content && Array.isArray(content.players);
-};
-
 const findProfileData = (data: any): Partial<PlayerProfile> | null => {
   if (!data) return null;
   if (data.basicInfo && (data.attributes || data.goalkeeperAttributes) && data.ratings) {
@@ -298,22 +286,6 @@ const findProfileData = (data: any): Partial<PlayerProfile> | null => {
   }
   return null;
 };
-
-const findComparisonData = (data: any): Partial<PlayerComparison> | null => {
-    if (!data) return null;
-    if (data.summary && Array.isArray(data.players) && data.players.length > 1) {
-        return data;
-    }
-    if (typeof data === 'object' && data !== null) {
-        for (const key in data) {
-            if (Object.prototype.hasOwnProperty.call(data, key)) {
-                const found = findComparisonData(data[key]);
-                if (found) return found;
-            }
-        }
-    }
-    return null;
-}
 
 const createDefaultProfile = (): PlayerProfile => {
     const defaultAttributes: Attributes = {
@@ -467,25 +439,10 @@ const sanitizeProfileData = (partialProfile: Partial<PlayerProfile> | null): Pla
     return sanitized;
 };
 
-const sanitizeComparisonData = (partialComparison: Partial<PlayerComparison> | null): PlayerComparison => {
-    const defaults = {
-        summary: 'No comparison summary available.',
-        players: [],
-    };
-    if (!partialComparison) return defaults;
-    
-    const sanitizedPlayers = (partialComparison.players || []).map(p => sanitizeProfileData(p));
-    
-    return {
-        summary: partialComparison.summary || defaults.summary,
-        players: sanitizedPlayers,
-    };
-};
-
-// Robustly recover a structured profile/comparison from a raw model text blob.
+// Robustly recover a structured profile from a raw model text blob.
 // Handles markdown fences, thinking-artifact tokens, and trailing commas. Returns
-// null if the text is not (or is too corrupted to be) a valid profile/comparison.
-const extractStructuredFromText = (text: string | undefined): PlayerProfile | PlayerComparison | null => {
+// null if the text is not (or is too corrupted to be) a valid profile.
+const extractStructuredFromText = (text: string | undefined): PlayerProfile | null => {
     if (!text) return null;
     let jsonText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
     const firstOpen = jsonText.indexOf('{');
@@ -503,8 +460,6 @@ const extractStructuredFromText = (text: string | undefined): PlayerProfile | Pl
     for (const candidate of candidates) {
         try {
             const parsed = JSON.parse(candidate);
-            const foundComparison = findComparisonData(parsed);
-            if (foundComparison) return sanitizeComparisonData(foundComparison);
             const foundProfile = findProfileData(parsed);
             if (foundProfile) return sanitizeProfileData(foundProfile);
         } catch {
@@ -520,10 +475,9 @@ const extractStructuredFromText = (text: string | undefined): PlayerProfile | Pl
 // foundation is already in the prompt. Throws on failure so the caller can fall back.
 const synthesizeFormalResponse = async (
     prompt: string,
-    isComparisonRequest: boolean,
     systemInstruction: string,
-): Promise<PlayerProfile | PlayerComparison> => {
-    const schema = isComparisonRequest ? PLAYER_COMPARISON_SCHEMA : PLAYER_PROFILE_SCHEMA;
+): Promise<PlayerProfile> => {
+    const schema = PLAYER_PROFILE_SCHEMA;
 
     // thinkingLevel: LOW — with no thinkingConfig, Flash runs dynamic thinking (~2900
     // thinking tokens measured), which was ~74% of synthesis decode time. Capping it to LOW
@@ -556,9 +510,7 @@ const synthesizeFormalResponse = async (
     }
 
     const parsed = JSON.parse(text);
-    return isComparisonRequest
-        ? sanitizeComparisonData(parsed as Partial<PlayerComparison>)
-        : sanitizeProfileData(parsed as Partial<PlayerProfile>);
+    return sanitizeProfileData(parsed as Partial<PlayerProfile>);
 };
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -639,14 +591,22 @@ const serializeProfileForHistory = (p: PlayerProfile): string => {
     ].filter(Boolean).join('\n');
 };
 
-const serializeComparisonForHistory = (c: PlayerComparison): string => {
-    const players = (c.players || []).map(serializeProfileForHistory).join('\n\n');
+// Legacy comparison objects in old chat history — serialize as prose for continuity.
+const serializeLegacyComparisonForHistory = (content: { summary?: string; players?: PlayerProfile[] }): string => {
+    const players = (content.players || []).map(serializeProfileForHistory).join('\n\n');
     return [
         `[COMPARISON YOU (Futbolpedia) PREVIOUSLY GENERATED — stay consistent with these ratings unless you explicitly revise them]`,
-        c.summary ? `Summary: ${c.summary}` : '',
+        content.summary ? `Summary: ${content.summary}` : '',
         players,
     ].filter(Boolean).join('\n\n');
 };
+
+const isLegacyComparisonContent = (content: unknown): content is { summary?: string; players?: PlayerProfile[] } =>
+    typeof content === 'object' &&
+    content !== null &&
+    'summary' in content &&
+    'players' in content &&
+    Array.isArray((content as { players?: unknown }).players);
 // ──────────────────────────────────────────────────────────────────────────────
 
 // ─── Prior-dossier reuse ("law") for formal follow-ups ─────────────────────────
@@ -658,16 +618,15 @@ const serializeComparisonForHistory = (c: PlayerComparison): string => {
 const isConfidentDossier = (p: PlayerProfile): boolean =>
     !!p?.basicInfo?.name && p.basicInfo.name !== 'N/A' && (p.ratings?.overall ?? 0) > 0;
 
-// Dossiers embedded in message content (comparisons store the full object; standalone
-// profiles store only a text stub — see App.tsx).
+// Dossiers embedded in message content (legacy comparisons may still store full objects).
 const collectDossiersFromHistory = (history: ChatMessage[]): PlayerProfile[] => {
     const out: PlayerProfile[] = [];
     for (const msg of history) {
         if (msg.sender !== 'ai') continue;
         if (isPlayerProfile(msg.content)) {
             if (isConfidentDossier(msg.content)) out.push(msg.content);
-        } else if (isPlayerComparison(msg.content)) {
-            for (const p of (msg.content as PlayerComparison).players || []) {
+        } else if (isLegacyComparisonContent(msg.content)) {
+            for (const p of msg.content.players || []) {
                 if (isConfidentDossier(p)) out.push(p);
             }
         }
@@ -697,8 +656,8 @@ const dossierSlugsCoveredInHistory = (history: ChatMessage[]): Set<string> => {
         if (msg.sender !== 'ai') continue;
         if (isPlayerProfile(msg.content)) {
             slugs.add(toPlayerSlug(msg.content.basicInfo.name));
-        } else if (isPlayerComparison(msg.content)) {
-            for (const p of (msg.content as PlayerComparison).players || []) {
+        } else if (isLegacyComparisonContent(msg.content)) {
+            for (const p of msg.content.players || []) {
                 slugs.add(toPlayerSlug(p.basicInfo.name));
             }
         }
@@ -824,7 +783,7 @@ const sendChatMessage = async (
   thinkingLevel: "minimal" | "low" | "medium" | "high" = "medium",
   systemInstruction?: string,
   conversationProfiles: PlayerProfile[] = [],
-): Promise<string | PlayerProfile | PlayerComparison> => {
+): Promise<string | PlayerProfile> => {
   const geminiHistory: Content[] = history
     .map((msg): Content | null => {
       const isUser = msg.sender === 'user';
@@ -832,16 +791,14 @@ const sendChatMessage = async (
       
       if (typeof msg.content === 'string') {
         parts.push({ text: msg.content });
-      } else if (isPlayerProfile(msg.content) || isPlayerComparison(msg.content)) {
+      } else if (isPlayerProfile(msg.content)) {
         if (!isUser) {
           // Serialize the FULL dossier into history so follow-up questions have complete
           // context of the analysis and never contradict its own ratings/attributes.
-          if (isPlayerProfile(msg.content)) {
-            parts.push({ text: serializeProfileForHistory(msg.content as PlayerProfile) });
-          } else {
-            parts.push({ text: serializeComparisonForHistory(msg.content as PlayerComparison) });
-          }
+          parts.push({ text: serializeProfileForHistory(msg.content as PlayerProfile) });
         }
+      } else if (isLegacyComparisonContent(msg.content) && !isUser) {
+        parts.push({ text: serializeLegacyComparisonForHistory(msg.content) });
       }
 
       if (msg.image && isUser) {
@@ -955,7 +912,7 @@ export const sendMessageToAI = async (
     mode: 'default' | 'fast' = 'default',
     conversationProfiles: PlayerProfile[] = [],
     savedDossiers: PlayerProfile[] = [],
-): Promise<string | PlayerProfile | PlayerComparison> => {
+): Promise<string | PlayerProfile> => {
     const { year, month, currentSeason } = getCurrentSeasonInfo();
 
     // Detect EAFC-specific queries to conditionally inject the FC Playstyles directory.
@@ -985,13 +942,12 @@ export const sendMessageToAI = async (
         /\b(i disagree|you'?re wrong|that'?s wrong|too (high|low)|overrated|underrated)\b/i.test(message);
 
     const rawProfileRequest = /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good|rank|tier|analyze|breakdown)\b/i.test(message) || /analysis on|report on|break down/i.test(message);
-    const rawComparison = /compare|vs|versus|better/i.test(message);
-    // A challenge/explanation vetoes formal (dossier/comparison) routing → answered in Mode A.
+    const isCompareQuestion = /compare|vs|versus|better/i.test(message);
+    // A challenge/explanation vetoes formal dossier routing → answered in Mode A.
     const isProfileRequest = rawProfileRequest && !isExplanationOrChallenge;
-    const isComparison = rawComparison && !isExplanationOrChallenge;
     const isHistorical = /\bprime\b|\bpeak\b|\ball[- ]time\b|\bhistorical\b/i.test(message);
     const isCurrentStateQuery = /\b(squad|roster|lineup|line.?up|formation|manager|coach|signings?|transfers?|this season|playing for|who(?:'s| is) (?:at|managing)|how (?:does|do) .+ play)\b/i.test(message);
-    const isFormal = isProfileRequest || isComparison;
+    const isFormal = isProfileRequest;
 
     // ── Prior-dossier reuse ("law") ──────────────────────────────────────────────
     // Formal follow-ups that reference a player already dossiered in this conversation
@@ -1040,7 +996,7 @@ export const sendMessageToAI = async (
         // fresh fast-mode generation, so there is no reason for fast mode to regenerate a
         // player that is already cached. Cache entries are valid for 14 days; stale entries
         // fall through to regenerate via whichever mode was requested.
-        if (isProfileRequest && !isComparison && !imageData) {
+        if (isProfileRequest && !imageData) {
             // In-conversation lock takes priority over the Supabase cache: a plain re-request
             // for a single player already dossiered in THIS thread returns that exact dossier,
             // so nothing contradicts it. Refresh/variation requests fall through to regenerate.
@@ -1069,7 +1025,7 @@ export const sendMessageToAI = async (
                 ? `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
     <instructions>
     You are in FAST MODE. Use a single googleSearch to gather current data, then generate the response immediately.
-    CRITICAL: You MUST output the COMPLETE Player Profile or Comparison JSON schema with ALL required fields.
+    CRITICAL: You MUST output the COMPLETE Player Profile JSON schema with ALL required fields.
     The "attributes" object (all 25 values) and "playstyleAndRole" are MANDATORY — do not abbreviate or omit any fields.
     Follow the schema exactly as defined in the system instruction. Output pure JSON only, no preamble.
     </instructions>
@@ -1124,27 +1080,23 @@ export const sendMessageToAI = async (
     ${lockedDossiersBlock}
     ${savedDossiersBlock}
     <instructions>
-    Generate the COMPLETE Player ${isComparison ? 'Comparison' : 'Profile'} JSON per the schema.
+    Generate the COMPLETE Player Profile JSON per the schema.
     ${getFormalSynthesisQualityReminders()}
     Use the foundation above for current-status facts (club, form, injuries) — do not invent unverified figures.
     </instructions>
     <task>${message}</task>`;
 
                 try {
-                    const result = await synthesizeFormalResponse(fastSynthPrompt, isComparison, systemInstruction);
+                    const result = await synthesizeFormalResponse(fastSynthPrompt, systemInstruction);
                     perf('synthesis');
-                    if (!isComparison && 'basicInfo' in result) {
-                        upsertCachedDossier(toPlayerSlug((result as PlayerProfile).basicInfo.name), result as PlayerProfile);
-                    }
+                    upsertCachedDossier(toPlayerSlug(result.basicInfo.name), result);
                     return result;
                 } catch (e) {
                     console.warn('[Fast Mode] Structured synthesis failed, guarded chat fallback:', e);
                     const fb = await sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, 'low', systemInstruction, conversationProfiles);
                     const structured = typeof fb === 'string' ? extractStructuredFromText(fb) : fb;
-                    if (structured && typeof structured === 'object') {
-                        if (!isComparison && 'basicInfo' in structured) {
-                            upsertCachedDossier(toPlayerSlug((structured as PlayerProfile).basicInfo.name), structured as PlayerProfile);
-                        }
+                    if (structured && typeof structured === 'object' && 'basicInfo' in structured) {
+                        upsertCachedDossier(toPlayerSlug(structured.basicInfo.name), structured);
                         return structured;
                     }
                     throw new Error("The scouting report came back malformed. Please try that request again in a moment.");
@@ -1162,14 +1114,11 @@ export const sendMessageToAI = async (
                 // A profile request already NAMES the player, so the four search vectors are
                 // deterministic templates — building them in code removes a full serial round
                 // trip (the query-gen phase) from the critical path with no loss of search depth
-                // or triangulation. This mirrors fast mode, which has always templated its
-                // grounding queries inline without any quality regression. The query-gen call is
-                // still used for comparison/historical requests below, where it earns its cost by
-                // disambiguating the two players / peak eras from a looser prompt.
+                // or triangulation. Historical requests still use query-gen to disambiguate peak eras.
                 //
                 // Vectors mirror the previous generated set 1:1 (E2: 5→4, D = merged status+fitness):
                 //   A Anchor & Class · B Hard Data · C Scouting Profile & Eye Test · D Status & Fitness
-                if (!isComparison && !isHistorical) {
+                if (!isHistorical) {
                     queries = [
                         `${message} — 2024/2025 peak season, major awards, and "best player" rankings`,
                         `${message} — ${currentSeason} season stats: goals, assists, G/A per 90, clean sheets, and advanced metrics`,
@@ -1177,23 +1126,7 @@ export const sendMessageToAI = async (
                         `${message} — current club, any ${year} transfer or loan news, injury status, manager quotes about his role, and tactical fit in ${currentSeason}`,
                     ];
                 } else {
-                    // Comparison / historical: keep the query-gen call so both players (and, for
-                    // historical requests, their respective peak eras) are correctly identified.
-                    let queryGenPrompt: string;
-
-                    if (isHistorical && isComparison) {
-                        queryGenPrompt = `
-Task: Generate search queries to compare the PRIME/PEAK of the two players in: "${message}".
-MANDATORY: Exactly 4 queries — 2 per player at their respective peaks.
-
-PLAYER 1 — VECTOR A: Absolute peak season stats, major awards, and "best player" rankings during prime.
-PLAYER 1 — VECTOR B: Pundit analysis and match performance reviews from their peak era.
-PLAYER 2 — VECTOR A: Absolute peak season stats, major awards, and "best player" rankings during prime.
-PLAYER 2 — VECTOR B: Pundit analysis and match performance reviews from their peak era.
-
-OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
-                    } else if (isHistorical) {
-                        queryGenPrompt = `
+                    const queryGenPrompt = `
 Task: Generate search queries for evaluating the PEAK/PRIME of: "${message}".
 MANDATORY SEARCH VECTORS (exactly 1 precise query per vector):
 
@@ -1203,20 +1136,6 @@ VECTOR C (Narrative & Eye Test): Pundit analysis, fan sentiment, and match perfo
 VECTOR D (Context): Tactical fit and manager quotes about their role during their most dominant period.
 
 OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
-                    } else {
-                        // isComparison && !isHistorical
-                        queryGenPrompt = `
-Task: Generate search queries to compare the two players in: "${message}".
-Context: Current Date is ${month} ${year}. Season: ${currentSeason}.
-MANDATORY: Exactly 4 queries — 2 per player. Identify the two players from the request.
-
-PLAYER 1 — VECTOR A: Their ${currentSeason} stats, goals, assists, and hard performance data.
-PLAYER 1 — VECTOR B: Recent pundit analysis, form, current club/status, and tactical role (${month} ${year}).
-PLAYER 2 — VECTOR A: Their ${currentSeason} stats, goals, assists, and hard performance data.
-PLAYER 2 — VECTOR B: Recent pundit analysis, form, current club/status, and tactical role (${month} ${year}).
-
-OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
-                    }
 
                     // LOW thinking for query generation: costs almost nothing but meaningfully improves
                     // query specificity vs MINIMAL (correct club names, season labels, etc.).
@@ -1301,18 +1220,21 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                 factualFoundation = results.join('\n\n---\n\n');
                 perf(`search phase (${queriesToRun.length} parallel)`);
             } else {
-                // Non-formal chat
-                if (isCurrentStateQuery) {
+                // Non-formal chat (includes comparisons — prose only, no structured dossiers)
+                if (isCompareQuestion || isCurrentStateQuery) {
                     try {
                         const contextRes = await getAi().models.generateContent({
                             model: FLASH_MODEL,
                             contents: `[Date: ${month} ${year}] ${message}`,
                             config: { tools: [{ googleSearch: {} }] }
                         });
-                        factualFoundation = `[CURRENT STATE CONTEXT — ${month} ${year}]\nDo NOT generate a JSON profile. Answer conversationally using the grounded data below.\n${contextRes.text || ''}`;
+                        const preamble = isCompareQuestion
+                            ? `COMPARISON CONTEXT — ${month} ${year}. Do NOT generate JSON profiles or side-by-side dossiers. Answer conversationally with your scouting opinion, grounded in the data below.`
+                            : `CURRENT STATE CONTEXT — ${month} ${year}. Do NOT generate a JSON profile. Answer conversationally using the grounded data below.`;
+                        factualFoundation = `${preamble}\n${contextRes.text || ''}`;
                     } catch (e) {
                         console.warn('[Context Search] Failed for non-formal query:', e);
-                        factualFoundation = "Current state search unavailable. Answer conversationally but flag any current-status claims as potentially unverified.";
+                        factualFoundation = "Search unavailable. Answer conversationally but flag any current-status claims as potentially unverified.";
                     }
                 } else {
                     factualFoundation = "User is engaging in general conversation. Do not generate a JSON profile. Respond conversationally as the Senior Tactical Columnist. You have access to the googleSearch tool—use it if the user asks a question requiring current stats, squad info, injuries, or recent news.";
@@ -1431,7 +1353,7 @@ Return ONLY this JSON (no preamble, no markdown):
         if (!isFormal) {
             finalInstructions = `
     1. IDENTITY: Senior Tactical Columnist / Lead Scout.
-    2. CONVERSATIONAL TURN — NOT a dossier request. Respond in natural Markdown prose. You are STRICTLY PROHIBITED from outputting a JSON profile or comparison object here, no matter what player names appear in the message.
+    2. CONVERSATIONAL TURN — NOT a dossier request. Respond in natural Markdown prose. You are STRICTLY PROHIBITED from outputting a JSON profile here, no matter what player names appear in the message. For comparisons ("X vs Y", "who is better"), give your scouting opinion in prose — do NOT emit structured comparison JSON or generate full dossiers for both players.
     3. DOSSIER CONTINUITY: The conversation history contains the full dossier(s) you previously generated (marked "DOSSIER YOU (Futbolpedia) PREVIOUSLY GENERATED"). Those Overall/Potential ratings, the 25 attributes, strengths, weaknesses and playstyle are YOUR authored analysis and are authoritative. When the user asks a follow-up, ground your answer in those exact numbers — do NOT quote a different Overall or contradict an attribute you already assigned. If you genuinely need to change a value, say so explicitly ("I'd revise his Overall from 84 to 82 because…") rather than silently citing a different figure.
     4. SAVED ARCHIVE: When <saved_dossiers> is present, the user asked to reference profiles from their cross-conversation library — use those exact saved ratings and attributes, do not regenerate them. When <saved_dossier_archive> is present (index only), summarize what dossiers they have on file; if they then name a player, answer from that player's saved data when available.
     5. If the user is questioning, challenging, or disagreeing with a rating you gave earlier, engage their actual argument directly and honestly — defend the rating with specific reasoning, or concede and revise it if they make a fair point. Address their specific claim (e.g. league strength, sample size, minutes played), do not dodge it.
@@ -1454,23 +1376,16 @@ Return ONLY this JSON (no preamble, no markdown):
 
     <task>${message}</task>`;
 
-        // ── Q1: Route ALL formal default-mode requests (profiles AND comparisons) ──
-        // through structured synthesis. synthesizeFormalResponse uses responseSchema so
-        // Gemini guarantees schema-valid JSON and retries transient rate limits internally.
+        // ── Q1: Route formal default-mode profile requests through structured synthesis.
+        // synthesizeFormalResponse uses responseSchema so Gemini guarantees schema-valid JSON.
         // A formal request must resolve to a structured object — it must NEVER return a
         // raw JSON string to the UI. If every path fails we throw a clean error so the
         // user sees an "Editor's Note" instead of raw braces.
         if (isFormal && !imageData && mode === 'default') {
-            const cacheIfProfile = (result: PlayerProfile | PlayerComparison) => {
-                if (!isComparison && 'basicInfo' in result) {
-                    upsertCachedDossier(toPlayerSlug((result as PlayerProfile).basicInfo.name), result as PlayerProfile);
-                }
-            };
-
             try {
-                const result = await synthesizeFormalResponse(finalAnswerPrompt, isComparison, systemInstruction);
+                const result = await synthesizeFormalResponse(finalAnswerPrompt, systemInstruction);
                 perf('synthesis');
-                cacheIfProfile(result);
+                upsertCachedDossier(toPlayerSlug(result.basicInfo.name), result);
                 return result;
             } catch (e) {
                 console.warn('[Structured Synthesis] Failed after retries, attempting chat fallback:', e);
@@ -1480,8 +1395,8 @@ Return ONLY this JSON (no preamble, no markdown):
                 try {
                     const fallback = await sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, 'minimal', systemInstruction, conversationProfiles);
                     const structured = typeof fallback === 'string' ? extractStructuredFromText(fallback) : fallback;
-                    if (structured && typeof structured === 'object') {
-                        cacheIfProfile(structured);
+                    if (structured && typeof structured === 'object' && 'basicInfo' in structured) {
+                        upsertCachedDossier(toPlayerSlug(structured.basicInfo.name), structured);
                         return structured;
                     }
                 } catch (fallbackErr) {

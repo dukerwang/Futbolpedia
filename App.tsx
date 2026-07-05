@@ -388,14 +388,6 @@ const App: React.FC = () => {
             content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
             timestamp: Date.now(),
           };
-      } else if (typeof aiResponse === 'object' && 'summary' in aiResponse) {
-          // Comparison - for now treat as text/summary in chat
-           newAiMessage = {
-            id: generateId(),
-            sender: 'ai',
-            content: aiResponse,
-            timestamp: Date.now(),
-          };
       } else {
           newAiMessage = {
             id: generateId(),
