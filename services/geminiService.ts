@@ -783,6 +783,7 @@ const sendChatMessage = async (
   thinkingLevel: "minimal" | "low" | "medium" | "high" = "medium",
   systemInstruction?: string,
   conversationProfiles: PlayerProfile[] = [],
+  parseStructured = true,
 ): Promise<string | PlayerProfile> => {
   const geminiHistory: Content[] = history
     .map((msg): Content | null => {
@@ -894,9 +895,12 @@ const sendChatMessage = async (
         throw new Error("The AI model failed to return a valid text response. Please try again.");
     }
 
-    const structured = extractStructuredFromText(text);
+    // Conversational turns must stay prose. The system prompt still contains the
+    // dossier schema, so the model can leak JSON even when we asked for Markdown —
+    // parsing that leak would reopen a dossier card the user never asked for.
+    const structured = parseStructured ? extractStructuredFromText(text) : null;
     if (structured) return structured;
-    console.warn("All JSON parse attempts failed, treating as text.");
+    if (parseStructured) console.warn("All JSON parse attempts failed, treating as text.");
     return text;
   } catch (error) {
     console.error("Gemini API call failed:", error);
@@ -921,13 +925,10 @@ export const sendMessageToAI = async (
 
     // ── Intent detection (hoisted so the global catch can guard formal requests) ──
     // A message can CONTAIN dossier keywords ("rate", "rating", "dossier", "profile") while
-    // actually being a QUESTION or CHALLENGE about a rating we already gave — e.g. "why did
-    // you rate him 84?", "how does that make sense?", "I didn't ask for another dossier,
-    // answer the question". Those must be answered conversationally (Mode A), NOT trigger a
-    // fresh dossier. Keyword matching alone cannot tell a request apart from a rebuttal, so we
-    // detect explanation/challenge intent explicitly and let it VETO formal routing. Without
-    // this, "you rate palestra an 84…" matches \brate\b and "…another palestra dossier" matches
-    // \bdossier\b, both wrongly regenerating a dossier instead of answering the user.
+    // actually being a QUESTION, CHALLENGE, or COMPARISON — e.g. "why did you rate him 84?",
+    // "compare them in terms of player profile", "don't rate, answer in raw text".
+    // Those must be answered conversationally (Mode A), NOT trigger a fresh dossier.
+    // The structured comparison UI was removed: compare/vs/versus is always prose.
     const isExplanationOrChallenge =
         /\bwhy\b/i.test(message) ||
         /\bhow come\b/i.test(message) ||
@@ -935,19 +936,22 @@ export const sendMessageToAI = async (
         /\byour (rating|ranking|rank|score|assessment|take|analysis|reasoning|logic|answer)\b/i.test(message) ||
         /\b(explain|justify)\b/i.test(message) ||
         /\b(make|makes|made|making) (no |any )?sense\b/i.test(message) ||
-        /\b(didn'?t|did not|never) ask(ed)?\b/i.test(message) ||
+        /\b(didn['\u2019]?t|did not|never) ask(ed)?\b/i.test(message) ||
         /\banswer (the|my|this) (question|q)\b/i.test(message) ||
-        /\bdon'?t (generate|make|create|give|want|need)\b/i.test(message) ||
+        /\bdon['\u2019]?t (generate|make|create|give|want|need|rate|scout|profile|evaluate)\b/i.test(message) ||
+        /\bno don['\u2019]?t\b/i.test(message) ||
+        /\b(raw text|in prose|in (?:plain |raw )?text)\b/i.test(message) ||
         /\b(have|had|got) a (question|problem|issue)\b/i.test(message) ||
         /\b(i disagree|you'?re wrong|that'?s wrong|too (high|low)|overrated|underrated)\b/i.test(message);
 
     const rawProfileRequest = /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good|rank|tier|analyze|breakdown)\b/i.test(message) || /analysis on|report on|break down/i.test(message);
-    const isCompareQuestion = /compare|vs|versus|better/i.test(message);
-    // A challenge/explanation vetoes formal dossier routing → answered in Mode A.
-    const isProfileRequest = rawProfileRequest && !isExplanationOrChallenge;
+    // Bare "better" is too greedy ("rate X, he's better than last year") — keep compare/vs/versus.
+    const isCompareQuestion = /\b(compare|versus)\b|\bvs\.?\b|\bwho(?:'s| is) better\b/i.test(message);
+    // Challenge, "don't rate", and comparisons all veto the dossier pipeline → Mode A.
+    const isProfileRequest = rawProfileRequest && !isExplanationOrChallenge && !isCompareQuestion;
     const isHistorical = /\bprime\b|\bpeak\b|\ball[- ]time\b|\bhistorical\b/i.test(message);
     const isCurrentStateQuery = /\b(squad|roster|lineup|line.?up|formation|manager|coach|signings?|transfers?|this season|playing for|who(?:'s| is) (?:at|managing)|how (?:does|do) .+ play)\b/i.test(message);
-    const isFormal = isProfileRequest;
+    let isFormal = isProfileRequest;
 
     // ── Prior-dossier reuse ("law") ──────────────────────────────────────────────
     // Formal follow-ups that reference a player already dossiered in this conversation
@@ -974,6 +978,12 @@ export const sendMessageToAI = async (
     // deliberately regenerate (e.g. "rate him again but at striker", "update his profile").
     const wantsRegeneration = /\b(update|refresh|latest|redo|re-?rate|re-?evaluate|recheck|instead|current form)\b/i.test(message);
 
+    // No identifiable player + no image → do not invent a dossier (this is how a
+    // follow-up like "don't rate, compare in raw text" used to emit a random player).
+    if (isFormal && !imageData && referencedDossiers.length === 0 && !extractCandidateSlug(message)) {
+        isFormal = false;
+    }
+
     // ── Per-phase timing instrumentation ────────────────────────────────────
     // Logs each pipeline phase's wall time to the console so real bottlenecks can be
     // measured instead of estimated. Set FUTBOLPEDIA_PERF=false on window to silence.
@@ -996,7 +1006,7 @@ export const sendMessageToAI = async (
         // fresh fast-mode generation, so there is no reason for fast mode to regenerate a
         // player that is already cached. Cache entries are valid for 14 days; stale entries
         // fall through to regenerate via whichever mode was requested.
-        if (isProfileRequest && !imageData) {
+        if (isFormal && !imageData) {
             // In-conversation lock takes priority over the Supabase cache: a plain re-request
             // for a single player already dossiered in THIS thread returns that exact dossier,
             // so nothing contradicts it. Refresh/variation requests fall through to regenerate.
@@ -1034,8 +1044,9 @@ export const sendMessageToAI = async (
     <instructions>
     You are in FAST MODE. Skip deep multi-step research.
     1. Use the googleSearch tool efficiently if you need data you don't have.
-    2. Answer concisely but accurately.
+    2. ${isCompareQuestion ? 'Write a detailed Markdown scouting comparison covering identity/profile, tactical fit, and relative quality. Cover every player named. Do NOT output JSON or a single-player dossier.' : 'Answer concisely but accurately.'}
     3. Maintain the Futbolpedia identity (Objective, Scout-like).
+    4. Never output a JSON player profile on this turn.
     </instructions>
     <task>${message}</task>`;
 
@@ -1102,7 +1113,7 @@ export const sendMessageToAI = async (
                     throw new Error("The scouting report came back malformed. Please try that request again in a moment.");
                 }
             }
-            return sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, 'low', systemInstruction, conversationProfiles);
+            return sendChatMessage(fastPrompt, history, FLASH_MODEL, undefined, 'low', systemInstruction, conversationProfiles, false);
         }
 
         // ── Default mode: pipeline ──────────────────────────────────────────────
@@ -1229,7 +1240,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                             config: { tools: [{ googleSearch: {} }] }
                         });
                         const preamble = isCompareQuestion
-                            ? `COMPARISON CONTEXT — ${month} ${year}. Do NOT generate JSON profiles or side-by-side dossiers. Answer conversationally with your scouting opinion, grounded in the data below.`
+                            ? `COMPARISON CONTEXT — ${month} ${year}. The user wants a prose comparison, NOT a dossier. Do NOT generate JSON profiles. Write a detailed scouting comparison covering identity/profile, tactical fit, and relative quality, grounded in the data below. Cover every player named — do not collapse this into a single-player report.`
                             : `CURRENT STATE CONTEXT — ${month} ${year}. Do NOT generate a JSON profile. Answer conversationally using the grounded data below.`;
                         factualFoundation = `${preamble}\n${contextRes.text || ''}`;
                     } catch (e) {
@@ -1353,13 +1364,13 @@ Return ONLY this JSON (no preamble, no markdown):
         if (!isFormal) {
             finalInstructions = `
     1. IDENTITY: Senior Tactical Columnist / Lead Scout.
-    2. CONVERSATIONAL TURN — NOT a dossier request. Respond in natural Markdown prose. You are STRICTLY PROHIBITED from outputting a JSON profile here, no matter what player names appear in the message. For comparisons ("X vs Y", "who is better"), give your scouting opinion in prose — do NOT emit structured comparison JSON or generate full dossiers for both players.
+    2. CONVERSATIONAL TURN — NOT a dossier request. Respond in natural Markdown prose. You are STRICTLY PROHIBITED from outputting a JSON profile here, no matter what player names appear in the message. If the user asked to COMPARE players (including "in terms of player profile"), write a detailed prose comparison covering identity, tactical fit, and quality — do NOT emit JSON, do NOT generate a dossier for only one player, and do NOT treat the word "profile" as a request for a dossier card.
     3. DOSSIER CONTINUITY: The conversation history contains the full dossier(s) you previously generated (marked "DOSSIER YOU (Futbolpedia) PREVIOUSLY GENERATED"). Those Overall/Potential ratings, the 25 attributes, strengths, weaknesses and playstyle are YOUR authored analysis and are authoritative. When the user asks a follow-up, ground your answer in those exact numbers — do NOT quote a different Overall or contradict an attribute you already assigned. If you genuinely need to change a value, say so explicitly ("I'd revise his Overall from 84 to 82 because…") rather than silently citing a different figure.
     4. SAVED ARCHIVE: When <saved_dossiers> is present, the user asked to reference profiles from their cross-conversation library — use those exact saved ratings and attributes, do not regenerate them. When <saved_dossier_archive> is present (index only), summarize what dossiers they have on file; if they then name a player, answer from that player's saved data when available.
     5. If the user is questioning, challenging, or disagreeing with a rating you gave earlier, engage their actual argument directly and honestly — defend the rating with specific reasoning, or concede and revise it if they make a fair point. Address their specific claim (e.g. league strength, sample size, minutes played), do not dodge it.
     6. Protocol J (Explanation Integrity): cite ONLY the real Section III tier scale — never invent tier names — and keep Overall (current) distinct from Potential (future).
     7. Use the factual foundation / search tool for any current-state fact; never assert current status from memory.
-    8. Be sharp, specific, and concise. No filler, no restating the question.`;
+    8. Be sharp and specific. No filler, no restating the question. Comparisons should be a real briefing (identity, tactical fit, quality) — not a three-sentence blurb.`;
         }
 
         const finalAnswerPrompt = `
@@ -1406,7 +1417,7 @@ Return ONLY this JSON (no preamble, no markdown):
             }
         }
 
-        return sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, selectedLevel, systemInstruction, conversationProfiles);
+        return sendChatMessage(finalAnswerPrompt, history, FLASH_MODEL, imageData, selectedLevel, systemInstruction, conversationProfiles, false);
     } catch (error) {
         console.error("[GLOBAL WORKFLOW] Failed:", error);
         // For a formal request, never leak raw JSON: attempt one guarded structured
@@ -1422,6 +1433,6 @@ Return ONLY this JSON (no preamble, no markdown):
             throw error instanceof Error ? error : new Error("The scouting report could not be generated. Please try again.");
         }
         // MINIMAL thinking: LOW leaks citation tokens ([2.1.3] etc.) into JSON output.
-        return sendChatMessage(message, history, FLASH_MODEL, imageData, "minimal", getMasterInstructions(false), conversationProfiles);
+        return sendChatMessage(message, history, FLASH_MODEL, imageData, "minimal", getMasterInstructions(false), conversationProfiles, false);
     }
 };

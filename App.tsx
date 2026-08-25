@@ -355,6 +355,7 @@ const App: React.FC = () => {
     const lowerCaseMessage = userMessageText.toLowerCase();
     if (mode === 'fast') specificLoadingMessage = 'Quick lookup...';
     else if (imageData) specificLoadingMessage = 'Analyzing imagery...';
+    else if (/\b(compare|versus)\b|\bvs\.?\b/.test(lowerCaseMessage)) specificLoadingMessage = 'Comparing players...';
     else if (lowerCaseMessage.includes('rate') || lowerCaseMessage.includes('profile')) specificLoadingMessage = 'Scouting player...';
     
     setLoadingMessage(specificLoadingMessage);

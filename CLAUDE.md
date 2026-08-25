@@ -53,7 +53,7 @@ On init, `App.tsx` runs a migration path: old `futbolpedia-chat-history` / `futb
 ### Key Types (`types.ts`)
 - `PlayerProfile` — The central data model. Contains `basicInfo`, `ratings` (overall/potential), `attributes` (25 outfield), optional `goalkeeperAttributes`, `strengths`, `weaknesses`, `playstyleAndRole`, `shortBio`, `latestUpdate`.
 - `Conversation` — Wraps an array of `ChatMessage` plus the `activeProfile` and `allProfiles` at the time.
-- `ChatMessage.content` is a union: `string | PlayerProfile | PlayerComparison | ReactNode`.
+- `ChatMessage.content` is a union: `string | PlayerProfile | ReactNode`.
 
 ### Prompt Engineering (`constants.ts`)
 The `MASTER_INSTRUCTION_SET` is a ~300-line system prompt. Key concepts when modifying it:
