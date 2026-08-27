@@ -1,6 +1,10 @@
 import { GoogleGenAI, Chat, Content, Type, ThinkingLevel } from "@google/genai";
 import type { PlayerProfile, Attributes, GoalkeeperAttributes, ChatMessage } from '../types';
 import { MASTER_INSTRUCTION_SET, getMasterInstructions, SIMULATION_YEAR, SIMULATION_SEASON } from '../constants';
+import {
+  findProfileManagerGroundingIssues,
+  type FutbolpediaVerifiedFacts,
+} from './profileManagerGrounding';
 
 const supabaseUrl = "https://hrocnbcavstmjysptjdk.supabase.co";
 const supabaseKey = "sb_publishable_NKyG9miYqS8JgdpgWuXm9A_tc3vaVCL";
@@ -99,7 +103,7 @@ export const getSharedConversation = async (code: string): Promise<import('../ty
   }
 };
 
-const FLASH_MODEL = 'gemini-3.5-flash';
+const FLASH_MODEL = 'gemini-3.7-flash';
 
 // ─── Q1: Structured output schemas ────────────────────────────────────────────
 // These are passed to generateContent as responseSchema for formal synthesis,
@@ -512,6 +516,26 @@ const synthesizeFormalResponse = async (
     const parsed = JSON.parse(text);
     return sanitizeProfileData(parsed as Partial<PlayerProfile>);
 };
+
+const synthesizeFormalResponseWithManagerGrounding = async (
+    prompt: string,
+    systemInstruction: string,
+    verifiedFacts: FutbolpediaVerifiedFacts | null,
+): Promise<PlayerProfile> => {
+    let lastIssues: string[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const attemptPrompt =
+            attempt === 0 || lastIssues.length === 0
+                ? prompt
+                : `${prompt}\n\n<manager_grounding_retry>\nPrevious draft failed head-coach verification: ${lastIssues.join('; ')}. Remove unverified manager names. Only name a coach if verified_facts.currentHeadCoach is set; otherwise describe role without naming a manager.\n</manager_grounding_retry>`;
+        const result = await synthesizeFormalResponse(attemptPrompt, systemInstruction);
+        if (!verifiedFacts) return result;
+        lastIssues = findProfileManagerGroundingIssues(result, verifiedFacts);
+        if (lastIssues.length === 0) return result;
+        console.warn(`[Manager Grounding] synthesis attempt ${attempt + 1} failed:`, lastIssues);
+    }
+    throw new Error(`Manager grounding failed after retry: ${lastIssues.join('; ')}`);
+};
 // ──────────────────────────────────────────────────────────────────────────────
 
 // ─── Shared formal-synthesis quality reminders ─────────────────────────────────
@@ -530,6 +554,8 @@ const getFormalSynthesisQualityReminders = (): string => `
     STRENGTHS/WEAKNESSES FORMAT (Protocol L): Each entry MUST follow "**Bold Title:** Analytical sentence with specific evidence." Ground titles and sentences in real, specific traits — not vague labels.
     SHORT BIO — UNIQUE, ACCURATE, CURRENT (Protocols I & L): Minimum 80 words. Goal: a fresh, high-quality snapshot of who the player is RIGHT NOW — current standing, form, situation — worded differently for every player; quality and accuracy come first. Break out of the one reused mould — "Affectionately known as '[nickname]'... following a [transfer]... silenced/defied skeptics by [stat]... enters [new season] under [new manager]" — and never use the crutch phrases "silenced/defied skeptics." A nickname is OPTIONAL; include one only if genuinely famous, never invent or force it as the opener. Vary both the opening (a plain stat/achievement, a defining moment, a direct identity statement, a real tension) and the closing across profiles.
     TACTICAL BRIEF — ACCURATE IDENTITY, NOT ACTION LOG (Protocol T): playstyle.description must capture WHO the player is as a footballer — his true type, defining qualities, how he compares to the norm for his role, and his genuine limitations — as accurately as a world-class scout would. There is NO required opening template; open in whatever way most sharply captures THIS player and vary it across profiles. Make the reader come away knowing what mould he belongs to. Do NOT write it as a chronological chain of "He does X. He does Y. He does Z." actions (a play-by-play), and do NOT anchor it to one club's tactical system. Concrete habits are welcome as evidence, but identity is the payload.
+    HEAD COACH (Protocol M): Never write "under [Manager]" or "[Manager]'s rotation/system" in shortBio, latestUpdate, or playstyle unless verified_facts.currentHeadCoach is confirmed from search. Former/sacked managers are a common hallucination — omit the name when unverified.
+    ROSTER MOBILITY: If verified_facts.premierLeagueMobility or mobilitySummary indicates exit risk or a recent move, reflect it in latestUpdate without inventing transfer details.
     PRE-OUTPUT VERIFICATION:
        • (P) Every attribute populated from established ability; 0 only for an unidentifiable player; string fields use "N/A"
        • (R) The attribute set has genuine spread (clear peaks and troughs), not a flat band near the Overall
@@ -1060,21 +1086,27 @@ export const sendMessageToAI = async (
             if (isFormal) {
                 let fastFoundation = '';
                 try {
-                    const [anchorRes, profileRes] = await Promise.allSettled([
+                    const [anchorRes, profileRes, coachRes] = await Promise.allSettled([
                         getAi().models.generateContent({
                             model: FLASH_MODEL,
                             contents: `[Date: ${month} ${year}] ${message}: player's class/reputation anchor, major awards, current club, transfer/injury status.`,
-                            config: { tools: [{ googleSearch: {} }], thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } },
+                            config: { tools: [{ googleSearch: {} }] },
                         }),
                         getAi().models.generateContent({
                             model: FLASH_MODEL,
                             contents: `[Date: ${month} ${year}] ${message}: scouting profile — playing style, specific technical/physical/mental strengths and weaknesses, notable career moments or nicknames, ${currentSeason} form and stats.`,
-                            config: { tools: [{ googleSearch: {} }], thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } },
+                            config: { tools: [{ googleSearch: {} }] },
+                        }),
+                        getAi().models.generateContent({
+                            model: FLASH_MODEL,
+                            contents: `[Date: ${month} ${year}] ${message}: current head coach and manager appointment at his club.`,
+                            config: { tools: [{ googleSearch: {} }] },
                         }),
                     ]);
                     const anchorText = anchorRes.status === 'fulfilled' ? anchorRes.value.text : '';
                     const profileText = profileRes.status === 'fulfilled' ? profileRes.value.text : '';
-                    fastFoundation = [anchorText, profileText].filter(Boolean).join('\n\n---\n\n');
+                    const coachText = coachRes.status === 'fulfilled' ? coachRes.value.text : '';
+                    fastFoundation = [anchorText, profileText, coachText].filter(Boolean).join('\n\n---\n\n');
                 } catch (e) {
                     console.warn('[Fast Mode] Grounding search failed, synthesizing from prompt only:', e);
                 }
@@ -1127,14 +1159,15 @@ export const sendMessageToAI = async (
                 // trip (the query-gen phase) from the critical path with no loss of search depth
                 // or triangulation. Historical requests still use query-gen to disambiguate peak eras.
                 //
-                // Vectors mirror the previous generated set 1:1 (E2: 5→4, D = merged status+fitness):
-                //   A Anchor & Class · B Hard Data · C Scouting Profile & Eye Test · D Status & Fitness
+                // Vectors mirror the previous generated set with head-coach + mobility split:
+                //   A Anchor & Class · B Hard Data · C Scouting Profile · D Status/Fitness/Transfer · E Head Coach · (mobility in D)
                 if (!isHistorical) {
                     queries = [
                         `${message} — 2024/2025 peak season, major awards, and "best player" rankings`,
                         `${message} — ${currentSeason} season stats: goals, assists, G/A per 90, clean sheets, and advanced metrics`,
                         `${message} — scouting report: playing style, specific technical/physical/mental strengths and weaknesses, and pundit/analyst breakdowns of HOW he plays`,
-                        `${message} — current club, any ${year} transfer or loan news, injury status, manager quotes about his role, and tactical fit in ${currentSeason}`,
+                        `${message} — current club, any ${year} transfer or loan news, Premier League exit or arrival rumors, injury status, and tactical fit in ${currentSeason}`,
+                        `${message} — current head coach and manager appointment at his club as of ${month} ${year}`,
                     ];
                 } else {
                     const queryGenPrompt = `
@@ -1179,7 +1212,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                     perf('query generation');
                 }
 
-                const SAFE_QUERY_LIMIT = 4;
+                const SAFE_QUERY_LIMIT = 5;
 
                 // ── Q2: Capture grounding source URLs from each search ──────────────────
                 // All searches fire concurrently (see below). Retries with backoff on 429 as
@@ -1193,7 +1226,6 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
                             contents: `[Date: ${month} ${year}] ${q}`,
                             config: {
                                 tools: [{googleSearch: {}}],
-                                thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
                             }
                         });
                         if (perfEnabled) {
@@ -1258,6 +1290,7 @@ OUTPUT: JSON with a single 'queries' array containing strictly 4 strings.`;
         // This surfaces data gaps explicitly (Protocol P) rather than letting the
         // model fill them silently from training data.
         let verifiedFactsBlock = '';
+        let parsedVerifiedFacts: FutbolpediaVerifiedFacts | null = null;
         if (isFormal && factualFoundation && !factualFoundation.startsWith('User is engaging')) {
             try {
                 // Misc: cap at 8k chars (was 14k) — tail of search snippets is usually
@@ -1282,19 +1315,25 @@ Return ONLY this JSON (no preamble, no markdown):
   "recentMatchDate": "the most recent match date found in the results as YYYY-MM-DD or 'Month YYYY', or null — this anchors Protocol M temporal verification",
   "majorAwards": ["array of confirmed awards and rankings found"],
   "tacticalRole": "string about current role or manager quotes, or null",
+  "currentHeadCoach": "string — full name ONLY if search confirms who manages his CURRENT club as of the simulation date; null if only a former/sacked manager is mentioned or sources conflict",
+  "conflictingManagerReports": ["array of conflicting manager names or appointments found — empty if none"],
+  "premierLeagueMobility": "stable | recent_arrival | linked_exit | confirmed_exit | linked_move | unknown",
+  "mobilitySummary": "string — plain note on club/league stability, transfer exit or arrival if verified, or null",
   "verifiedSources": ["array of source URLs or titles from the SOURCES fields in the search results, if present"],
   "dataGaps": ["list of fields where search results contained no data — e.g. 'season2526Stats', 'injuryStatus'"]
-}`;
+}
+
+Manager extraction rule: if sources cite a sacked or former manager without confirming the current appointment, set currentHeadCoach to null and list the conflict in conflictingManagerReports.`;
                 const extractionRes = await getAi().models.generateContent({
                     model: FLASH_MODEL,
                     contents: extractionPrompt,
                     config: {
-                        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
                         responseMimeType: 'application/json',
                     }
                 });
                 const rawExtraction = (extractionRes.text || '{}').replace(/```json|```/g, '').trim();
                 const parsedFacts = JSON.parse(rawExtraction);
+                parsedVerifiedFacts = parsedFacts as FutbolpediaVerifiedFacts;
                 verifiedFactsBlock = `
     <verified_facts>
     These facts were explicitly confirmed in the search results. Use them for basicInfo and latestUpdate.
@@ -1320,7 +1359,7 @@ Return ONLY this JSON (no preamble, no markdown):
     1. IDENTITY: Senior Tactical Columnist / Lead Scout.
     2. TRAINING MEMORY PROHIBITION: Your pre-trained knowledge of player club affiliations, squad compositions, manager names, transfer history, and injury statuses is potentially months or years out of date. You are PROHIBITED from stating any current-state fact (club, squad, manager, fitness, role) unless it is explicitly confirmed in the <factual_foundation> or <verified_facts> blocks above. If search data is absent for a current-state claim, write "no current data available" — never default to training memory.
     3. ANCHOR: Use only the factual foundation and verified facts above. They supersede all training knowledge.
-    4. PROTOCOL M (Temporal Firewall): Strictly verify the YEAR of events. Prioritize ${month} ${year} data. Use 'recentMatchDate' from verified_facts as your temporal anchor before writing latestUpdate.
+    4. PROTOCOL M (Temporal Firewall): Strictly verify the YEAR of events. Prioritize ${month} ${year} data. Use 'recentMatchDate' from verified_facts as your temporal anchor before writing latestUpdate. Never name a head coach unless verified_facts.currentHeadCoach is set — omit rather than guess from training memory.
     5. PROTOCOL B (Injury Quarantine / "Rodri" Override): If the foundation shows the player started a match in the last 7 days, they are MATCH FIT. Ignore any "injured" status from 2025.
     6. ROSTER CHECK: If foundation shows a transfer or loan in the 25-26 season, update the basicInfo.club accordingly.
     7. DATA INTEGRITY: Use foundation data only for 'latestUpdate' and 'basicInfo'. Do not calculate ratings using ranking numbers; ratings must be based on the attribute framework applied to verified ability.
@@ -1394,7 +1433,11 @@ Return ONLY this JSON (no preamble, no markdown):
         // user sees an "Editor's Note" instead of raw braces.
         if (isFormal && !imageData && mode === 'default') {
             try {
-                const result = await synthesizeFormalResponse(finalAnswerPrompt, systemInstruction);
+                const result = await synthesizeFormalResponseWithManagerGrounding(
+                    finalAnswerPrompt,
+                    systemInstruction,
+                    parsedVerifiedFacts,
+                );
                 perf('synthesis');
                 upsertCachedDossier(toPlayerSlug(result.basicInfo.name), result);
                 return result;
