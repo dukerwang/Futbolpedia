@@ -192,6 +192,7 @@ const PLAYER_PROFILE_SCHEMA = {
 
 let currentThinkingLevel: string | null = null;
 let currentSystemInstruction: string | null = null;
+let currentTemperature: number | null = null;
 let chat: Chat | null = null;
 let currentModel: string | null = null;
 // Lazy singleton: constructing eagerly at module scope means any environment
@@ -213,9 +214,16 @@ export const resetChat = () => {
   currentModel = null;
   currentThinkingLevel = null;
   currentSystemInstruction = null;
+  currentTemperature = null;
 };
 
-function initializeChat(model: string, history?: Content[], level: "minimal" | "low" | "medium" | "high" = "medium", systemInstruction?: string) {
+function initializeChat(
+  model: string,
+  history?: Content[],
+  level: "minimal" | "low" | "medium" | "high" = "medium",
+  systemInstruction?: string,
+  temperatureOverride?: number,
+) {
   const levelMap: Record<string, ThinkingLevel> = {
     minimal: ThinkingLevel.MINIMAL,
     low: ThinkingLevel.LOW,
@@ -224,7 +232,9 @@ function initializeChat(model: string, history?: Content[], level: "minimal" | "
   };
 
   // Temperature scaled by thinking level: deeper analysis = lower temp to reduce hallucination.
-  const temperature = level === 'high' ? 0.6 : level === 'medium' ? 0.7 : level === 'low' ? 0.8 : 0.85;
+  const temperature =
+    temperatureOverride ??
+    (level === 'high' ? 0.6 : level === 'medium' ? 0.7 : level === 'low' ? 0.8 : 0.85);
   const instruction = systemInstruction ?? MASTER_INSTRUCTION_SET;
 
   chat = getAi().chats.create({
@@ -264,6 +274,7 @@ function initializeChat(model: string, history?: Content[], level: "minimal" | "
   currentModel = model;
   currentThinkingLevel = level;
   currentSystemInstruction = instruction;
+  currentTemperature = temperature;
 }
 
 const isPlayerProfile = (content: any): content is PlayerProfile => {
@@ -537,6 +548,28 @@ const synthesizeFormalResponseWithManagerGrounding = async (
     }
     throw new Error(`Manager grounding failed after retry: ${lastIssues.join('; ')}`);
 };
+
+/** Schema-enforced JSON (no chat session). Used by Gaffa trade scorecards. */
+export async function generateJsonWithSchema<T>(params: {
+  prompt: string;
+  systemInstruction: string;
+  schema: Record<string, unknown>;
+  temperature?: number;
+}): Promise<T> {
+  const response = await getAi().models.generateContent({
+    model: FLASH_MODEL,
+    contents: params.prompt,
+    config: {
+      systemInstruction: params.systemInstruction,
+      temperature: params.temperature ?? 0.2,
+      responseMimeType: 'application/json',
+      responseSchema: params.schema,
+    },
+  });
+  const text = response.text;
+  if (!text) throw new Error('Structured JSON returned no text');
+  return JSON.parse(text) as T;
+}
 // ──────────────────────────────────────────────────────────────────────────────
 
 // ─── Shared formal-synthesis quality reminders ─────────────────────────────────
@@ -811,6 +844,7 @@ const sendChatMessage = async (
   systemInstruction?: string,
   conversationProfiles: PlayerProfile[] = [],
   parseStructured = true,
+  temperatureOverride?: number,
 ): Promise<string | PlayerProfile> => {
   const geminiHistory: Content[] = history
     .map((msg): Content | null => {
@@ -862,8 +896,17 @@ const sendChatMessage = async (
   }
 
   const resolvedInstruction = systemInstruction ?? MASTER_INSTRUCTION_SET;
-  if (!chat || currentModel !== model || currentThinkingLevel !== thinkingLevel || currentSystemInstruction !== resolvedInstruction) {
-    initializeChat(model, geminiHistory, thinkingLevel, resolvedInstruction);
+  const levelTemp =
+    temperatureOverride ??
+    (thinkingLevel === 'high' ? 0.6 : thinkingLevel === 'medium' ? 0.7 : thinkingLevel === 'low' ? 0.8 : 0.85);
+  if (
+    !chat ||
+    currentModel !== model ||
+    currentThinkingLevel !== thinkingLevel ||
+    currentSystemInstruction !== resolvedInstruction ||
+    currentTemperature !== levelTemp
+  ) {
+    initializeChat(model, geminiHistory, thinkingLevel, resolvedInstruction, temperatureOverride);
   }
 
   try {
@@ -945,6 +988,7 @@ export const sendProseChatMessage = async (
     thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
     systemInstruction?: string;
     conversationProfiles?: PlayerProfile[];
+    temperature?: number;
   },
 ): Promise<string> => {
   const result = await sendChatMessage(
@@ -956,6 +1000,7 @@ export const sendProseChatMessage = async (
     options?.systemInstruction,
     options?.conversationProfiles ?? [],
     false,
+    options?.temperature,
   );
   if (typeof result !== 'string') {
     throw new Error('Expected a prose reply but received a structured profile.');
