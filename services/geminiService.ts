@@ -104,7 +104,7 @@ export const getSharedConversation = async (code: string): Promise<import('../ty
   }
 };
 
-const FLASH_MODEL = 'gemini-3.7-flash';
+const FLASH_MODEL = 'gemini-3.8-flash';
 
 // ─── Q1: Structured output schemas ────────────────────────────────────────────
 // These are passed to generateContent as responseSchema for formal synthesis,
@@ -979,7 +979,7 @@ export const gatherSearchFoundation = async (queries: string[]): Promise<string>
   settled.forEach((result, i) => {
     if (result.status === 'fulfilled') {
       const text = result.value.text?.trim();
-      if (text) chunks.push(`### Search ${i + 1}\nQuery: ${queries[i]}\n${text}`);
+      if (text) chunks.push(`### Grounding notes (internal — never cite as Search ${i + 1})\n${text}`);
     }
   });
   return chunks.join('\n\n') || 'No grounded search results available for this turn.';

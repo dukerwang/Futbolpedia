@@ -47,15 +47,23 @@ function buildResearchQueries(message: string, speed: 'default' | 'fast', thread
   const focus = threadHint
     ? `${message}\n(Open thread context: ${threadHint.slice(0, 280)})`
     : message;
-  const base = [
-    `${datePrefix} ${focus} — current clubs, ages, positions, injury/availability, recent role and minutes.`,
-    `${datePrefix} ${focus} — Premier League transfer links, PL exit/arrival risk, tactical usage.`,
+  const clubLock = `${datePrefix} CURRENT CLUB CHECK for every player named in: ${focus}. For each, state the club they play for NOW (${SIMULATION_YEAR} / ${SIMULATION_SEASON}), not last season. Call out summer transfers.`;
+  const rest = [
+    `${datePrefix} ${focus} — ages, positions, injury/availability, recent role and minutes at their CURRENT club.`,
+    `${datePrefix} ${focus} — Premier League transfer links, PL exit/arrival risk, tactical usage this season.`,
   ];
-  if (speed === 'fast') return base.slice(0, 1);
-  return [
-    ...base,
-    `${datePrefix} ${focus} — career phase, set-piece role, competition for minutes this season.`,
-  ];
+  if (speed === 'fast') return [clubLock, rest[0]];
+  return [clubLock, ...rest];
+}
+
+/** Strip leaked grounding citations from user-facing Gaffa prose. */
+export function sanitizeGaffaProse(text: string): string {
+  return text
+    .replace(/\s*\[(?:Search|Source|Grounding)\s*\d+(?:\s*[,&]\s*(?:Search|Source|Grounding)\s*\d+)*\]/gi, '')
+    .replace(/\s*\((?:Search|Source)\s*\d+(?:\s*[,&]\s*(?:Search|Source)\s*\d+)*\)/gi, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/ {2,}/g, ' ')
+    .trim();
 }
 
 export async function sendGaffaMessage(
@@ -111,16 +119,21 @@ ${message}
 - Prefer the rules snapshot for mechanics questions.
 - If not connected to a club, do not invent roster/standings/prices; caveat unknown club context on trade takes.
 - Never use fantasy points as proof of football quality.
+- Confirm each named player's CURRENT club from the foundation or locked roster before describing their role. Do not default to last season's club.
+- Never write [Search 1], [Search 2], or similar citations.
+- Once you have a verdict in this thread, do not reverse it without naming a new material fact.
+- A user fact-correction updates the fact; it does not automatically strengthen your prior take.
 - ${CONTINUITY_REMINDER}
 - Prefer a flowing scout take over checklist labels like "DO IT IF" / "HOLD IF" unless the user asks for a decision framework.
 - Do not lecture on scoring-curve math unless asked how points work.
 </reminders>
 </gaffa_turn>`;
 
-  return sendProseChatMessage(prompt, history, {
+  const prose = await sendProseChatMessage(prompt, history, {
     imageData: options?.imageData,
     thinkingLevel: kind === 'rules' ? 'minimal' : 'low',
     systemInstruction,
     conversationProfiles: [],
   });
+  return sanitizeGaffaProse(prose);
 }
