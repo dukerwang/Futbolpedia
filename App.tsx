@@ -9,6 +9,16 @@ import type { ChatMessage, PlayerProfile, Conversation, ChatDomain } from './typ
 import { sendMessageToAI, resetChat, getCachedDossier, getSharedConversation } from './services/geminiService';
 import { sendGaffaMessage } from './services/gaffaChatService';
 import { looksLikeGaffaQuestion } from './services/gaffaDetect';
+import {
+  clearGaffaLink,
+  fetchGaffaContext,
+  loadGaffaLink,
+  mapResponseToBag,
+  resolveContextBagForSend,
+  saveGaffaLink,
+  type GaffaLinkState,
+} from './services/gaffaContext';
+import { GaffaConnectStrip } from './components/GaffaConnectStrip';
 
 const generateId = () => `id-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 const CHAT_HISTORY_KEY = 'futbolpedia-chat-history';
@@ -35,6 +45,9 @@ const App: React.FC = () => {
   // Chat domain (Futbolpedia default vs Gaffa Q&A) — persisted per conversation
   const [domain, setDomain] = useState<ChatDomain>('default');
   const [gaffaNudge, setGaffaNudge] = useState<string | null>(null);
+  const [gaffaLink, setGaffaLink] = useState<GaffaLinkState | null>(null);
+  const [gaffaSyncing, setGaffaSyncing] = useState(false);
+  const [gaffaSyncError, setGaffaSyncError] = useState<string | null>(null);
 
   // Initialize Theme
   useEffect(() => {
@@ -45,6 +58,11 @@ const App: React.FC = () => {
         setIsDarkMode(false);
         document.documentElement.classList.remove('dark');
     }
+  }, []);
+
+  // Load persisted Gaffa club link
+  useEffect(() => {
+    setGaffaLink(loadGaffaLink());
   }, []);
 
   const toggleTheme = () => {
@@ -363,6 +381,36 @@ const App: React.FC = () => {
     resetChat();
   }, []);
 
+  const handleGaffaSync = useCallback(async (leagueId: string, clubId: string) => {
+    setGaffaSyncing(true);
+    setGaffaSyncError(null);
+    try {
+      const res = await fetchGaffaContext(leagueId, clubId);
+      const bag = mapResponseToBag(res);
+      const next: GaffaLinkState = {
+        league_id: bag.league_id!,
+        club_id: bag.club_id!,
+        league_name: bag.league_name,
+        club_name: bag.club_name,
+        last_synced_at: bag.synced_at,
+        bag,
+      };
+      saveGaffaLink(next);
+      setGaffaLink(next);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Sync failed';
+      setGaffaSyncError(msg);
+    } finally {
+      setGaffaSyncing(false);
+    }
+  }, []);
+
+  const handleGaffaDisconnect = useCallback(() => {
+    clearGaffaLink();
+    setGaffaLink(null);
+    setGaffaSyncError(null);
+  }, []);
+
   const handleSendMessage = useCallback(async (
     userMessageText: string,
     imageData?: string,
@@ -415,9 +463,23 @@ const App: React.FC = () => {
 
     try {
       if (activeDomain === 'gaffa') {
+        const contextBag = await resolveContextBagForSend(gaffaLink);
+        if (contextBag.connected && contextBag.synced_at) {
+          const nextLink: GaffaLinkState = {
+            league_id: contextBag.league_id!,
+            club_id: contextBag.club_id!,
+            league_name: contextBag.league_name,
+            club_name: contextBag.club_name,
+            last_synced_at: contextBag.synced_at,
+            bag: contextBag,
+          };
+          saveGaffaLink(nextLink);
+          setGaffaLink(nextLink);
+        }
         const prose = await sendGaffaMessage(userMessageText, messages, {
           speed: mode,
           imageData,
+          contextBag,
         });
         setMessages(prev => [...prev, {
           id: generateId(),
@@ -464,7 +526,7 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [messages, allProfiles, globalDossiers, domain, saveAndSetActiveProfile]);
+  }, [messages, allProfiles, globalDossiers, domain, gaffaLink, saveAndSetActiveProfile]);
 
   const handleSelectProfile = useCallback((profile: PlayerProfile | null) => {
     setActiveProfile(profile);
@@ -679,6 +741,15 @@ const App: React.FC = () => {
             {/* Input Container - Sticky Bottom */}
             <div className="flex-none px-6 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:pb-8 bg-gradient-to-t from-cream-200 dark:from-charcoal via-cream-200/95 dark:via-charcoal/95 to-transparent z-20">
                 <div className="max-w-[800px] mx-auto w-full">
+                    {domain === 'gaffa' && (
+                      <GaffaConnectStrip
+                        link={gaffaLink}
+                        syncing={gaffaSyncing}
+                        error={gaffaSyncError}
+                        onSync={handleGaffaSync}
+                        onDisconnect={handleGaffaDisconnect}
+                      />
+                    )}
                     <ChatInput
                         onSendMessage={handleSendMessage}
                         isLoading={isLoading}

@@ -16,6 +16,47 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  // Proxy to Gaffa club-context integration (secret stays server-side).
+  app.get("/api/gaffa/context", async (req, res) => {
+    const leagueId = typeof req.query.leagueId === "string" ? req.query.leagueId.trim() : "";
+    const teamId = typeof req.query.teamId === "string" ? req.query.teamId.trim() : "";
+    if (!leagueId || !teamId) {
+      return res.status(400).json({ error: "Missing leagueId or teamId" });
+    }
+
+    const base = (process.env.GAFFA_BASE_URL || "").replace(/\/$/, "");
+    const secret = process.env.FUTBOLPEDIA_READ_SECRET;
+    if (!base || !secret) {
+      return res.status(503).json({
+        error: "Gaffa connect is not configured (GAFFA_BASE_URL / FUTBOLPEDIA_READ_SECRET)",
+      });
+    }
+
+    try {
+      const url = `${base}/api/integrations/futbolpedia/context?leagueId=${encodeURIComponent(leagueId)}&teamId=${encodeURIComponent(teamId)}`;
+      const upstream = await axios.get(url, {
+        headers: { "x-futbolpedia-secret": secret },
+        validateStatus: () => true,
+        timeout: 20000,
+      });
+      if (upstream.status === 401) {
+        return res.status(401).json({ error: "Gaffa rejected the read secret" });
+      }
+      if (upstream.status === 404) {
+        return res.status(404).json({ error: upstream.data?.error || "League or club not found" });
+      }
+      if (upstream.status >= 400) {
+        return res.status(502).json({
+          error: upstream.data?.error || `Gaffa error (${upstream.status})`,
+        });
+      }
+      return res.json(upstream.data);
+    } catch (err: any) {
+      console.error("[gaffa/context]", err?.message || err);
+      return res.status(502).json({ error: "Could not reach Gaffa" });
+    }
+  });
+
   const API_KEY = process.env.API_FOOTBALL_KEY;
   const API_URL = "https://v3.football.api-sports.io";
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;

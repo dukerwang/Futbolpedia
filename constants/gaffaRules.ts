@@ -95,20 +95,55 @@ function buildContextBagBlock(bag: GaffaContextBag): string {
       'For club-specific or trade advice, give a reasoned football + mechanics take and explicitly note what depends on unknown club context (needs, standings, settings, ownership).',
       'Do NOT invent roster, prices clearing in their league, or commissioner overrides.'
     );
+    return lines.join('\n');
+  }
+
+  lines.push(`League: ${bag.league_name ?? 'unknown'} (${bag.league_id ?? '?'})`);
+  lines.push(`Club: ${bag.club_name ?? 'unknown'} (${bag.club_id ?? '?'})`);
+  if (bag.budget_eur_m != null) lines.push(`Club Balance (€m): ${bag.budget_eur_m}`);
+  if (bag.synced_at) {
+    lines.push(`Synced at: ${bag.synced_at}${bag.stale ? ' (STALE — refresh failed; treat cautiously)' : ''}`);
+  }
+  lines.push('Treat the following as LOCKED FACTS — do not contradict ownership, balance, standings, or XI.');
+
+  if (bag.standings) {
+    const s = bag.standings;
+    lines.push(
+      `Standings: rank ${s.rank ?? '?'}${s.of_teams != null ? `/${s.of_teams}` : ''} · W-D-L ${s.wins}-${s.draws}-${s.losses} · PF ${s.points_for}`,
+    );
+  }
+
+  if (bag.matchup) {
+    const m = bag.matchup;
+    lines.push(
+      `Matchup GW${m.gameweek}: vs ${m.opponent_club_name ?? 'TBD'} (${m.status})` +
+        (m.your_score != null || m.opponent_score != null
+          ? ` · score ${m.your_score ?? '?'}–${m.opponent_score ?? '?'}`
+          : ''),
+    );
   } else {
-    lines.push(`League ID: ${bag.league_id ?? 'unknown'}`);
-    lines.push(`Club ID: ${bag.club_id ?? 'unknown'}`);
-    if (bag.budget_eur_m != null) lines.push(`Budget (€m): ${bag.budget_eur_m}`);
-    if (bag.synced_at) lines.push(`Synced at: ${bag.synced_at}`);
-    lines.push('Treat any populated live fields below as LOCKED FACTS — do not contradict them.');
-    if (bag.roster != null) lines.push(`Roster JSON: ${JSON.stringify(bag.roster)}`);
-    if (bag.standings != null) lines.push(`Standings JSON: ${JSON.stringify(bag.standings)}`);
-    if (bag.matchup != null) lines.push(`Matchup JSON: ${JSON.stringify(bag.matchup)}`);
-    if (bag.open_listings != null) lines.push(`Listings JSON: ${JSON.stringify(bag.open_listings)}`);
-    if (bag.settings_overrides != null) {
-      lines.push(`Settings overrides JSON: ${JSON.stringify(bag.settings_overrides)}`);
+    lines.push('Matchup: none for current gameweek');
+  }
+
+  if (bag.lineup) {
+    const xi = bag.lineup.starters.map((p) => `${p.name} (${p.slot})`).join(', ') || 'empty';
+    const bench = bag.lineup.bench.map((p) => `${p.name} (${p.slot})`).join(', ') || 'empty';
+    lines.push(
+      `Lineup${bag.lineup.formation ? ` ${bag.lineup.formation}` : ''}${bag.lineup.gameweek != null ? ` (GW${bag.lineup.gameweek})` : ''}:`,
+    );
+    lines.push(`  XI: ${xi}`);
+    lines.push(`  Bench: ${bench}`);
+  }
+
+  if (bag.roster?.length) {
+    lines.push('Roster (name | pos | status | PL club):');
+    for (const p of bag.roster) {
+      const label = p.display_name || p.name;
+      const sec = p.secondary_positions?.length ? `/${p.secondary_positions.join(',')}` : '';
+      lines.push(`  - ${label} | ${p.primary_position}${sec} | ${p.status} | ${p.pl_team ?? '?'}`);
     }
   }
+
   return lines.join('\n');
 }
 

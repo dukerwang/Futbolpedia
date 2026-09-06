@@ -84,20 +84,80 @@ export interface ChatMessage {
 
 export type ChatDomain = 'default' | 'gaffa';
 
-/** Locked / live context for Gaffa-mode answers. Phase 1 uses version + connected: false only. */
+export interface GaffaRosterPlayer {
+  player_id: string;
+  name: string;
+  display_name?: string;
+  primary_position: string;
+  secondary_positions?: string[];
+  status: string;
+  pl_team?: string | null;
+}
+
+export interface GaffaStandings {
+  rank: number | null;
+  of_teams?: number;
+  played?: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  points_for: number;
+  points_against?: number;
+}
+
+export interface GaffaMatchup {
+  gameweek: number;
+  opponent_club_name: string | null;
+  status: string;
+  your_score?: number | null;
+  opponent_score?: number | null;
+}
+
+export interface GaffaLineupSlot {
+  player_id: string;
+  name: string;
+  slot: string;
+}
+
+export interface GaffaLineup {
+  formation?: string | null;
+  gameweek?: number;
+  starters: GaffaLineupSlot[];
+  bench: GaffaLineupSlot[];
+}
+
+/** Locked / live context for Gaffa-mode answers. */
 export interface GaffaContextBag {
   gaffa_rules_version: string;
-  /** Phase 1 always false. Phase 2 sets true after a successful league/club link. */
   connected: boolean;
+  /** True when using a cached bag after a failed refresh (&lt; 24h). */
+  stale?: boolean;
   league_id?: string;
   club_id?: string;
+  league_name?: string;
+  club_name?: string;
   settings_overrides?: Record<string, unknown>;
-  roster?: unknown;
+  roster?: GaffaRosterPlayer[];
   budget_eur_m?: number;
-  standings?: unknown;
-  matchup?: unknown;
+  standings?: GaffaStandings;
+  matchup?: GaffaMatchup | null;
+  lineup?: GaffaLineup | null;
   open_listings?: unknown;
   synced_at?: string;
+}
+
+/** API payload from Gaffa / Futbolpedia proxy (before local bag fields). */
+export interface GaffaClubContextResponse {
+  league_id: string;
+  club_id: string;
+  league_name: string;
+  club_name: string;
+  budget_eur_m: number;
+  roster: GaffaRosterPlayer[];
+  standings: GaffaStandings;
+  matchup: GaffaMatchup | null;
+  lineup: GaffaLineup | null;
+  synced_at: string;
 }
 
 export interface Conversation {
