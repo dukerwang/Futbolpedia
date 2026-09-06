@@ -476,7 +476,7 @@ const App: React.FC = () => {
           saveGaffaLink(nextLink);
           setGaffaLink(nextLink);
         }
-        const prose = await sendGaffaMessage(userMessageText, messages, {
+        const { prose, scorecard } = await sendGaffaMessage(userMessageText, messages, {
           speed: mode,
           imageData,
           contextBag,
@@ -486,6 +486,7 @@ const App: React.FC = () => {
           sender: 'ai',
           content: prose,
           timestamp: Date.now(),
+          gaffaScorecard: scorecard ?? undefined,
         }]);
         return;
       }

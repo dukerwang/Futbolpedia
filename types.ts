@@ -74,12 +74,37 @@ export interface PlayerProfile {
   createdAt?: number;
 }
 
+export type GaffaTradeVerdict = 'hold' | 'lean_hold' | 'toss_up' | 'lean_take' | 'take';
+
+/** Code-derived trade lock shown in Gaffa chat. Scores 1–5. */
+export interface GaffaTradeScorecard {
+  outgoing: string;
+  incoming: string;
+  incoming_cash_eur_m: number;
+  outgoing_club: string;
+  incoming_club: string;
+  replacement: number;
+  coverage: number;
+  cash_deployable: number;
+  starter_leverage: number;
+  replacement_note: string;
+  coverage_note: string;
+  cash_note: string;
+  leverage_note: string;
+  what_would_flip: string;
+  verdict: GaffaTradeVerdict;
+  confidence: 'low' | 'medium';
+  net: number;
+}
+
 export interface ChatMessage {
   id: string;
   sender: 'user' | 'ai';
   content: string | PlayerProfile | ReactNode;
   image?: string; // base64 encoded image string
   timestamp?: number;
+  /** Present on Gaffa asset-trade replies after the scorecard path runs. */
+  gaffaScorecard?: GaffaTradeScorecard;
 }
 
 export type ChatDomain = 'default' | 'gaffa';

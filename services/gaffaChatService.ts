@@ -1,5 +1,10 @@
 import { Type } from '@google/genai';
-import type { ChatMessage, GaffaContextBag } from '../types';
+import type {
+  ChatMessage,
+  GaffaContextBag,
+  GaffaTradeScorecard,
+  GaffaTradeVerdict,
+} from '../types';
 import {
   buildGaffaSystemInstruction,
   emptyGaffaContextBag,
@@ -10,30 +15,12 @@ import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
 
 export type GaffaTurnKind = 'rules' | 'strategy' | 'player_trade';
 
-export type GaffaTradeVerdict = 'hold' | 'lean_hold' | 'toss_up' | 'lean_take' | 'take';
-
-interface GaffaTradeScorecardRaw {
-  outgoing: string;
-  incoming: string;
-  incoming_cash_eur_m: number;
-  outgoing_club: string;
-  incoming_club: string;
-  replacement: number;
-  coverage: number;
-  cash_deployable: number;
-  starter_leverage: number;
-  replacement_note: string;
-  coverage_note: string;
-  cash_note: string;
-  leverage_note: string;
-  what_would_flip: string;
+export interface GaffaMessageResult {
+  prose: string;
+  scorecard: GaffaTradeScorecard | null;
 }
 
-export interface GaffaTradeScorecard extends GaffaTradeScorecardRaw {
-  verdict: GaffaTradeVerdict;
-  confidence: 'low' | 'medium';
-  net: number;
-}
+type GaffaTradeScorecardRaw = Omit<GaffaTradeScorecard, 'verdict' | 'confidence' | 'net'>;
 
 function clampScore(n: number): number {
   if (!Number.isFinite(n)) return 3;
@@ -156,10 +143,42 @@ Incoming: ${card.incoming} (${card.incoming_club}) + €${card.incoming_cash_eur
 Notes: ${card.replacement_note} | ${card.coverage_note} | ${card.cash_note} | ${card.leverage_note}
 What would flip: ${card.what_would_flip}
 
+The user already sees this scorecard in the UI. Do not re-narrate every factor.
 You MUST match this verdict. You MUST NOT sound more sure than ${card.confidence}.
-If toss_up or lean_*: say it is close. Do not write "outstanding", "do not pull the trigger" as gospel, "obliterates", "without hesitation", or "the kind of move that wins leagues".
-Lead with a hedged call, give the strongest case for the other side in one breath, then the locked call and what would flip it.
+If toss_up or lean_*: say it is close.
+SHAPE: (1) one sentence hedged call using the verdict + confidence words (2) one sentence strongest case for the other side (3) two sentences max tying the locked numbers (4) one sentence what would flip.
+HARD CAP 150 words. No First/Second/Finally sermons.
+Banned: outstanding, do not pull the trigger, obliterates, without hesitation, the kind of move that wins leagues, sharper move, unmistakable, talismanic, textbook, years trying to acquire, dead capital.
 </locked_scorecard>`;
+}
+
+const TRADE_PROSE_MAX_WORDS = 160;
+const TRADE_PROSE_MAX_PARAS = 4;
+
+/** Keep scorecard replies short so prose cannot out-talk the lock. */
+export function capGaffaTradeProse(text: string): string {
+  const paras = text
+    .trim()
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .slice(0, TRADE_PROSE_MAX_PARAS);
+  let limited = paras.join('\n\n');
+  const wordCount = limited.split(/\s+/).filter(Boolean).length;
+  if (wordCount <= TRADE_PROSE_MAX_WORDS) return limited;
+
+  const sentences = limited.match(/[^.!?]+[.!?]+(?:["')\]]+)?|[^.!?]+$/g) ?? [limited];
+  const kept: string[] = [];
+  let count = 0;
+  for (const raw of sentences) {
+    const sentence = raw.trim();
+    if (!sentence) continue;
+    const w = sentence.split(/\s+/).filter(Boolean).length;
+    if (count + w > TRADE_PROSE_MAX_WORDS && kept.length > 0) break;
+    kept.push(sentence);
+    count += w;
+  }
+  return kept.join(' ').trim();
 }
 
 export function classifyGaffaTurn(message: string): GaffaTurnKind {
@@ -227,7 +246,7 @@ export async function sendGaffaMessage(
     imageData?: string;
     contextBag?: GaffaContextBag;
   },
-): Promise<string> {
+): Promise<GaffaMessageResult> {
   const speed = options?.speed ?? 'default';
   const bag = options?.contextBag ?? emptyGaffaContextBag();
   const kind = classifyGaffaTurn(message);
@@ -262,6 +281,7 @@ export async function sendGaffaMessage(
   }
 
   let scorecardBlock = '';
+  let scorecard: GaffaTradeScorecard | null = null;
   const runScorecard =
     looksLikeAssetTrade(message) ||
     (continuePriorTrade &&
@@ -269,17 +289,17 @@ export async function sendGaffaMessage(
 
   if (runScorecard) {
     try {
-      const card = await buildTradeScorecard({
+      scorecard = await buildTradeScorecard({
         message,
         factualFoundation,
         bag,
         ongoingThread,
       });
-      scorecardBlock = formatScorecardBlock(card);
+      scorecardBlock = formatScorecardBlock(scorecard);
     } catch (err) {
       console.warn('[Gaffa] trade scorecard failed:', err);
       scorecardBlock = `<locked_scorecard>
-Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure either way. Give both sides and what you would need to lock a call.
+Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure either way. Give both sides and what you would need to lock a call. Max 120 words.
 </locked_scorecard>`;
     }
   }
@@ -305,15 +325,20 @@ ${message}
 - ${CONTINUITY_REMINDER}
 - Prefer a flowing scout take over checklist labels like "DO IT IF" / "HOLD IF" unless the user asks for a decision framework.
 - Do not lecture on scoring-curve math unless asked how points work.
+- If a locked_scorecard is present: max 150 words. The scorecard is shown to the user — do not write a four-paragraph briefing.
 </reminders>
 </gaffa_turn>`;
 
   const prose = await sendProseChatMessage(prompt, history, {
     imageData: options?.imageData,
     thinkingLevel: runScorecard || kind === 'player_trade' ? 'medium' : kind === 'rules' ? 'minimal' : 'low',
-    temperature: runScorecard ? 0.4 : kind === 'player_trade' ? 0.35 : kind === 'strategy' ? 0.5 : undefined,
+    temperature: runScorecard ? 0.25 : kind === 'player_trade' ? 0.35 : kind === 'strategy' ? 0.5 : undefined,
     systemInstruction,
     conversationProfiles: [],
   });
-  return sanitizeGaffaProse(prose);
+  const cleaned = sanitizeGaffaProse(prose);
+  return {
+    prose: scorecard ? capGaffaTradeProse(cleaned) : cleaned,
+    scorecard,
+  };
 }

@@ -3,6 +3,7 @@ import type { ChatMessage as ChatMessageType } from '../types';
 import { useTypewriter } from './useTypewriter';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { GaffaTradeScorecardView, formatScorecardCopy } from './GaffaTradeScorecard';
 
 /** Legacy chats may still store old comparison objects — render summary as prose. */
 const getLegacyComparisonSummary = (content: unknown): string | null => {
@@ -41,6 +42,9 @@ export const ChatMessage: React.FC<{ message: ChatMessageType }> = ({ message })
         else {
             const legacySummary = getLegacyComparisonSummary(content);
             if (legacySummary) textToCopy = legacySummary;
+        }
+        if (message.gaffaScorecard) {
+            textToCopy = [formatScorecardCopy(message.gaffaScorecard), textToCopy].filter(Boolean).join('\n\n');
         }
         
         navigator.clipboard.writeText(textToCopy);
@@ -83,6 +87,10 @@ export const ChatMessage: React.FC<{ message: ChatMessageType }> = ({ message })
                 <div className="flex items-center justify-between border-b border-cream-300 dark:border-charcoal-border pb-2">
                     <span className="text-[10px] font-sans font-bold text-charcoal/60 dark:text-cream-400 uppercase tracking-widest">Analysis Report</span>
                 </div>
+
+                {message.gaffaScorecard ? (
+                    <GaffaTradeScorecardView card={message.gaffaScorecard} />
+                ) : null}
                 
                 <div className="prose max-w-none text-charcoal dark:text-cream-100 leading-8 text-[16px] font-light font-sans" dangerouslySetInnerHTML={renderContent()} />
 
