@@ -27,16 +27,14 @@ function ScoreTicks({ value }: { value: number }) {
   );
 }
 
-function Factor({
+function ScoreCell({
   label,
   hint,
   value,
-  note,
 }: {
   label: string;
   hint: string;
   value: number;
-  note: string;
 }) {
   return (
     <div className="min-w-0">
@@ -52,11 +50,6 @@ function Factor({
       <p className="mt-1 text-[10px] font-sans uppercase tracking-wide text-charcoal/40 dark:text-cream-400/40">
         {hint}
       </p>
-      {note ? (
-        <p className="mt-1 text-[12px] font-sans font-light leading-snug text-charcoal/70 dark:text-cream-200/70 line-clamp-2">
-          {note}
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -79,6 +72,13 @@ export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = 
 }) => {
   const cash =
     card.incoming_cash_eur_m > 0 ? ` + €${card.incoming_cash_eur_m}m` : '';
+
+  const notes = [
+    { label: 'Replacement', text: card.replacement_note },
+    { label: 'Coverage', text: card.coverage_note },
+    { label: 'Cash', text: card.cash_note },
+    { label: 'Leverage', text: card.leverage_note },
+  ].filter((n) => n.text);
 
   return (
     <div className="border border-cream-300 dark:border-charcoal-border bg-cream-50/60 dark:bg-charcoal-surface/60 px-4 py-3">
@@ -104,31 +104,27 @@ export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = 
       </p>
 
       <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Factor
-          label="Replacement"
-          hint="Higher → take"
-          value={card.replacement}
-          note={card.replacement_note}
-        />
-        <Factor
-          label="Coverage"
-          hint="Higher → take"
-          value={card.coverage}
-          note={card.coverage_note}
-        />
-        <Factor
-          label="Cash"
-          hint="Higher → take"
-          value={card.cash_deployable}
-          note={card.cash_note}
-        />
-        <Factor
-          label="Leverage"
-          hint="Higher → hold"
-          value={card.starter_leverage}
-          note={card.leverage_note}
-        />
+        <ScoreCell label="Replacement" hint="Higher → take" value={card.replacement} />
+        <ScoreCell label="Coverage" hint="Higher → take" value={card.coverage} />
+        <ScoreCell label="Cash" hint="Higher → take" value={card.cash_deployable} />
+        <ScoreCell label="Leverage" hint="Higher → hold" value={card.starter_leverage} />
       </div>
+
+      {notes.length > 0 ? (
+        <ul className="mt-3 space-y-1.5">
+          {notes.map((n) => (
+            <li
+              key={n.label}
+              className="text-[13px] font-sans font-light leading-relaxed text-charcoal/75 dark:text-cream-200/75"
+            >
+              <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-charcoal/45 dark:text-cream-400/45 mr-2">
+                {n.label}
+              </span>
+              {n.text}
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       {card.what_would_flip ? (
         <p className="mt-3 text-[13px] font-sans font-light leading-relaxed text-charcoal/75 dark:text-cream-200/75">

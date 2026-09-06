@@ -2,6 +2,7 @@ import { Type } from '@google/genai';
 import type {
   ChatMessage,
   GaffaContextBag,
+  GaffaRosterPlayer,
   GaffaTradeScorecard,
   GaffaTradeVerdict,
 } from '../types';
@@ -46,8 +47,9 @@ export function deriveTradeVerdict(card: Pick<GaffaTradeScorecardRaw, 'replaceme
   else if (net === 10 || net === 11) verdict = 'lean_take';
   else verdict = 'take';
 
-  // Mixed factors (e.g. quality drop + huge cash) stay uncertain.
-  const spread = Math.max(replacement, coverage, cash) - Math.min(replacement, coverage, cash);
+  // Mixed factors (quality drop vs unused cash vs starter leverage) stay uncertain.
+  const spread =
+    Math.max(replacement, coverage, cash, leverage) - Math.min(replacement, coverage, cash, leverage);
   const confidence: 'low' | 'medium' =
     verdict === 'toss_up' || spread >= 3 || Math.abs(net - 8.5) <= 2 ? 'low' : 'medium';
 
@@ -97,6 +99,27 @@ function looksLikeAssetTrade(message: string): boolean {
   );
 }
 
+function isSlotPlayer(p: GaffaRosterPlayer, slot: string): boolean {
+  return p.primary_position === slot || (p.secondary_positions ?? []).includes(slot);
+}
+
+function slotCoverSummary(bag: GaffaContextBag, slot: string): string {
+  const named = (bag.roster ?? [])
+    .filter((p) => isSlotPlayer(p, slot))
+    .map((p) => `${p.display_name || p.name} [${p.status}]`);
+  const xi = (bag.lineup?.starters ?? []).filter((s) => s.slot === slot).map((s) => s.name);
+  const bench = (bag.lineup?.bench ?? []).map((s) => `${s.name} (${s.slot})`);
+  return `XI ${slot}: ${xi.join(', ') || 'none'}. Roster ${slot}: ${named.join(', ') || 'none listed'}. Bench: ${bench.join(', ') || 'none'}.`;
+}
+
+function clipClause(s: string, maxWords: number): string {
+  const trimmed = (s || '').trim();
+  if (!trimmed) return trimmed;
+  const words = trimmed.split(/\s+/);
+  if (words.length <= maxWords) return trimmed;
+  return `${words.slice(0, maxWords).join(' ').replace(/[.,;:]+$/, '')}.`;
+}
+
 async function buildTradeScorecard(params: {
   message: string;
   factualFoundation: string;
@@ -104,7 +127,11 @@ async function buildTradeScorecard(params: {
   ongoingThread: string;
 }): Promise<GaffaTradeScorecard> {
   const connected = params.bag.connected
-    ? `Connected club: ${params.bag.club_name}. Balance €${params.bag.budget_eur_m}m. Rank ${params.bag.standings?.rank ?? '?'}. XI: ${(params.bag.lineup?.starters ?? []).map((s) => s.name).join(', ') || 'unknown'}.`
+    ? [
+        `Connected club: ${params.bag.club_name}. Balance €${params.bag.budget_eur_m}m. Rank ${params.bag.standings?.rank ?? '?'}.`,
+        `XI: ${(params.bag.lineup?.starters ?? []).map((s) => `${s.name} (${s.slot})`).join(', ') || 'unknown'}.`,
+        slotCoverSummary(params.bag, 'ST'),
+      ].join(' ')
     : 'Not connected — do not invent roster/budget.';
 
   const raw = await generateJsonWithSchema<GaffaTradeScorecardRaw>({
@@ -113,8 +140,10 @@ async function buildTradeScorecard(params: {
 CURRENT CLUB: use foundation + locked roster PL club; never last season's club.
 cash_deployable: score 1 or 2 if the club already has a large balance AND the user named no spend target AND there is no open-window/auction path in the message. Extra cash on a pile is not automatically 4–5.
 replacement: elite clinical #9 vs a high-work lower-ceiling striker is typically 2, not 4.
-coverage: academy/developmental-only ST backup is 1–2, not 4.
-starter_leverage: locked starting ST on a top-table club is 4–5.`,
+coverage: academy/developmental-only ST backup is 1–2, not 4. coverage_note MUST name the actual ST backups from Roster ST (name + status). Never claim there is no other striker if bench/academy names are listed. Never write "no other centre-forward in the starting lineup" — every XI has one starter.
+starter_leverage: locked starting ST on a top-table club is 4–5.
+Notes: one short clause, max 22 words.
+what_would_flip: a realistic new fact that would change THIS call given the locked bag. With a large unused balance, selling the outgoing to fund some other position is NOT a flip — they can already buy that player. Good flips: a named target they cannot afford without this extra cash; outgoing long-term unavailable; incoming clearly matching outgoing quality. Start with "If".`,
     schema: TRADE_SCORE_SCHEMA,
     prompt: `${connected}
 
@@ -126,11 +155,19 @@ ${params.factualFoundation || 'none'}
 
 User: ${params.message}
 
-Score the four factors. Notes must be one sentence each. what_would_flip: the smallest real-world change that would move the call.`,
+Score the four factors.`,
   });
 
   const derived = deriveTradeVerdict(raw);
-  return { ...raw, ...derived };
+  return {
+    ...raw,
+    replacement_note: clipClause(raw.replacement_note, 22),
+    coverage_note: clipClause(raw.coverage_note, 22),
+    cash_note: clipClause(raw.cash_note, 22),
+    leverage_note: clipClause(raw.leverage_note, 22),
+    what_would_flip: clipClause(raw.what_would_flip, 36),
+    ...derived,
+  };
 }
 
 function formatScorecardBlock(card: GaffaTradeScorecard): string {
@@ -143,17 +180,17 @@ Incoming: ${card.incoming} (${card.incoming_club}) + €${card.incoming_cash_eur
 Notes: ${card.replacement_note} | ${card.coverage_note} | ${card.cash_note} | ${card.leverage_note}
 What would flip: ${card.what_would_flip}
 
-The user already sees this scorecard in the UI. Do not re-narrate every factor.
+The user already sees this scorecard in the UI. Do not re-narrate every factor. Do not repeat the would-flip line.
 You MUST match this verdict. You MUST NOT sound more sure than ${card.confidence}.
-If toss_up or lean_*: say it is close.
-SHAPE: (1) one sentence hedged call using the verdict + confidence words (2) one sentence strongest case for the other side (3) two sentences max tying the locked numbers (4) one sentence what would flip.
-HARD CAP 150 words. No First/Second/Finally sermons.
+If toss_up or lean_* or low confidence: say it is close.
+SHAPE: (1) one sentence hedged call using the verdict + confidence words (2) one sentence strongest case for the other side (3) two sentences max tying the locked numbers.
+HARD CAP 110 words. Two short paragraphs. No First/Second/Finally sermons.
 Banned: outstanding, do not pull the trigger, obliterates, without hesitation, the kind of move that wins leagues, sharper move, unmistakable, talismanic, textbook, years trying to acquire, dead capital.
 </locked_scorecard>`;
 }
 
-const TRADE_PROSE_MAX_WORDS = 160;
-const TRADE_PROSE_MAX_PARAS = 4;
+const TRADE_PROSE_MAX_WORDS = 120;
+const TRADE_PROSE_MAX_PARAS = 2;
 
 /** Keep scorecard replies short so prose cannot out-talk the lock. */
 export function capGaffaTradeProse(text: string): string {
@@ -325,7 +362,7 @@ ${message}
 - ${CONTINUITY_REMINDER}
 - Prefer a flowing scout take over checklist labels like "DO IT IF" / "HOLD IF" unless the user asks for a decision framework.
 - Do not lecture on scoring-curve math unless asked how points work.
-- If a locked_scorecard is present: max 150 words. The scorecard is shown to the user — do not write a four-paragraph briefing.
+- If a locked_scorecard is present: max 110 words, two short paragraphs. Do not repeat Would flip — the card has it.
 </reminders>
 </gaffa_turn>`;
 
