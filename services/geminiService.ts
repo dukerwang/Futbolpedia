@@ -5,6 +5,7 @@ import {
   findProfileManagerGroundingIssues,
   type FutbolpediaVerifiedFacts,
 } from './profileManagerGrounding';
+import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
 
 const supabaseUrl = "https://hrocnbcavstmjysptjdk.supabase.co";
 const supabaseKey = "sb_publishable_NKyG9miYqS8JgdpgWuXm9A_tc3vaVCL";
@@ -1106,6 +1107,7 @@ export const sendMessageToAI = async (
 
         // ── Fast mode bypass ────────────────────────────────────────────────────
         if (mode === 'fast' && !imageData) {
+            const ongoingThread = !isFormal ? buildOngoingThreadBlock(history) : '';
             const fastPrompt = isFormal
                 ? `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
     <instructions>
@@ -1116,12 +1118,14 @@ export const sendMessageToAI = async (
     </instructions>
     <task>${message}</task>`
                 : `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+    ${ongoingThread}
     <instructions>
     You are in FAST MODE. Skip deep multi-step research.
     1. Use the googleSearch tool efficiently if you need data you don't have.
     2. ${isCompareQuestion ? 'Write a detailed Markdown scouting comparison covering identity/profile, tactical fit, and relative quality. Cover every player named. Do NOT output JSON or a single-player dossier.' : 'Answer concisely but accurately.'}
     3. Maintain the Futbolpedia identity (Objective, Scout-like).
     4. Never output a JSON player profile on this turn.
+    5. ${CONTINUITY_REMINDER}
     </instructions>
     <task>${message}</task>`;
 
@@ -1456,13 +1460,17 @@ Manager extraction rule: if sources cite a sacked or former manager without conf
     3. DOSSIER CONTINUITY: The conversation history contains the full dossier(s) you previously generated (marked "DOSSIER YOU (Futbolpedia) PREVIOUSLY GENERATED"). Those Overall/Potential ratings, the 25 attributes, strengths, weaknesses and playstyle are YOUR authored analysis and are authoritative. When the user asks a follow-up, ground your answer in those exact numbers — do NOT quote a different Overall or contradict an attribute you already assigned. If you genuinely need to change a value, say so explicitly ("I'd revise his Overall from 84 to 82 because…") rather than silently citing a different figure.
     4. SAVED ARCHIVE: When <saved_dossiers> is present, the user asked to reference profiles from their cross-conversation library — use those exact saved ratings and attributes, do not regenerate them. When <saved_dossier_archive> is present (index only), summarize what dossiers they have on file; if they then name a player, answer from that player's saved data when available.
     5. If the user is questioning, challenging, or disagreeing with a rating you gave earlier, engage their actual argument directly and honestly — defend the rating with specific reasoning, or concede and revise it if they make a fair point. Address their specific claim (e.g. league strength, sample size, minutes played), do not dodge it.
-    6. Protocol J (Explanation Integrity): cite ONLY the real Section III tier scale — never invent tier names — and keep Overall (current) distinct from Potential (future).
-    7. Use the factual foundation / search tool for any current-state fact; never assert current status from memory.
-    8. Be sharp and specific. No filler, no restating the question. Comparisons should be a real briefing (identity, tactical fit, quality) — not a three-sentence blurb.`;
+    6. ${CONTINUITY_REMINDER} If they supply new context (backups, budget, standings, constraints) after an open comparison or recommendation, re-answer that open question with the new context — do not treat the context message as a standalone briefing.
+    7. Protocol J (Explanation Integrity): cite ONLY the real Section III tier scale — never invent tier names — and keep Overall (current) distinct from Potential (future).
+    8. Use the factual foundation / search tool for any current-state fact; never assert current status from memory.
+    9. Be sharp and specific. No filler, no restating the question. Comparisons should be a real briefing (identity, tactical fit, quality) — not a three-sentence blurb.`;
         }
+
+        const ongoingThread = !isFormal ? buildOngoingThreadBlock(history) : '';
 
         const finalAnswerPrompt = `
     <context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+    ${ongoingThread}
     <factual_foundation>
     ${factualFoundation}
     </factual_foundation>
