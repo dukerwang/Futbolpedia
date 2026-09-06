@@ -82,6 +82,24 @@ export interface ChatMessage {
   timestamp?: number;
 }
 
+export type ChatDomain = 'default' | 'gaffa';
+
+/** Locked / live context for Gaffa-mode answers. Phase 1 uses version + connected: false only. */
+export interface GaffaContextBag {
+  gaffa_rules_version: string;
+  /** Phase 1 always false. Phase 2 sets true after a successful league/club link. */
+  connected: boolean;
+  league_id?: string;
+  club_id?: string;
+  settings_overrides?: Record<string, unknown>;
+  roster?: unknown;
+  budget_eur_m?: number;
+  standings?: unknown;
+  matchup?: unknown;
+  open_listings?: unknown;
+  synced_at?: string;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -89,4 +107,6 @@ export interface Conversation {
   createdAt: number;
   activeProfile: PlayerProfile | null;
   allProfiles: PlayerProfile[];
+  /** Chat domain for this conversation. Missing on legacy rows → treat as 'default'. */
+  domain?: ChatDomain;
 }

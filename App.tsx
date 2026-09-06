@@ -5,8 +5,10 @@ import { ChatInput } from './components/ChatInput';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import { WhatsNewPopup } from './components/WhatsNewPopup';
-import type { ChatMessage, PlayerProfile, Conversation } from './types';
+import type { ChatMessage, PlayerProfile, Conversation, ChatDomain } from './types';
 import { sendMessageToAI, resetChat, getCachedDossier, getSharedConversation } from './services/geminiService';
+import { sendGaffaMessage } from './services/gaffaChatService';
+import { looksLikeGaffaQuestion } from './services/gaffaDetect';
 
 const generateId = () => `id-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 const CHAT_HISTORY_KEY = 'futbolpedia-chat-history';
@@ -29,6 +31,10 @@ const App: React.FC = () => {
   const [activeProfile, setActiveProfile] = useState<PlayerProfile | null>(null);
   const [allProfiles, setAllProfiles] = useState<PlayerProfile[]>([]);
   const [globalDossiers, setGlobalDossiers] = useState<PlayerProfile[]>([]);
+
+  // Chat domain (Futbolpedia default vs Gaffa Q&A) — persisted per conversation
+  const [domain, setDomain] = useState<ChatDomain>('default');
+  const [gaffaNudge, setGaffaNudge] = useState<string | null>(null);
 
   // Initialize Theme
   useEffect(() => {
@@ -215,6 +221,7 @@ const App: React.FC = () => {
     setMessages(activeConv.messages);
     setActiveProfile(activeConv.activeProfile);
     setAllProfiles(activeConv.allProfiles);
+    setDomain(activeConv.domain ?? 'default');
 
     // Mark as initialized so synchronization effect can run safely
     isInitializedRef.current = true;
@@ -286,6 +293,8 @@ const App: React.FC = () => {
             setMessages(importedConv.messages);
             setActiveProfile(importedConv.activeProfile);
             setAllProfiles(importedConv.allProfiles);
+            setDomain(importedConv.domain ?? 'default');
+            setGaffaNudge(null);
             // Merge any dossiers from the shared conversation
             if (importedConv.allProfiles?.length > 0) {
               setGlobalDossiers(prev => {
@@ -336,6 +345,7 @@ const App: React.FC = () => {
             messages,
             activeProfile,
             allProfiles,
+            domain,
             title
           };
         }
@@ -345,57 +355,101 @@ const App: React.FC = () => {
       localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
       return updated;
     });
-  }, [messages, activeProfile, allProfiles, activeConversationId]);
+  }, [messages, activeProfile, allProfiles, domain, activeConversationId]);
   
-  const handleSendMessage = useCallback(async (userMessageText: string, imageData?: string, mode: 'default' | 'fast' = 'default') => {
+  const handleDomainChange = useCallback((next: ChatDomain) => {
+    setDomain(next);
+    setGaffaNudge(null);
+    resetChat();
+  }, []);
+
+  const handleSendMessage = useCallback(async (
+    userMessageText: string,
+    imageData?: string,
+    mode: 'default' | 'fast' = 'default',
+    messageDomain: ChatDomain = domain,
+  ) => {
     if (!userMessageText.trim() && !imageData) return;
 
-    // Set Loading State
-    let specificLoadingMessage = 'Consulting archives...';
+    const activeDomain = messageDomain;
     const lowerCaseMessage = userMessageText.toLowerCase();
-    if (mode === 'fast') specificLoadingMessage = 'Quick lookup...';
-    else if (imageData) specificLoadingMessage = 'Analyzing imagery...';
-    else if (/\b(compare|versus)\b|\bvs\.?\b/.test(lowerCaseMessage)) specificLoadingMessage = 'Comparing players...';
-    else if (lowerCaseMessage.includes('rate') || lowerCaseMessage.includes('profile')) specificLoadingMessage = 'Scouting player...';
-    
+
+    // Soft nudge when default domain looks Gaffa-specific — never silently inject Gaffa context.
+    if (activeDomain === 'default' && userMessageText.trim() && looksLikeGaffaQuestion(userMessageText)) {
+      setGaffaNudge('This looks like a Gaffa question — switch to Gaffa mode?');
+    } else if (activeDomain === 'gaffa') {
+      setGaffaNudge(null);
+    }
+
+    let specificLoadingMessage = 'Consulting archives...';
+    if (activeDomain === 'gaffa') {
+      if (/\b(trade|swap|€|\d+\s*m)\b/i.test(userMessageText)) {
+        specificLoadingMessage = 'Weighing the trade...';
+      } else if (/\b(oop|auto-?sub|eligibility|formation|bench|lock|rule)\b/i.test(lowerCaseMessage)) {
+        specificLoadingMessage = 'Checking the rulebook...';
+      } else {
+        specificLoadingMessage = 'Gaffa briefing...';
+      }
+    } else if (mode === 'fast') {
+      specificLoadingMessage = 'Quick lookup...';
+    } else if (imageData) {
+      specificLoadingMessage = 'Analyzing imagery...';
+    } else if (/\b(compare|versus)\b|\bvs\.?\b/.test(lowerCaseMessage)) {
+      specificLoadingMessage = 'Comparing players...';
+    } else if (lowerCaseMessage.includes('rate') || lowerCaseMessage.includes('profile')) {
+      specificLoadingMessage = 'Scouting player...';
+    }
+
     setLoadingMessage(specificLoadingMessage);
     setIsLoading(true);
 
-    // Add User Message
     const newUserMessage: ChatMessage = {
       id: generateId(),
       sender: 'user',
-      content: userMessageText || "Image uploaded",
+      content: userMessageText || 'Image uploaded',
       image: imageData,
       timestamp: Date.now(),
     };
-    
+
     setMessages(prev => [...prev, newUserMessage]);
 
     try {
+      if (activeDomain === 'gaffa') {
+        const prose = await sendGaffaMessage(userMessageText, messages, {
+          speed: mode,
+          imageData,
+        });
+        setMessages(prev => [...prev, {
+          id: generateId(),
+          sender: 'ai',
+          content: prose,
+          timestamp: Date.now(),
+        }]);
+        return;
+      }
+
       const aiResponse = await sendMessageToAI(userMessageText, messages, imageData, mode, allProfiles, globalDossiers);
-      
+
       let newAiMessage: ChatMessage;
 
-      // Logic: If response is a Profile, open dossier but keep chat text clean
       if (typeof aiResponse === 'object' && 'basicInfo' in aiResponse) {
-          const profile = aiResponse as PlayerProfile;
-          saveAndSetActiveProfile(profile);
-          setIsPanelOpen(true); // Auto-open toggle
+        const profile = aiResponse as PlayerProfile;
+        saveAndSetActiveProfile(profile);
+        setIsPanelOpen(true);
 
-          newAiMessage = {
-            id: generateId(),
-            sender: 'ai',
-            content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
-            timestamp: Date.now(),
-          };
+        newAiMessage = {
+          id: generateId(),
+          sender: 'ai',
+          content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
+          timestamp: Date.now(),
+        };
       } else {
-          newAiMessage = {
-            id: generateId(),
-            sender: 'ai',
-            content: aiResponse,
-            timestamp: Date.now(),
-          };
+        newAiMessage = {
+          id: generateId(),
+          sender: 'ai',
+          content: aiResponse,
+          timestamp: Date.now(),
+        };
       }
 
       setMessages(prev => [...prev, newAiMessage]);
@@ -408,9 +462,9 @@ const App: React.FC = () => {
         timestamp: Date.now(),
       }]);
     } finally {
-        setIsLoading(false);
+      setIsLoading(false);
     }
-  }, [messages, allProfiles, globalDossiers]);
+  }, [messages, allProfiles, globalDossiers, domain, saveAndSetActiveProfile]);
 
   const handleSelectProfile = useCallback((profile: PlayerProfile | null) => {
     setActiveProfile(profile);
@@ -482,6 +536,8 @@ const App: React.FC = () => {
     setMessages(target.messages);
     setActiveProfile(target.activeProfile);
     setAllProfiles(target.allProfiles);
+    setDomain(target.domain ?? 'default');
+    setGaffaNudge(null);
   }, [conversations]);
 
   const handleNewConversation = useCallback(() => {
@@ -494,6 +550,7 @@ const App: React.FC = () => {
       createdAt: Date.now(),
       activeProfile: null,
       allProfiles: [],
+      domain: 'default',
     };
 
     setConversations(prev => {
@@ -508,6 +565,8 @@ const App: React.FC = () => {
     setMessages([]);
     setActiveProfile(null);
     setAllProfiles([]);
+    setDomain('default');
+    setGaffaNudge(null);
     setIsPanelOpen(false);
   }, []);
 
@@ -531,6 +590,8 @@ const App: React.FC = () => {
           setMessages(nextActive.messages);
           setActiveProfile(nextActive.activeProfile);
           setAllProfiles(nextActive.allProfiles);
+          setDomain(nextActive.domain ?? 'default');
+          setGaffaNudge(null);
         } else {
           const newId = generateId();
           const newConv: Conversation = {
@@ -540,6 +601,7 @@ const App: React.FC = () => {
             createdAt: Date.now(),
             activeProfile: null,
             allProfiles: [],
+            domain: 'default',
           };
           filtered.push(newConv);
           setActiveConversationId(newId);
@@ -547,6 +609,8 @@ const App: React.FC = () => {
           setMessages([]);
           setActiveProfile(null);
           setAllProfiles([]);
+          setDomain('default');
+          setGaffaNudge(null);
           setIsPanelOpen(false);
         }
       }
@@ -615,10 +679,15 @@ const App: React.FC = () => {
             {/* Input Container - Sticky Bottom */}
             <div className="flex-none px-6 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:pb-8 bg-gradient-to-t from-cream-200 dark:from-charcoal via-cream-200/95 dark:via-charcoal/95 to-transparent z-20">
                 <div className="max-w-[800px] mx-auto w-full">
-                    <ChatInput 
-                        onSendMessage={handleSendMessage} 
-                        isLoading={isLoading} 
-                        loadingMessage={loadingMessage} 
+                    <ChatInput
+                        onSendMessage={handleSendMessage}
+                        isLoading={isLoading}
+                        loadingMessage={loadingMessage}
+                        domain={domain}
+                        onDomainChange={handleDomainChange}
+                        gaffaNudge={gaffaNudge}
+                        onAcceptGaffaNudge={() => handleDomainChange('gaffa')}
+                        onDismissGaffaNudge={() => setGaffaNudge(null)}
                     />
                 </div>
             </div>

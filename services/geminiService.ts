@@ -935,6 +935,55 @@ const sendChatMessage = async (
   }
 };
 
+/** Prose-only chat send — never parses dossier JSON from the reply. Used by Gaffa mode. */
+export const sendProseChatMessage = async (
+  message: string,
+  history: ChatMessage[],
+  options?: {
+    imageData?: string;
+    thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
+    systemInstruction?: string;
+    conversationProfiles?: PlayerProfile[];
+  },
+): Promise<string> => {
+  const result = await sendChatMessage(
+    message,
+    history,
+    FLASH_MODEL,
+    options?.imageData,
+    options?.thinkingLevel ?? 'low',
+    options?.systemInstruction,
+    options?.conversationProfiles ?? [],
+    false,
+  );
+  if (typeof result !== 'string') {
+    throw new Error('Expected a prose reply but received a structured profile.');
+  }
+  return result;
+};
+
+/** Parallel googleSearch grounding for Gaffa player/trade turns. */
+export const gatherSearchFoundation = async (queries: string[]): Promise<string> => {
+  const settled = await Promise.allSettled(
+    queries.map((q) =>
+      getAi().models.generateContent({
+        model: FLASH_MODEL,
+        contents: q,
+        config: { tools: [{ googleSearch: {} }] },
+      }),
+    ),
+  );
+
+  const chunks: string[] = [];
+  settled.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      const text = result.value.text?.trim();
+      if (text) chunks.push(`### Search ${i + 1}\nQuery: ${queries[i]}\n${text}`);
+    }
+  });
+  return chunks.join('\n\n') || 'No grounded search results available for this turn.';
+};
+
 export const sendMessageToAI = async (
     message: string,
     history: ChatMessage[],
