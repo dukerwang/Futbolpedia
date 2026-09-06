@@ -1,7 +1,7 @@
 /** Bump when prompt/schema or pipeline behavior changes materially. */
 export const PIPELINE_VERSION = '0.2.1';
 
-export const FLASH_MODEL = 'gemini-3.7-flash';
+export const FLASH_MODEL = 'gemini-3.8-flash';
 
 /** Align with Futbolpedia master instruction temporal anchor. */
 export const SIMULATION_YEAR = 2026;

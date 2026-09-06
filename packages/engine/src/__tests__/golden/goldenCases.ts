@@ -57,7 +57,7 @@ function outlookText(text: string, tags: string[], confidence: 'high' | 'medium'
       horizons_touched: ['near', 'long'],
       evidence_gaps: [],
       generated_at: `${BASE_DATE}T00:00:00.000Z`,
-      model_id: 'gemini-3.7-flash',
+      model_id: 'gemini-3.8-flash',
       pipeline_version: '0.2.0',
     },
   };

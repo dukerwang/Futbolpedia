@@ -44,7 +44,7 @@ function makeOutlook(text: string, confidence: 'high' | 'medium' | 'low' = 'high
       horizons_touched: ['near', 'long'],
       evidence_gaps: [],
       generated_at: '2026-08-26T00:00:00.000Z',
-      model_id: 'gemini-3.7-flash',
+      model_id: 'gemini-3.8-flash',
       pipeline_version: '0.2.0',
     },
   };

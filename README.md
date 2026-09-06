@@ -16,7 +16,7 @@ Through a highly specialized prompt engineering framework and a custom React int
 
 - **Frontend:** React 19, TypeScript, Vite
 - **Styling:** Tailwind CSS (Dark/Light mode support)
-- **AI & Data Generation:** Google Gemini GenAI SDK (`@google/genai`) using `gemini-3.7-flash` (via `services/geminiService.ts` and `@futbolpedia/engine` for Gaffa outlooks)
+- **AI & Data Generation:** Google Gemini GenAI SDK (`@google/genai`) using `gemini-3.8-flash` (via `services/geminiService.ts` and `@futbolpedia/engine` for Gaffa outlooks)
 - **Database & State Management:** Supabase (for profile sharing and URL persistence), standard React Hooks, `localStorage`
 - **Parsing/Rendering:** DOMPurify, Marked
 
