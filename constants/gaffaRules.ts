@@ -144,6 +144,59 @@ function buildContextBagBlock(bag: GaffaContextBag): string {
     }
   }
 
+  if (bag.settings) {
+    const s = bag.settings;
+    lines.push(
+      `League settings: roster ${s.roster_size} · bench ${s.bench_size} · IR ${s.ir_size}` +
+        (s.taxi_size != null ? ` · academy ${s.taxi_size}` : '') +
+        (s.taxi_age_limit != null ? ` (U${s.taxi_age_limit})` : '') +
+        (s.free_agent_bid_floor != null ? ` · FA floor ${Math.round(s.free_agent_bid_floor * 100)}% MV` : '') +
+        (s.max_loan_outs != null || s.max_loan_ins != null
+          ? ` · loans out/in ${s.max_loan_outs ?? '?'}/${s.max_loan_ins ?? '?'}`
+          : '') +
+        (s.league_status ? ` · status ${s.league_status}` : ''),
+    );
+  }
+
+  const listings = bag.open_listings ?? [];
+  const auctions = bag.open_auctions ?? [];
+  if (listings.length === 0 && auctions.length === 0) {
+    lines.push('Market: no open listings or live auctions.');
+  } else {
+    if (listings.length) {
+      lines.push(`Open listings (${listings.length}):`);
+      for (const l of listings) {
+        const price = [
+          l.min_bid_eur_m != null ? `min €${l.min_bid_eur_m}m` : null,
+          l.ask_eur_m != null ? `ask €${l.ask_eur_m}m` : null,
+          l.release_clause_eur_m != null ? `clause €${l.release_clause_eur_m}m` : null,
+        ]
+          .filter(Boolean)
+          .join(', ');
+        const doors = [
+          l.open_to_sale ? 'sale' : null,
+          l.open_to_trade ? 'trade' : null,
+          l.open_to_loan ? 'loan' : null,
+        ]
+          .filter(Boolean)
+          .join('/');
+        lines.push(
+          `  - ${l.name} ${l.position} from ${l.seller_club_name}${l.yours ? ' (YOURS)' : ''}` +
+            `${price ? ` · ${price}` : ''}${doors ? ` · ${doors}` : ''}`,
+        );
+      }
+    }
+    if (auctions.length) {
+      lines.push(`Live auctions (${auctions.length}):`);
+      for (const a of auctions) {
+        lines.push(
+          `  - ${a.name} ${a.position} · ${a.kind}` +
+            (a.highest_bid_eur_m != null ? ` · high €${a.highest_bid_eur_m}m` : ''),
+        );
+      }
+    }
+  }
+
   return lines.join('\n');
 }
 
@@ -185,7 +238,7 @@ The user already sees the four scores. Do not write a briefing. Hard cap 110 wor
 If there is no scorecard, score these four, then decide — the same facts must not produce opposite sermons:
 1. Replacement quality — Compare outgoing vs incoming as footballers in the SLOT the outgoing occupies in this club's locked XI (if connected). A clear drop in finishing/penalty/talisman quality is a quality downgrade. Do not treat "starting PL striker" as equivalent to an elite #9.
 2. Coverage — Can this specific roster absorb 4–8 weeks without the outgoing? Thin ST/bench (academy/IR/developmental) makes KEEPING the better starter more valuable. Incoming-as-injury-hedge only wins if the outgoing is currently unavailable, not merely "gets knocks."
-3. Cash path — Extra Club Balance counts only if BOTH are true: (a) the locked roster has identifiable holes the cash could fill, AND (b) there is a realistic near-term way to spend it (open auctions, a named manager-to-manager target, or an open transfer window). Surplus cash on an already-large balance, with no named spend and a closed window, is NOT a reason to sell a difference-maker. Never argue both "€310m war chest wins leagues" and "extra cash is a dead asset" from the same bag — apply (a) and (b) once.
+3. Cash path — Extra Club Balance counts only if BOTH are true: (a) the locked roster has identifiable holes the cash could fill, AND (b) there is a realistic near-term way to spend it (open auctions/listings in the locked bag, a named manager-to-manager target, or an open transfer window). If the bag has live auctions or OTHER clubs' listings this team could bid on, (b) is true. Listings marked YOURS are you selling, not a spend path. Surplus cash on an already-large balance, with no named spend and no market path, is NOT a reason to sell a difference-maker. Never argue both "€310m war chest wins leagues" and "extra cash is a dead asset" from the same bag — apply (a) and (b) once.
 4. Competitive window — If connected standings show contention AND the outgoing is a locked starter in a strong XI, default KEEP unless 1–3 clearly overturn it.
 
 When 1 and 2 say keep, and 3 has no named spend path: HOLD. Say what would change the call (a hole + a real buyer/auction, or outgoing unavailable).

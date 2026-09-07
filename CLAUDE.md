@@ -41,7 +41,7 @@ The core complexity lives here. There are two chat modes:
 ### Gaffa mode (`services/gaffaChatService.ts`)
 Separate chat domain from dossier synthesis. When the ChatInput **Gaffa** toggle is on, `App` routes to `sendGaffaMessage` — prose only, never `responseSchema` dossiers. Rules come from curated `constants/gaffaRules.ts` (`GAFFA_RULES_SNAPSHOT`, versioned). Soft auto-detect in `services/gaffaDetect.ts` nudges switching mode when default chat looks Gaffa-specific; it does not silently inject Gaffa context.
 
-**Phase 2 club connect:** paste league + club IDs in the Gaffa connect strip → Express `GET /api/gaffa/context` proxies to Gaffa `GET /api/integrations/futbolpedia/context` with server-only `FUTBOLPEDIA_READ_SECRET` + `GAFFA_BASE_URL`. Live bag fills `GaffaContextBag` for locked roster/budget/standings/matchup/XI. Spec: `docs/superpowers/specs/2026-09-06-gaffa-league-connect-design.md`.
+**Phase 2 club connect:** paste league + club IDs in the Gaffa connect strip, or open `#/gaffa/<leagueId>/<clubId>` (Gaffa club page **Ask Futbolpedia**). Express `GET /api/gaffa/context` proxies to Gaffa `GET /api/integrations/futbolpedia/context` with server-only `FUTBOLPEDIA_READ_SECRET` + `GAFFA_BASE_URL`. Live bag fills `GaffaContextBag` for roster/budget/standings/matchup/XI plus listings, live auctions, and league settings.
 
 **Critical quirks:**
 - `ThinkingLevel` + `responseSchema` conflict on Gemini Flash — the synthesis step deliberately omits `thinkingConfig` to prevent malformed JSON output. Use `MINIMAL` thinking in any fallback path that parses JSON.

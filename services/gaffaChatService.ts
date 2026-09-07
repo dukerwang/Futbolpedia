@@ -120,6 +120,25 @@ function clipClause(s: string, maxWords: number): string {
   return `${words.slice(0, maxWords).join(' ').replace(/[.,;:]+$/, '')}.`;
 }
 
+function marketSpendSummary(bag: GaffaContextBag): string {
+  const listings = bag.open_listings ?? [];
+  const auctions = bag.open_auctions ?? [];
+  const others = listings.filter((l) => !l.yours);
+  if (others.length === 0 && auctions.length === 0) {
+    return 'Market: no bid-able listings or live auctions.';
+  }
+  const listingBits = others
+    .slice(0, 8)
+    .map((l) => {
+      const floor = l.min_bid_eur_m ?? l.ask_eur_m ?? l.release_clause_eur_m;
+      return `${l.name} (${l.position}, ${l.seller_club_name}${floor != null ? `, €${floor}m` : ''})`;
+    });
+  const auctionBits = auctions
+    .slice(0, 8)
+    .map((a) => `${a.name} (${a.position}${a.highest_bid_eur_m != null ? `, high €${a.highest_bid_eur_m}m` : ''})`);
+  return `Bid-able listings: ${listingBits.join('; ') || 'none'}. Live auctions: ${auctionBits.join('; ') || 'none'}.`;
+}
+
 async function buildTradeScorecard(params: {
   message: string;
   factualFoundation: string;
@@ -131,6 +150,7 @@ async function buildTradeScorecard(params: {
         `Connected club: ${params.bag.club_name}. Balance €${params.bag.budget_eur_m}m. Rank ${params.bag.standings?.rank ?? '?'}.`,
         `XI: ${(params.bag.lineup?.starters ?? []).map((s) => `${s.name} (${s.slot})`).join(', ') || 'unknown'}.`,
         slotCoverSummary(params.bag, 'ST'),
+        marketSpendSummary(params.bag),
       ].join(' ')
     : 'Not connected — do not invent roster/budget.';
 
@@ -138,7 +158,7 @@ async function buildTradeScorecard(params: {
     temperature: 0.15,
     systemInstruction: `You score Gaffa dynasty trades. Integers 1-5 only. Do not pick a final verdict.
 CURRENT CLUB: use foundation + locked roster PL club; never last season's club.
-cash_deployable: score 1 or 2 if the club already has a large balance AND the user named no spend target AND there is no open-window/auction path in the message. Extra cash on a pile is not automatically 4–5.
+cash_deployable: score 1 or 2 if the club already has a large balance AND the user named no spend target AND there is no bid-able listing or live auction in the locked market. If OTHER clubs have listings or there are live auctions, (b) spend path exists — typically 3, not 1. Extra cash on a pile is not automatically 4–5. Listings marked YOURS are not a spend path.
 replacement: elite clinical #9 vs a high-work lower-ceiling striker is typically 2, not 4.
 coverage: academy/developmental-only ST backup is 1–2, not 4. coverage_note MUST name the actual ST backups from Roster ST (name + status). Never claim there is no other striker if bench/academy names are listed. Never write "no other centre-forward in the starting lineup" — every XI has one starter.
 starter_leverage: locked starting ST on a top-table club is 4–5.

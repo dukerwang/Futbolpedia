@@ -14,6 +14,7 @@ import {
   fetchGaffaContext,
   loadGaffaLink,
   mapResponseToBag,
+  parseGaffaConnectHash,
   resolveContextBagForSend,
   saveGaffaLink,
   type GaffaLinkState,
@@ -331,6 +332,56 @@ const App: React.FC = () => {
         } catch (err) {
           console.error("Shared conversation fetch failed:", err);
         } finally {
+          setIsLoading(false);
+        }
+      } else if (hash.startsWith('#/gaffa/')) {
+        const ids = parseGaffaConnectHash(hash);
+        window.history.replaceState({}, '', window.location.pathname);
+        if (!ids) return;
+        const newId = generateId();
+        const newConv: Conversation = {
+          id: newId,
+          title: 'Gaffa club',
+          messages: [],
+          createdAt: Date.now(),
+          activeProfile: null,
+          allProfiles: [],
+          domain: 'gaffa',
+        };
+        setConversations((prev) => {
+          const updated = [newConv, ...prev];
+          localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
+          return updated;
+        });
+        setActiveConversationId(newId);
+        localStorage.setItem('futbolpedia-active-conversation-id', newId);
+        setMessages([]);
+        setActiveProfile(null);
+        setAllProfiles([]);
+        setDomain('gaffa');
+        setGaffaNudge(null);
+        setIsLoading(true);
+        setGaffaSyncing(true);
+        setGaffaSyncError(null);
+        try {
+          const res = await fetchGaffaContext(ids.leagueId, ids.clubId);
+          const bag = mapResponseToBag(res);
+          const next: GaffaLinkState = {
+            league_id: bag.league_id!,
+            club_id: bag.club_id!,
+            league_name: bag.league_name,
+            club_name: bag.club_name,
+            last_synced_at: bag.synced_at,
+            bag,
+          };
+          saveGaffaLink(next);
+          setGaffaLink(next);
+        } catch (err) {
+          console.error('Gaffa connect from hash failed:', err);
+          setGaffaSyncError(err instanceof Error ? err.message : 'Sync failed');
+          setGaffaLink({ league_id: ids.leagueId, club_id: ids.clubId });
+        } finally {
+          setGaffaSyncing(false);
           setIsLoading(false);
         }
       }

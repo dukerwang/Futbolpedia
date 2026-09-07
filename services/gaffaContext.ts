@@ -49,6 +49,9 @@ export function mapResponseToBag(res: GaffaClubContextResponse): GaffaContextBag
     standings: res.standings,
     matchup: res.matchup,
     lineup: res.lineup,
+    settings: res.settings,
+    open_listings: res.open_listings ?? [],
+    open_auctions: res.open_auctions ?? [],
     synced_at: res.synced_at,
   };
 }
@@ -114,4 +117,19 @@ export async function resolveContextBagForSend(
     }
     return emptyGaffaContextBag();
   }
+}
+
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Parse `#/gaffa/<leagueId>/<clubId>` from Futbolpedia's hash router. */
+export function parseGaffaConnectHash(
+  hash: string,
+): { leagueId: string; clubId: string } | null {
+  const m = hash.match(/^#\/gaffa\/([^/]+)\/([^/?#]+)/i);
+  if (!m) return null;
+  const leagueId = m[1].trim();
+  const clubId = m[2].trim();
+  if (!UUID.test(leagueId) || !UUID.test(clubId)) return null;
+  return { leagueId, clubId };
 }

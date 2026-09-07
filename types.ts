@@ -151,6 +151,47 @@ export interface GaffaLineup {
   bench: GaffaLineupSlot[];
 }
 
+export interface GaffaLeagueSettings {
+  roster_size: number;
+  bench_size: number;
+  ir_size: number;
+  taxi_size: number | null;
+  taxi_age_limit: number | null;
+  max_teams: number;
+  is_dynasty: boolean;
+  starting_faab_eur_m: number | null;
+  free_agent_bid_floor: number | null;
+  max_loan_outs: number | null;
+  max_loan_ins: number | null;
+  league_status: string | null;
+}
+
+export interface GaffaOpenListing {
+  player_id: string;
+  name: string;
+  position: string;
+  seller_club_id: string;
+  seller_club_name: string;
+  yours: boolean;
+  status: string;
+  min_bid_eur_m: number | null;
+  ask_eur_m: number | null;
+  release_clause_eur_m: number | null;
+  open_to_trade: boolean;
+  open_to_sale: boolean;
+  open_to_loan: boolean;
+  expires_at: string | null;
+}
+
+export interface GaffaOpenAuction {
+  player_id: string;
+  name: string;
+  position: string;
+  kind: string;
+  highest_bid_eur_m: number | null;
+  expires_at: string | null;
+}
+
 /** Locked / live context for Gaffa-mode answers. */
 export interface GaffaContextBag {
   gaffa_rules_version: string;
@@ -162,12 +203,14 @@ export interface GaffaContextBag {
   league_name?: string;
   club_name?: string;
   settings_overrides?: Record<string, unknown>;
+  settings?: GaffaLeagueSettings;
   roster?: GaffaRosterPlayer[];
   budget_eur_m?: number;
   standings?: GaffaStandings;
   matchup?: GaffaMatchup | null;
   lineup?: GaffaLineup | null;
-  open_listings?: unknown;
+  open_listings?: GaffaOpenListing[];
+  open_auctions?: GaffaOpenAuction[];
   synced_at?: string;
 }
 
@@ -182,6 +225,9 @@ export interface GaffaClubContextResponse {
   standings: GaffaStandings;
   matchup: GaffaMatchup | null;
   lineup: GaffaLineup | null;
+  settings?: GaffaLeagueSettings;
+  open_listings?: GaffaOpenListing[];
+  open_auctions?: GaffaOpenAuction[];
   synced_at: string;
 }
 
