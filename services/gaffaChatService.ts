@@ -112,6 +112,51 @@ function slotCoverSummary(bag: GaffaContextBag, slot: string): string {
   return `XI ${slot}: ${xi.join(', ') || 'none'}. Roster ${slot}: ${named.join(', ') || 'none listed'}. Bench: ${bench.join(', ') || 'none'}.`;
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Stop the model swapping in lookalike names or PL teammates
+ * (Mahamadou Sangaré, Bergvall/Fernandes).
+ */
+export function lockGaffaRosterNames(prose: string, bag: GaffaContextBag): string {
+  if (!bag.connected || !bag.roster?.length) return prose;
+
+  const lastNames = new Set<string>();
+  const byLast: { last: string; full: string; first: string }[] = [];
+  for (const p of bag.roster) {
+    const full = (p.name || '').trim();
+    if (!full) continue;
+    const parts = full.split(/\s+/);
+    const last = parts[parts.length - 1];
+    const first = parts.slice(0, -1).join(' ');
+    lastNames.add(last.toLowerCase());
+    if (first) byLast.push({ last, full, first });
+  }
+
+  let out = prose;
+  out = out.replace(
+    /(?<!\p{L})(\p{Lu}\p{L}*(?:['.-]\p{L}+)*)\/(\p{Lu}\p{L}*(?:['.-]\p{L}+)*)(?!\p{L})/gu,
+    (all, a: string, b: string) => {
+      const aOk = lastNames.has(a.toLowerCase());
+      const bOk = lastNames.has(b.toLowerCase());
+      if (aOk && !bOk) return a;
+      if (bOk && !aOk) return b;
+      return all;
+    },
+  );
+
+  for (const { last, full, first } of byLast) {
+    const re = new RegExp(
+      `(?<!\\p{L})(?!${escapeRegExp(first)}(?!\\p{L}))\\p{Lu}[\\p{L}'-]+\\s+${escapeRegExp(last)}(?!\\p{L})`,
+      'gu',
+    );
+    out = out.replace(re, full);
+  }
+  return out;
+}
+
 function clipClause(s: string, maxWords: number): string {
   const trimmed = (s || '').trim();
   if (!trimmed) return trimmed;
@@ -318,7 +363,15 @@ export async function sendGaffaMessage(
     (kind === 'strategy' &&
       /\b(player|squad|minutes|form|injury|transfer|striker|backup)\b/i.test(message));
 
-  if (shouldResearch) {
+  const ownSquadShape =
+    bag.connected &&
+    kind !== 'player_trade' &&
+    !looksLikeAssetTrade(message) &&
+    /\b(i|i'm|im|we|our|my|this club|squad|roster|depth|strongest|weakest|position group)\b/i.test(
+      message,
+    );
+
+  if (shouldResearch && !ownSquadShape) {
     try {
       const priorUser = [...history]
         .reverse()
@@ -369,13 +422,14 @@ ${scorecardBlock ? `${scorecardBlock}\n` : ''}
 ${message}
 </task>
 <reminders>
-- Prose Markdown only. No dossier JSON. Never print the scorecard XML.
+- Prose Markdown: **bold** and paragraphs. No # headings. Never print the scorecard XML.
 - Prefer the rules snapshot for mechanics questions.
 - If not connected to a club, do not invent roster/standings/prices; caveat unknown club context on trade takes.
 - Never use fantasy points as proof of football quality.
 - If a locked_scorecard is present: match its verdict and confidence. Do not out-confident it. Close calls stay close.
 - Surplus cash without a named near-term spend is not a reason to sell a locked starter.
 - Confirm each named player's CURRENT club from the foundation or locked roster before describing their role. Do not default to last season's club.
+- When connected: name only locked-roster Full names, exact spelling. No slash-compounds with players who are not on the list. PL club tags are not a license to name real-life teammates.
 - Never write [Search 1], [Search 2], or similar citations.
 - Once you have a verdict in this thread, do not reverse it without naming a new material fact.
 - A user fact-correction updates the fact; it does not automatically strengthen your prior take.
@@ -393,7 +447,7 @@ ${message}
     systemInstruction,
     conversationProfiles: [],
   });
-  const cleaned = sanitizeGaffaProse(prose);
+  const cleaned = lockGaffaRosterNames(sanitizeGaffaProse(prose), bag);
   return {
     prose: scorecard ? capGaffaTradeProse(cleaned) : cleaned,
     scorecard,
