@@ -122,6 +122,8 @@ export async function resolveContextBagForSend(
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export const GAFFA_PENDING_CONNECT_KEY = 'futbolpedia-gaffa-pending-connect';
+
 /** Parse `#/gaffa/<leagueId>/<clubId>` from Futbolpedia's hash router. */
 export function parseGaffaConnectHash(
   hash: string,
@@ -132,4 +134,47 @@ export function parseGaffaConnectHash(
   const clubId = m[2].trim();
   if (!UUID.test(leagueId) || !UUID.test(clubId)) return null;
   return { leagueId, clubId };
+}
+
+/**
+ * Ask Futbolpedia lands on `#/gaffa/...`. React Strict Mode remounts and the
+ * first effect used to `replaceState` the hash away, so the remount opened
+ * default chat. Stash ids in sessionStorage and read them back if the hash
+ * is already gone. Do not clear the hash here.
+ */
+export function consumeGaffaConnectIds(): { leagueId: string; clubId: string } | null {
+  if (typeof window === 'undefined') return null;
+  const fromHash = parseGaffaConnectHash(window.location.hash);
+  if (fromHash) {
+    try {
+      sessionStorage.setItem(GAFFA_PENDING_CONNECT_KEY, JSON.stringify(fromHash));
+    } catch {
+      /* private mode / quota */
+    }
+    return fromHash;
+  }
+  try {
+    const raw = sessionStorage.getItem(GAFFA_PENDING_CONNECT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { leagueId?: string; clubId?: string };
+    if (
+      typeof parsed?.leagueId === 'string' &&
+      typeof parsed?.clubId === 'string' &&
+      UUID.test(parsed.leagueId) &&
+      UUID.test(parsed.clubId)
+    ) {
+      return { leagueId: parsed.leagueId, clubId: parsed.clubId };
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export function clearGaffaConnectPending(): void {
+  try {
+    sessionStorage.removeItem(GAFFA_PENDING_CONNECT_KEY);
+  } catch {
+    /* ignore */
+  }
 }

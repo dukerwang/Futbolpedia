@@ -10,11 +10,12 @@ import { sendMessageToAI, resetChat, getCachedDossier, getSharedConversation } f
 import { sendGaffaMessage } from './services/gaffaChatService';
 import { looksLikeGaffaQuestion } from './services/gaffaDetect';
 import {
+  clearGaffaConnectPending,
   clearGaffaLink,
+  consumeGaffaConnectIds,
   fetchGaffaContext,
   loadGaffaLink,
   mapResponseToBag,
-  parseGaffaConnectHash,
   resolveContextBagForSend,
   saveGaffaLink,
   type GaffaLinkState,
@@ -22,6 +23,35 @@ import {
 import { GaffaConnectStrip } from './components/GaffaConnectStrip';
 
 const generateId = () => `id-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+/** Survives Strict Mode remount so Ask Futbolpedia does not open two chats. */
+let gaffaHashConnect:
+  | { key: string; convId: string; promise: Promise<GaffaLinkState> }
+  | null = null;
+
+function startGaffaHashConnect(ids: { leagueId: string; clubId: string }): {
+  convId: string;
+  promise: Promise<GaffaLinkState>;
+} {
+  const key = `${ids.leagueId}/${ids.clubId}`;
+  if (gaffaHashConnect?.key === key) return gaffaHashConnect;
+  const convId = generateId();
+  const promise = fetchGaffaContext(ids.leagueId, ids.clubId).then((res) => {
+    const bag = mapResponseToBag(res);
+    const next: GaffaLinkState = {
+      league_id: bag.league_id!,
+      club_id: bag.club_id!,
+      league_name: bag.league_name,
+      club_name: bag.club_name,
+      last_synced_at: bag.synced_at,
+      bag,
+    };
+    saveGaffaLink(next);
+    return next;
+  });
+  gaffaHashConnect = { key, convId, promise };
+  return gaffaHashConnect;
+}
 const CHAT_HISTORY_KEY = 'futbolpedia-chat-history';
 const ACTIVE_PROFILE_KEY = 'futbolpedia-active-profile';
 
@@ -121,6 +151,7 @@ const App: React.FC = () => {
 
   // Load Conversations & Profiles (with Migration)
   useEffect(() => {
+    const gaffaIds = consumeGaffaConnectIds();
     let savedConvs: Conversation[] = [];
     try {
       const stored = localStorage.getItem('futbolpedia-conversations');
@@ -235,12 +266,21 @@ const App: React.FC = () => {
     setActiveConversationId(activeId);
     localStorage.setItem('futbolpedia-active-conversation-id', activeId);
 
-    // Load active conversation's data into individual states
+    // Load active conversation's data into individual states.
+    // A Gaffa hash must win over the last briefing, or Ask Futbolpedia
+    // looks like a normal Futbolpedia tab.
     const activeConv = savedConvs.find(c => c.id === activeId) || savedConvs[0];
-    setMessages(activeConv.messages);
-    setActiveProfile(activeConv.activeProfile);
-    setAllProfiles(activeConv.allProfiles);
-    setDomain(activeConv.domain ?? 'default');
+    if (gaffaIds) {
+      setMessages([]);
+      setActiveProfile(null);
+      setAllProfiles([]);
+      setDomain('gaffa');
+    } else {
+      setMessages(activeConv.messages);
+      setActiveProfile(activeConv.activeProfile);
+      setAllProfiles(activeConv.allProfiles);
+      setDomain(activeConv.domain ?? 'default');
+    }
 
     // Mark as initialized so synchronization effect can run safely
     isInitializedRef.current = true;
@@ -334,13 +374,10 @@ const App: React.FC = () => {
         } finally {
           setIsLoading(false);
         }
-      } else if (hash.startsWith('#/gaffa/')) {
-        const ids = parseGaffaConnectHash(hash);
-        window.history.replaceState({}, '', window.location.pathname);
-        if (!ids) return;
-        const newId = generateId();
+      } else if (gaffaIds) {
+        const { convId, promise } = startGaffaHashConnect(gaffaIds);
         const newConv: Conversation = {
-          id: newId,
+          id: convId,
           title: 'Gaffa club',
           messages: [],
           createdAt: Date.now(),
@@ -349,12 +386,13 @@ const App: React.FC = () => {
           domain: 'gaffa',
         };
         setConversations((prev) => {
+          if (prev.some((c) => c.id === convId)) return prev;
           const updated = [newConv, ...prev];
           localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
           return updated;
         });
-        setActiveConversationId(newId);
-        localStorage.setItem('futbolpedia-active-conversation-id', newId);
+        setActiveConversationId(convId);
+        localStorage.setItem('futbolpedia-active-conversation-id', convId);
         setMessages([]);
         setActiveProfile(null);
         setAllProfiles([]);
@@ -364,25 +402,17 @@ const App: React.FC = () => {
         setGaffaSyncing(true);
         setGaffaSyncError(null);
         try {
-          const res = await fetchGaffaContext(ids.leagueId, ids.clubId);
-          const bag = mapResponseToBag(res);
-          const next: GaffaLinkState = {
-            league_id: bag.league_id!,
-            club_id: bag.club_id!,
-            league_name: bag.league_name,
-            club_name: bag.club_name,
-            last_synced_at: bag.synced_at,
-            bag,
-          };
-          saveGaffaLink(next);
+          const next = await promise;
           setGaffaLink(next);
         } catch (err) {
           console.error('Gaffa connect from hash failed:', err);
           setGaffaSyncError(err instanceof Error ? err.message : 'Sync failed');
-          setGaffaLink({ league_id: ids.leagueId, club_id: ids.clubId });
+          setGaffaLink({ league_id: gaffaIds.leagueId, club_id: gaffaIds.clubId });
         } finally {
           setGaffaSyncing(false);
           setIsLoading(false);
+          clearGaffaConnectPending();
+          window.history.replaceState({}, '', window.location.pathname);
         }
       }
     };
