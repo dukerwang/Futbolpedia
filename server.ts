@@ -57,6 +57,34 @@ async function startServer() {
     }
   });
 
+  // In-app Gaffa chat: Gaffa (session-auth) proxies here with the read secret.
+  // Runs Gaffa mode only — prose (+ optional trade lock), never a dossier card.
+  app.post("/api/gaffa/chat", async (req, res) => {
+    const { authorizeGaffaReadSecret, runGaffaChatTurn } = await import("./services/gaffaChatApi");
+    if (!authorizeGaffaReadSecret(req.headers["x-futbolpedia-secret"])) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const body = req.body ?? {};
+    try {
+      const result = await runGaffaChatTurn({
+        message: body.message,
+        history: Array.isArray(body.history) ? body.history : [],
+        leagueId: body.leagueId ?? body.league_id,
+        clubId: body.clubId ?? body.club_id ?? body.teamId,
+        speed: body.speed === "fast" ? "fast" : "default",
+      });
+      return res.json(result);
+    } catch (err: any) {
+      const status = Number(err?.status);
+      if (status >= 400 && status < 600) {
+        return res.status(status).json({ error: err.message || "Chat failed" });
+      }
+      console.error("[gaffa/chat]", err?.message || err);
+      return res.status(502).json({ error: "Gaffa chat failed" });
+    }
+  });
+
   const API_KEY = process.env.API_FOOTBALL_KEY;
   const API_URL = "https://v3.football.api-sports.io";
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
