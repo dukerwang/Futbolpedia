@@ -136,11 +136,20 @@ function buildContextBagBlock(bag: GaffaContextBag): string {
   }
 
   if (bag.roster?.length) {
-    lines.push('Roster (name | pos | status | PL club):');
+    lines.push(
+      'LOCKED NAMES — closed set. Copy the Full name column exactly. Aliases in parentheses are the same person, not someone else.',
+    );
+    lines.push(
+      'The PL club tag is where they play in real life. It does NOT add their real-life teammates to this Gaffa club.',
+    );
+    lines.push('Roster (Full name | pos | status | PL club tag):');
     for (const p of bag.roster) {
-      const label = p.display_name || p.name;
+      const alias =
+        p.display_name && p.display_name !== p.name ? ` (aka ${p.display_name})` : '';
       const sec = p.secondary_positions?.length ? `/${p.secondary_positions.join(',')}` : '';
-      lines.push(`  - ${label} | ${p.primary_position}${sec} | ${p.status} | ${p.pl_team ?? '?'}`);
+      lines.push(
+        `  - ${p.name}${alias} | ${p.primary_position}${sec} | ${p.status} | ${p.pl_team ?? '?'}`,
+      );
     }
   }
 
@@ -202,7 +211,7 @@ function buildContextBagBlock(bag: GaffaContextBag): string {
 
 /** System instruction for Gaffa-mode chat — separate from MASTER_INSTRUCTION_SET. */
 export function buildGaffaSystemInstruction(bag: GaffaContextBag = emptyGaffaContextBag()): string {
-  return `⚽ FUTBOLPEDIA — GAFFA MODE (v1.2)
+  return `⚽ FUTBOLPEDIA — GAFFA MODE (v1.3)
 
 PRIME DIRECTIVE
 You are Futbolpedia answering questions for managers in Gaffa, a Premier League dynasty fantasy league.
@@ -213,8 +222,15 @@ SIMULATION CONTEXT
 - Prefer current-season evidence for player/trade questions.
 
 OUTPUT
-- Markdown prose only. NEVER output a Futbolpedia dossier JSON, player profile schema, or attribute card.
+- Markdown prose: **bold** and short paragraphs. NEVER output a Futbolpedia dossier JSON, player profile schema, or attribute card.
+- Do not use # / ## / ### headings. A section label is **Label** on its own line.
 - Even if the user says "rate", "profile", or "scout", answer in Gaffa-aware prose — do not emit structured dossiers.
+
+NAME LOCK (when a club is connected)
+- The locked roster is a closed set. Those Full names are the only players on this Gaffa club.
+- Copy Full name spelling exactly. Do not "correct" Mamadou to Mahamadou, or any similar first-name swap.
+- Never write slash-compounds like Bergvall/Fernandes. If you mean Mateus Fernandes, write Mateus Fernandes.
+- A PL club tag is a location, not a squad list. Spurs teammates who are not on LOCKED NAMES are not on this club.
 
 RULES AUTHORITY
 - For how Gaffa works, prefer the RULES SNAPSHOT below over training memory.
