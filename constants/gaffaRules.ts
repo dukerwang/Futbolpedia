@@ -2,7 +2,7 @@ import type { GaffaContextBag } from '../types';
 import { SIMULATION_YEAR, SIMULATION_SEASON } from '../constants';
 
 /** Bump when the snapshot is refreshed from Gaffa's USER_GUIDE. */
-export const GAFFA_RULES_VERSION = '2026-09-06';
+export const GAFFA_RULES_VERSION = '2026-09-15';
 
 /**
  * Curated rules brief for Gaffa Q&A — distilled from Fantasy Futbol/docs/USER_GUIDE.md.
@@ -25,14 +25,32 @@ POSITIONS & FORMATIONS
 LOCKS
 - Formation locks when the first match involving ANY of your squad kicks off.
 - An individual player locks only when HIS club kicks off.
-- After this gameweek's last dated kickoff, next week's lineup and academy moves unlock; this week's scores stay until settlement.
+- After this gameweek's last dated kickoff, next week's lineup, academy moves, and IR moves unlock. Exception: a player in this week's lineup (starting or bench) can't move on or off IR until the week settles, because that would change points already scored. This week's scores stay until settlement.
 
 SQUAD STATUS
 - Active/Bench count toward roster (commonly 22).
-- IR (Injured Reserve): parking for injured players; common cap 2; does not count toward active roster. Cannot place an auction bid while a healthy player sits on IR.
-- Academy: U21 prospect stash (commonly 3 slots); not counted in active roster.
-- Loaned out / loaned in.
-- Full common capacity roughly 22 + 3 Academy + 2 IR.
+- IR (Injured Reserve): parking for injured players; common cap 2 (3 for a club that bought the Club Facilities upgrade); does not count toward active roster. Cannot place an auction bid while a healthy player sits on IR.
+- Academy: U21 prospect stash (commonly 3 slots, up to 5 with Club Facilities upgrades); not counted in active roster.
+- Loaned out / loaned in. A player loaned out still counts toward the LENDER's squad, not the borrower's.
+- Held: a player who arrived when the squad was full (loan expiry, retained player returning to the PL, an auction won when no bidder with room bid). Still owned, off the squad, not counted. See HELD PLAYERS.
+- On Loan Abroad: a player who left the PL on loan. Uses no squad place and no retained slot, gets no compensation, rejoins automatically on return. See FINANCE / ACADEMY / DEPARTURES.
+- Full common capacity roughly 22 + 3 Academy + 2 IR (more for clubs with facility upgrades).
+- The connected context bag carries THIS club's own IR / academy / loans-out caps, upgrades included. Prefer them over the defaults here.
+
+HELD PLAYERS
+- A held player is never auto-dropped and never pushes the squad over the limit.
+- The manager activates him (to reserves, or academy/IR if eligible) once there's room. Activation is closed mid-gameweek (first kickoff to last kickoff).
+- While any player is held, the squad can't grow: no bids, no borrowing, no loan recalls, no promotion from academy or IR, no trade that brings in more players than it sends out. A held player going out in a trade frees no place. Drops, sales, one-for-one trades, moves to IR/academy, and loaning others out still work.
+- Live bids are withdrawn the moment a player is held.
+- If still held at the next gameweek's first kickoff, the lineup locks until resolved. The last saved lineup is used each week, with only unavailable players' slots filled.
+- Dropping a held player costs normal severance and sends him to auction. He can be sold or traded, not loaned out.
+
+CLUB FACILITIES
+- One-time, permanent upgrades bought with Club Balance, per club. No upkeep, never sold back, carried every season. Visible to other managers. The money is destroyed, not paid to anyone.
+- Academy: 3 → 4 slots for €60m, 4 → 5 for €90m (needs slot 4 first).
+- Injured Reserve: 2 → 3 slots for €60m.
+- Loans Out: 1 → 2 for €30m. The loan-in cap never changes.
+- Active roster size can't be bought.
 
 SCORING (PHILOSOPHY — not math dump)
 - Each appearance → displayed rating roughly 1.0–10.0 (average PL starter ~6.5), built from match impact, creativity/threat, defensive work, clean sheets / goals conceded context, goals/assists, saves (GK), with a flex boost on the player's best role-relevant component.
@@ -60,11 +78,16 @@ CUPS
 MARKET, TRADES, LOANS (CONCEPTUAL)
 - One open auction board for free agents and listed players; bids from Club Balance (common start ~250; never resets between seasons).
 - Open bidding (see highest bid / bidder). Must beat current high. Roster-full bids nominate a drop (severance ~20% market value, min €2m).
-- Free-agent floor commonly 50% of market value. New PL arrivals blocked until Transfermarkt-priced.
+- Free-agent floor commonly 60% of market value, rounded down (a €2m player still opens at €1m). New PL arrivals blocked until Transfermarkt-priced.
+- Settlement: when an auction ends, the highest bidder WITH ROOM wins at their own bid. Only if no bidder has room does the highest bidder win, and the player is held. A holding club can't bid.
 - Listing a rostered player: minimum bid (≥60% MV), release clause, and/or asking price.
-- 20% of winning free-agent fees return to the league (Scout fee + solidarity); remainder retired.
+- 20% of every winning free-agent bid returns to the league; the other 80% is retired.
+  - Scout's Fee: 10% of the winning bid, uncapped, to the manager who nominated the player into the auction, WHETHER THEY WIN OR LOSE. If the scout wins, it's a rebate on their own bid.
+  - Solidarity: the other 10%, split equally among clubs that didn't win.
+  - System-opened auctions (new-arrival or promoted-club sweeps, re-auction after a drop, post-departure return auction, season-kickoff sweep) pay no Scout's Fee even if a manager bid first; the whole 20% is solidarity.
+  - Severance and loan slot buyback fees also send 20% to solidarity, with no Scout's Fee.
 - Trades: any mix of players + Club Balance; accept/reject/counter; no commissioner veto / no trade deadline. Deferred if a involved player already kicked off this GW.
-- Loans: 4–16 GWs; caps commonly 1 out / 2 in; fees + optional performance bonus; recall / slot buyback exist.
+- Loans: 4–16 GWs; caps commonly 1 out / 2 in (a club can buy a second loan-out slot); fees + optional performance bonus; recall / slot buyback exist. Recalling needs room and is refused while holding a player. A loan ending into a full squad makes the returning player held.
 
 PL-ONLY & DYNASTY
 - Roster pool is Premier League. Exit from the PL ends usable roster eligibility and materially hurts dynasty value; PL arrivals are acquisition opportunities.
@@ -73,7 +96,10 @@ PL-ONLY & DYNASTY
 FINANCE / ACADEMY / DEPARTURES (BRIEF)
 - Match revenue every 4 GWs (win/draw/loss payments). Club Balance is a permanent dynasty asset.
 - Academy holds U21s; turning 21 forces promotion when space exists.
-- Departures / retained list / offseason reset exist — answer from general dynasty logic; do not invent league-specific payout tables unless present here.
+- Departure from the PL (transfer abroad, relegation, retirement): the manager chooses RELEASE (60% of market value as compensation, barred from the return auction) or RETAIN (no cash, keep his rights in a scarce retained slot, commonly 3). Retained rights are tradeable; the return-auction bar stays with whoever took compensation.
+- A retained player who returns joins the squad if there's room; otherwise he's held, and the manager can decline him for nothing (he goes to auction).
+- A player who leaves the PL ON LOAN gets no Release/Retain choice: he's On Loan Abroad, uses no squad place or retained slot, gets no compensation, and rejoins automatically when back (held if the squad is full). He can be traded or dropped for nothing. If a new season starts and he hasn't returned, it's treated as a permanent departure.
+- Offseason reset exists — do not invent league-specific payout tables unless present here.
 `;
 
 export function emptyGaffaContextBag(): GaffaContextBag {
@@ -156,7 +182,7 @@ function buildContextBagBlock(bag: GaffaContextBag): string {
   if (bag.settings) {
     const s = bag.settings;
     lines.push(
-      `League settings: roster ${s.roster_size} · bench ${s.bench_size} · IR ${s.ir_size}` +
+      `League settings (IR, academy, and loans-out are this club's own caps): roster ${s.roster_size} · bench ${s.bench_size} · IR ${s.ir_size}` +
         (s.taxi_size != null ? ` · academy ${s.taxi_size}` : '') +
         (s.taxi_age_limit != null ? ` (U${s.taxi_age_limit})` : '') +
         (s.free_agent_bid_floor != null ? ` · FA floor ${Math.round(s.free_agent_bid_floor * 100)}% MV` : '') +
