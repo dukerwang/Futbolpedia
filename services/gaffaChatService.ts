@@ -440,9 +440,16 @@ ${message}
 </reminders>
 </gaffa_turn>`;
 
+  // gemini-3.8-flash rejects thinkingLevel MINIMAL (API 400). Rules used MINIMAL
+  // to skip extra reasoning; that failed in ~2s and POST /api/gaffa/chat returned 502.
+  // LOW is the supported equivalent and matches squad/strategy turns. This path is
+  // prose-only — never responseSchema / dossier JSON.
+  const thinkingLevel =
+    runScorecard || kind === 'player_trade' ? 'medium' : 'low';
+
   const prose = await sendProseChatMessage(prompt, history, {
     imageData: options?.imageData,
-    thinkingLevel: runScorecard || kind === 'player_trade' ? 'medium' : kind === 'rules' ? 'minimal' : 'low',
+    thinkingLevel,
     temperature: runScorecard ? 0.25 : kind === 'player_trade' ? 0.35 : kind === 'strategy' ? 0.5 : undefined,
     systemInstruction,
     conversationProfiles: [],
