@@ -58,7 +58,9 @@ async function startServer() {
   });
 
   // In-app Gaffa chat: Gaffa (session-auth) proxies here with the read secret.
-  // Runs Gaffa mode only — prose (+ optional trade lock), never a dossier card.
+  // Always loads the live club bag (roster, listings, auctions, settings) before
+  // Gaffa-mode prompt assembly — first turn included; the user need not say "Gaffa".
+  // Prose only (+ optional trade lock), never a dossier card.
   app.post("/api/gaffa/chat", async (req, res) => {
     const { authorizeGaffaReadSecret, runGaffaChatTurn } = await import("./services/gaffaChatApi");
     if (!authorizeGaffaReadSecret(req.headers["x-futbolpedia-secret"])) {
