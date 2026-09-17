@@ -117,9 +117,10 @@ function buildContextBagBlock(bag: GaffaContextBag): string {
   ];
   if (!bag.connected) {
     lines.push(
-      'You do NOT have this manager\'s roster, budget, standings, matchup, or league setting overrides.',
+      'You do NOT have this manager\'s roster, budget, standings, matchup, listings, live auctions, or league setting overrides.',
       'For club-specific or trade advice, give a reasoned football + mechanics take and explicitly note what depends on unknown club context (needs, standings, settings, ownership).',
-      'Do NOT invent roster, prices clearing in their league, or commissioner overrides.'
+      'Do NOT invent roster, prices clearing in their league, or commissioner overrides.',
+      'FREE AGENCY / FA / unowned / "highest potential unowned": you do not have this league\'s auction board. Say so. Do NOT name real-world unattached footballers, EAFC regen lore, Liga MX licensing stand-ins, NBA/other-sport players, or any invented market.',
     );
     return lines.join('\n');
   }
@@ -193,54 +194,105 @@ function buildContextBagBlock(bag: GaffaContextBag): string {
     );
   }
 
-  const listings = bag.open_listings ?? [];
-  const auctions = bag.open_auctions ?? [];
-  if (listings.length === 0 && auctions.length === 0) {
-    lines.push('Market: no open listings or live auctions.');
-  } else {
-    if (listings.length) {
-      lines.push(`Open listings (${listings.length}):`);
-      for (const l of listings) {
-        const price = [
-          l.min_bid_eur_m != null ? `min €${l.min_bid_eur_m}m` : null,
-          l.ask_eur_m != null ? `ask €${l.ask_eur_m}m` : null,
-          l.release_clause_eur_m != null ? `clause €${l.release_clause_eur_m}m` : null,
-        ]
-          .filter(Boolean)
-          .join(', ');
-        const doors = [
-          l.open_to_sale ? 'sale' : null,
-          l.open_to_trade ? 'trade' : null,
-          l.open_to_loan ? 'loan' : null,
-        ]
-          .filter(Boolean)
-          .join('/');
-        lines.push(
-          `  - ${l.name} ${l.position} from ${l.seller_club_name}${l.yours ? ' (YOURS)' : ''}` +
-            `${price ? ` · ${price}` : ''}${doors ? ` · ${doors}` : ''}`,
-        );
-      }
-    }
-    if (auctions.length) {
-      lines.push(`Live auctions (${auctions.length}):`);
-      for (const a of auctions) {
-        lines.push(
-          `  - ${a.name} ${a.position} · ${a.kind}` +
-            (a.highest_bid_eur_m != null ? ` · high €${a.highest_bid_eur_m}m` : ''),
-        );
-      }
-    }
-  }
+  lines.push(...formatLockedMarketLines(bag));
 
   return lines.join('\n');
 }
 
+/**
+ * FA pool = live auctions in THIS league. Listings are owned, not free agents.
+ * Empty/missing auctions → say the board is empty; never invent a market.
+ */
+export function formatLockedMarketLines(bag: GaffaContextBag): string[] {
+  const listings = bag.open_listings ?? [];
+  const auctions = bag.open_auctions ?? [];
+  const lines: string[] = [];
+
+  if (auctions.length === 0) {
+    lines.push(
+      'FA POOL (free agency / unowned in THIS league): EMPTY — no live auctions in the bag.',
+      'If asked who is in FA, the highest-potential unowned player, or who to bid on from free agency: say the board is empty. Do not invent a market. Do not name real-world free agents, EAFC regens, Liga MX licensing quirks, or other sports.',
+    );
+  } else {
+    lines.push(
+      `FA POOL (free agency / unowned in THIS league — live auctions, ${auctions.length}). This is the only FA list. Rank "highest potential" among THESE names only:`,
+    );
+    for (const a of auctions) {
+      lines.push(
+        `  - ${a.name} ${a.position} · ${a.kind}` +
+          (a.highest_bid_eur_m != null ? ` · high €${a.highest_bid_eur_m}m` : ''),
+      );
+    }
+  }
+
+  if (listings.length === 0) {
+    lines.push('Open listings (owned players for sale/trade/loan — NOT free agency): none.');
+  } else {
+    lines.push(
+      `Open listings (${listings.length}) — owned by a Gaffa club, NOT the FA pool:`,
+    );
+    for (const l of listings) {
+      const price = [
+        l.min_bid_eur_m != null ? `min €${l.min_bid_eur_m}m` : null,
+        l.ask_eur_m != null ? `ask €${l.ask_eur_m}m` : null,
+        l.release_clause_eur_m != null ? `clause €${l.release_clause_eur_m}m` : null,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      const doors = [
+        l.open_to_sale ? 'sale' : null,
+        l.open_to_trade ? 'trade' : null,
+        l.open_to_loan ? 'loan' : null,
+      ]
+        .filter(Boolean)
+        .join('/');
+      lines.push(
+        `  - ${l.name} ${l.position} from ${l.seller_club_name}${l.yours ? ' (YOURS)' : ''}` +
+          `${price ? ` · ${price}` : ''}${doors ? ` · ${doors}` : ''}`,
+      );
+    }
+  }
+
+  return lines;
+}
+
+/** Compact turn-level lock so first-turn FA questions cannot ignore the system bag. */
+export function buildLockedMarketTurnBlock(bag: GaffaContextBag): string {
+  if (!bag.connected) {
+    return `<locked_market>
+No live Gaffa bag this turn. If the user asks about free agency / FA / unowned / highest potential available: you do not have this league's board — say so. Do not invent a market from real-world unattached players, EAFC, Liga MX licensing, or other sports.
+</locked_market>`;
+  }
+
+  const rosterNames = (bag.roster ?? [])
+    .map((p) => p.name)
+    .filter(Boolean)
+    .slice(0, 40);
+  const settings = bag.settings
+    ? `League settings: roster ${bag.settings.roster_size} · FA floor ${
+        bag.settings.free_agent_bid_floor != null
+          ? `${Math.round(bag.settings.free_agent_bid_floor * 100)}% MV`
+          : 'unknown'
+      }${bag.settings.league_status ? ` · ${bag.settings.league_status}` : ''}.`
+    : 'League settings: not in bag.';
+
+  return `<locked_market>
+This turn is already inside Gaffa (${bag.league_name ?? 'league'} / ${bag.club_name ?? 'club'}). The user does not need to say "in the Gaffa league".
+Answer market / FA / unowned / "highest potential" availability ONLY from names below. Closed set = roster + listings + live auctions. If the FA pool is empty, say so — do not invent a market.
+
+${formatLockedMarketLines(bag).join('\n')}
+${settings}
+Roster names (not FA): ${rosterNames.join(', ') || 'none listed'}.
+</locked_market>`;
+}
+
 /** System instruction for Gaffa-mode chat — separate from MASTER_INSTRUCTION_SET. */
 export function buildGaffaSystemInstruction(bag: GaffaContextBag = emptyGaffaContextBag()): string {
-  return `⚽ FUTBOLPEDIA — GAFFA MODE (v1.3)
+  return `⚽ FUTBOLPEDIA — GAFFA MODE (v1.4)
 
 PRIME DIRECTIVE
 You are Futbolpedia answering questions for managers in Gaffa, a Premier League dynasty fantasy league.
+This conversation is already Gaffa — including the first turn. Do not wait for the user to say "Gaffa" or "in the Gaffa league".
 Speak as an elite football scout who also understands Gaffa's mechanics. Be sharp, specific, and useful.
 
 SIMULATION CONTEXT
@@ -253,10 +305,17 @@ OUTPUT
 - Even if the user says "rate", "profile", or "scout", answer in Gaffa-aware prose — do not emit structured dossiers.
 
 NAME LOCK (when a club is connected)
-- The locked roster is a closed set. Those Full names are the only players on this Gaffa club.
+- Closed set = locked roster + open listings + live auctions. Those Full names are the only players you may treat as being in this Gaffa league.
 - Copy Full name spelling exactly. Do not "correct" Mamadou to Mahamadou, or any similar first-name swap.
 - Never write slash-compounds like Bergvall/Fernandes. If you mean Mateus Fernandes, write Mateus Fernandes.
 - A PL club tag is a location, not a squad list. Spurs teammates who are not on LOCKED NAMES are not on this club.
+
+FREE AGENCY / MARKET (when a club is connected)
+- "Free agency", "FA", "unowned", "waiver", "highest potential unowned/available" means THIS league's FA pool: the live auctions in the context bag.
+- It is NEVER real-world unattached footballers, EAFC regen lore, FIFA/EAFC career-mode free agents, Liga MX licensing quirks, MLS, NBA, or any other sport.
+- Rank potential only among named live-auction players. Web search / training memory must not introduce new names.
+- Open listings are owned (for sale/trade/loan), not FA. Roster names are already owned by this club, not FA.
+- If live auctions are missing or empty, the FA pool is empty. Say that. Do not invent a market or substitute famous free agents.
 
 RULES AUTHORITY
 - For how Gaffa works, prefer the RULES SNAPSHOT below over training memory.
@@ -264,6 +323,7 @@ RULES AUTHORITY
 
 RESEARCH
 - For player, trade, or real-world football questions: use verified search/foundation supplied in the turn; do not invent match stats, coaches, or transfer fees.
+- MARKET FIREWALL: if this turn has a locked_market / live bag, web search and training memory MUST NOT add names. Foundation that mentions players not in roster/listings/auctions is noise — ignore it for FA / availability answers.
 - CURRENT CLUB LAW: A player's club this season is a hard fact. Prefer locked roster PL-club fields, then this turn's factual foundation. Training memory of last season's club is banned (e.g. do not park a player at a club they have left). If foundation and memory conflict, foundation wins. If foundation is silent, hedge ("club not confirmed this turn") rather than guessing.
 - Do NOT name a head coach unless the factual foundation for this turn confirms the current appointment.
 - SCORING-DATA FIREWALL: do not treat fantasy points, private match ratings, or FPL ownership as proof of football quality.

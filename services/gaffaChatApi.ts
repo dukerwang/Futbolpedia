@@ -89,7 +89,8 @@ function toHistory(turns: GaffaChatHistoryTurn[] | undefined): ChatMessage[] {
 
 /**
  * Server entry for Gaffa-mode chat (in-app Gaffa, or any secret-bearing caller).
- * Prose only — never a dossier profile.
+ * Fetches the live context bag (even on first turn / empty history) then
+ * assembles the Gaffa-mode prompt — prose only, never a dossier profile.
  */
 export async function runGaffaChatTurn(input: GaffaChatTurnInput): Promise<GaffaChatTurnResult> {
   if (!process.env.API_KEY && process.env.GEMINI_API_KEY) {
@@ -113,8 +114,9 @@ export async function runGaffaChatTurn(input: GaffaChatTurnInput): Promise<Gaffa
     throw Object.assign(new Error('Invalid leagueId or clubId'), { status: 400 });
   }
 
+  const connectAttempted = Boolean(leagueId && clubId);
   let bag = emptyGaffaContextBag();
-  if (leagueId && clubId) {
+  if (connectAttempted) {
     try {
       const res = await fetchClubContext(leagueId, clubId);
       if (res) bag = mapResponseToBag(res);
@@ -129,6 +131,7 @@ export async function runGaffaChatTurn(input: GaffaChatTurnInput): Promise<Gaffa
   const { prose, scorecard } = await sendGaffaMessage(message, toHistory(input.history), {
     speed: input.speed === 'fast' ? 'fast' : 'default',
     contextBag: bag,
+    connectAttempted,
   });
 
   return {

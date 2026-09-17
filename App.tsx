@@ -531,6 +531,7 @@ const App: React.FC = () => {
           speed: mode,
           imageData,
           contextBag,
+          connectAttempted: Boolean(gaffaLink),
         });
         setMessages(prev => [...prev, {
           id: generateId(),
