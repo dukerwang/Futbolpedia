@@ -55,7 +55,7 @@ async function fetchClubContext(
   const upstream = await axios.get(url, {
     headers: { 'x-futbolpedia-secret': secret },
     validateStatus: () => true,
-    timeout: 20000,
+        timeout: 30000,
   });
   if (upstream.status === 401) {
     throw Object.assign(new Error('Gaffa rejected the read secret'), { status: 401 });

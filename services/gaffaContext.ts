@@ -52,6 +52,9 @@ export function mapResponseToBag(res: GaffaClubContextResponse): GaffaContextBag
     settings: res.settings,
     open_listings: res.open_listings ?? [],
     open_auctions: res.open_auctions ?? [],
+    // Preserve missing vs [] — a legacy Gaffa payload has no unowned pool;
+    // coercing that to [] would wrongly claim FA is empty.
+    free_agents: Array.isArray(res.free_agents) ? res.free_agents : undefined,
     synced_at: res.synced_at,
   };
 }

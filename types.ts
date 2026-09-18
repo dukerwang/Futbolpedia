@@ -192,6 +192,18 @@ export interface GaffaOpenAuction {
   expires_at: string | null;
 }
 
+/** Unowned player in this league — Gaffa free agency, not a listing. */
+export interface GaffaFreeAgent {
+  player_id: string;
+  name: string;
+  display_name?: string;
+  position: string;
+  pl_team?: string | null;
+  market_value_eur_m?: number | null;
+  age?: number | null;
+  live_auction?: boolean;
+}
+
 /** Locked / live context for Gaffa-mode answers. */
 export interface GaffaContextBag {
   gaffa_rules_version: string;
@@ -211,6 +223,8 @@ export interface GaffaContextBag {
   lineup?: GaffaLineup | null;
   open_listings?: GaffaOpenListing[];
   open_auctions?: GaffaOpenAuction[];
+  /** Unowned active PL players. This is free agency. Missing on legacy bags. */
+  free_agents?: GaffaFreeAgent[];
   synced_at?: string;
 }
 
@@ -228,6 +242,7 @@ export interface GaffaClubContextResponse {
   settings?: GaffaLeagueSettings;
   open_listings?: GaffaOpenListing[];
   open_auctions?: GaffaOpenAuction[];
+  free_agents?: GaffaFreeAgent[];
   synced_at: string;
 }
 

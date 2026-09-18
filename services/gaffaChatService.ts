@@ -176,9 +176,14 @@ function clipClause(s: string, maxWords: number): string {
 function marketSpendSummary(bag: GaffaContextBag): string {
   const listings = bag.open_listings ?? [];
   const auctions = bag.open_auctions ?? [];
+  const fa = bag.free_agents;
   const others = listings.filter((l) => !l.yours);
-  if (others.length === 0 && auctions.length === 0) {
-    return 'Market: no bid-able listings or live auctions.';
+  const faCount = fa?.length ?? 0;
+  if (others.length === 0 && auctions.length === 0 && faCount === 0) {
+    if (fa == null) {
+      return 'Market: no bid-able listings or live auctions; unowned FA list not in this bag — do not treat that as empty FA.';
+    }
+    return 'Market: no bid-able listings, live auctions, or unowned FA players.';
   }
   const listingBits = others
     .slice(0, 8)
@@ -189,7 +194,13 @@ function marketSpendSummary(bag: GaffaContextBag): string {
   const auctionBits = auctions
     .slice(0, 8)
     .map((a) => `${a.name} (${a.position}${a.highest_bid_eur_m != null ? `, high €${a.highest_bid_eur_m}m` : ''})`);
-  return `Bid-able listings: ${listingBits.join('; ') || 'none'}. Live auctions: ${auctionBits.join('; ') || 'none'}.`;
+  const faBit =
+    fa == null
+      ? 'FA pool not in bag'
+      : faCount
+        ? `FA pool: ${faCount} unowned (nominate to open an auction)`
+        : 'FA pool empty';
+  return `Bid-able listings: ${listingBits.join('; ') || 'none'}. Live auctions: ${auctionBits.join('; ') || 'none'}. ${faBit}.`;
 }
 
 async function buildTradeScorecard(params: {
@@ -211,7 +222,7 @@ async function buildTradeScorecard(params: {
     temperature: 0.15,
     systemInstruction: `You score Gaffa dynasty trades. Integers 1-5 only. Do not pick a final verdict.
 CURRENT CLUB: use foundation + locked roster PL club; never last season's club.
-cash_deployable: score 1 or 2 if the club already has a large balance AND the user named no spend target AND there is no bid-able listing or live auction in the locked market. If OTHER clubs have listings or there are live auctions, (b) spend path exists — typically 3, not 1. Extra cash on a pile is not automatically 4–5. Listings marked YOURS are not a spend path.
+cash_deployable: score 1 or 2 if the club already has a large balance AND the user named no spend target AND there is no bid-able listing, live auction, or unowned FA player in the locked market. If OTHER clubs have listings, there are live auctions, or free_agents is a non-empty list, (b) spend path exists — typically 3, not 1. Nominating an unowned FA player is a spend path. Extra cash on a pile is not automatically 4–5. Listings marked YOURS are not a spend path.
 replacement: elite clinical #9 vs a high-work lower-ceiling striker is typically 2, not 4.
 coverage: academy/developmental-only ST backup is 1–2, not 4. coverage_note MUST name the actual ST backups from Roster ST (name + status). Never claim there is no other striker if bench/academy names are listed. Never write "no other centre-forward in the starting lineup" — every XI has one starter.
 starter_leverage: locked starting ST on a top-table club is 4–5.
@@ -318,6 +329,45 @@ export function looksLikeGaffaMarketQuery(message: string): boolean {
   return false;
 }
 
+function bagMarketNames(bag: GaffaContextBag): string[] {
+  const names: string[] = [];
+  for (const p of bag.free_agents ?? []) {
+    if (p.name) names.push(p.name);
+    if (p.display_name) names.push(p.display_name);
+  }
+  for (const l of bag.open_listings ?? []) {
+    if (l.name) names.push(l.name);
+  }
+  for (const a of bag.open_auctions ?? []) {
+    if (a.name) names.push(a.name);
+  }
+  return names;
+}
+
+function messageMentionsBagName(message: string, names: string[]): boolean {
+  for (const raw of names) {
+    const n = (raw || '').trim();
+    if (n.length < 4) continue;
+    const re = new RegExp(`(?<!\\p{L})${escapeRegExp(n)}(?!\\p{L})`, 'iu');
+    if (re.test(message)) return true;
+  }
+  return false;
+}
+
+/** Availability / buy-from-FA questions, including named unowned players. */
+export function looksLikeGaffaAvailabilityQuery(message: string, bag: GaffaContextBag): boolean {
+  if (looksLikeGaffaMarketQuery(message)) return true;
+  if (!bag.connected) return false;
+  if (
+    !/\b(buy|sign|claim|bid|available|pickup|pick\s*up|nominate|acquire)\b/i.test(
+      message,
+    )
+  ) {
+    return false;
+  }
+  return messageMentionsBagName(message, bagMarketNames(bag));
+}
+
 export function shouldSkipGaffaWebResearch(
   message: string,
   bag: GaffaContextBag,
@@ -325,7 +375,7 @@ export function shouldSkipGaffaWebResearch(
 ): boolean {
   if (!bag.connected) return false;
   if (looksLikeAssetTrade(message)) return false;
-  if (looksLikeGaffaMarketQuery(message)) return true;
+  if (looksLikeGaffaAvailabilityQuery(message, bag)) return true;
   if (kind === 'player_trade') return false;
   if (
     /\b(i|i'm|im|we|our|my|this club|squad|roster|depth|strongest|weakest|position group)\b/i.test(
@@ -433,8 +483,8 @@ ${params.message}
 <reminders>
 - Prose Markdown: **bold** and paragraphs. No # headings. Never print the scorecard XML or locked_market XML.
 - This chat is already Gaffa. Do not wait for the user to say "in the Gaffa league". First turn must use the live bag immediately.
-- Free agency / FA / unowned / highest potential unowned = live auctions in locked_market, never real-world unattached, EAFC regen lore, Liga MX licensing, NBA, or other sports.
-- When the bag is connected: name only players in roster, open listings, and live auctions. If the FA pool is empty or missing, say so — do not invent a market.
+- Free agency / FA / unowned / highest potential unowned = the unowned FA pool in locked_market, never real-world unattached, EAFC regen lore, Liga MX licensing, NBA, or other sports. Live auctions are only the subset currently being bid on.
+- When the bag is connected: name only players in roster, open listings, live auctions, and the FA pool. If free_agents is present and empty, say FA is empty — do not invent a market. If free_agents is missing, do not treat empty auctions as empty FA. A player in the FA pool with no live auction can still be bought by nominating an FA auction.
 - Prefer the rules snapshot for mechanics questions.
 - If not connected to a club, do not invent roster/standings/prices; caveat unknown club context on trade takes.
 - Never use fantasy points as proof of football quality.
