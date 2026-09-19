@@ -37,7 +37,7 @@ async function startServer() {
       const upstream = await axios.get(url, {
         headers: { "x-futbolpedia-secret": secret },
         validateStatus: () => true,
-        timeout: 20000,
+        timeout: 30000,
       });
       if (upstream.status === 401) {
         return res.status(401).json({ error: "Gaffa rejected the read secret" });
@@ -58,7 +58,7 @@ async function startServer() {
   });
 
   // In-app Gaffa chat: Gaffa (session-auth) proxies here with the read secret.
-  // Always loads the live club bag (roster, listings, auctions, settings) before
+  // Always loads the live club bag (roster, listings, auctions, unowned FA pool, settings) before
   // Gaffa-mode prompt assembly — first turn included; the user need not say "Gaffa".
   // Prose only (+ optional trade lock), never a dossier card.
   app.post("/api/gaffa/chat", async (req, res) => {
