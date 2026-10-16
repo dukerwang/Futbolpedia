@@ -92,6 +92,149 @@ async function startServer() {
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
   console.log(`[startup] GEMINI_API_KEY set: ${!!GEMINI_API_KEY} (${GEMINI_API_KEY ? GEMINI_API_KEY.slice(0, 6) + '...' : 'MISSING'})`);
 
+  const PLAYER_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+  const playerFactCache = new Map<string, { expiresAt: number; payload: any }>();
+
+  const formatHeightImperial = (raw: string | null | undefined): string | null => {
+    if (!raw) return null;
+    const cmMatch = String(raw).match(/(\d{2,3})\s*cm/i);
+    if (cmMatch) {
+      const cm = parseInt(cmMatch[1], 10);
+      if (cm > 100) {
+        const totalInches = Math.round(cm / 2.54);
+        const feet = Math.floor(totalInches / 12);
+        const inches = totalInches % 12;
+        return `${feet}'${inches}"`;
+      }
+    }
+    return String(raw).trim() || null;
+  };
+
+  const formatWeightLbs = (raw: string | null | undefined): string | null => {
+    if (!raw) return null;
+    const kgMatch = String(raw).match(/(\d{2,3})\s*kg/i);
+    if (kgMatch) {
+      const kg = parseInt(kgMatch[1], 10);
+      if (kg > 35) {
+        return `${Math.round(kg * 2.20462)} lbs`;
+      }
+    }
+    return String(raw).trim() || null;
+  };
+
+  app.get("/api/football/player", async (req, res) => {
+    const rawName = typeof req.query.name === "string" ? req.query.name.trim() : "";
+    const season = typeof req.query.season === "string" ? parseInt(req.query.season, 10) || 2025 : 2025;
+    if (!rawName || rawName.length < 2) {
+      return res.status(400).json({ error: "Missing player name" });
+    }
+    if (!API_KEY) {
+      return res.json({ available: false, player: null });
+    }
+
+    const cacheKey = `${rawName.toLowerCase()}:${season}`;
+    const cached = playerFactCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return res.json(cached.payload);
+    }
+
+    try {
+      const tokens = rawName.split(/\s+/).filter(Boolean);
+      const searchTerm = tokens.length > 1 ? tokens[tokens.length - 1] : rawName;
+
+      const profileRes = await axios.get(`${API_URL}/players/profiles`, {
+        params: { search: searchTerm },
+        headers: { "x-apisports-key": API_KEY },
+        timeout: 6000,
+      });
+
+      const candidates: any[] = profileRes.data?.response ?? [];
+      if (candidates.length === 0) {
+        const emptyPayload = { available: true, player: null };
+        playerFactCache.set(cacheKey, { expiresAt: Date.now() + PLAYER_CACHE_TTL_MS, payload: emptyPayload });
+        return res.json(emptyPayload);
+      }
+
+      const lowerFull = rawName.toLowerCase();
+      const matchedEntry =
+        candidates.find((c) => {
+          const p = c?.player;
+          if (!p) return false;
+          const full = `${p.firstname || ""} ${p.lastname || ""}`.toLowerCase();
+          return (
+            String(p.name || "").toLowerCase() === lowerFull ||
+            full.includes(lowerFull) ||
+            tokens.every((t) => full.includes(t.toLowerCase()) || String(p.name || "").toLowerCase().includes(t.toLowerCase()))
+          );
+        }) || candidates[0];
+
+      const basePlayer = matchedEntry.player;
+      let currentClub: string | null = null;
+      let league: string | null = null;
+      let injured: boolean | null = basePlayer?.injured ?? null;
+      let seasonStats: any = null;
+
+      if (basePlayer?.id) {
+        try {
+          const statsRes = await axios.get(`${API_URL}/players`, {
+            params: { id: basePlayer.id, season },
+            headers: { "x-apisports-key": API_KEY },
+            timeout: 6000,
+          });
+          const statEntry = statsRes.data?.response?.[0];
+          const primaryStat = statEntry?.statistics?.[0];
+          if (statEntry?.player) {
+            injured = statEntry.player.injured ?? injured;
+          }
+          if (primaryStat) {
+            currentClub = primaryStat.team?.name ?? null;
+            league = primaryStat.league?.name ?? null;
+            seasonStats = {
+              season,
+              appearances: primaryStat.games?.appearences ?? null,
+              lineups: primaryStat.games?.lineups ?? null,
+              minutes: primaryStat.games?.minutes ?? null,
+              goals: primaryStat.goals?.total ?? null,
+              assists: primaryStat.goals?.assists ?? null,
+              keyPasses: primaryStat.passes?.key ?? null,
+              tackles: primaryStat.tackles?.total ?? null,
+              interceptions: primaryStat.tackles?.interceptions ?? null,
+              duelsWon: primaryStat.duels?.won ?? null,
+              rating: primaryStat.games?.rating ?? null,
+            };
+          }
+        } catch (statsErr) {
+          // Non-fatal: still return profile bio facts
+        }
+      }
+
+      const payload = {
+        available: true,
+        player: {
+          id: basePlayer.id,
+          name: basePlayer.name || `${basePlayer.firstname || ""} ${basePlayer.lastname || ""}`.trim(),
+          firstname: basePlayer.firstname,
+          lastname: basePlayer.lastname,
+          age: basePlayer.age ?? null,
+          nationality: basePlayer.nationality ?? null,
+          height: formatHeightImperial(basePlayer.height),
+          weight: formatWeightLbs(basePlayer.weight),
+          position: basePlayer.position ?? null,
+          currentClub,
+          league,
+          injured,
+          seasonStats,
+        },
+      };
+
+      playerFactCache.set(cacheKey, { expiresAt: Date.now() + PLAYER_CACHE_TTL_MS, payload });
+      return res.json(payload);
+    } catch (error: any) {
+      console.warn("[api/football/player] lookup failed:", error?.message || error);
+      return res.json({ available: false, player: null });
+    }
+  });
+
   app.get("/api/football/squad", async (req, res) => {
     try {
       const { team } = req.query;

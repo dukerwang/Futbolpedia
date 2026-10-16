@@ -12,7 +12,9 @@ export default defineConfig(({ mode }) => {
       plugins: [react()],
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        'process.env.FUTBOLPEDIA_MODEL': JSON.stringify(env.FUTBOLPEDIA_MODEL || ''),
+        'process.env.FUTBOLPEDIA_SYNTHESIS_MODEL': JSON.stringify(env.FUTBOLPEDIA_SYNTHESIS_MODEL || ''),
       },
       resolve: {
         alias: {

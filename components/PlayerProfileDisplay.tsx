@@ -1,6 +1,7 @@
 import React from 'react';
 import type { PlayerProfile } from '../types';
 import { AttributeTable } from './AttributeTable';
+import { getTierForRating } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -31,23 +32,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
     latestUpdate 
   } = profile;
 
-  const getRatingTier = (rating: number) => {
-    if (rating >= 99) return "GOAT Status";
-    if (rating >= 96) return "Generational Icon";
-    if (rating >= 94) return "Ballon d'Or Standard";
-    if (rating >= 91) return "World-Class Elite";
-    if (rating >= 89) return "Elite Match-Winner";
-    if (rating >= 86) return "World-Class Starter";
-    if (rating >= 84) return "Borderline World-Class";
-    if (rating >= 81) return "High-Caliber Starter";
-    if (rating >= 79) return "UCL Standard";
-    if (rating >= 76) return "Quality Starter";
-    if (rating >= 74) return "Impact Specialist / 12th Man";
-    if (rating >= 71) return "Strong Rotation Option";
-    if (rating >= 66) return "Squad Depth";
-    if (rating >= 61) return "Developing Professional";
-    return "Amateur";
-  }
+  const getRatingTier = (rating: number) => getTierForRating(rating);
 
   const renderMarkdown = (text: string | undefined) => {
     if (!text) return { __html: '' };

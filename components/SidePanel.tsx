@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
+import { getShortTierLabel } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { supabase, toPlayerSlug } from '../services/geminiService';
@@ -17,17 +18,17 @@ interface SidePanelProps {
 }
 
 const getTierColorClass = (rating: number) => {
-    if (rating >= 90) return 'bg-emerald-500'; // 90+ Emerald
+    if (rating >= 90) return 'bg-emerald-500'; // 90+ Emerald (World-Class threshold)
     if (rating >= 80) return 'bg-emerald-400'; // 80-89 Sage/Light Green
     if (rating >= 70) return 'bg-charcoal/50 dark:bg-gray-400'; // 70-79 Charcoal Light
     return 'bg-gray-200 dark:bg-gray-700'; // <70 Faint Grey
 };
 
-const AttributeLine: React.FC<{ label: string; rating: number }> = ({ label, rating }) => {
+const AttributeLine: React.FC<{ label: string; rating: number }> = ({ label: attrLabel, rating }) => {
     return (
         <div className="group">
             <div className="flex justify-between text-xs mb-1.5 items-end">
-                <span className="text-charcoal/70 dark:text-cream-200 font-medium">{label}</span>
+                <span className="text-charcoal/70 dark:text-cream-200 font-medium">{attrLabel}</span>
                 <span className={`font-mono text-sm leading-none font-bold ${rating >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-cream-100'}`}>{rating}</span>
             </div>
             <div className="h-[3px] w-full bg-cream-400/30 dark:bg-charcoal-light/50 rounded-full overflow-hidden">
@@ -88,15 +89,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     }
   }, [isOpen]);
 
-  const getTierText = (rating: number) => {
-      if (rating >= 96) return "Generational Icon";
-      if (rating >= 91) return "World Class Elite";
-      if (rating >= 86) return "Elite Starter";
-      if (rating >= 81) return "High-Caliber";
-      if (rating >= 76) return "Top Flight Proven";
-      if (rating >= 70) return "Squad Rotation";
-      return "Developing";
-  };
+  const getTierText = (rating: number) => getShortTierLabel(rating);
 
   const renderMarkdown = (text: string) => {
       if (!text) return { __html: '' };
