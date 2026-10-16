@@ -380,8 +380,14 @@ export async function sendGaffaMessage(
         continuePriorTrade && priorUser && typeof priorUser.content === 'string'
           ? priorUser.content
           : undefined;
+      const combinedText = [message, threadHint].filter(Boolean).join(' ');
+      const playerCandidates = Array.from(
+        combinedText.matchAll(/\b([A-Z][a-zà-öø-ÿ]+(?:\s+[A-Z][a-zà-öø-ÿ'-]+)+)\b/g),
+        (m) => m[1],
+      ).slice(0, 2);
       factualFoundation = await gatherSearchFoundation(
         buildResearchQueries(message, speed, threadHint),
+        playerCandidates,
       );
     } catch (err) {
       console.warn('[Gaffa] research foundation failed:', err);

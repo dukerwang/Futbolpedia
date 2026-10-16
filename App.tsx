@@ -106,13 +106,19 @@ const App: React.FC = () => {
       });
 
       setAllProfiles(prev => {
-        const exists = prev.some(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
-        if (!exists) {
-          const updated = [...prev, profileWithDate];
-          localStorage.setItem('futbolpedia-all-profiles', JSON.stringify(updated));
-          return updated;
+        const existsIndex = prev.findIndex(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
+        let updated: PlayerProfile[];
+        if (existsIndex === -1) {
+          updated = [...prev, profileWithDate];
+        } else {
+          updated = [...prev];
+          updated[existsIndex] = {
+            ...profileWithDate,
+            createdAt: prev[existsIndex].createdAt || profileWithDate.createdAt
+          };
         }
-        return prev;
+        localStorage.setItem('futbolpedia-all-profiles', JSON.stringify(updated));
+        return updated;
       });
     } else {
       localStorage.removeItem(ACTIVE_PROFILE_KEY);
@@ -542,7 +548,20 @@ const App: React.FC = () => {
         return;
       }
 
-      const aiResponse = await sendMessageToAI(userMessageText, messages, imageData, mode, allProfiles, globalDossiers);
+      const aiResponse = await sendMessageToAI(
+        userMessageText,
+        messages,
+        imageData,
+        mode,
+        allProfiles,
+        globalDossiers,
+        {
+          onDossierUpdated: (updatedProfile) => {
+            saveAndSetActiveProfile(updatedProfile);
+            setIsPanelOpen(true);
+          },
+        },
+      );
 
       let newAiMessage: ChatMessage;
 
