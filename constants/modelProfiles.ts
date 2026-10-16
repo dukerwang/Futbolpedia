@@ -31,20 +31,15 @@ export interface ModelCapabilityProfile {
 
 /**
  * Default fast/workhorse model for routing, search grounding, and fast turns.
- * Override via FUTBOLPEDIA_MODEL env var when upgrading across model releases.
+ * Update this constant directly when switching across Gemini releases.
  */
-export const DEFAULT_FAST_MODEL =
-  (typeof process !== 'undefined' && (process.env as any)?.FUTBOLPEDIA_MODEL) ||
-  'gemini-3.8-flash';
+export const DEFAULT_FAST_MODEL = 'gemini-3.8-flash';
 
 /**
  * Primary model for deep dossier synthesis and nuanced scouting evaluations.
- * Defaults to DEFAULT_FAST_MODEL ('gemini-3.8-flash') and can be switched to
- * 'gemini-4-argon' (or any future release) via FUTBOLPEDIA_SYNTHESIS_MODEL.
+ * Change to 'gemini-4-argon' (or any future release) here when ready.
  */
-export const DEFAULT_SYNTHESIS_MODEL =
-  (typeof process !== 'undefined' && (process.env as any)?.FUTBOLPEDIA_SYNTHESIS_MODEL) ||
-  DEFAULT_FAST_MODEL;
+export const DEFAULT_SYNTHESIS_MODEL = DEFAULT_FAST_MODEL;
 
 const GEMINI_3_8_FLASH_PROFILE: ModelCapabilityProfile = {
   id: 'gemini-3.8-flash',
