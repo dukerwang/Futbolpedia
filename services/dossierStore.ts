@@ -24,6 +24,13 @@ export const supabase =
 export const isSupabaseReady = () => !!supabase;
 
 const CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+// Invalidate cached dossiers created before the v4.1 rating calibration update
+// so previously under-calibrated dossiers regenerate fresh when requested.
+export const CALIBRATION_EPOCH_MS = Date.parse('2026-10-20T21:15:00Z');
+
+let supabaseCalibratedPool: PlayerProfile[] = [];
+let supabasePoolFetchedAt = 0;
+const SUPABASE_POOL_TTL_MS = 60 * 1000; // 60 seconds
 
 export const toPlayerSlug = (name: string): string =>
   name
@@ -44,23 +51,85 @@ export const getCachedDossier = async (
       .eq('player_slug', slug)
       .single();
     if (error || !data) return null;
-    if (checkTTL && Date.now() - new Date(data.updated_at).getTime() > CACHE_TTL_MS) return null;
-    return data.player_data as PlayerProfile;
+    const updatedAtMs = new Date(data.updated_at).getTime();
+    if (
+      checkTTL &&
+      (Date.now() - updatedAtMs > CACHE_TTL_MS || updatedAtMs < CALIBRATION_EPOCH_MS)
+    ) {
+      return null;
+    }
+    const profile = data.player_data as PlayerProfile;
+    return {
+      ...profile,
+      createdAt: profile.createdAt || updatedAtMs,
+    };
   } catch {
     return null;
   }
 };
 
 export const upsertCachedDossier = async (slug: string, profile: PlayerProfile): Promise<void> => {
-  if (!supabase || !slug) return;
+  if (!slug) return;
+  const stamped: PlayerProfile = {
+    ...profile,
+    createdAt: profile.createdAt || Date.now(),
+  };
+  // Update in-memory Supabase calibrated pool immediately
+  const existingIdx = supabaseCalibratedPool.findIndex(
+    (p) => toPlayerSlug(p.basicInfo.name) === slug,
+  );
+  if (existingIdx >= 0) {
+    supabaseCalibratedPool[existingIdx] = stamped;
+  } else {
+    supabaseCalibratedPool = [stamped, ...supabaseCalibratedPool];
+  }
+
+  if (!supabase) return;
   try {
     await supabase.from('player_profiles').upsert(
-      { player_slug: slug, player_data: profile, updated_at: new Date().toISOString() },
+      { player_slug: slug, player_data: stamped, updated_at: new Date().toISOString() },
       { onConflict: 'player_slug' },
     );
   } catch (e) {
     console.warn('[Cache] Upsert failed:', e);
   }
+};
+
+/**
+ * Fetches post-calibration dossiers from the global Supabase `player_profiles` JSONB table
+ * and caches them in memory for 60s so grepDossiers and peer calibration work across devices.
+ */
+export const fetchSupabaseCalibratedPool = async (): Promise<PlayerProfile[]> => {
+  if (!supabase) return supabaseCalibratedPool;
+  if (Date.now() - supabasePoolFetchedAt < SUPABASE_POOL_TTL_MS && supabaseCalibratedPool.length > 0) {
+    return supabaseCalibratedPool;
+  }
+  try {
+    const epochIso = new Date(CALIBRATION_EPOCH_MS).toISOString();
+    const { data, error } = await supabase
+      .from('player_profiles')
+      .select('player_data, updated_at')
+      .gte('updated_at', epochIso)
+      .order('updated_at', { ascending: false })
+      .limit(60);
+    if (!error && Array.isArray(data)) {
+      const loaded: PlayerProfile[] = [];
+      for (const row of data) {
+        const p = row?.player_data as PlayerProfile | undefined;
+        if (p && p.basicInfo?.name && p.ratings?.overall >= 60) {
+          loaded.push({
+            ...p,
+            createdAt: p.createdAt || new Date(row.updated_at).getTime(),
+          });
+        }
+      }
+      supabaseCalibratedPool = loaded;
+      supabasePoolFetchedAt = Date.now();
+    }
+  } catch {
+    // Non-fatal: fall back to current in-memory pool
+  }
+  return supabaseCalibratedPool;
 };
 
 const SHARE_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -454,5 +523,209 @@ export function applyDossierPatch(base: PlayerProfile, patch: DossierPatch): Pla
           : base.playstyleAndRole.bestRoles,
     },
     latestUpdate: patch.latestUpdate || base.latestUpdate,
+    createdAt: Date.now(),
   };
+}
+
+export interface DossierGrepParams {
+  query?: string;
+  position?: string;
+  club?: string;
+  minOverall?: number;
+  maxOverall?: number;
+  minPotential?: number;
+  attributeKey?: string;
+  minAttributeValue?: number;
+  sortBy?: string;
+  limit?: number;
+}
+
+const matchesPositionalFilter = (playerPos: string, filterPos: string): boolean => {
+  const p = playerPos.toLowerCase();
+  const f = filterPos.toLowerCase().trim();
+  if (!f) return true;
+  if (p.includes(f)) return true;
+  if ((f === 'cb' || f.includes('center back') || f.includes('centre back')) && p.includes('centre-back')) return true;
+  if ((f === 'lb' || f === 'rb' || f.includes('fullback') || f.includes('full-back')) && p.includes('back') && !p.includes('centre-back')) return true;
+  if (f.includes('defend') && (p.includes('back') || p.includes('defensive midfielder'))) return true;
+  if (f.includes('midfield') && p.includes('midfielder')) return true;
+  if (f.includes('wing') && (p.includes('winger') || p.includes('wide'))) return true;
+  if ((f === 'st' || f === 'cf' || f.includes('striker') || f.includes('forward') || f.includes('attack')) && (p.includes('striker') || p.includes('forward') || p.includes('winger'))) return true;
+  if ((f === 'gk' || f.includes('keeper')) && p.includes('goalkeeper')) return true;
+  return false;
+};
+
+/**
+ * Instant (<1ms) in-memory grep and structured attribute query over all saved/active dossiers.
+ * Replaces upfront regex guessing with deterministic agent-callable search.
+ */
+export function grepDossiers(
+  dossiers: PlayerProfile[],
+  params: DossierGrepParams = {},
+): {
+  totalMatches: number;
+  results: Array<{
+    name: string;
+    club: string;
+    position: string;
+    age: number;
+    overall: number;
+    potential: number;
+    archetype: string;
+    bestRoles: string[];
+    topAttributes: Record<string, number>;
+    queriedAttribute?: { key: string; value: number };
+    strengths: string[];
+    weaknesses: string[];
+  }>;
+} {
+  const bySlug = new Map<string, PlayerProfile>();
+  for (const d of [...supabaseCalibratedPool, ...dossiers]) {
+    if (isConfidentDossier(d)) {
+      bySlug.set(toPlayerSlug(d.basicInfo.name), d);
+    }
+  }
+  let pool = [...bySlug.values()];
+
+  if (params.position) {
+    pool = pool.filter((p) => matchesPositionalFilter(p.basicInfo.position, params.position!));
+  }
+  if (params.club) {
+    const clubLower = params.club.toLowerCase().trim();
+    pool = pool.filter((p) => p.basicInfo.club.toLowerCase().includes(clubLower));
+  }
+  if (typeof params.minOverall === 'number') {
+    pool = pool.filter((p) => p.ratings.overall >= params.minOverall!);
+  }
+  if (typeof params.maxOverall === 'number') {
+    pool = pool.filter((p) => p.ratings.overall <= params.maxOverall!);
+  }
+  if (typeof params.minPotential === 'number') {
+    pool = pool.filter((p) => p.ratings.potential >= params.minPotential!);
+  }
+  if (params.attributeKey && typeof params.minAttributeValue === 'number') {
+    const key = params.attributeKey as keyof Attributes;
+    pool = pool.filter((p) => {
+      const val = p.attributes?.[key];
+      return typeof val === 'number' && val >= params.minAttributeValue!;
+    });
+  }
+  if (params.query && params.query.trim()) {
+    const tokens = params.query
+      .toLowerCase()
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    pool = pool.filter((p) => {
+      const haystack = [
+        p.basicInfo.name,
+        p.basicInfo.club,
+        p.basicInfo.nationality,
+        p.basicInfo.position,
+        p.playstyleAndRole?.playstyle?.archetype ?? '',
+        p.playstyleAndRole?.playstyle?.description ?? '',
+        ...(p.playstyleAndRole?.bestRoles ?? []),
+        ...(p.strengths ?? []),
+        ...(p.weaknesses ?? []),
+        p.shortBio ?? '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return tokens.every((t) => haystack.includes(t));
+    });
+  }
+
+  const sortKey = params.sortBy?.trim() || 'overall';
+  pool.sort((a, b) => {
+    if (sortKey === 'potential') return b.ratings.potential - a.ratings.potential;
+    if (sortKey === 'age') return a.basicInfo.age - b.basicInfo.age;
+    if (sortKey in (a.attributes || {})) {
+      const ak = a.attributes[sortKey as keyof Attributes] ?? 0;
+      const bk = b.attributes[sortKey as keyof Attributes] ?? 0;
+      return bk - ak;
+    }
+    return b.ratings.overall - a.ratings.overall;
+  });
+
+  const limit = Math.max(1, Math.min(25, params.limit ?? 10));
+  const sliced = pool.slice(0, limit);
+
+  return {
+    totalMatches: pool.length,
+    results: sliced.map((p) => {
+      const sortedAttrs = Object.entries(p.attributes || {})
+        .filter(([, v]) => typeof v === 'number' && v > 0)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
+      const topAttributes: Record<string, number> = {};
+      for (const [k, v] of sortedAttrs) topAttributes[k] = v;
+
+      const attrKey = params.attributeKey as keyof Attributes | undefined;
+      const queriedVal = attrKey && p.attributes ? p.attributes[attrKey] : undefined;
+
+      return {
+        name: p.basicInfo.name,
+        club: p.basicInfo.club,
+        position: p.basicInfo.position,
+        age: p.basicInfo.age,
+        overall: p.ratings.overall,
+        potential: p.ratings.potential,
+        archetype: p.playstyleAndRole?.playstyle?.archetype || 'N/A',
+        bestRoles: p.playstyleAndRole?.bestRoles || [],
+        topAttributes,
+        ...(attrKey && typeof queriedVal === 'number'
+          ? { queriedAttribute: { key: attrKey, value: queriedVal } }
+          : {}),
+        strengths: p.strengths || [],
+        weaknesses: p.weaknesses || [],
+      };
+    }),
+  };
+}
+
+export function mergeAllCalibratedDossiers(
+  savedDossiers: PlayerProfile[],
+  conversationDossiers: PlayerProfile[],
+): PlayerProfile[] {
+  const bySlug = new Map<string, PlayerProfile>();
+  // Order from broadest (Supabase pool) to most local (savedDossiers -> conversationDossiers)
+  for (const d of [...supabaseCalibratedPool, ...savedDossiers, ...conversationDossiers]) {
+    if (!isConfidentDossier(d)) continue;
+    if (!d.createdAt || d.createdAt < CALIBRATION_EPOCH_MS) continue;
+    bySlug.set(toPlayerSlug(d.basicInfo.name), d);
+  }
+  return [...bySlug.values()];
+}
+
+/**
+ * Builds a compact peer calibration ledger from the user's freshly calibrated dossiers
+ * (across Supabase global pool, local saved archive, and active conversation)
+ * so every new synthesis automatically anchors against the user's established scale.
+ */
+export function buildPositionalPeerLedgerBlock(
+  savedDossiers: PlayerProfile[],
+  conversationDossiers: PlayerProfile[],
+): string {
+  const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+  if (allCalibrated.length === 0) return '';
+
+  const sorted = [...allCalibrated]
+    .sort((a, b) => b.ratings.overall - a.ratings.overall)
+    .slice(0, 15);
+
+  const lines = sorted.map((p) => {
+    const topSpikes = Object.entries(p.attributes || {})
+      .filter(([, v]) => typeof v === 'number' && v > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([k, v]) => `${ATTRIBUTE_LABELS[k as keyof Attributes] || k} ${v}`)
+      .join(', ');
+    return `- ${p.basicInfo.name} (${p.basicInfo.position}, ${p.basicInfo.club}): ${p.ratings.overall} OVR / ${p.ratings.potential} POT${topSpikes ? ` [Spikes: ${topSpikes}]` : ''}`;
+  });
+
+  return `
+<calibrated_peer_ledger>
+Active peer benchmarks already rated on this user's calibrated Futbolpedia ledger (maintain relative consistency with these ratings):
+${lines.join('\n')}
+</calibrated_peer_ledger>`;
 }

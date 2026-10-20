@@ -6,8 +6,10 @@ import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
 import {
   applyDossierPatch,
   buildHistoryContents,
+  buildLockedDossiersBlock,
   DossierPatch,
   findReferencedDossiers,
+  mergeAllCalibratedDossiers,
   serializeProfileForHistory,
   toPlayerSlug,
   upsertCachedDossier,
@@ -108,8 +110,10 @@ export interface ConversationalScoutParams {
   imageData?: string;
   isEAFCRequest: boolean;
   conversationDossiers: PlayerProfile[];
+  savedDossiers: PlayerProfile[];
   lockedDossiersBlock: string;
   savedDossiersBlock: string;
+  peerLedgerBlock?: string;
   onDossierUpdated?: (updatedProfile: PlayerProfile) => void;
 }
 
@@ -124,8 +128,10 @@ export async function runConversationalScout(
     imageData,
     isEAFCRequest,
     conversationDossiers,
+    savedDossiers,
     lockedDossiersBlock,
     savedDossiersBlock,
+    peerLedgerBlock,
     onDossierUpdated,
   } = params;
 
@@ -193,47 +199,70 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     }
   }
 
-  // 2. Multi-Player Comparison & Grounded Tactical Chat Path
+  // 2. Multi-Player Comparison & Agentic Tactical Chat Path
   let factualFoundation = '';
-  if (!imageData && (route.intent === 'compare' || route.needsSearch)) {
-    try {
-      const datePrefix = `[Date: ${month} ${year}]`;
-      const queries =
-        route.intent === 'compare' && route.targetPlayers.length >= 2
-          ? [
-              `${datePrefix} ${route.targetPlayers.join(' vs ')} — current clubs (${year}), ages, positions, ${currentSeason} season stats, and tactical roles`,
-              `${datePrefix} ${route.targetPlayers.join(' vs ')} — scouting comparison: technical, physical, and mental strengths, weaknesses, and peer standing`,
-            ]
-          : [`${datePrefix} ${message}`];
+  let effectiveLockedBlock = lockedDossiersBlock;
 
-      factualFoundation = await gatherSearchFoundation(queries, route.targetPlayers);
-    } catch (e) {
-      console.warn('[ConversationalScout] Grounding search failed:', e);
-      factualFoundation =
-        'Live search unavailable for this turn. Answer carefully and flag any unverified current-season claims.';
+  if (!imageData && route.intent === 'compare' && route.targetPlayers.length >= 2) {
+    // Check which compared players are already in our calibrated ledger (0ms local + Supabase pool lookup)
+    const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+    const matchedDossiersBySlug = new Map<string, PlayerProfile>();
+    const unratedPlayers: string[] = [];
+
+    for (const targetName of route.targetPlayers) {
+      const hits = findReferencedDossiers(targetName, allCalibrated, [targetName]);
+      if (hits.length > 0) {
+        for (const h of hits) {
+          matchedDossiersBySlug.set(toPlayerSlug(h.basicInfo.name), h);
+        }
+      } else {
+        unratedPlayers.push(targetName);
+      }
+    }
+
+    if (matchedDossiersBySlug.size > 0) {
+      effectiveLockedBlock = buildLockedDossiersBlock([...matchedDossiersBySlug.values()]);
+    }
+
+    // Only fire external search/API-Football for players NOT already in our calibrated ledger
+    if (unratedPlayers.length > 0) {
+      try {
+        const datePrefix = `[Date: ${month} ${year}]`;
+        const subjectLabel = unratedPlayers.join(' vs ');
+        const queries = [
+          `${datePrefix} ${subjectLabel} — current clubs (${year}), ages, positions, ${currentSeason} season stats, and tactical roles`,
+          `${datePrefix} ${subjectLabel} — scouting profile: technical, physical, and mental strengths, weaknesses, and peer standing`,
+        ];
+
+        factualFoundation = await gatherSearchFoundation(queries, unratedPlayers);
+      } catch (e) {
+        console.warn('[ConversationalScout] Comparison grounding search failed:', e);
+      }
     }
   }
 
   const modeGuidance =
     route.intent === 'compare'
-      ? `Write a detailed, scout-grade prose comparison covering every player named (${route.targetPlayers.join(', ') || 'all named players'}). Compare their footballing identity/mould, tactical fit, strengths and limitations, and relative tier on the Section III scale. Never output a JSON dossier object.`
+      ? `Write a detailed, scout-grade prose comparison covering every player named (${route.targetPlayers.join(', ') || 'all named players'}). Compare their footballing identity/mould, tactical fit, strengths and limitations, and relative tier on the Section III scale. For any player present in <locked_dossiers>, use their exact locked Overall, Potential, and 25 attributes. Never output a JSON dossier object.`
       : route.intent === 'archive_inventory'
-        ? `Summarize the user's saved dossier archive clearly based on <saved_dossier_archive>.`
-        : `Respond conversationally in Markdown prose as the Senior Tactical Columnist. Stay 100% consistent with any dossier numbers already generated in this conversation unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
+        ? `Summarize or query the user's saved dossier archive clearly using <saved_dossier_archive> or the \`grep_saved_dossiers\` tool.`
+        : `Respond conversationally in Markdown prose as the Senior Tactical Columnist. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_player_fact_sheet\` / \`get_football_squad\` / \`get_team_fixtures\` for deterministic API-Football records, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers already generated in this conversation unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
 
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
 ${factualFoundation ? `<factual_foundation>\n${factualFoundation}\n</factual_foundation>` : ''}
-${lockedDossiersBlock}
+${peerLedgerBlock ?? ''}
+${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}
-2. Current-state facts (club, manager, injuries, ${currentSeason} stats) must come from <factual_foundation> or existing dossiers, never stale training memory.
+2. Current-state facts (club, manager, injuries, ${currentSeason} stats) must come from <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, Google Search), or existing dossiers — never stale training memory.
 3. ${CONTINUITY_REMINDER}
 </instructions>
 <task>${message}</task>`;
 
   const historyContents = buildHistoryContents(history, conversationDossiers);
+  const dossiersPool = [...savedDossiers, ...conversationDossiers];
 
   return generateProseTurn({
     message: fullPrompt,
@@ -241,6 +270,7 @@ ${savedDossiersBlock}
     systemInstruction,
     mode,
     imageData,
-    enableTools: !factualFoundation,
+    enableTools: true,
+    dossiersPool,
   });
 }

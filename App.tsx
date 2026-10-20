@@ -84,7 +84,7 @@ const App: React.FC = () => {
     if (profile) {
       const profileWithDate = {
         ...profile,
-        createdAt: profile.createdAt || Date.now()
+        createdAt: Date.now()
       };
       
       localStorage.setItem(ACTIVE_PROFILE_KEY, JSON.stringify(profileWithDate));
@@ -96,10 +96,7 @@ const App: React.FC = () => {
           updated = [...prev, profileWithDate];
         } else {
           updated = [...prev];
-          updated[existsIndex] = {
-            ...profileWithDate,
-            createdAt: prev[existsIndex].createdAt || profileWithDate.createdAt
-          };
+          updated[existsIndex] = profileWithDate;
         }
         localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
         return updated;
@@ -112,10 +109,7 @@ const App: React.FC = () => {
           updated = [...prev, profileWithDate];
         } else {
           updated = [...prev];
-          updated[existsIndex] = {
-            ...profileWithDate,
-            createdAt: prev[existsIndex].createdAt || profileWithDate.createdAt
-          };
+          updated[existsIndex] = profileWithDate;
         }
         localStorage.setItem('futbolpedia-all-profiles', JSON.stringify(updated));
         return updated;

@@ -128,14 +128,13 @@ export async function classifyTurn(params: {
   const hasCompare = HAS_COMPARE_CUE(trimmed);
   const hasDossierTrigger = HAS_DOSSIER_TRIGGER(trimmed);
 
-  // 2. 0ms local fast-path for unambiguous single-player dossier requests ("Rate Cole Palmer")
+  // 2. 0ms local fast-path for unambiguous single-player dossier requests ("Rate Cole Palmer", "Rate Prime John Terry")
   if (
     !hasImage &&
     hasDossierTrigger &&
     !hasChallenge &&
     !hasCompare &&
     !wantsRegeneration &&
-    !isHistorical &&
     !/\b(and|or)\b/i.test(trimmed)
   ) {
     const candidateName = extractCandidatePlayerName(trimmed);
@@ -143,7 +142,7 @@ export async function classifyTurn(params: {
       return {
         intent: 'single_dossier',
         targetPlayers: [candidateName],
-        isHistorical: false,
+        isHistorical,
         wantsRegeneration: false,
         needsSearch: true,
       };

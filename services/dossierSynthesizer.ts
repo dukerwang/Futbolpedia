@@ -14,6 +14,7 @@ import {
   findProfileManagerGroundingIssues,
   type FutbolpediaVerifiedFacts,
 } from './profileManagerGrounding';
+import type { ApiFootballPlayerFactSheet } from './groundingService';
 
 const OUTFIELD_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
@@ -92,7 +93,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
     calibration: {
       type: Type.OBJECT,
       description:
-        'Mandatory pre-rating calibration step. Anchor the tier band, peer comparison, top spike attributes, and true flaws BEFORE assigning numbers.',
+        'Mandatory pre-rating calibration and grounding verification step. Anchor the tier band, peer comparison, top spike attributes, true flaws, and verified head coach BEFORE assigning numbers.',
       properties: {
         tierBand: {
           type: Type.STRING,
@@ -114,8 +115,26 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
           items: { type: Type.STRING },
           description: '2-3 attribute keys that reflect genuine limitations in his toolkit.',
         },
+        verifiedCurrentHeadCoach: {
+          type: Type.STRING,
+          nullable: true,
+          description:
+            'Set ONLY if <factual_foundation> explicitly confirms the current head coach of the player’s current club. Set to null if unconfirmed, historical, or if sources conflict.',
+        },
+        conflictingManagerReports: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: 'List any former/sacked/conflicting manager names mentioned in search so prose avoids citing them as current.',
+        },
       },
-      required: ['tierBand', 'peerBenchmark', 'signatureSpikes', 'genuineFlaws'],
+      required: [
+        'tierBand',
+        'peerBenchmark',
+        'signatureSpikes',
+        'genuineFlaws',
+        'verifiedCurrentHeadCoach',
+        'conflictingManagerReports',
+      ],
     },
     basicInfo: {
       type: Type.OBJECT,
@@ -195,6 +214,8 @@ interface RawSynthesizedProfile {
     peerBenchmark: string;
     signatureSpikes: string[];
     genuineFlaws: string[];
+    verifiedCurrentHeadCoach?: string | null;
+    conflictingManagerReports?: string[];
   };
   basicInfo?: {
     name?: string;
@@ -368,6 +389,28 @@ export const sanitizeProfileData = (
   return sanitized;
 };
 
+function resolveEffectiveVerifiedFacts(
+  raw: RawSynthesizedProfile,
+  profile: PlayerProfile,
+  explicitVerifiedFacts: FutbolpediaVerifiedFacts | null,
+  isHistorical: boolean,
+): FutbolpediaVerifiedFacts | null {
+  if (isHistorical) return null;
+  if (explicitVerifiedFacts) return explicitVerifiedFacts;
+  if (!raw.calibration) return null;
+  return {
+    currentClub: profile.basicInfo.club,
+    currentHeadCoach: raw.calibration.verifiedCurrentHeadCoach ?? null,
+    conflictingManagerReports: raw.calibration.conflictingManagerReports ?? [],
+    season2526Stats: null,
+    recentForm: null,
+    injuryStatus: null,
+    majorAwards: [],
+    tacticalRole: null,
+    mobilitySummary: null,
+  };
+}
+
 function findSynthesisValidationIssues(
   raw: RawSynthesizedProfile,
   profile: PlayerProfile,
@@ -422,8 +465,10 @@ export interface SynthesizeDossierParams {
   foundationText: string;
   verifiedFacts: FutbolpediaVerifiedFacts | null;
   verifiedFactsBlock: string;
+  apiPlayer?: ApiFootballPlayerFactSheet | null;
   lockedDossiersBlock: string;
   savedDossiersBlock: string;
+  peerLedgerBlock?: string;
 }
 
 export async function synthesizePlayerDossier(
@@ -433,12 +478,15 @@ export async function synthesizePlayerDossier(
 
   const temporalRules = params.isHistorical
     ? `
-    - HISTORICAL / PEAK EVALUATION: Evaluate the player strictly on their PEAK/PRIME era as supported by the grounding foundation.
-    - Disregard their ${year} status (retired, manager, veteran) when rating attributes and Overall.
-    - Use latestUpdate to summarize their peak-era standing and signature achievements.`
+    - HISTORICAL / PEAK EVALUATION: Evaluate the player at their ABSOLUTE CAREER ZENITH on the exact same 1–99 scale as modern players (zero nostalgia inflation, zero conservative underselling).
+    - If the player at their peak was the #1 player in the world at their position or an all-time league/Champions League benchmark (such as Prime John Terry in 2004–2009), calibrate them in \`93_95_WC_ELITE\` (94–95) — do not cap historic defenders or midfielders at 91–92.
+    - Because a Prime/Peak dossier represents the player's realized peak, set \`ratings.potential\` equal to \`ratings.overall\` (unless their career was cut short before their prime).
+    - Disregard their ${year} status (retired, manager, veteran) when rating attributes and Overall.`
     : `
-    - CURRENT EVALUATION (${month} ${year}, Season ${currentSeason}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <verified_facts> and <factual_foundation>.
-    - Never name a head coach in shortBio, playstyle, or latestUpdate unless verified_facts.currentHeadCoach is non-null.
+    - CURRENT EVALUATION (${month} ${year}, Season ${currentSeason}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <deterministic_bio_anchor> and <factual_foundation>.
+    - NO REPUTATION LAG: If the player is already performing as a Top 3–5 player in the world at their position for an elite club right now (e.g., Willian Pacho at PSG), rate their current Overall in \`90_92_WORLD_CLASS\` (90–92) — do not undersell them at 87–89 Borderline World-Class and hide their current level in Potential.
+    - APEX CONTINENTAL STARS: If the player is the primary talisman/focal point of a Champions League-winning or Ballon d'Or-caliber campaign (e.g., Ousmane Dembélé at PSG), rate them at 92–94 rather than scraping the 91 floor.
+    - Set \`calibration.verifiedCurrentHeadCoach\` ONLY if <factual_foundation> explicitly confirms the current head coach of the player's current club as of ${month} ${year}. Never name a head coach in shortBio, playstyle, or latestUpdate when \`verifiedCurrentHeadCoach\` is null.
     - If grounding shows the player started a recent match, treat them as match fit.
     - Never write a stat-based qualifier in latestUpdate without a specific verified number from the grounding data.`;
 
@@ -447,11 +495,12 @@ export async function synthesizePlayerDossier(
 ${params.foundationText}
 </factual_foundation>
 ${params.verifiedFactsBlock}
+${params.peerLedgerBlock ?? ''}
 ${params.lockedDossiersBlock}
 ${params.savedDossiersBlock}
 <synthesis_instructions>
 ${temporalRules}
-- Complete the \`calibration\` block first: choose the exact \`tierBand\` from Section III (remembering World-Class starts strictly at 90 and awards/team trophies never create an automatic 90+ floor), name 1-2 positional peers in \`peerBenchmark\`, and identify \`signatureSpikes\` and \`genuineFlaws\`.
+- Complete the \`calibration\` block first: choose the exact \`tierBand\` from Section III based on where the player ranks globally at their position (Top 1–2 / historic positional benchmark = 93–95 World-Class Elite; Top 3–5 at their position = 90–92 World-Class), name 1-2 positional peers in \`peerBenchmark\`, and identify \`signatureSpikes\` and \`genuineFlaws\`.
 - Ensure \`ratings.overall\` sits inside the integer range of your chosen \`calibration.tierBand\`.
 - Make the 25 attributes reflect a realistic, spiky scouting profile where \`signatureSpikes\` are high and \`genuineFlaws\` stay low.
 </synthesis_instructions>
@@ -474,7 +523,39 @@ ${temporalRules}
     });
 
     const profile = sanitizeProfileData(raw);
-    lastIssues = findSynthesisValidationIssues(raw, profile, params.verifiedFacts);
+
+    // Deterministically backfill missing bio fields from API-Football on active players
+    if (!params.isHistorical && params.apiPlayer) {
+      const api = params.apiPlayer;
+      if ((!profile.basicInfo.age || profile.basicInfo.age <= 0) && api.age) {
+        profile.basicInfo.age = api.age;
+      }
+      if (profile.basicInfo.nationality === 'N/A' && api.nationality) {
+        profile.basicInfo.nationality = api.nationality;
+      }
+      if (profile.basicInfo.height === 'N/A' && api.height) {
+        profile.basicInfo.height = api.height;
+      }
+      if (profile.basicInfo.weight === 'N/A' && api.weight) {
+        profile.basicInfo.weight = api.weight;
+      }
+      if (profile.basicInfo.club === 'N/A' && api.currentClub) {
+        profile.basicInfo.club = normalizeClub(api.currentClub);
+      }
+    }
+
+    // Enforce Potential === Overall on historical Prime/Peak cards if the model floated Potential by 1-2 pts
+    if (params.isHistorical && profile.ratings.potential !== profile.ratings.overall) {
+      profile.ratings.potential = profile.ratings.overall;
+    }
+
+    const effectiveVerifiedFacts = resolveEffectiveVerifiedFacts(
+      raw,
+      profile,
+      params.verifiedFacts,
+      params.isHistorical,
+    );
+    lastIssues = findSynthesisValidationIssues(raw, profile, effectiveVerifiedFacts);
 
     if (lastIssues.length === 0) {
       return profile;
@@ -485,8 +566,8 @@ ${temporalRules}
     // On final attempt, return the sanitized profile if only non-fatal calibration/spread warnings remain
     // and no manager-grounding violation occurred.
     if (attempt === 1) {
-      const managerIssues = params.verifiedFacts
-        ? findProfileManagerGroundingIssues(profile, params.verifiedFacts)
+      const managerIssues = effectiveVerifiedFacts
+        ? findProfileManagerGroundingIssues(profile, effectiveVerifiedFacts)
         : [];
       if (managerIssues.length === 0) {
         return profile;

@@ -6,8 +6,11 @@ VI. DOSSIER SYNTHESIS & CALIBRATION WORKFLOW
 You are generating a structured scouting dossier JSON object. Follow this exact sequence inside the schema:
 
 1. **Step 1 — Scout Calibration (\`calibration\`):**
-   - Select \`tierBand\` from the Section III scale based on the player's intrinsic footballing quality (remembering that World-Class starts strictly at 90, and team trophies or Ballon d'Or nominations never create an automatic 90+ floor).
-   - Write \`peerBenchmark\`: name 1–2 real-world positional peers (one slightly above or level, one slightly below) to lock the exact integer within that tier band.
+   - Select \`tierBand\` from the Section III scale based on the player's intrinsic footballing quality and positional standing:
+     - **93–95 (\`93_95_WC_ELITE\`):** #1–2 in the world at their position at their peak, all-time league/UCL positional benchmark (e.g., Prime John Terry at 94–95), or apex continental superstar.
+     - **90–92 (\`90_92_WORLD_CLASS\`):** Undisputed World-Class player and Top 3–5 in the world at their position right now (e.g., Willian Pacho at 90–91, or elite continental stars at 92–93). Never drop a genuine top-3 to top-5 positional player into \`87_89_BORDERLINE_WC\` out of reputation lag.
+     - **Historical & Modern Parity:** Grade historical peaks and current players on the exact same scale with zero nostalgia bias and zero conservative cap on defenders or midfielders.
+   - Write \`peerBenchmark\`: name 1–2 real-world positional peers (with their ratings) to lock the exact integer within that tier band.
    - List 3–4 \`signatureSpikes\`: the exact attribute keys that define this player's ceiling and best qualities.
    - List 2–3 \`genuineFlaws\`: the exact attribute keys that represent real limitations or non-strengths in their game.
 

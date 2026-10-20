@@ -94,6 +94,82 @@ async function startServer() {
 
   const PLAYER_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
   const playerFactCache = new Map<string, { expiresAt: number; payload: any }>();
+  const teamIdCache = new Map<string, number>();
+  const teamContextCache = new Map<
+    number,
+    { expiresAt: number; coach: string | null; recentFixtures: any[]; upcomingFixtures: any[] }
+  >();
+
+  const getTeamContextById = async (teamId: number) => {
+    const cached = teamContextCache.get(teamId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached;
+    }
+
+    const [lastFixturesRes, nextFixturesRes, coachRes] = await Promise.allSettled([
+      axios.get(`${API_URL}/fixtures`, {
+        params: { team: teamId, last: 5 },
+        headers: { "x-apisports-key": API_KEY },
+        timeout: 4500,
+      }),
+      axios.get(`${API_URL}/fixtures`, {
+        params: { team: teamId, next: 3 },
+        headers: { "x-apisports-key": API_KEY },
+        timeout: 4500,
+      }),
+      axios.get(`${API_URL}/coachs`, {
+        params: { team: teamId },
+        headers: { "x-apisports-key": API_KEY },
+        timeout: 4500,
+      }),
+    ]);
+
+    const formatFixture = (f: any) => ({
+      date: f?.fixture?.date ? String(f.fixture.date).slice(0, 10) : null,
+      competition: f?.league?.name ?? null,
+      homeTeam: f?.teams?.home?.name ?? null,
+      awayTeam: f?.teams?.away?.name ?? null,
+      score:
+        f?.goals?.home != null && f?.goals?.away != null
+          ? `${f.goals.home}-${f.goals.away}`
+          : "Scheduled",
+    });
+
+    const recentFixtures =
+      lastFixturesRes.status === "fulfilled"
+        ? (lastFixturesRes.value.data?.response ?? []).map(formatFixture)
+        : [];
+
+    const upcomingFixtures =
+      nextFixturesRes.status === "fulfilled"
+        ? (nextFixturesRes.value.data?.response ?? []).map(formatFixture)
+        : [];
+
+    let coach: string | null = null;
+    if (coachRes.status === "fulfilled") {
+      const coaches: any[] = coachRes.value.data?.response ?? [];
+      const activeCoach =
+        coaches.find((c) =>
+          Array.isArray(c?.career) &&
+          c.career.some((stint: any) => stint?.team?.id === teamId && stint?.end === null),
+        ) || coaches[0];
+      if (activeCoach?.name) {
+        coach =
+          activeCoach.firstname && activeCoach.lastname
+            ? `${activeCoach.firstname} ${activeCoach.lastname}`
+            : String(activeCoach.name);
+      }
+    }
+
+    const entry = {
+      expiresAt: Date.now() + PLAYER_CACHE_TTL_MS,
+      coach,
+      recentFixtures,
+      upcomingFixtures,
+    };
+    teamContextCache.set(teamId, entry);
+    return entry;
+  };
 
   const formatHeightImperial = (raw: string | null | undefined): string | null => {
     if (!raw) return null;
@@ -173,6 +249,8 @@ async function startServer() {
       let league: string | null = null;
       let injured: boolean | null = basePlayer?.injured ?? null;
       let seasonStats: any = null;
+      let coach: string | null = null;
+      let recentFixtures: any[] = [];
 
       if (basePlayer?.id) {
         try {
@@ -202,6 +280,14 @@ async function startServer() {
               duelsWon: primaryStat.duels?.won ?? null,
               rating: primaryStat.games?.rating ?? null,
             };
+            if (primaryStat.team?.id) {
+              if (currentClub) {
+                teamIdCache.set(currentClub.toLowerCase(), primaryStat.team.id);
+              }
+              const teamCtx = await getTeamContextById(primaryStat.team.id);
+              coach = teamCtx.coach;
+              recentFixtures = teamCtx.recentFixtures;
+            }
           }
         } catch (statsErr) {
           // Non-fatal: still return profile bio facts
@@ -222,8 +308,10 @@ async function startServer() {
           position: basePlayer.position ?? null,
           currentClub,
           league,
+          coach,
           injured,
           seasonStats,
+          recentFixtures,
         },
       };
 
@@ -251,6 +339,9 @@ async function startServer() {
       }
 
       const teamId = teamRes.data.response[0].team.id;
+      const teamName = teamRes.data.response[0].team.name;
+      if (teamName) teamIdCache.set(String(teamName).toLowerCase(), teamId);
+      teamIdCache.set(String(team).toLowerCase().trim(), teamId);
 
       // 2. Get Squad
       const squadRes = await axios.get(`${API_URL}/players/squads`, {
@@ -262,6 +353,44 @@ async function startServer() {
     } catch (error: any) {
       console.error(error?.response?.data || error);
       res.status(500).json({ error: "Failed to fetch from API-Football" });
+    }
+  });
+
+  app.get("/api/football/fixtures", async (req, res) => {
+    try {
+      const rawTeam = typeof req.query.team === "string" ? req.query.team.trim() : "";
+      if (!rawTeam) return res.status(400).json({ error: "Missing team name" });
+      if (!API_KEY) return res.json({ available: false, team: rawTeam, recentFixtures: [], upcomingFixtures: [] });
+
+      let teamId = teamIdCache.get(rawTeam.toLowerCase());
+      let resolvedTeamName = rawTeam;
+      if (!teamId) {
+        const teamRes = await axios.get(`${API_URL}/teams`, {
+          params: { search: rawTeam },
+          headers: { "x-apisports-key": API_KEY },
+          timeout: 5000,
+        });
+        const first = teamRes.data?.response?.[0]?.team;
+        if (!first?.id) {
+          return res.status(404).json({ error: "Team not found" });
+        }
+        teamId = first.id as number;
+        resolvedTeamName = first.name || rawTeam;
+        teamIdCache.set(rawTeam.toLowerCase(), teamId);
+        if (first.name) teamIdCache.set(String(first.name).toLowerCase(), teamId);
+      }
+
+      const ctx = await getTeamContextById(teamId);
+      return res.json({
+        available: true,
+        team: resolvedTeamName,
+        coach: ctx.coach,
+        recentFixtures: ctx.recentFixtures,
+        upcomingFixtures: ctx.upcomingFixtures,
+      });
+    } catch (error: any) {
+      console.warn("[api/football/fixtures] lookup failed:", error?.message || error);
+      return res.status(500).json({ error: "Failed to fetch fixtures from API-Football" });
     }
   });
 

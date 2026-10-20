@@ -8,12 +8,16 @@ import {
 } from './aiClient';
 import { runConversationalScout } from './conversationalScout';
 import {
+  CALIBRATION_EPOCH_MS,
   buildHistoryContents,
   buildLockedDossiersBlock,
+  buildPositionalPeerLedgerBlock,
   buildSavedDossiersBlock,
+  fetchSupabaseCalibratedPool,
   findReferencedDossiers,
   getCachedDossier,
   getSharedConversation,
+  grepDossiers,
   isSupabaseReady,
   mergeConversationDossiers,
   resolveSavedDossiersForRequest,
@@ -121,13 +125,16 @@ export const sendMessageToAI = async (
   const isEAFCRequest = /\b(playstyle\+?|fc\s*card|eafc|ea\s*fc)\b/i.test(message);
   const conversationDossiers = mergeConversationDossiers(history, conversationProfiles);
 
-  // 1. Classify turn via Structured Turn Router (with 0ms fast-path for simple commands)
-  const route = await classifyTurn({
-    message,
-    history,
-    conversationDossiers,
-    hasImage: Boolean(imageData),
-  });
+  // 1. Classify turn via Structured Turn Router in parallel with warming the Supabase calibrated ledger
+  const [route] = await Promise.all([
+    classifyTurn({
+      message,
+      history,
+      conversationDossiers,
+      hasImage: Boolean(imageData),
+    }),
+    fetchSupabaseCalibratedPool(),
+  ]);
   perf(`turn router (${route.intent})`);
 
   // 2. Resolve conversation-locked and saved-archive dossiers
@@ -156,6 +163,7 @@ export const sendMessageToAI = async (
     }
   }
   const lockedDossiersBlock = buildLockedDossiersBlock(referencedDossiers);
+  const peerLedgerBlock = buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers);
 
   // 3. Single-Player Dossier Pipeline
   if (route.intent === 'single_dossier') {
@@ -165,12 +173,16 @@ export const sendMessageToAI = async (
       extractCandidateSlug(message) ||
       '';
 
+    const isFreshlyCalibrated = (p?: PlayerProfile): boolean =>
+      Boolean(p?.createdAt && p.createdAt >= CALIBRATION_EPOCH_MS);
+
     if (!imageData) {
       // Return locked in-conversation dossier if re-requested without regeneration/historical flag
       if (
         !route.isHistorical &&
         !route.wantsRegeneration &&
-        referencedDossiers.length === 1
+        referencedDossiers.length === 1 &&
+        isFreshlyCalibrated(referencedDossiers[0])
       ) {
         return referencedDossiers[0];
       }
@@ -180,7 +192,8 @@ export const sendMessageToAI = async (
         !route.isHistorical &&
         !route.wantsRegeneration &&
         wantsSavedDossierAccess(message) &&
-        savedResult.dossiers.length === 1
+        savedResult.dossiers.length === 1 &&
+        isFreshlyCalibrated(savedResult.dossiers[0])
       ) {
         return savedResult.dossiers[0];
       }
@@ -204,6 +217,11 @@ export const sendMessageToAI = async (
     });
     perf('hybrid grounding');
 
+    const freshReferencedDossiers = referencedDossiers.filter(isFreshlyCalibrated);
+    const synthesisLockedBlock = route.wantsRegeneration
+      ? ''
+      : buildLockedDossiersBlock(freshReferencedDossiers);
+
     const profile = await synthesizePlayerDossier({
       rawMessage: message,
       mode,
@@ -211,15 +229,25 @@ export const sendMessageToAI = async (
       foundationText: grounding.foundationText,
       verifiedFacts: grounding.verifiedFacts,
       verifiedFactsBlock: grounding.verifiedFactsBlock,
-      lockedDossiersBlock: route.wantsRegeneration ? '' : lockedDossiersBlock,
+      apiPlayer: grounding.apiPlayer,
+      lockedDossiersBlock: synthesisLockedBlock,
       savedDossiersBlock,
+      peerLedgerBlock,
     });
     perf('calibrated synthesis');
 
-    if (!route.isHistorical) {
-      upsertCachedDossier(toPlayerSlug(profile.basicInfo.name), profile);
-    }
-    return profile;
+    const stampedProfile: PlayerProfile = {
+      ...profile,
+      createdAt: Date.now(),
+    };
+
+    const baseSlug = toPlayerSlug(stampedProfile.basicInfo.name);
+    const cacheSlug =
+      route.isHistorical && !baseSlug.startsWith('prime-') && !baseSlug.startsWith('peak-')
+        ? `prime-${baseSlug}`
+        : baseSlug;
+    upsertCachedDossier(cacheSlug, stampedProfile);
+    return stampedProfile;
   }
 
   // 4. Conversational Scout Pipeline (Comparisons, Live Dossier Revisions, Tactical Q&A, Archive)
@@ -231,8 +259,10 @@ export const sendMessageToAI = async (
     imageData,
     isEAFCRequest,
     conversationDossiers,
+    savedDossiers,
     lockedDossiersBlock,
     savedDossiersBlock,
+    peerLedgerBlock,
     onDossierUpdated: options?.onDossierUpdated,
   });
   perf('conversational scout');

@@ -1,10 +1,16 @@
-import { Type } from '@google/genai';
 import {
-  generateStructured,
   getCurrentSeasonInfo,
   runGroundedSearch,
 } from './aiClient';
 import type { FutbolpediaVerifiedFacts } from './profileManagerGrounding';
+
+export interface ApiFootballFixtureItem {
+  date: string | null;
+  competition: string | null;
+  homeTeam: string | null;
+  awayTeam: string | null;
+  score: string;
+}
 
 export interface ApiFootballPlayerFactSheet {
   id: number;
@@ -18,6 +24,7 @@ export interface ApiFootballPlayerFactSheet {
   position: string | null;
   currentClub: string | null;
   league: string | null;
+  coach?: string | null;
   injured: boolean | null;
   seasonStats: {
     season: number;
@@ -32,6 +39,7 @@ export interface ApiFootballPlayerFactSheet {
     duelsWon: number | null;
     rating: string | null;
   } | null;
+  recentFixtures?: ApiFootballFixtureItem[];
 }
 
 export interface ExtendedVerifiedFacts extends FutbolpediaVerifiedFacts {
@@ -53,69 +61,14 @@ export interface ExtendedVerifiedFacts extends FutbolpediaVerifiedFacts {
   dataGaps: string[];
 }
 
-const VERIFIED_FACTS_SCHEMA: Record<string, unknown> = {
-  type: Type.OBJECT,
-  properties: {
-    playerName: { type: Type.STRING, nullable: true },
-    currentClub: { type: Type.STRING, nullable: true },
-    age: { type: Type.NUMBER, nullable: true },
-    position: { type: Type.STRING, nullable: true },
-    nationality: { type: Type.STRING, nullable: true },
-    height: { type: Type.STRING, nullable: true },
-    weight: { type: Type.STRING, nullable: true },
-    season2526Stats: { type: Type.STRING, nullable: true },
-    recentForm: { type: Type.STRING, nullable: true },
-    injuryStatus: { type: Type.STRING, nullable: true },
-    recentMatchDate: { type: Type.STRING, nullable: true },
-    majorAwards: { type: Type.ARRAY, items: { type: Type.STRING } },
-    tacticalRole: { type: Type.STRING, nullable: true },
-    currentHeadCoach: { type: Type.STRING, nullable: true },
-    conflictingManagerReports: { type: Type.ARRAY, items: { type: Type.STRING } },
-    premierLeagueMobility: {
-      type: Type.STRING,
-      enum: [
-        'stable',
-        'recent_arrival',
-        'linked_exit',
-        'confirmed_exit',
-        'linked_move',
-        'unknown',
-      ],
-    },
-    mobilitySummary: { type: Type.STRING, nullable: true },
-    verifiedSources: { type: Type.ARRAY, items: { type: Type.STRING } },
-    dataGaps: { type: Type.ARRAY, items: { type: Type.STRING } },
-  },
-  required: [
-    'playerName',
-    'currentClub',
-    'age',
-    'position',
-    'nationality',
-    'height',
-    'weight',
-    'season2526Stats',
-    'recentForm',
-    'injuryStatus',
-    'recentMatchDate',
-    'majorAwards',
-    'tacticalRole',
-    'currentHeadCoach',
-    'conflictingManagerReports',
-    'premierLeagueMobility',
-    'mobilitySummary',
-    'verifiedSources',
-    'dataGaps',
-  ],
-};
-
 export async function fetchApiFootballPlayer(
   playerName: string,
+  timeoutMs = 3500,
 ): Promise<ApiFootballPlayerFactSheet | null> {
   if (typeof fetch === 'undefined' || !playerName.trim()) return null;
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(
       `/api/football/player?name=${encodeURIComponent(playerName.trim())}`,
       { signal: controller.signal },
@@ -136,12 +89,26 @@ export function formatApiFootballFactSheetBlock(player: ApiFootballPlayerFactShe
     ? `Season ${stats.season} (API-Football): ${stats.appearances ?? 0} apps (${stats.lineups ?? 0} starts, ${stats.minutes ?? 0} mins), ${stats.goals ?? 0} goals, ${stats.assists ?? 0} assists${stats.keyPasses != null ? `, ${stats.keyPasses} key passes` : ''}${stats.tackles != null ? `, ${stats.tackles} tackles` : ''}${stats.interceptions != null ? `, ${stats.interceptions} interceptions` : ''}.`
     : 'Season stats: not available in API-Football.';
 
+  const fixturesLine =
+    Array.isArray(player.recentFixtures) && player.recentFixtures.length > 0
+      ? `Recent Club Match Log: ${player.recentFixtures
+          .slice(0, 5)
+          .map(
+            (f) =>
+              `${f.date ?? '?'} [${f.competition ?? 'Match'}] ${f.homeTeam} ${f.score} ${f.awayTeam}`,
+          )
+          .join(' | ')}`
+      : '';
+
   return [
     `[API-FOOTBALL DETERMINISTIC RECORD — ${player.name}]`,
     `Age: ${player.age ?? 'N/A'} | Nationality: ${player.nationality ?? 'N/A'} | Height: ${player.height ?? 'N/A'} | Weight: ${player.weight ?? 'N/A'}`,
-    `Position: ${player.position ?? 'N/A'} | Registered Club: ${player.currentClub ?? 'N/A'}${player.league ? ` (${player.league})` : ''} | Injured flag: ${player.injured ?? 'unknown'}`,
+    `Position: ${player.position ?? 'N/A'} | Registered Club: ${player.currentClub ?? 'N/A'}${player.league ? ` (${player.league})` : ''}${player.coach ? ` | Registered Head Coach: ${player.coach}` : ''} | Injured flag: ${player.injured ?? 'unknown'}`,
     statsLine,
-  ].join('\n');
+    fixturesLine,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 export interface PlayerGroundingBundle {
@@ -151,6 +118,14 @@ export interface PlayerGroundingBundle {
   apiPlayer: ApiFootballPlayerFactSheet | null;
 }
 
+const ANTI_GAME_FILTER = '-site:futbin.com -site:sofifa.com -site:fifaindex.com -site:futwiz.com';
+
+/**
+ * Direct, adaptive grounding gatherer.
+ * 1. For active players, checks deterministic API-Football first (with fast timeout).
+ * 2. When API-Football returns a complete current-season record (club, coach, stats, recent match log),
+ *    collapses web search down to a single focused tactical & recent-news query instead of over-fetching.
+ */
 export async function gatherPlayerGrounding(params: {
   playerName: string;
   rawMessage: string;
@@ -161,90 +136,64 @@ export async function gatherPlayerGrounding(params: {
   const datePrefix = `[Date: ${month} ${year}]`;
   const subject = params.playerName || params.rawMessage;
 
-  let searchQueries: string[];
   if (params.isHistorical) {
-    searchQueries = [
-      `${subject} peak prime season major awards Ballon d'Or rankings and honours`,
-      `${subject} prime years best season stats goals assists per 90 and advanced metrics`,
-      `${subject} prime tactical role scouting report playing style strengths weaknesses and defining matches`,
-    ];
-  } else if (params.mode === 'fast') {
-    searchQueries = [
-      `${subject} current club ${year}, current head coach and manager appointment, injury status, transfer news, and ${currentSeason} stats`,
-      `${subject} scouting profile: playing style, technical/physical/mental strengths and weaknesses, tactical role, and recent form`,
-    ];
-  } else {
-    searchQueries = [
-      `${subject} — current club as of ${month} ${year}, confirmed current head coach, recent match appearances, injury status, and ${year} transfer or loan news`,
-      `${subject} — scouting report: playing style, tactical role, technical/physical/mental strengths and weaknesses, and analyst breakdowns of how he plays`,
-      `${subject} — ${currentSeason} season stats (goals, assists, minutes, key metrics), major awards, and peer reputation`,
-    ];
-  }
-
-  const [apiPlayer, ...searchResults] = await Promise.all([
-    params.isHistorical ? Promise.resolve(null) : fetchApiFootballPlayer(subject),
-    ...searchQueries.map((q) => runGroundedSearch(q, { datePrefix })),
-  ]);
-
-  const apiBlock = formatApiFootballFactSheetBlock(apiPlayer);
-  const searchBlock = searchResults.map((r) => r.formattedBlock).join('\n\n---\n\n');
-  const foundationText = [apiBlock, searchBlock].filter(Boolean).join('\n\n===\n\n');
-
-  if (params.isHistorical) {
+    const searchResult = await runGroundedSearch(
+      `${subject} career peak prime seasons major honours Ballon d'Or FIFPro World XI best season stats tactical profile ${ANTI_GAME_FILTER}`,
+    );
     return {
-      foundationText,
+      foundationText: searchResult.formattedBlock,
       verifiedFacts: null,
       verifiedFactsBlock: '',
       apiPlayer: null,
     };
   }
 
-  let verifiedFacts: ExtendedVerifiedFacts | null = null;
-  let verifiedFactsBlock = '';
+  const apiPlayer = await fetchApiFootballPlayer(subject, 2600);
+  const hasCompleteApiRecord = Boolean(
+    apiPlayer?.currentClub &&
+      apiPlayer?.seasonStats &&
+      (apiPlayer.seasonStats.appearances ?? 0) > 0,
+  );
 
-  try {
-    const extractionPrompt = `Extract verified player facts from the API-Football record and web search grounding below.
-Rules:
-- Use API-Football as the primary anchor for age, nationality, height, and weight when present.
-- For currentClub, use the most recent ${year} club confirmed in web search if a transfer or loan occurred; otherwise use API-Football.
-- Set currentHeadCoach ONLY if web search explicitly confirms who manages the player's CURRENT club as of ${month} ${year}. If only a sacked or former manager is mentioned, or if sources conflict, set currentHeadCoach to null and list the conflict in conflictingManagerReports.
-- Never guess or invent unstated facts; use null for missing fields.
-
-GROUNDING DATA:
-${foundationText.substring(0, 9500)}
-
-USER REQUEST: "${params.rawMessage}"`;
-
-    verifiedFacts = await generateStructured<ExtendedVerifiedFacts>({
-      task: 'extraction',
-      mode: params.mode,
-      prompt: extractionPrompt,
-      schema: VERIFIED_FACTS_SCHEMA,
-    });
-
-    if (apiPlayer) {
-      verifiedFacts.age = verifiedFacts.age ?? apiPlayer.age;
-      verifiedFacts.nationality = verifiedFacts.nationality ?? apiPlayer.nationality;
-      verifiedFacts.height = verifiedFacts.height ?? apiPlayer.height;
-      verifiedFacts.weight = verifiedFacts.weight ?? apiPlayer.weight;
-      verifiedFacts.currentClub = verifiedFacts.currentClub ?? apiPlayer.currentClub;
-    }
-
-    verifiedFactsBlock = `
-    <verified_facts>
-    Authoritative facts merged from API-Football and live search grounding:
-    - Use these exact values for basicInfo (name, age, nationality, club, height, weight) and latestUpdate.
-    - Missing current-season stats in dataGaps lower confidence — NEVER zero out any of the 25 ability attributes for a recognizable footballer.
-    - Only name a head coach in prose if currentHeadCoach is non-null.
-    ${JSON.stringify(verifiedFacts, null, 2)}
-    </verified_facts>`;
-  } catch (e) {
-    console.warn('[Grounding] Schema fact extraction failed, using raw foundation:', e);
+  let searchQueries: string[];
+  if (hasCompleteApiRecord || params.mode === 'fast') {
+    // Adaptive short-circuit: API-Football already supplied bio, club, coach, season stats, and match log.
+    // Run 1 focused query for tactical scouting profile, positional standing, and latest injury/transfer news.
+    const clubHint = apiPlayer?.currentClub ? ` (${apiPlayer.currentClub})` : '';
+    searchQueries = [
+      `${subject}${clubHint} — tactical scouting report, playing style, positional standing in world football, technical/physical/mental strengths and weaknesses, and latest ${month} ${year} news or injury updates ${ANTI_GAME_FILTER}`,
+    ];
+  } else {
+    // Fallback when API-Football lacks a current-season record: run 2 parallel search vectors
+    searchQueries = [
+      `${subject} — current club as of ${month} ${year}, confirmed current head coach, recent match appearances, injury status, ${currentSeason} season stats, and major honours ${ANTI_GAME_FILTER}`,
+      `${subject} — tactical scouting report: playing style, positional standing in world football, technical/physical/mental strengths and weaknesses ${ANTI_GAME_FILTER}`,
+    ];
   }
+
+  const searchResults = await Promise.all(
+    searchQueries.map((q) => runGroundedSearch(q, { datePrefix })),
+  );
+
+  const apiBlock = formatApiFootballFactSheetBlock(apiPlayer);
+  const searchBlock = searchResults.map((r) => r.formattedBlock).join('\n\n---\n\n');
+  const foundationText = [apiBlock, searchBlock].filter(Boolean).join('\n\n===\n\n');
+
+  const verifiedFactsBlock = apiPlayer
+    ? `<deterministic_bio_anchor>
+Authoritative API-Football record for ${apiPlayer.name}:
+- Age: ${apiPlayer.age ?? 'verify from search'}
+- Nationality: ${apiPlayer.nationality ?? 'verify from search'}
+- Height: ${apiPlayer.height ?? 'verify from search'}
+- Weight: ${apiPlayer.weight ?? 'verify from search'}
+- Registered Club: ${apiPlayer.currentClub ?? 'verify from search'} (update only if search confirms a more recent ${year} transfer/loan)
+${apiPlayer.coach ? `- Registered Head Coach: ${apiPlayer.coach} (update only if search confirms a more recent coaching change)` : ''}
+</deterministic_bio_anchor>`
+    : '';
 
   return {
     foundationText,
-    verifiedFacts,
+    verifiedFacts: null,
     verifiedFactsBlock,
     apiPlayer,
   };

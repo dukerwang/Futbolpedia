@@ -1,4 +1,5 @@
 import { GoogleGenAI, Content, ThinkingLevel, Type } from '@google/genai';
+import type { PlayerProfile } from '../types';
 import {
   AITask,
   DEFAULT_FAST_MODEL,
@@ -7,6 +8,7 @@ import {
   ThinkingTier,
 } from '../constants/modelProfiles';
 import { SIMULATION_SEASON, SIMULATION_YEAR } from '../prompts/scoutCore';
+import { DossierGrepParams, grepDossiers } from './dossierStore';
 
 export const FLASH_MODEL = DEFAULT_FAST_MODEL;
 export const SYNTHESIS_MODEL = DEFAULT_SYNTHESIS_MODEL;
@@ -145,6 +147,7 @@ export interface GenerateProseTurnParams {
   thinkingLevelOverride?: ThinkingTier;
   modelOverride?: string;
   enableTools?: boolean;
+  dossiersPool?: PlayerProfile[];
 }
 
 export async function generateProseTurn(params: GenerateProseTurnParams): Promise<string> {
@@ -154,30 +157,114 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
     temperature: params.temperatureOverride,
   });
 
+  const functionDeclarations: any[] = [
+    {
+      name: 'grep_saved_dossiers',
+      description:
+        'Instant (<1ms) structured grep and attribute filter across the user’s saved and in-conversation player dossiers. Use this whenever the user asks about their scouted players, compares against saved profiles, filters by position/rating/attribute thresholds, or asks who ranks highest in a specific attribute.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          query: {
+            type: Type.STRING,
+            description:
+              'Optional keyword search across player name, club, nationality, archetype, bestRoles, strengths, weaknesses, and shortBio.',
+          },
+          position: {
+            type: Type.STRING,
+            description:
+              'Optional positional filter (e.g. "Centre-Back", "CB", "Midfielder", "Winger", "Striker", "Full-Back", "Goalkeeper").',
+          },
+          club: {
+            type: Type.STRING,
+            description: 'Optional club filter (e.g. "PSG", "Chelsea", "Arsenal").',
+          },
+          minOverall: {
+            type: Type.NUMBER,
+            description: 'Minimum Overall rating filter (1-99).',
+          },
+          maxOverall: {
+            type: Type.NUMBER,
+            description: 'Maximum Overall rating filter (1-99).',
+          },
+          minPotential: {
+            type: Type.NUMBER,
+            description: 'Minimum Potential rating filter (1-99).',
+          },
+          attributeKey: {
+            type: Type.STRING,
+            description:
+              'Optional specific outfield attribute key to filter or inspect (e.g. "defensivePositioning", "progressivePassing", "finishing", "speed", "dribbling", "tackling", "footballIQ", "composure").',
+          },
+          minAttributeValue: {
+            type: Type.NUMBER,
+            description: 'Minimum value (1-99) required for attributeKey.',
+          },
+          sortBy: {
+            type: Type.STRING,
+            description:
+              'Field to sort descending by: "overall" (default), "potential", "age", or any of the 25 attribute keys (e.g. "progressivePassing", "speed").',
+          },
+          limit: {
+            type: Type.NUMBER,
+            description: 'Max dossiers to return (default 10, max 25).',
+          },
+        },
+      },
+    },
+    {
+      name: 'get_player_fact_sheet',
+      description:
+        'Fetches a player’s deterministic API-Football fact sheet (registered club, age, height, weight, injury flag, and current season appearances/goals/assists/tackles/key passes).',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          name: {
+            type: Type.STRING,
+            description: 'Full name of the footballer (e.g. "Willian Pacho", "Ousmane Dembélé").',
+          },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'get_football_squad',
+      description:
+        'Gets the current active roster/squad of a football team using API-Football. Use this to verify current players for a club.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          team: {
+            type: Type.STRING,
+            description: 'The name of the football club (e.g. Real Madrid, Arsenal, PSG)',
+          },
+        },
+        required: ['team'],
+      },
+    },
+    {
+      name: 'get_team_fixtures',
+      description:
+        'Gets the last 5 completed match results, next 3 upcoming fixtures, and registered head coach for a football club using API-Football.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          team: {
+            type: Type.STRING,
+            description: 'The name of the football club (e.g. PSG, Chelsea, Barcelona)',
+          },
+        },
+        required: ['team'],
+      },
+    },
+  ];
+
   const tools: any[] =
     params.enableTools === false
       ? []
       : [
           { googleSearch: {} },
-          {
-            functionDeclarations: [
-              {
-                name: 'get_football_squad',
-                description:
-                  'Gets the current active roster/squad of a football team using API-Football. Use this to verify current players for a club.',
-                parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                    team: {
-                      type: Type.STRING,
-                      description: 'The name of the football club (e.g. Real Madrid, Arsenal)',
-                    },
-                  },
-                  required: ['team'],
-                },
-              },
-            ],
-          },
+          { functionDeclarations },
         ];
 
   const chatSession = getAi().chats.create({
@@ -211,36 +298,69 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
 
   let response = await chatSession.sendMessage({ message: parts });
 
-  while (response.functionCalls && response.functionCalls.length > 0) {
-    const functionCall = response.functionCalls[0];
-    let apiResult: any = {};
+  let safetyLoopCount = 0;
+  while (response.functionCalls && response.functionCalls.length > 0 && safetyLoopCount < 4) {
+    safetyLoopCount++;
+    const calls = response.functionCalls;
 
-    try {
-      if (functionCall.name === 'get_football_squad') {
-        const args = functionCall.args as any;
-        if (args?.team) {
-          const fetchRes = await fetch(`/api/football/squad?team=${encodeURIComponent(args.team)}`);
-          if (!fetchRes.ok) throw new Error('API responded with an error.');
-          apiResult = await fetchRes.json();
-        } else {
-          apiResult = { error: 'Missing team argument' };
+    const toolResponses = await Promise.all(
+      calls.map(async (functionCall) => {
+        let apiResult: any = {};
+        const args = (functionCall.args as any) ?? {};
+        try {
+          if (functionCall.name === 'grep_saved_dossiers') {
+            apiResult = grepDossiers(params.dossiersPool ?? [], args as DossierGrepParams);
+          } else if (functionCall.name === 'get_player_fact_sheet') {
+            if (args.name) {
+              const fetchRes = await fetch(
+                `/api/football/player?name=${encodeURIComponent(String(args.name))}`,
+              );
+              apiResult = fetchRes.ok
+                ? await fetchRes.json()
+                : { error: `Player lookup returned status ${fetchRes.status}` };
+            } else {
+              apiResult = { error: 'Missing name argument' };
+            }
+          } else if (functionCall.name === 'get_football_squad') {
+            if (args.team) {
+              const fetchRes = await fetch(
+                `/api/football/squad?team=${encodeURIComponent(String(args.team))}`,
+              );
+              apiResult = fetchRes.ok
+                ? await fetchRes.json()
+                : { error: `Squad lookup returned status ${fetchRes.status}` };
+            } else {
+              apiResult = { error: 'Missing team argument' };
+            }
+          } else if (functionCall.name === 'get_team_fixtures') {
+            if (args.team) {
+              const fetchRes = await fetch(
+                `/api/football/fixtures?team=${encodeURIComponent(String(args.team))}`,
+              );
+              apiResult = fetchRes.ok
+                ? await fetchRes.json()
+                : { error: `Fixtures lookup returned status ${fetchRes.status}` };
+            } else {
+              apiResult = { error: 'Missing team argument' };
+            }
+          } else {
+            apiResult = { error: `Unknown tool: ${functionCall.name}` };
+          }
+        } catch (e: any) {
+          apiResult = { error: e?.message || 'Tool execution failed' };
         }
-      } else {
-        apiResult = { error: 'Unknown function' };
-      }
-    } catch (e: any) {
-      apiResult = { error: e?.message || 'Tool execution failed' };
-    }
 
-    response = await chatSession.sendMessage({
-      message: [
-        {
+        return {
           functionResponse: {
             name: functionCall.name,
             response: apiResult,
           },
-        },
-      ],
+        };
+      }),
+    );
+
+    response = await chatSession.sendMessage({
+      message: toolResponses,
     });
   }
 
