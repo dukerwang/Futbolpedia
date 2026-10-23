@@ -1,5 +1,6 @@
 import type { GaffaClubContextResponse, GaffaContextBag } from '../types';
 import { GAFFA_RULES_VERSION, emptyGaffaContextBag } from '../constants/gaffaRules';
+import { fetchGaffaContextFromSupabase, getGaffaSessionUser } from './gaffaAuth';
 
 export const GAFFA_LINK_KEY = 'futbolpedia-gaffa-link';
 
@@ -63,6 +64,25 @@ export async function fetchGaffaContext(
   leagueId: string,
   teamId: string,
 ): Promise<GaffaClubContextResponse> {
+  const sessionUser = await getGaffaSessionUser();
+  if (sessionUser) {
+    try {
+      return await fetchGaffaContextFromSupabase(leagueId, teamId);
+    } catch (supabaseErr) {
+      // Fall back to server proxy if configured; otherwise surface the Supabase error
+      const qs = new URLSearchParams({ leagueId, teamId });
+      try {
+        const res = await fetch(`/api/gaffa/context?${qs.toString()}`);
+        if (res.ok) {
+          return res.json();
+        }
+      } catch {
+        /* ignore proxy error when Supabase already reported why */
+      }
+      throw supabaseErr;
+    }
+  }
+
   const qs = new URLSearchParams({ leagueId, teamId });
   const res = await fetch(`/api/gaffa/context?${qs.toString()}`);
   if (!res.ok) {

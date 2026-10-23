@@ -5,7 +5,14 @@ import { ChatInput } from './components/ChatInput';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import { WhatsNewPopup } from './components/WhatsNewPopup';
-import type { ChatMessage, PlayerProfile, Conversation, ChatDomain } from './types';
+import type {
+  ChatMessage,
+  PlayerProfile,
+  Conversation,
+  ChatDomain,
+  GaffaAuthUser,
+  GaffaUserClub,
+} from './types';
 import { sendMessageToAI, resetChat, getCachedDossier, getSharedConversation } from './services/geminiService';
 import { sendGaffaMessage } from './services/gaffaChatService';
 import { looksLikeGaffaQuestion } from './services/gaffaDetect';
@@ -19,6 +26,14 @@ import {
   saveGaffaLink,
   type GaffaLinkState,
 } from './services/gaffaContext';
+import {
+  fetchMyGaffaClubs,
+  getGaffaSessionUser,
+  onGaffaAuthStateChange,
+  signInGaffaWithGoogle,
+  signInGaffaWithPassword,
+  signOutGaffa,
+} from './services/gaffaAuth';
 import { GaffaConnectStrip } from './components/GaffaConnectStrip';
 
 const generateId = () => `id-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -50,6 +65,9 @@ const App: React.FC = () => {
   const [gaffaLink, setGaffaLink] = useState<GaffaLinkState | null>(null);
   const [gaffaSyncing, setGaffaSyncing] = useState(false);
   const [gaffaSyncError, setGaffaSyncError] = useState<string | null>(null);
+  const [gaffaUser, setGaffaUser] = useState<GaffaAuthUser | null>(null);
+  const [gaffaClubs, setGaffaClubs] = useState<GaffaUserClub[]>([]);
+  const [gaffaAuthLoading, setGaffaAuthLoading] = useState(false);
 
   // Initialize Theme
   useEffect(() => {
@@ -457,6 +475,107 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // Subscribe to Gaffa Supabase Auth and auto-load/select user's clubs
+  useEffect(() => {
+    let active = true;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('gaffa_auth') === '1') {
+      setDomain('gaffa');
+      params.delete('gaffa_auth');
+      const nextSearch = params.toString();
+      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+      window.history.replaceState({}, '', nextUrl);
+    }
+
+    const syncClubsForUser = async (user: GaffaAuthUser | null) => {
+      if (!active) return;
+      setGaffaUser(user);
+      if (!user) {
+        setGaffaClubs([]);
+        return;
+      }
+      try {
+        const clubs = await fetchMyGaffaClubs(user.id);
+        if (!active) return;
+        setGaffaClubs(clubs);
+        if (clubs.length === 0) return;
+
+        const saved = loadGaffaLink();
+        const matchingSaved = saved
+          ? clubs.find(
+              (c) => c.league_id === saved.league_id && c.club_id === saved.club_id,
+            )
+          : undefined;
+        const target = matchingSaved ?? clubs[0];
+        const alreadyFresh =
+          matchingSaved &&
+          saved?.bag?.connected &&
+          saved.last_synced_at &&
+          Date.now() - Date.parse(saved.last_synced_at) < 10 * 60 * 1000;
+
+        if (!alreadyFresh) {
+          void handleGaffaSync(target.league_id, target.club_id);
+        }
+      } catch (err) {
+        if (!active) return;
+        setGaffaSyncError(
+          err instanceof Error ? err.message : 'Could not load your Gaffa clubs',
+        );
+      }
+    };
+
+    void getGaffaSessionUser().then(syncClubsForUser);
+    const unsubscribe = onGaffaAuthStateChange((user) => {
+      void syncClubsForUser(user);
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [handleGaffaSync]);
+
+  const handleGaffaSignInPassword = useCallback(
+    async (email: string, password: string) => {
+      setGaffaAuthLoading(true);
+      setGaffaSyncError(null);
+      try {
+        await signInGaffaWithPassword(email, password);
+      } catch (err) {
+        setGaffaSyncError(err instanceof Error ? err.message : 'Sign-in failed');
+      } finally {
+        setGaffaAuthLoading(false);
+      }
+    },
+    [],
+  );
+
+  const handleGaffaSignInGoogle = useCallback(async () => {
+    setGaffaAuthLoading(true);
+    setGaffaSyncError(null);
+    try {
+      await signInGaffaWithGoogle();
+    } catch (err) {
+      setGaffaSyncError(err instanceof Error ? err.message : 'Google sign-in failed');
+      setGaffaAuthLoading(false);
+    }
+  }, []);
+
+  const handleGaffaSignOut = useCallback(async () => {
+    setGaffaAuthLoading(true);
+    try {
+      await signOutGaffa();
+      clearGaffaLink();
+      setGaffaUser(null);
+      setGaffaClubs([]);
+      setGaffaLink(null);
+      setGaffaSyncError(null);
+    } finally {
+      setGaffaAuthLoading(false);
+    }
+  }, []);
+
   const handleGaffaDisconnect = useCallback(() => {
     clearGaffaLink();
     setGaffaLink(null);
@@ -821,6 +940,12 @@ const App: React.FC = () => {
                         onQuickPrompt={(prompt) => handleSendMessage(prompt, undefined, 'gaffa')}
                         calibratedDossiers={globalDossiers}
                         disabled={isLoading}
+                        authUser={gaffaUser}
+                        userClubs={gaffaClubs}
+                        authLoading={gaffaAuthLoading}
+                        onSignInPassword={handleGaffaSignInPassword}
+                        onSignInGoogle={handleGaffaSignInGoogle}
+                        onSignOut={handleGaffaSignOut}
                       />
                     )}
                     <ChatInput

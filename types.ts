@@ -249,6 +249,22 @@ export interface GaffaClubContextResponse {
   synced_at: string;
 }
 
+export interface GaffaUserClub {
+  club_id: string;
+  club_name: string;
+  abbreviation?: string | null;
+  budget_eur_m: number;
+  league_id: string;
+  league_name: string;
+  season?: string | null;
+  league_status?: string | null;
+}
+
+export interface GaffaAuthUser {
+  id: string;
+  email?: string;
+}
+
 export interface Conversation {
   id: string;
   title: string;

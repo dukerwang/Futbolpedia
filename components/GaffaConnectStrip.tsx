@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { PlayerProfile } from '../types';
+import type { GaffaAuthUser, GaffaUserClub, PlayerProfile } from '../types';
 import type { GaffaLinkState } from '../services/gaffaContext';
 import {
   auditGaffaLineup,
@@ -18,6 +18,12 @@ interface GaffaConnectStripProps {
   onQuickPrompt?: (prompt: string) => void;
   calibratedDossiers?: PlayerProfile[];
   disabled?: boolean;
+  authUser?: GaffaAuthUser | null;
+  userClubs?: GaffaUserClub[];
+  authLoading?: boolean;
+  onSignInPassword?: (email: string, password: string) => Promise<void> | void;
+  onSignInGoogle?: () => Promise<void> | void;
+  onSignOut?: () => Promise<void> | void;
 }
 
 type InspectorTab = 'lineup' | 'squad' | 'market';
@@ -33,9 +39,19 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
   onQuickPrompt,
   calibratedDossiers = [],
   disabled = false,
+  authUser = null,
+  userClubs = [],
+  authLoading = false,
+  onSignInPassword,
+  onSignInGoogle,
+  onSignOut,
 }) => {
   const [leagueId, setLeagueId] = useState(link?.league_id ?? '');
   const [clubId, setClubId] = useState(link?.club_id ?? '');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [manualMode, setManualMode] = useState(false);
+  const [selectedClubKey, setSelectedClubKey] = useState('');
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<InspectorTab>('lineup');
   const [marketFilter, setMarketFilter] = useState<MarketFilter>('ALL');
@@ -44,7 +60,16 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
   useEffect(() => {
     setLeagueId(link?.league_id ?? '');
     setClubId(link?.club_id ?? '');
+    if (link?.league_id && link?.club_id) {
+      setSelectedClubKey(`${link.league_id}:${link.club_id}`);
+    }
   }, [link?.league_id, link?.club_id]);
+
+  useEffect(() => {
+    if (!selectedClubKey && userClubs.length > 0) {
+      setSelectedClubKey(`${userClubs[0].league_id}:${userClubs[0].club_id}`);
+    }
+  }, [selectedClubKey, userClubs]);
 
   const bag = link?.bag;
   const connected = Boolean(bag?.connected || (link?.league_id && link?.club_name));
@@ -132,13 +157,35 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
     onQuickPrompt(prompt);
   };
 
+  const handleClubSelectChange = (val: string) => {
+    setSelectedClubKey(val);
+    const [nextLeagueId, nextClubId] = val.split(':');
+    if (nextLeagueId && nextClubId) {
+      onSync(nextLeagueId, nextClubId);
+    }
+  };
+
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onSignInPassword || !email.trim() || !password) return;
+    await onSignInPassword(email.trim(), password);
+    setPassword('');
+  };
+
+  const busy = syncing || authLoading;
+
   return (
     <div className="mb-3 border border-charcoal/15 dark:border-cream-400/15 bg-cream-50/85 dark:bg-charcoal-surface/85 px-3.5 py-2.5 transition-colors">
       <div className="flex flex-wrap items-center gap-2 justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/55 dark:text-cream-400/60">
             Gaffa club
           </span>
+          {authUser?.email && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 bg-charcoal/5 dark:bg-cream-400/10 text-charcoal/65 dark:text-cream-300/75 truncate max-w-[180px]">
+              {authUser.email}
+            </span>
+          )}
           {bag?.standings?.rank != null && (
             <span className="text-[10px] font-mono px-1.5 py-0.5 bg-charcoal/5 dark:bg-cream-400/10 text-charcoal/70 dark:text-cream-200/80">
               Rank #{bag.standings.rank}
@@ -156,28 +203,46 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
           )}
         </div>
 
-        {connected && (
-          <div className="flex items-center gap-3">
-            {bag?.connected && (
-              <button
-                type="button"
-                onClick={() => setInspectorOpen((prev) => !prev)}
-                className="text-[10px] font-sans font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 hover:underline flex items-center gap-1"
-              >
-                <span>{inspectorOpen ? 'Hide Club & Market' : 'Inspect Club & Market'}</span>
-                <span className="material-symbols-outlined text-[13px]">
-                  {inspectorOpen ? 'expand_less' : 'expand_more'}
-                </span>
-              </button>
-            )}
+        <div className="flex flex-wrap items-center gap-3">
+          {connected && bag?.connected && (
             <button
               type="button"
-              disabled={syncing}
+              onClick={() => setInspectorOpen((prev) => !prev)}
+              className="text-[10px] font-sans font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 hover:underline flex items-center gap-1"
+            >
+              <span>{inspectorOpen ? 'Hide Club & Market' : 'Inspect Club & Market'}</span>
+              <span className="material-symbols-outlined text-[13px]">
+                {inspectorOpen ? 'expand_less' : 'expand_more'}
+              </span>
+            </button>
+          )}
+          {connected && (
+            <button
+              type="button"
+              disabled={busy}
               onClick={() => link && onSync(link.league_id, link.club_id)}
               className="text-[10px] font-sans uppercase tracking-wide text-charcoal/60 dark:text-cream-400/60 hover:underline disabled:opacity-50"
             >
               {syncing ? 'Syncing…' : 'Refresh'}
             </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setManualMode((prev) => !prev)}
+            className="text-[10px] font-sans uppercase tracking-wide text-charcoal/50 dark:text-cream-400/50 hover:underline"
+          >
+            {manualMode ? (authUser ? 'Hide IDs' : 'Sign In') : 'Manual IDs'}
+          </button>
+          {authUser && onSignOut ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onSignOut()}
+              className="text-[10px] font-sans uppercase tracking-wide text-charcoal/45 dark:text-cream-400/45 hover:underline disabled:opacity-50"
+            >
+              Sign out
+            </button>
+          ) : connected ? (
             <button
               type="button"
               onClick={onDisconnect}
@@ -185,9 +250,47 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
             >
               Disconnect
             </button>
-          </div>
-        )}
+          ) : null}
+        </div>
       </div>
+
+      {/* Club Switcher when signed in with 1+ clubs */}
+      {authUser && userClubs.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <label className="text-[10px] font-sans font-bold uppercase tracking-wider text-charcoal/55 dark:text-cream-400/60">
+            Select club
+          </label>
+          <select
+            value={
+              link?.league_id && link?.club_id
+                ? `${link.league_id}:${link.club_id}`
+                : selectedClubKey
+            }
+            disabled={busy}
+            onChange={(e) => handleClubSelectChange(e.target.value)}
+            className="flex-1 min-w-[200px] bg-cream-100/90 dark:bg-charcoal/80 border border-charcoal/20 dark:border-cream-400/20 px-2.5 py-1 text-xs font-serif text-charcoal dark:text-cream-100 outline-none focus:border-emerald-600 dark:focus:border-emerald-400 disabled:opacity-50"
+          >
+            {userClubs.map((c) => {
+              const key = `${c.league_id}:${c.club_id}`;
+              return (
+                <option key={key} value={key}>
+                  {c.club_name} · {c.league_name} (€{c.budget_eur_m}m)
+                </option>
+              );
+            })}
+          </select>
+          {!connected && (
+            <button
+              type="button"
+              disabled={busy || !selectedClubKey}
+              onClick={() => handleClubSelectChange(selectedClubKey)}
+              className="shrink-0 px-2.5 py-1 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[10px] font-sans uppercase tracking-wider disabled:opacity-40"
+            >
+              {syncing ? 'Connecting…' : 'Connect'}
+            </button>
+          )}
+        </div>
+      )}
 
       {connected ? (
         <div className="mt-1.5">
@@ -221,6 +324,31 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
               </span>
             ) : null}
           </div>
+
+          {manualMode && (
+            <div className="mt-2 flex flex-col sm:flex-row gap-2">
+              <input
+                value={leagueId}
+                onChange={(e) => setLeagueId(e.target.value)}
+                placeholder="League ID"
+                className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1 text-xs font-mono text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
+              />
+              <input
+                value={clubId}
+                onChange={(e) => setClubId(e.target.value)}
+                placeholder="Club ID"
+                className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1 text-xs font-mono text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
+              />
+              <button
+                type="button"
+                disabled={busy || !leagueId.trim() || !clubId.trim()}
+                onClick={() => onSync(leagueId.trim(), clubId.trim())}
+                className="shrink-0 px-3 py-1 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[10px] font-sans uppercase tracking-wide disabled:opacity-40"
+              >
+                {syncing ? 'Syncing…' : 'Sync IDs'}
+              </button>
+            </div>
+          )}
 
           {/* Proactive Roster-State & Lineup Alerts */}
           {alerts.length > 0 && (
@@ -644,7 +772,7 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
             </div>
           )}
         </div>
-      ) : (
+      ) : manualMode ? (
         <div className="mt-2 flex flex-col sm:flex-row gap-2">
           <input
             value={leagueId}
@@ -660,13 +788,63 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
           />
           <button
             type="button"
-            disabled={syncing || !leagueId.trim() || !clubId.trim()}
+            disabled={busy || !leagueId.trim() || !clubId.trim()}
             onClick={() => onSync(leagueId.trim(), clubId.trim())}
             className="shrink-0 px-3 py-1.5 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[11px] font-sans uppercase tracking-wide disabled:opacity-40"
           >
             {syncing ? 'Syncing…' : 'Sync'}
           </button>
         </div>
+      ) : authUser ? (
+        userClubs.length === 0 ? (
+          <p className="mt-1.5 text-xs font-serif italic text-charcoal/60 dark:text-cream-400/60">
+            No clubs found on your Gaffa account. Join a league on Gaffa or switch to Manual IDs.
+          </p>
+        ) : null
+      ) : (
+        <form onSubmit={handlePasswordSubmit} className="mt-2 flex flex-col sm:flex-row gap-2">
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Gaffa email"
+            autoComplete="email"
+            className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2.5 py-1.5 text-xs font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            autoComplete="current-password"
+            className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2.5 py-1.5 text-xs font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
+          />
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="submit"
+              disabled={busy || !email.trim() || !password}
+              className="px-3 py-1.5 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[11px] font-sans uppercase tracking-wide disabled:opacity-40"
+            >
+              {authLoading ? 'Signing in…' : 'Sign in'}
+            </button>
+            {onSignInGoogle && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onSignInGoogle()}
+                className="px-2.5 py-1.5 border border-charcoal/20 dark:border-cream-400/20 bg-cream-100/80 dark:bg-charcoal/70 text-charcoal dark:text-cream-100 text-[11px] font-sans uppercase tracking-wide hover:border-charcoal/40 dark:hover:border-cream-400/40 disabled:opacity-40 flex items-center gap-1.5"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.81-3.5 5.44-6.5 5.44C8.36 19.27 5 15.65 5 12c0-3.65 3.36-7.27 7.2-7.27 3.09 0 4.9 1.97 4.9 1.97L19 4.72S16.56 2 12.1 2C6.42 2 2.03 6.8 2.03 12c0 5.05 4.13 10 10.22 10 5.35 0 9.25-3.67 9.25-9.09 0-1.15-.15-1.81-.15-1.81Z"
+                  />
+                </svg>
+                <span>Google</span>
+              </button>
+            )}
+          </div>
+        </form>
       )}
 
       {error && (
