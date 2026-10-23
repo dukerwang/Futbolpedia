@@ -697,23 +697,82 @@ export function mergeAllCalibratedDossiers(
   return [...bySlug.values()];
 }
 
+export interface PeerLedgerOptions {
+  targetPlayers?: string[];
+  positionHint?: string;
+  message?: string;
+}
+
+const inferPositionalFilterFromText = (text: string): string | null => {
+  const lower = text.toLowerCase();
+  if (/\b(centre[- ]?backs?|center[- ]?backs?|\bcbs?\b)\b/.test(lower)) return 'Centre-Back';
+  if (/\b(full[- ]?backs?|wing[- ]?backs?|\blbs?\b|\brbs?\b|\blwbs?\b|\brwbs?\b|left[- ]backs?|right[- ]backs?)\b/.test(lower))
+    return 'Full-Back';
+  if (/\b(defensive midfielders?|\bcdms?\b|\bdms?\b|holding midfielders?|#6|number 6)\b/.test(lower))
+    return 'Defensive Midfielder';
+  if (/\b(attacking midfielders?|\bcams?\b|\bams?\b|#10|number 10|playmakers?)\b/.test(lower))
+    return 'Attacking Midfielder';
+  if (/\b(midfielders?|\bcms?\b|#8|number 8)\b/.test(lower)) return 'Midfielder';
+  if (/\b(wingers?|\brws?\b|\blws?\b|wide forwards?)\b/.test(lower)) return 'Winger';
+  if (/\b(strikers?|centre[- ]?forwards?|center[- ]?forwards?|\bsts?\b|\bcfs?\b|#9|number 9|forwards?)\b/.test(lower))
+    return 'Striker';
+  if (/\b(goalkeepers?|keepers?|\bgks?\b)\b/.test(lower)) return 'Goalkeeper';
+  return null;
+};
+
 /**
- * Builds a compact peer calibration ledger from the user's freshly calibrated dossiers
+ * Builds a compact, position-aware peer calibration ledger from the user's freshly calibrated dossiers
  * (across Supabase global pool, local saved archive, and active conversation)
- * so every new synthesis automatically anchors against the user's established scale.
+ * so every new synthesis and debate automatically anchors against same-position peers first.
  */
 export function buildPositionalPeerLedgerBlock(
   savedDossiers: PlayerProfile[],
   conversationDossiers: PlayerProfile[],
+  options?: PeerLedgerOptions,
 ): string {
   const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
   if (allCalibrated.length === 0) return '';
 
-  const sorted = [...allCalibrated]
-    .sort((a, b) => b.ratings.overall - a.ratings.overall)
-    .slice(0, 15);
+  const matchedTargets = findReferencedDossiers(
+    options?.message ?? '',
+    allCalibrated,
+    options?.targetPlayers ?? [],
+  );
 
-  const lines = sorted.map((p) => {
+  const detectedPos =
+    options?.positionHint ||
+    matchedTargets[0]?.basicInfo.position.split('/')[0] ||
+    (options?.message ? inferPositionalFilterFromText(options.message) : null);
+
+  const sortedAll = [...allCalibrated].sort((a, b) => b.ratings.overall - a.ratings.overall);
+  const selectedBySlug = new Map<string, PlayerProfile>();
+
+  // 1. Prioritize direct target matches so their exact ratings are always visible
+  for (const t of matchedTargets) {
+    selectedBySlug.set(toPlayerSlug(t.basicInfo.name), t);
+  }
+
+  // 2. Prioritize same-position calibrated peers across all rating tiers (up to 10)
+  if (detectedPos) {
+    const positionalPeers = sortedAll.filter((p) =>
+      matchesPositionalFilter(p.basicInfo.position, detectedPos),
+    );
+    for (const p of positionalPeers.slice(0, 10)) {
+      selectedBySlug.set(toPlayerSlug(p.basicInfo.name), p);
+    }
+  }
+
+  // 3. Fill remaining slots up to 18 with global top-rated anchors
+  for (const p of sortedAll) {
+    if (selectedBySlug.size >= 18) break;
+    selectedBySlug.set(toPlayerSlug(p.basicInfo.name), p);
+  }
+
+  const finalList = [...selectedBySlug.values()].sort(
+    (a, b) => b.ratings.overall - a.ratings.overall,
+  );
+
+  const lines = finalList.map((p) => {
     const topSpikes = Object.entries(p.attributes || {})
       .filter(([, v]) => typeof v === 'number' && v > 0)
       .sort((a, b) => b[1] - a[1])
@@ -725,7 +784,7 @@ export function buildPositionalPeerLedgerBlock(
 
   return `
 <calibrated_peer_ledger>
-Active peer benchmarks already rated on this user's calibrated Futbolpedia ledger (maintain relative consistency with these ratings):
+Active peer benchmarks already rated on this user's calibrated Futbolpedia ledger (maintain strict relative consistency with these ratings):
 ${lines.join('\n')}
 </calibrated_peer_ledger>`;
 }

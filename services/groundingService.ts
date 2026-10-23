@@ -180,18 +180,81 @@ ${apiPlayer.coach ? `- Registered Head Coach: ${apiPlayer.coach} (update only if
   };
 }
 
+export interface ApiFootballTeamContext {
+  team: string;
+  coach: string | null;
+  recentFixtures: ApiFootballFixtureItem[];
+  upcomingFixtures: ApiFootballFixtureItem[];
+}
+
+export async function fetchApiFootballTeamContext(
+  teamName: string,
+  timeoutMs = 3200,
+): Promise<ApiFootballTeamContext | null> {
+  if (typeof fetch === 'undefined' || !teamName.trim()) return null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(
+      `/api/football/fixtures?team=${encodeURIComponent(teamName.trim())}`,
+      { signal: controller.signal },
+    );
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.available) return null;
+    return {
+      team: data.team || teamName,
+      coach: data.coach ?? null,
+      recentFixtures: Array.isArray(data.recentFixtures) ? data.recentFixtures : [],
+      upcomingFixtures: Array.isArray(data.upcomingFixtures) ? data.upcomingFixtures : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function formatApiFootballTeamContextBlock(ctx: ApiFootballTeamContext | null): string {
+  if (!ctx) return '';
+  const recentLine =
+    ctx.recentFixtures.length > 0
+      ? `Recent Matches: ${ctx.recentFixtures
+          .slice(0, 5)
+          .map((f) => `${f.date ?? '?'} [${f.competition ?? 'Match'}] ${f.homeTeam} ${f.score} ${f.awayTeam}`)
+          .join(' | ')}`
+      : '';
+  const upcomingLine =
+    ctx.upcomingFixtures.length > 0
+      ? `Upcoming Fixtures: ${ctx.upcomingFixtures
+          .slice(0, 3)
+          .map((f) => `${f.date ?? '?'} [${f.competition ?? 'Match'}] ${f.homeTeam} vs ${f.awayTeam}`)
+          .join(' | ')}`
+      : '';
+  return [
+    `[API-FOOTBALL CLUB CONTEXT — ${ctx.team}]`,
+    ctx.coach ? `Registered Head Coach: ${ctx.coach}` : '',
+    recentLine,
+    upcomingLine,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 /**
- * Parallel Google Search + optional API-Football player enrichment for Gaffa mode
- * and multi-player comparisons.
+ * Parallel Google Search + optional API-Football player/club enrichment for Gaffa mode,
+ * multi-player comparisons, and conversational tactical analysis.
  */
 export async function gatherSearchFoundation(
   queries: string[],
   playerNames: string[] = [],
+  clubNames: string[] = [],
 ): Promise<string> {
-  const uniquePlayers = [...new Set(playerNames.map((n) => n.trim()).filter(Boolean))].slice(0, 2);
+  const uniquePlayers = [...new Set(playerNames.map((n) => n.trim()).filter(Boolean))].slice(0, 3);
+  const uniqueClubs = [...new Set(clubNames.map((c) => c.trim()).filter(Boolean))].slice(0, 2);
 
-  const [apiPlayers, searchSettled] = await Promise.all([
+  const [apiPlayers, apiClubs, searchSettled] = await Promise.all([
     Promise.all(uniquePlayers.map((name) => fetchApiFootballPlayer(name))),
+    Promise.all(uniqueClubs.map((club) => fetchApiFootballTeamContext(club))),
     Promise.allSettled(queries.map((q) => runGroundedSearch(q))),
   ]);
 
@@ -200,6 +263,12 @@ export async function gatherSearchFoundation(
   for (const p of apiPlayers) {
     if (p) {
       chunks.push(formatApiFootballFactSheetBlock(p));
+    }
+  }
+
+  for (const c of apiClubs) {
+    if (c) {
+      chunks.push(formatApiFootballTeamContextBlock(c));
     }
   }
 

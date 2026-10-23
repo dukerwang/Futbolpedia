@@ -163,7 +163,10 @@ export const sendMessageToAI = async (
     }
   }
   const lockedDossiersBlock = buildLockedDossiersBlock(referencedDossiers);
-  const peerLedgerBlock = buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers);
+  const peerLedgerBlock = buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers, {
+    targetPlayers: route.targetPlayers,
+    message,
+  });
 
   // 3. Single-Player Dossier Pipeline
   if (route.intent === 'single_dossier') {
@@ -220,6 +223,13 @@ export const sendMessageToAI = async (
     const synthesisLockedBlock = route.wantsRegeneration
       ? ''
       : buildLockedDossiersBlock(freshReferencedDossiers);
+    const synthesisPeerLedgerBlock = grounding.apiPlayer?.position
+      ? buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers, {
+          targetPlayers: route.targetPlayers,
+          positionHint: grounding.apiPlayer.position,
+          message,
+        })
+      : peerLedgerBlock;
 
     const profile = await synthesizePlayerDossier({
       rawMessage: message,
@@ -230,7 +240,7 @@ export const sendMessageToAI = async (
       apiPlayer: grounding.apiPlayer,
       lockedDossiersBlock: synthesisLockedBlock,
       savedDossiersBlock,
-      peerLedgerBlock,
+      peerLedgerBlock: synthesisPeerLedgerBlock,
     });
     perf('calibrated synthesis');
 

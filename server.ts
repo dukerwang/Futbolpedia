@@ -260,32 +260,52 @@ async function startServer() {
             timeout: 6000,
           });
           const statEntry = statsRes.data?.response?.[0];
-          const primaryStat = statEntry?.statistics?.[0];
+          const allStats: any[] = Array.isArray(statEntry?.statistics) ? statEntry.statistics : [];
           if (statEntry?.player) {
             injured = statEntry.player.injured ?? injured;
           }
-          if (primaryStat) {
-            currentClub = primaryStat.team?.name ?? null;
-            league = primaryStat.league?.name ?? null;
+          if (allStats.length > 0) {
+            const natLower = String(basePlayer.nationality || "").toLowerCase();
+            const clubStats = allStats.filter((s) => {
+              const teamName = String(s?.team?.name || "").toLowerCase();
+              return !natLower || teamName !== natLower;
+            });
+            const effectiveStats = clubStats.length > 0 ? clubStats : allStats;
+            const primaryClubId = effectiveStats[0]?.team?.id;
+            const sameClubStats = primaryClubId
+              ? effectiveStats.filter((s) => s?.team?.id === primaryClubId)
+              : [effectiveStats[0]];
+
+            // Pick the competition with the most minutes for the primary league label & rating
+            const mainCompStat = [...sameClubStats].sort(
+              (a, b) => (b?.games?.minutes ?? 0) - (a?.games?.minutes ?? 0),
+            )[0] || effectiveStats[0];
+
+            currentClub = mainCompStat?.team?.name ?? effectiveStats[0]?.team?.name ?? null;
+            league = mainCompStat?.league?.name ?? effectiveStats[0]?.league?.name ?? null;
+
+            const sumField = (getter: (s: any) => number | null | undefined): number =>
+              sameClubStats.reduce((acc, s) => acc + (Number(getter(s)) || 0), 0);
+
             seasonStats = {
               season,
-              appearances: primaryStat.games?.appearences ?? null,
-              lineups: primaryStat.games?.lineups ?? null,
-              minutes: primaryStat.games?.minutes ?? null,
-              goals: primaryStat.goals?.total ?? null,
-              assists: primaryStat.goals?.assists ?? null,
-              keyPasses: primaryStat.passes?.key ?? null,
-              tackles: primaryStat.tackles?.total ?? null,
-              interceptions: primaryStat.tackles?.interceptions ?? null,
-              duelsWon: primaryStat.duels?.won ?? null,
-              rating: primaryStat.games?.rating ?? null,
+              appearances: sumField((s) => s?.games?.appearences),
+              lineups: sumField((s) => s?.games?.lineups),
+              minutes: sumField((s) => s?.games?.minutes),
+              goals: sumField((s) => s?.goals?.total),
+              assists: sumField((s) => s?.goals?.assists),
+              keyPasses: sumField((s) => s?.passes?.key),
+              tackles: sumField((s) => s?.tackles?.total),
+              interceptions: sumField((s) => s?.tackles?.interceptions),
+              duelsWon: sumField((s) => s?.duels?.won),
+              rating: mainCompStat?.games?.rating ?? null,
             };
-            if (primaryStat.team?.id) {
+            if (primaryClubId) {
               if (currentClub) {
-                teamIdCache.set(currentClub.toLowerCase(), primaryStat.team.id);
+                teamIdCache.set(currentClub.toLowerCase(), primaryClubId);
               }
               const teamCtx = await Promise.race([
-                getTeamContextById(primaryStat.team.id),
+                getTeamContextById(primaryClubId),
                 new Promise<null>((resolve) => setTimeout(() => resolve(null), 900)),
               ]);
               if (teamCtx) {

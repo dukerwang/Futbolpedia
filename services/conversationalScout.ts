@@ -1,5 +1,6 @@
 import { Type } from '@google/genai';
 import type { ChatMessage, PlayerProfile } from '../types';
+import type { ThinkingTier } from '../constants/modelProfiles';
 import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
 import { generateProseTurn, generateStructured, getCurrentSeasonInfo } from './aiClient';
 import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
@@ -16,6 +17,22 @@ import {
 } from './dossierStore';
 import { gatherSearchFoundation } from './groundingService';
 import type { TurnRoute } from './turnRouter';
+
+/** Strip leaked internal grounding tags or search citations from user-facing prose. */
+function sanitizeScoutProse(text: string): string {
+  return text
+    .replace(
+      /\s*\[(?:Search|Source|Grounding|Query)\s*\d*(?:\s*[,&]\s*(?:Search|Source|Grounding|Query)\s*\d*)*\]/gi,
+      '',
+    )
+    .replace(
+      /\s*\((?:Search|Source|Grounding)\s*\d+(?:\s*[,&]\s*(?:Search|Source|Grounding)\s*\d+)*\)/gi,
+      '',
+    )
+    .replace(/<\/?(?:factual_foundation|locked_dossiers|calibrated_peer_ledger|saved_dossiers)>/gi, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+}
 
 interface ChallengeTurnResponse {
   replyProse: string;
@@ -150,10 +167,14 @@ export async function runConversationalScout(
     let groundingNotes = '';
     if (route.needsSearch) {
       try {
+        const customQueries =
+          route.searchQueries && route.searchQueries.length > 0
+            ? route.searchQueries.slice(0, 2)
+            : [
+                `[Date: ${month} ${year}] ${targetDossier.basicInfo.name}: ${message} (${currentSeason} stats and scouting verification)`,
+              ];
         groundingNotes = await gatherSearchFoundation(
-          [
-            `[Date: ${month} ${year}] ${targetDossier.basicInfo.name}: ${message} (${currentSeason} stats and scouting verification)`,
-          ],
+          customQueries,
           [targetDossier.basicInfo.name],
         );
       } catch {
@@ -164,13 +185,14 @@ export async function runConversationalScout(
     try {
       const challengePrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
+${peerLedgerBlock ?? ''}
 <active_dossier>
 ${serializeProfileForHistory(targetDossier)}
 </active_dossier>
 ${groundingNotes ? `<grounding_verification>\n${groundingNotes}\n</grounding_verification>` : ''}
 <instructions>
 The user is challenging, questioning, or requesting an adjustment to the dossier above.
-1. Evaluate their point honestly against the Scout's Code, the recalibrated Section III Rating Tier Scale (where World-Class starts strictly at 90), and any grounding verification above.
+1. Evaluate their point honestly against the Scout's Code, the recalibrated Section III Rating Tier Scale (where World-Class starts strictly at 90), and any grounding verification or peer benchmarks above.
 2. If the current dossier rating/attribute is justified, set \`revisedDossier: false\` and defend the rating directly with concrete tactical/statistical reasoning in \`replyProse\`.
 3. If the user makes a valid evidence-backed point (or explicitly asks to adjust a rating/attribute), set \`revisedDossier: true\`, populate \`dossierPatch\` with the exact updated values so the UI card updates live, and explain the revision clearly in \`replyProse\`.
 4. Ensure every number you mention in \`replyProse\` matches either the existing dossier or your \`dossierPatch\`.
@@ -182,6 +204,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         prompt: challengePrompt,
         systemInstruction,
         schema: CHALLENGE_TURN_SCHEMA,
+        thinkingLevelOverride: 'medium',
       });
 
       if (result.revisedDossier && result.dossierPatch) {
@@ -190,18 +213,17 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         onDossierUpdated?.(updatedProfile);
       }
 
-      return result.replyProse;
+      return sanitizeScoutProse(result.replyProse);
     } catch (e) {
       console.warn('[ConversationalScout] Structured challenge path failed, falling back to prose:', e);
     }
   }
 
-  // 2. Multi-Player Comparison & Agentic Tactical Chat Path
+  // 2. Universal Calibrated Ledger Matching & Pre-Grounding across Comparisons, Debates, Rankings & Tactical Chat
   let factualFoundation = '';
   let effectiveLockedBlock = lockedDossiersBlock;
 
-  if (!imageData && route.intent === 'compare' && route.targetPlayers.length >= 2) {
-    // Check which compared players are already in our calibrated ledger (0ms local + Supabase pool lookup)
+  if (!imageData && route.intent !== 'archive_inventory') {
     const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
     const matchedDossiersBySlug = new Map<string, PlayerProfile>();
     const unratedPlayers: string[] = [];
@@ -217,33 +239,74 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       }
     }
 
+    // Also include any referenced dossiers found directly in the raw message
+    for (const d of findReferencedDossiers(message, allCalibrated, route.targetPlayers)) {
+      matchedDossiersBySlug.set(toPlayerSlug(d.basicInfo.name), d);
+    }
+
     if (matchedDossiersBySlug.size > 0) {
       effectiveLockedBlock = buildLockedDossiersBlock([...matchedDossiersBySlug.values()]);
     }
 
-    // Only fire external search/API-Football for players NOT already in our calibrated ledger
-    if (unratedPlayers.length > 0) {
+    const targetClubs = route.targetClubs ?? [];
+    const shouldPreGround =
+      unratedPlayers.length > 0 ||
+      targetClubs.length > 0 ||
+      (route.needsSearch && Boolean(route.searchQueries?.length));
+
+    if (shouldPreGround) {
       try {
         const datePrefix = `[Date: ${month} ${year}]`;
-        const subjectLabel = unratedPlayers.join(' vs ');
-        const queries = [
-          `${datePrefix} ${subjectLabel} — current clubs (${year}), ages, positions, ${currentSeason} season stats, and tactical roles`,
-          `${datePrefix} ${subjectLabel} — scouting profile: technical, physical, and mental strengths, weaknesses, and peer standing`,
-        ];
+        let queries: string[] = [];
 
-        factualFoundation = await gatherSearchFoundation(queries, unratedPlayers);
+        if (route.searchQueries && route.searchQueries.length > 0) {
+          queries = route.searchQueries
+            .slice(0, 2)
+            .map((q) => (q.includes(String(year)) ? q : `${datePrefix} ${q}`));
+        } else if (unratedPlayers.length > 0) {
+          const subjectLabel = unratedPlayers.join(' vs ');
+          queries = [
+            `${datePrefix} ${subjectLabel} — current clubs (${year}), ages, positions, ${currentSeason} season stats, and tactical roles`,
+            `${datePrefix} ${subjectLabel} — scouting profile: technical, physical, and mental strengths, weaknesses, and peer standing`,
+          ];
+        } else if (targetClubs.length > 0) {
+          const clubLabel = targetClubs.join(' vs ');
+          queries = [
+            `${datePrefix} ${clubLabel} — confirmed current head coach (${year}), ${currentSeason} tactical system, starting XI, and recent performance`,
+          ];
+        }
+
+        factualFoundation = await gatherSearchFoundation(queries, unratedPlayers, targetClubs);
       } catch (e) {
-        console.warn('[ConversationalScout] Comparison grounding search failed:', e);
+        console.warn('[ConversationalScout] Pre-grounding search failed:', e);
       }
     }
   }
 
-  const modeGuidance =
-    route.intent === 'compare'
-      ? `Write a detailed, scout-grade prose comparison covering every player named (${route.targetPlayers.join(', ') || 'all named players'}). Compare their footballing identity/mould, tactical fit, strengths and limitations, and relative tier on the Section III scale. For any player present in <locked_dossiers>, use their exact locked Overall, Potential, and 25 attributes. Never output a JSON dossier object.`
+  const analyticalMode =
+    route.analyticalMode ??
+    (route.intent === 'compare'
+      ? 'head_to_head'
       : route.intent === 'archive_inventory'
-        ? `Summarize or query the user's saved dossier archive clearly using <saved_dossier_archive> or the \`grep_saved_dossiers\` tool.`
-        : `Respond conversationally in Markdown prose as the Senior Tactical Columnist. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_player_fact_sheet\` / \`get_football_squad\` / \`get_team_fixtures\` for deterministic API-Football records, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers already generated in this conversation unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
+        ? 'archive'
+        : 'debate_or_verdict');
+
+  let modeGuidance: string;
+  if (route.intent === 'compare' || analyticalMode === 'head_to_head') {
+    modeGuidance = `Write a detailed, scout-grade head-to-head comparison covering every player named (${route.targetPlayers.join(', ') || 'all named players'}). Contrast their footballing identity/mould, phase-of-play execution (in possession, out of possession, transition), key separators across the 25-attribute framework, genuine limitations, and relative tier on the Section III scale. For any player present in <locked_dossiers>, use their exact locked Overall, Potential, and 25 attributes. Conclude with a definitive verdict on who holds the higher ceiling and which tactical setup favors each player. Never output a JSON dossier object.`;
+  } else if (route.intent === 'archive_inventory' || analyticalMode === 'archive') {
+    modeGuidance = `Summarize or query the user's saved dossier archive clearly using <saved_dossier_archive> or the \`grep_saved_dossiers\` tool.`;
+  } else if (analyticalMode === 'ranking_or_tierlist') {
+    modeGuidance = `Build a rigorous, scout-grade positional ranking or tier breakdown anchored explicitly to the Section III Rating Tier Scale (\`93–95 World-Class Elite\`, \`90–92 World-Class\`, \`87–89 Borderline World-Class\`, \`84–86 High-End Starter\`). Honor every player rating already established in <calibrated_peer_ledger> and <locked_dossiers>. For each ranked player, cite their approximate Overall tier, signature attributes, and the exact on-pitch separator (e.g., press resistance, 1v1 recovery pace, final-third creation) that places them ahead of or behind their peers. Never output a JSON dossier object.`;
+  } else if (analyticalMode === 'tactical_or_system') {
+    modeGuidance = `Deliver a deep tactical column breaking down the system, manager setup, or match dynamic across concrete phases of play: build-up geometry (e.g., 3-2 vs. 2-3 rest-defense), pressing triggers, half-space occupation, width provision, and transition exposure. Ground all current squad, role, and head-coach references strictly in verified ${currentSeason} facts. Never output a JSON dossier object.`;
+  } else if (analyticalMode === 'squad_or_recruitment') {
+    modeGuidance = `Analyze the squad structure, lineup balance, or recruitment question like a Sporting Director and Chief Scout. Identify specific profile bottlenecks (e.g., ball-carrying volume, rest-defense recovery pace, box presence), evaluate how candidate profiles complement existing starters, and anchor player quality to the Section III tier scale and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
+  } else if (analyticalMode === 'debate_or_verdict') {
+    modeGuidance = `Engage the football debate with dialectical depth: (1) steelman the strongest tactical and statistical case for each side, (2) separate intrinsic player quality from system/environment tax (how role, surrounding talent, or league tempo inflates or suppresses box-score output), (3) evaluate through the 25-attribute framework and Section III tiers, and (4) finish with a clear, non-fence-sitting verdict. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
+  } else {
+    modeGuidance = `Respond conversationally in Markdown prose as the Senior Tactical Columnist. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_player_fact_sheet\` / \`get_football_squad\` / \`get_team_fixtures\` for deterministic API-Football records, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
+  }
 
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
@@ -253,7 +316,7 @@ ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}
-2. Current-state facts (club, manager, injuries, ${currentSeason} stats) must come from <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, Google Search), or existing dossiers — never stale training memory.
+2. Current-state facts (club, manager, injuries, ${currentSeason} stats) must come from <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, \`get_team_fixtures\`, Google Search), or existing dossiers — never stale training memory. Never name an unverified head coach.
 3. ${CONTINUITY_REMINDER}
 </instructions>
 <task>${message}</task>`;
@@ -261,12 +324,26 @@ ${savedDossiersBlock}
   const historyContents = buildHistoryContents(history, conversationDossiers);
   const dossiersPool = [...savedDossiers, ...conversationDossiers];
 
-  return generateProseTurn({
+  const isDeepAnalyticalTurn =
+    route.reasoningComplexity === 'high' ||
+    route.intent === 'compare' ||
+    analyticalMode === 'head_to_head' ||
+    analyticalMode === 'debate_or_verdict' ||
+    analyticalMode === 'ranking_or_tierlist' ||
+    analyticalMode === 'tactical_or_system' ||
+    analyticalMode === 'squad_or_recruitment';
+
+  const thinkingLevelOverride: ThinkingTier = isDeepAnalyticalTurn ? 'medium' : 'low';
+
+  const rawReply = await generateProseTurn({
     message: fullPrompt,
     historyContents,
     systemInstruction,
     imageData,
+    thinkingLevelOverride,
     enableTools: true,
     dossiersPool,
   });
+
+  return sanitizeScoutProse(rawReply);
 }

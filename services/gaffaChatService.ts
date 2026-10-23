@@ -525,7 +525,9 @@ export async function sendGaffaMessage(
   const savedDossiers = options?.savedDossiers ?? [];
   const conversationProfiles = options?.conversationProfiles ?? [];
   const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationProfiles);
-  const peerLedgerBlock = buildPositionalPeerLedgerBlock(savedDossiers, conversationProfiles);
+  const peerLedgerBlock = buildPositionalPeerLedgerBlock(savedDossiers, conversationProfiles, {
+    message,
+  });
 
   const kind = classifyGaffaTurn(message);
   const systemInstruction = buildGaffaSystemInstruction(bag);

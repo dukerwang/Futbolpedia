@@ -320,7 +320,10 @@ export const sanitizeProfileData = (
     },
     ratings: {
       overall: Math.round(raw.ratings?.overall ?? defaults.ratings.overall),
-      potential: Math.round(raw.ratings?.potential ?? defaults.ratings.potential),
+      potential: Math.max(
+        Math.round(raw.ratings?.overall ?? defaults.ratings.overall),
+        Math.round(raw.ratings?.potential ?? defaults.ratings.potential),
+      ),
     },
     attributes: { ...defaults.attributes, ...raw.attributes },
     playstyleAndRole: {
@@ -446,11 +449,43 @@ function findSynthesisValidationIssues(
         'One or more outfield attributes were set to 0 for an identifiable professional player. Populate all 25 attributes with real values.',
       );
     } else if (vals.length > 0) {
-      const spread = Math.max(...vals) - Math.min(...vals);
+      const maxAttr = Math.max(...vals);
+      const minAttr = Math.min(...vals);
+      const spread = maxAttr - minAttr;
       if (spread < 12) {
         issues.push(
           `Outfield attributes are flattened (max-min spread is only ${spread}). Let signatureSpikes spike high and genuineFlaws stay low.`,
         );
+      }
+
+      if (overall >= 88 && maxAttr < overall - 1) {
+        issues.push(
+          `Overall rating is ${overall}, but the highest individual attribute is only ${maxAttr}. Ensure signatureSpikes reach at least ${overall}–${Math.min(99, overall + 3)}.`,
+        );
+      }
+
+      const spikes = raw.calibration?.signatureSpikes ?? [];
+      for (const spikeKey of spikes) {
+        if (spikeKey in profile.attributes) {
+          const val = profile.attributes[spikeKey as keyof Attributes];
+          if (typeof val === 'number' && val < overall - 3) {
+            issues.push(
+              `Attribute "${spikeKey}" was listed in calibration.signatureSpikes but rated only ${val} (Overall ${overall}). Raise "${spikeKey}" to reflect an elite signature trait.`,
+            );
+          }
+        }
+      }
+
+      const flaws = raw.calibration?.genuineFlaws ?? [];
+      for (const flawKey of flaws) {
+        if (flawKey in profile.attributes) {
+          const val = profile.attributes[flawKey as keyof Attributes];
+          if (typeof val === 'number' && val >= Math.max(82, overall - 2)) {
+            issues.push(
+              `Attribute "${flawKey}" was listed in calibration.genuineFlaws but rated ${val} (Overall ${overall}). Lower "${flawKey}" so the attribute table reflects the stated limitation.`,
+            );
+          }
+        }
       }
     }
   }
