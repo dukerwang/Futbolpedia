@@ -121,15 +121,13 @@ export interface PlayerGroundingBundle {
 const ANTI_GAME_FILTER = '-site:futbin.com -site:sofifa.com -site:fifaindex.com -site:futwiz.com';
 
 /**
- * Direct, adaptive grounding gatherer.
- * 1. For active players, checks deterministic API-Football first (with fast timeout).
- * 2. When API-Football returns a complete current-season record (club, coach, stats, recent match log),
- *    collapses web search down to a single focused tactical & recent-news query instead of over-fetching.
+ * Direct, parallel grounding gatherer.
+ * Runs API-Football lookup concurrently with focused web search grounding so API-Football
+ * adds 0ms of sequential wait time on top of search.
  */
 export async function gatherPlayerGrounding(params: {
   playerName: string;
   rawMessage: string;
-  mode: 'default' | 'fast';
   isHistorical: boolean;
 }): Promise<PlayerGroundingBundle> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
@@ -148,32 +146,15 @@ export async function gatherPlayerGrounding(params: {
     };
   }
 
-  const apiPlayer = await fetchApiFootballPlayer(subject, 2600);
-  const hasCompleteApiRecord = Boolean(
-    apiPlayer?.currentClub &&
-      apiPlayer?.seasonStats &&
-      (apiPlayer.seasonStats.appearances ?? 0) > 0,
-  );
+  const searchQueries = [
+    `${subject} — current club as of ${month} ${year}, confirmed current head coach, recent match appearances, injury status, ${currentSeason} season stats, and major honours ${ANTI_GAME_FILTER}`,
+    `${subject} — tactical scouting report: playing style, positional standing in world football, technical/physical/mental strengths and weaknesses ${ANTI_GAME_FILTER}`,
+  ];
 
-  let searchQueries: string[];
-  if (hasCompleteApiRecord || params.mode === 'fast') {
-    // Adaptive short-circuit: API-Football already supplied bio, club, coach, season stats, and match log.
-    // Run 1 focused query for tactical scouting profile, positional standing, and latest injury/transfer news.
-    const clubHint = apiPlayer?.currentClub ? ` (${apiPlayer.currentClub})` : '';
-    searchQueries = [
-      `${subject}${clubHint} — tactical scouting report, playing style, positional standing in world football, technical/physical/mental strengths and weaknesses, and latest ${month} ${year} news or injury updates ${ANTI_GAME_FILTER}`,
-    ];
-  } else {
-    // Fallback when API-Football lacks a current-season record: run 2 parallel search vectors
-    searchQueries = [
-      `${subject} — current club as of ${month} ${year}, confirmed current head coach, recent match appearances, injury status, ${currentSeason} season stats, and major honours ${ANTI_GAME_FILTER}`,
-      `${subject} — tactical scouting report: playing style, positional standing in world football, technical/physical/mental strengths and weaknesses ${ANTI_GAME_FILTER}`,
-    ];
-  }
-
-  const searchResults = await Promise.all(
-    searchQueries.map((q) => runGroundedSearch(q, { datePrefix })),
-  );
+  const [apiPlayer, ...searchResults] = await Promise.all([
+    fetchApiFootballPlayer(subject, 2800),
+    ...searchQueries.map((q) => runGroundedSearch(q, { datePrefix })),
+  ]);
 
   const apiBlock = formatApiFootballFactSheetBlock(apiPlayer);
   const searchBlock = searchResults.map((r) => r.formattedBlock).join('\n\n---\n\n');

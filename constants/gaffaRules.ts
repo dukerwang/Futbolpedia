@@ -1,5 +1,5 @@
 import type { GaffaContextBag } from '../types';
-import { SIMULATION_YEAR, SIMULATION_SEASON } from '../constants';
+import { SIMULATION_YEAR, SIMULATION_SEASON } from '../prompts/scoutCore';
 
 /** Bump when the snapshot is refreshed from Gaffa's USER_GUIDE. */
 export const GAFFA_RULES_VERSION = '2026-09-15';
@@ -248,8 +248,22 @@ export function formatLockedMarketLines(bag: GaffaContextBag): string[] {
       'You can nominate anyone below to open an FA auction (FA floor applies). LIVE AUCTION means a bid is already open.',
       `Rank "highest potential" only among THESE names. The bag has market value and age, not scout POT/OVR — do not invent overall or potential ratings. ${liveCount} currently on a live auction.`,
     );
-    for (const p of fa) {
+    const inlineCap = 60;
+    const sortedFa =
+      fa.length > inlineCap
+        ? [...fa].sort(
+            (a, b) =>
+              Number(Boolean(b.live_auction)) - Number(Boolean(a.live_auction)) ||
+              (b.market_value_eur_m ?? 0) - (a.market_value_eur_m ?? 0),
+          )
+        : fa;
+    for (const p of sortedFa.slice(0, inlineCap)) {
       lines.push(formatFaPlayerLine(p));
+    }
+    if (fa.length > inlineCap) {
+      lines.push(
+        `  ... plus ${fa.length - inlineCap} more unowned FA players in this league. Use the \`grep_gaffa_market\` tool to filter all ${fa.length} unowned players by position, age (e.g. U21), club, or keyword in <1ms.`,
+      );
     }
   }
 
@@ -406,4 +420,165 @@ ${GAFFA_RULES_SNAPSHOT}
 
 ${buildContextBagBlock(bag)}
 `;
+}
+
+export interface GaffaMarketGrepParams {
+  pool?: 'free_agents' | 'roster' | 'listings' | 'auctions' | 'all';
+  position?: string;
+  plTeam?: string;
+  maxAge?: number;
+  minAge?: number;
+  minMarketValue?: number;
+  maxMarketValue?: number;
+  query?: string;
+  sortBy?: 'market_value' | 'age';
+  limit?: number;
+}
+
+/**
+ * Instant (<1ms) structured grep over the connected Gaffa club bag
+ * (unowned FA pool, club roster, open listings, and live auctions).
+ */
+export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams = {}) {
+  if (!bag.connected) {
+    return {
+      connected: false,
+      message: 'No Gaffa club is connected in this session.',
+      results: [],
+    };
+  }
+
+  const poolType = params.pool ?? 'all';
+  const posFilter = params.position?.trim().toUpperCase();
+  const teamFilter = params.plTeam?.trim().toLowerCase();
+  const queryTokens = params.query
+    ? params.query
+        .toLowerCase()
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+    : [];
+
+  const items: Array<{
+    pool: string;
+    name: string;
+    display_name?: string;
+    position: string;
+    pl_team?: string | null;
+    age?: number | null;
+    market_value_eur_m?: number | null;
+    status?: string;
+    detail?: string;
+  }> = [];
+
+  if (poolType === 'all' || poolType === 'free_agents') {
+    for (const p of bag.free_agents ?? []) {
+      items.push({
+        pool: 'free_agent',
+        name: p.name,
+        display_name: p.display_name,
+        position: p.position,
+        pl_team: p.pl_team,
+        age: p.age,
+        market_value_eur_m: p.market_value_eur_m,
+        detail: p.live_auction ? 'LIVE AUCTION' : 'unowned (nominate to open auction)',
+      });
+    }
+  }
+
+  if (poolType === 'all' || poolType === 'roster') {
+    for (const p of bag.roster ?? []) {
+      const pos = [p.primary_position, ...(p.secondary_positions ?? [])].join('/');
+      items.push({
+        pool: 'roster',
+        name: p.name,
+        display_name: p.display_name,
+        position: pos,
+        pl_team: p.pl_team,
+        status: p.status,
+      });
+    }
+  }
+
+  if (poolType === 'all' || poolType === 'listings') {
+    for (const l of bag.open_listings ?? []) {
+      const price = l.min_bid_eur_m ?? l.ask_eur_m ?? l.release_clause_eur_m ?? null;
+      items.push({
+        pool: 'listing',
+        name: l.name,
+        position: l.position,
+        market_value_eur_m: price,
+        detail: `Seller: ${l.seller_club_name}${l.yours ? ' (YOURS)' : ''}`,
+      });
+    }
+  }
+
+  if (poolType === 'all' || poolType === 'auctions') {
+    for (const a of bag.open_auctions ?? []) {
+      items.push({
+        pool: 'auction',
+        name: a.name,
+        position: a.position,
+        market_value_eur_m: a.highest_bid_eur_m ?? null,
+        detail: `Kind: ${a.kind}${a.highest_bid_eur_m != null ? `, high €${a.highest_bid_eur_m}m` : ''}`,
+      });
+    }
+  }
+
+  const filtered = items.filter((item) => {
+    if (posFilter) {
+      const itemPosParts = item.position
+        .toUpperCase()
+        .split(/[/,\s]+/)
+        .filter(Boolean);
+      if (!itemPosParts.includes(posFilter) && !item.position.toUpperCase().includes(posFilter)) {
+        return false;
+      }
+    }
+    if (teamFilter && !(item.pl_team || '').toLowerCase().includes(teamFilter)) {
+      return false;
+    }
+    if (typeof params.maxAge === 'number' && (item.age == null || item.age > params.maxAge)) {
+      return false;
+    }
+    if (typeof params.minAge === 'number' && (item.age == null || item.age < params.minAge)) {
+      return false;
+    }
+    if (
+      typeof params.minMarketValue === 'number' &&
+      (item.market_value_eur_m == null || item.market_value_eur_m < params.minMarketValue)
+    ) {
+      return false;
+    }
+    if (
+      typeof params.maxMarketValue === 'number' &&
+      (item.market_value_eur_m == null || item.market_value_eur_m > params.maxMarketValue)
+    ) {
+      return false;
+    }
+    if (queryTokens.length > 0) {
+      const hay = [item.name, item.display_name, item.position, item.pl_team, item.status, item.detail]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (!queryTokens.every((t) => hay.includes(t))) return false;
+    }
+    return true;
+  });
+
+  if (params.sortBy === 'age') {
+    filtered.sort((a, b) => (a.age ?? 99) - (b.age ?? 99));
+  } else {
+    filtered.sort((a, b) => (b.market_value_eur_m ?? -1) - (a.market_value_eur_m ?? -1));
+  }
+
+  const limit = Math.max(1, Math.min(50, params.limit ?? 25));
+  return {
+    connected: true,
+    club: bag.club_name,
+    league: bag.league_name,
+    budget_eur_m: bag.budget_eur_m,
+    totalMatches: filtered.length,
+    results: filtered.slice(0, limit),
+  };
 }

@@ -23,20 +23,18 @@ export interface ModelCapabilityProfile {
    * deeper thinking with structured schemas cleanly.
    */
   supportsDeepSchemaThinking: boolean;
-  /** Default tuning per pipeline stage in Default mode */
-  defaultTuning: Record<AITask, TaskTuning>;
-  /** Default tuning per pipeline stage in Fast mode */
-  fastTuning: Record<AITask, TaskTuning>;
+  /** Unified per-stage tuning across the pipeline */
+  tuning: Record<AITask, TaskTuning>;
 }
 
 /**
- * Default fast/workhorse model for routing, search grounding, and fast turns.
+ * Default fast/workhorse model for routing, search grounding, and scouting turns.
  * Update this constant directly when switching across Gemini releases.
  */
 export const DEFAULT_FAST_MODEL = 'gemini-3.8-flash';
 
 /**
- * Primary model for deep dossier synthesis and nuanced scouting evaluations.
+ * Primary model for dossier synthesis and nuanced scouting evaluations.
  * Change to 'gemini-4-argon' (or any future release) here when ready.
  */
 export const DEFAULT_SYNTHESIS_MODEL = DEFAULT_FAST_MODEL;
@@ -45,19 +43,14 @@ const GEMINI_3_8_FLASH_PROFILE: ModelCapabilityProfile = {
   id: 'gemini-3.8-flash',
   family: 'gemini-3-flash',
   supportsDeepSchemaThinking: true,
-  defaultTuning: {
-    routing: { thinkingLevel: 'minimal', temperature: 0.1 },
-    grounding: { thinkingLevel: 'low', temperature: 0.2 },
-    extraction: { thinkingLevel: 'minimal', temperature: 0.1 },
-    synthesis: { thinkingLevel: 'medium', temperature: 0.35 },
-    chat: { thinkingLevel: 'medium', temperature: 0.55 },
-  },
-  fastTuning: {
+  tuning: {
     routing: { thinkingLevel: 'minimal', temperature: 0.1 },
     grounding: { thinkingLevel: 'minimal', temperature: 0.2 },
     extraction: { thinkingLevel: 'minimal', temperature: 0.1 },
+    // LOW thinking caps hidden thinking tokens (~400 vs ~2900 on MEDIUM/dynamic)
+    // while the explicit schema `calibration` block handles tier & peer reasoning in output tokens.
     synthesis: { thinkingLevel: 'low', temperature: 0.35 },
-    chat: { thinkingLevel: 'low', temperature: 0.6 },
+    chat: { thinkingLevel: 'low', temperature: 0.55 },
   },
 };
 
@@ -65,19 +58,12 @@ const GEMINI_4_ARGON_PROFILE: ModelCapabilityProfile = {
   id: 'gemini-4-argon',
   family: 'gemini-4-argon',
   supportsDeepSchemaThinking: true,
-  defaultTuning: {
-    routing: { thinkingLevel: 'minimal', temperature: 0.1 },
-    grounding: { thinkingLevel: 'low', temperature: 0.2 },
-    extraction: { thinkingLevel: 'minimal', temperature: 0.1 },
-    synthesis: { thinkingLevel: 'high', temperature: 0.3 },
-    chat: { thinkingLevel: 'medium', temperature: 0.5 },
-  },
-  fastTuning: {
+  tuning: {
     routing: { thinkingLevel: 'minimal', temperature: 0.1 },
     grounding: { thinkingLevel: 'minimal', temperature: 0.2 },
     extraction: { thinkingLevel: 'minimal', temperature: 0.1 },
     synthesis: { thinkingLevel: 'medium', temperature: 0.3 },
-    chat: { thinkingLevel: 'low', temperature: 0.55 },
+    chat: { thinkingLevel: 'medium', temperature: 0.5 },
   },
 };
 
@@ -124,7 +110,6 @@ export interface ResolvedTaskConfig {
  */
 export function resolveTaskModelConfig(
   task: AITask,
-  mode: 'default' | 'fast' = 'default',
   overrides?: {
     model?: string;
     thinkingLevel?: ThinkingTier;
@@ -132,13 +117,11 @@ export function resolveTaskModelConfig(
   },
 ): ResolvedTaskConfig {
   const defaultModelForTask =
-    task === 'synthesis' || (task === 'chat' && mode === 'default')
-      ? DEFAULT_SYNTHESIS_MODEL
-      : DEFAULT_FAST_MODEL;
+    task === 'synthesis' || task === 'chat' ? DEFAULT_SYNTHESIS_MODEL : DEFAULT_FAST_MODEL;
 
   const model = overrides?.model || defaultModelForTask;
   const profile = getModelProfile(model);
-  const baseTuning = mode === 'fast' ? profile.fastTuning[task] : profile.defaultTuning[task];
+  const baseTuning = profile.tuning[task];
 
   let thinkingLevel = overrides?.thinkingLevel ?? baseTuning.thinkingLevel;
   if (!profile.supportsDeepSchemaThinking && task === 'synthesis' && thinkingLevel === 'high') {

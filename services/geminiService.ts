@@ -1,4 +1,4 @@
-import type { ChatMessage, PlayerProfile } from '../types';
+import type { ChatMessage, GaffaContextBag, PlayerProfile } from '../types';
 import { ThinkingTier } from '../constants/modelProfiles';
 import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
 import {
@@ -59,7 +59,6 @@ export async function generateJsonWithSchema<T>(params: {
 }): Promise<T> {
   return generateStructured<T>({
     task: 'extraction',
-    mode: 'default',
     prompt: params.prompt,
     systemInstruction: params.systemInstruction,
     schema: params.schema,
@@ -77,6 +76,8 @@ export const sendProseChatMessage = async (
     thinkingLevel?: ThinkingTier;
     systemInstruction?: string;
     conversationProfiles?: PlayerProfile[];
+    dossiersPool?: PlayerProfile[];
+    gaffaBag?: GaffaContextBag;
     temperature?: number;
   },
 ): Promise<string> => {
@@ -93,6 +94,8 @@ export const sendProseChatMessage = async (
     thinkingLevelOverride: options?.thinkingLevel ?? 'low',
     temperatureOverride: options?.temperature,
     modelOverride: FLASH_MODEL,
+    dossiersPool: options?.dossiersPool,
+    gaffaBag: options?.gaffaBag,
   });
 };
 
@@ -104,7 +107,6 @@ export const sendMessageToAI = async (
   message: string,
   history: ChatMessage[],
   imageData?: string,
-  mode: 'default' | 'fast' = 'default',
   conversationProfiles: PlayerProfile[] = [],
   savedDossiers: PlayerProfile[] = [],
   options?: SendMessageOptions,
@@ -117,7 +119,7 @@ export const sendMessageToAI = async (
     if (!perfEnabled) return;
     const now = (typeof performance !== 'undefined' ? performance : Date).now();
     console.log(
-      `[Perf] ${label}: +${Math.round(now - perfPrev)}ms (total ${Math.round(now - perfStart)}ms) [${mode}]`,
+      `[Perf] ${label}: +${Math.round(now - perfPrev)}ms (total ${Math.round(now - perfStart)}ms)`,
     );
     perfPrev = now;
   };
@@ -125,16 +127,14 @@ export const sendMessageToAI = async (
   const isEAFCRequest = /\b(playstyle\+?|fc\s*card|eafc|ea\s*fc)\b/i.test(message);
   const conversationDossiers = mergeConversationDossiers(history, conversationProfiles);
 
-  // 1. Classify turn via Structured Turn Router in parallel with warming the Supabase calibrated ledger
-  const [route] = await Promise.all([
-    classifyTurn({
-      message,
-      history,
-      conversationDossiers,
-      hasImage: Boolean(imageData),
-    }),
-    fetchSupabaseCalibratedPool(),
-  ]);
+  // 1. Classify turn via Structured Turn Router (warm Supabase pool in background without blocking routing)
+  void fetchSupabaseCalibratedPool();
+  const route = await classifyTurn({
+    message,
+    history,
+    conversationDossiers,
+    hasImage: Boolean(imageData),
+  });
   perf(`turn router (${route.intent})`);
 
   // 2. Resolve conversation-locked and saved-archive dossiers
@@ -212,7 +212,6 @@ export const sendMessageToAI = async (
     const grounding = await gatherPlayerGrounding({
       playerName: primaryPlayer,
       rawMessage: message,
-      mode,
       isHistorical: route.isHistorical,
     });
     perf('hybrid grounding');
@@ -224,7 +223,6 @@ export const sendMessageToAI = async (
 
     const profile = await synthesizePlayerDossier({
       rawMessage: message,
-      mode,
       isHistorical: route.isHistorical,
       foundationText: grounding.foundationText,
       verifiedFacts: grounding.verifiedFacts,
@@ -255,7 +253,6 @@ export const sendMessageToAI = async (
     message,
     route,
     history,
-    mode,
     imageData,
     isEAFCRequest,
     conversationDossiers,

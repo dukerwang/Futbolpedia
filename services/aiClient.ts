@@ -1,5 +1,5 @@
 import { GoogleGenAI, Content, ThinkingLevel, Type } from '@google/genai';
-import type { PlayerProfile } from '../types';
+import type { GaffaContextBag, PlayerProfile } from '../types';
 import {
   AITask,
   DEFAULT_FAST_MODEL,
@@ -7,6 +7,7 @@ import {
   resolveTaskModelConfig,
   ThinkingTier,
 } from '../constants/modelProfiles';
+import { GaffaMarketGrepParams, grepGaffaBag } from '../constants/gaffaRules';
 import { SIMULATION_SEASON, SIMULATION_YEAR } from '../prompts/scoutCore';
 import { DossierGrepParams, grepDossiers } from './dossierStore';
 
@@ -17,8 +18,9 @@ let _ai: GoogleGenAI | null = null;
 export const getAi = (): GoogleGenAI =>
   (_ai ??= new GoogleGenAI({ apiKey: process.env.API_KEY as string }));
 
+// gemini-3.8-flash rejects ThinkingLevel.MINIMAL with HTTP 400; map 'minimal' to LOW.
 const THINKING_LEVEL_MAP: Record<ThinkingTier, ThinkingLevel> = {
-  minimal: ThinkingLevel.MINIMAL,
+  minimal: ThinkingLevel.LOW,
   low: ThinkingLevel.LOW,
   medium: ThinkingLevel.MEDIUM,
   high: ThinkingLevel.HIGH,
@@ -32,7 +34,6 @@ export const getCurrentSeasonInfo = () => {
 
 export interface GenerateStructuredParams {
   task: AITask;
-  mode?: 'default' | 'fast';
   prompt: string;
   systemInstruction?: string;
   schema: Record<string, unknown>;
@@ -42,7 +43,7 @@ export interface GenerateStructuredParams {
 }
 
 export async function generateStructured<T>(params: GenerateStructuredParams): Promise<T> {
-  const resolved = resolveTaskModelConfig(params.task, params.mode ?? 'default', {
+  const resolved = resolveTaskModelConfig(params.task, {
     model: params.modelOverride,
     thinkingLevel: params.thinkingLevelOverride,
     temperature: params.temperatureOverride,
@@ -97,6 +98,11 @@ export async function runGroundedSearch(
       contents: fullQuery,
       config: {
         tools: [{ googleSearch: {} }],
+        // Cap thinkingLevel to LOW during search grounding so Flash does not run
+        // multi-second dynamic thinking just to summarize search results.
+        thinkingConfig: {
+          thinkingLevel: ThinkingLevel.LOW,
+        },
       },
     });
     const text = res.text?.trim() || '';
@@ -141,17 +147,17 @@ export interface GenerateProseTurnParams {
   message: string;
   historyContents: Content[];
   systemInstruction: string;
-  mode?: 'default' | 'fast';
   imageData?: string;
   temperatureOverride?: number;
   thinkingLevelOverride?: ThinkingTier;
   modelOverride?: string;
   enableTools?: boolean;
   dossiersPool?: PlayerProfile[];
+  gaffaBag?: GaffaContextBag;
 }
 
 export async function generateProseTurn(params: GenerateProseTurnParams): Promise<string> {
-  const resolved = resolveTaskModelConfig('chat', params.mode ?? 'default', {
+  const resolved = resolveTaskModelConfig('chat', {
     model: params.modelOverride,
     thinkingLevel: params.thinkingLevelOverride,
     temperature: params.temperatureOverride,
@@ -257,6 +263,62 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
         required: ['team'],
       },
     },
+    ...(params.gaffaBag?.connected
+      ? [
+          {
+            name: 'grep_gaffa_market',
+            description:
+              'Instant (<1ms) structured grep and filter over the connected Gaffa league bag (unowned FA pool, club roster, open listings, and live auctions). Use this to find free agents or roster players by position, age (e.g. maxAge: 21 for Academy), market value, PL club, or name.',
+            parameters: {
+              type: Type.OBJECT,
+              properties: {
+                pool: {
+                  type: Type.STRING,
+                  enum: ['free_agents', 'roster', 'listings', 'auctions', 'all'],
+                  description: 'Which pool to filter (default "all").',
+                },
+                position: {
+                  type: Type.STRING,
+                  description: 'Exact Gaffa slot filter (GK, CB, LB, RB, LWB, RWB, DM, CM, AM, LW, RW, ST).',
+                },
+                plTeam: {
+                  type: Type.STRING,
+                  description: 'Optional Premier League club filter.',
+                },
+                maxAge: {
+                  type: Type.NUMBER,
+                  description: 'Maximum age (e.g. 21 for U21 Academy prospects).',
+                },
+                minAge: {
+                  type: Type.NUMBER,
+                  description: 'Minimum age.',
+                },
+                minMarketValue: {
+                  type: Type.NUMBER,
+                  description: 'Minimum market value in €m.',
+                },
+                maxMarketValue: {
+                  type: Type.NUMBER,
+                  description: 'Maximum market value in €m.',
+                },
+                query: {
+                  type: Type.STRING,
+                  description: 'Optional name or keyword search.',
+                },
+                sortBy: {
+                  type: Type.STRING,
+                  enum: ['market_value', 'age'],
+                  description: 'Sort order (default "market_value").',
+                },
+                limit: {
+                  type: Type.NUMBER,
+                  description: 'Maximum results to return (default 25, max 50).',
+                },
+              },
+            },
+          },
+        ]
+      : []),
   ];
 
   const tools: any[] =
@@ -310,6 +372,8 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
         try {
           if (functionCall.name === 'grep_saved_dossiers') {
             apiResult = grepDossiers(params.dossiersPool ?? [], args as DossierGrepParams);
+          } else if (functionCall.name === 'grep_gaffa_market' && params.gaffaBag) {
+            apiResult = grepGaffaBag(params.gaffaBag, args as GaffaMarketGrepParams);
           } else if (functionCall.name === 'get_player_fact_sheet') {
             if (args.name) {
               const fetchRes = await fetch(

@@ -465,7 +465,6 @@ const App: React.FC = () => {
   const handleSendMessage = useCallback(async (
     userMessageText: string,
     imageData?: string,
-    mode: 'default' | 'fast' = 'default',
     messageDomain: ChatDomain = domain,
   ) => {
     if (!userMessageText.trim() && !imageData) return;
@@ -489,8 +488,6 @@ const App: React.FC = () => {
       } else {
         specificLoadingMessage = 'Gaffa briefing...';
       }
-    } else if (mode === 'fast') {
-      specificLoadingMessage = 'Quick lookup...';
     } else if (imageData) {
       specificLoadingMessage = 'Analyzing imagery...';
     } else if (/\b(compare|versus)\b|\bvs\.?\b/.test(lowerCaseMessage)) {
@@ -528,10 +525,11 @@ const App: React.FC = () => {
           setGaffaLink(nextLink);
         }
         const { prose, scorecard } = await sendGaffaMessage(userMessageText, messages, {
-          speed: mode,
           imageData,
           contextBag,
           connectAttempted: Boolean(gaffaLink),
+          savedDossiers: globalDossiers,
+          conversationProfiles: allProfiles,
         });
         setMessages(prev => [...prev, {
           id: generateId(),
@@ -547,7 +545,6 @@ const App: React.FC = () => {
         userMessageText,
         messages,
         imageData,
-        mode,
         allProfiles,
         globalDossiers,
         {

@@ -106,7 +106,6 @@ export interface ConversationalScoutParams {
   message: string;
   route: TurnRoute;
   history: ChatMessage[];
-  mode: 'default' | 'fast';
   imageData?: string;
   isEAFCRequest: boolean;
   conversationDossiers: PlayerProfile[];
@@ -124,7 +123,6 @@ export async function runConversationalScout(
     message,
     route,
     history,
-    mode,
     imageData,
     isEAFCRequest,
     conversationDossiers,
@@ -181,7 +179,6 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 
       const result = await generateStructured<ChallengeTurnResponse>({
         task: 'chat',
-        mode,
         prompt: challengePrompt,
         systemInstruction,
         schema: CHALLENGE_TURN_SCHEMA,
@@ -268,7 +265,6 @@ ${savedDossiersBlock}
     message: fullPrompt,
     historyContents,
     systemInstruction,
-    mode,
     imageData,
     enableTools: true,
     dossiersPool,

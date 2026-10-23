@@ -284,9 +284,14 @@ async function startServer() {
               if (currentClub) {
                 teamIdCache.set(currentClub.toLowerCase(), primaryStat.team.id);
               }
-              const teamCtx = await getTeamContextById(primaryStat.team.id);
-              coach = teamCtx.coach;
-              recentFixtures = teamCtx.recentFixtures;
+              const teamCtx = await Promise.race([
+                getTeamContextById(primaryStat.team.id),
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), 900)),
+              ]);
+              if (teamCtx) {
+                coach = teamCtx.coach;
+                recentFixtures = teamCtx.recentFixtures;
+              }
             }
           }
         } catch (statsErr) {

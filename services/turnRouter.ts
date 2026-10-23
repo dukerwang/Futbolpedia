@@ -102,6 +102,20 @@ const HAS_DOSSIER_TRIGGER = (msg: string): boolean =>
     msg,
   ) || /\b(analysis on|report on|break down)\b/i.test(msg);
 
+const IS_BARE_PLAYER_QUERY = (msg: string): boolean => {
+  if (/[?!]/.test(msg)) return false;
+  const words = msg.trim().split(/\s+/);
+  if (words.length < 1 || words.length > 4) return false;
+  if (
+    /\b(what|why|who|how|when|where|which|is|are|was|were|can|could|should|would|do|does|did|will|tell|list|show|explain|thoughts|think|hello|hi|hey|thanks|thank|help|best|top|squad|team|lineup|table|standings|fixtures)\b/i.test(
+      msg,
+    )
+  ) {
+    return false;
+  }
+  return true;
+};
+
 export async function classifyTurn(params: {
   message: string;
   history: ChatMessage[];
@@ -127,11 +141,13 @@ export async function classifyTurn(params: {
   const hasChallenge = HAS_CHALLENGE_OR_QUESTION_CUE(trimmed);
   const hasCompare = HAS_COMPARE_CUE(trimmed);
   const hasDossierTrigger = HAS_DOSSIER_TRIGGER(trimmed);
+  const isBarePlayerName = IS_BARE_PLAYER_QUERY(trimmed);
 
-  // 2. 0ms local fast-path for unambiguous single-player dossier requests ("Rate Cole Palmer", "Rate Prime John Terry")
+  // 2. 0ms local fast-path for unambiguous single-player dossier requests
+  // ("Rate Cole Palmer", "Rate Prime John Terry", or bare player names like "dembele", "willian pacho", "prime john terry")
   if (
     !hasImage &&
-    hasDossierTrigger &&
+    (hasDossierTrigger || isBarePlayerName) &&
     !hasChallenge &&
     !hasCompare &&
     !wantsRegeneration &&
@@ -189,7 +205,6 @@ User message: "${trimmed}"`;
 
     const route = await generateStructured<TurnRoute>({
       task: 'routing',
-      mode: 'fast',
       prompt,
       schema: TURN_ROUTE_SCHEMA,
     });

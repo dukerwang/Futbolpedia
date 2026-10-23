@@ -5,7 +5,6 @@ interface ChatInputProps {
   onSendMessage: (
     message: string,
     imageData?: string,
-    mode?: 'default' | 'fast',
     domain?: ChatDomain,
   ) => void;
   isLoading: boolean;
@@ -29,7 +28,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 }) => {
   const [message, setMessage] = useState('');
   const [image, setImage] = useState<string | null>(null);
-  const [mode, setMode] = useState<'default' | 'fast'>('default');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const gaffaOn = domain === 'gaffa';
 
@@ -50,7 +48,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if ((!message.trim() && !image) || isLoading) return;
-    onSendMessage(message, image || undefined, mode, domain);
+    onSendMessage(message, image || undefined, domain);
     setMessage('');
     setImage(null);
   };
@@ -127,41 +125,73 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             </button>
             <input type="file" ref={fileInputRef} onChange={onFileChange} accept="image/*" className="hidden" />
 
-            {/* Speed: default vs fast */}
+            {/* Domain Toggle: Futbolpedia vs Gaffa */}
             <div
+              role="switch"
+              aria-checked={gaffaOn}
+              aria-label="Toggle between Futbolpedia scouting mode and Gaffa fantasy mode"
               className="relative flex items-center bg-cream-200 dark:bg-charcoal-light rounded-full p-1 w-24 h-9 cursor-pointer ml-2 border border-cream-300 dark:border-charcoal-border select-none"
-              onClick={() => setMode(mode === 'default' ? 'fast' : 'default')}
-              title={mode === 'default' ? 'Deep research' : 'Fast mode'}
+              onClick={() => {
+                if (!isLoading) onDomainChange(gaffaOn ? 'default' : 'gaffa');
+              }}
+              title={
+                gaffaOn
+                  ? 'Gaffa mode active — click to switch to Futbolpedia'
+                  : 'Futbolpedia mode active — click to switch to Gaffa'
+              }
             >
               <div
-                className={`absolute top-1 bottom-1 w-[46%] bg-white dark:bg-charcoal rounded-full shadow-sm transition-all duration-300 ease-out mx-[2%] ${mode === 'default' ? 'left-0' : 'left-[50%]'}`}
+                className={`absolute top-1 bottom-1 w-[46%] bg-white dark:bg-charcoal rounded-full shadow-sm transition-all duration-300 ease-out mx-[2%] ${
+                  !gaffaOn ? 'left-0' : 'left-[50%]'
+                }`}
               />
+              {/* Left: Futbolpedia mark */}
               <div
-                className={`flex-1 flex justify-center items-center z-10 transition-colors duration-300 ${mode === 'default' ? 'text-charcoal dark:text-white' : 'text-charcoal/40 dark:text-cream-400/40'}`}
+                className={`flex-1 flex justify-center items-center z-10 transition-colors duration-300 ${
+                  !gaffaOn
+                    ? 'text-charcoal dark:text-white'
+                    : 'text-charcoal/40 dark:text-cream-400/40'
+                }`}
               >
-                <span className="material-symbols-outlined text-[18px]">psychology</span>
+                <span className="material-symbols-outlined text-[18px]">sports_soccer</span>
               </div>
+              {/* Right: Gaffa mark (football head + manager suit & tie) */}
               <div
-                className={`flex-1 flex justify-center items-center z-10 transition-colors duration-300 ${mode === 'fast' ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal/40 dark:text-cream-400/40'}`}
+                className={`flex-1 flex justify-center items-center z-10 transition-colors duration-300 ${
+                  gaffaOn
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-charcoal/40 dark:text-cream-400/40'
+                }`}
               >
-                <span className="material-symbols-outlined text-[18px]">bolt</span>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 128 128"
+                  className="size-[19px]"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="5.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="64" cy="64" r="56" />
+                  <g transform="translate(35.2, 82.8) scale(0.06)">
+                    <path
+                      fill="currentColor"
+                      stroke="none"
+                      d="M480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm200-500 54-18 16-54q-32-48-77-82.5T574-786l-54 38v56l160 112Zm-400 0 160-112v-56l-54-38q-54 17-99 51.5T210-652l16 54 54 18Zm-42 308 46-4 30-54-58-174-56-20-40 30q0 65 18 118.5T238-272Zm242 112q26 0 51-4t49-12l28-60-26-44H378l-26 44 28 60q24 8 49 12t51 4Zm-90-200h180l56-160-146-102-144 102 54 160Zm332 88q42-50 60-103.5T800-494l-40-28-56 18-58 174 30 54 46 4Z"
+                    />
+                  </g>
+                  <path d="M 24.8 104 C 34 88, 42 82, 50 82 M 103.2 104 C 94 88, 86 82, 78 82" />
+                  <path d="M 50 82 L 44 94 H 49 L 64 116 L 79 94 H 84 L 78 82" />
+                  <path d="M 54 82 L 64 96 L 74 82" />
+                  <path
+                    fill="currentColor"
+                    stroke="none"
+                    d="M 61 82 H 67 L 66 90 L 67.5 106 L 64 111 L 60.5 106 L 62 90 Z"
+                  />
+                </svg>
               </div>
             </div>
-
-            {/* Domain: Gaffa */}
-            <button
-              type="button"
-              onClick={() => onDomainChange(gaffaOn ? 'default' : 'gaffa')}
-              disabled={isLoading}
-              title={gaffaOn ? 'Gaffa mode on — prose answers only' : 'Switch to Gaffa mode'}
-              className={`ml-1 px-3 h-9 text-xs font-sans uppercase tracking-wider border transition-colors select-none ${
-                gaffaOn
-                  ? 'bg-charcoal text-cream-50 border-charcoal dark:bg-emerald-600 dark:border-emerald-500 dark:text-white'
-                  : 'bg-transparent text-charcoal/55 dark:text-cream-400/55 border-cream-300 dark:border-charcoal-border hover:text-charcoal dark:hover:text-cream-50'
-              }`}
-            >
-              Gaffa
-            </button>
           </div>
 
           <button

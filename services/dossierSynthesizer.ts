@@ -460,7 +460,6 @@ function findSynthesisValidationIssues(
 
 export interface SynthesizeDossierParams {
   rawMessage: string;
-  mode: 'default' | 'fast';
   isHistorical: boolean;
   foundationText: string;
   verifiedFacts: FutbolpediaVerifiedFacts | null;
@@ -516,7 +515,6 @@ ${temporalRules}
 
     const raw = await generateStructured<RawSynthesizedProfile>({
       task: 'synthesis',
-      mode: params.mode,
       prompt: attemptPrompt,
       systemInstruction: DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION,
       schema: PLAYER_PROFILE_SYNTHESIS_SCHEMA,

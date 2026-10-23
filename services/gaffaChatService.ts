@@ -5,13 +5,21 @@ import type {
   GaffaRosterPlayer,
   GaffaTradeScorecard,
   GaffaTradeVerdict,
+  PlayerProfile,
 } from '../types';
 import {
   buildGaffaSystemInstruction,
   buildLockedMarketTurnBlock,
   emptyGaffaContextBag,
 } from '../constants/gaffaRules';
-import { SIMULATION_SEASON, SIMULATION_YEAR } from '../constants';
+import { SIMULATION_SEASON, SIMULATION_YEAR } from '../prompts/scoutCore';
+import {
+  buildPositionalPeerLedgerBlock,
+  fetchSupabaseCalibratedPool,
+  findReferencedDossiers,
+  mergeAllCalibratedDossiers,
+  serializeProfileForHistory,
+} from './dossierStore';
 import { gatherSearchFoundation, generateJsonWithSchema, sendProseChatMessage } from './geminiService';
 import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
 
@@ -430,18 +438,14 @@ function threadNeedsPlayerResearch(history: ChatMessage[]): boolean {
   return classifyGaffaTurn(recentUser.content) === 'player_trade';
 }
 
-function buildResearchQueries(message: string, speed: 'default' | 'fast', threadHint?: string): string[] {
+function buildResearchQueries(message: string, threadHint?: string): string[] {
   const datePrefix = `[Date context: ${SIMULATION_SEASON} / ${SIMULATION_YEAR}]`;
   const focus = threadHint
     ? `${message}\n(Open thread context: ${threadHint.slice(0, 280)})`
     : message;
-  const clubLock = `${datePrefix} CURRENT CLUB CHECK for every player named in: ${focus}. For each, state the club they play for NOW (${SIMULATION_YEAR} / ${SIMULATION_SEASON}), not last season. Call out summer transfers.`;
-  const rest = [
-    `${datePrefix} ${focus} — ages, positions, injury/availability, recent role and minutes at their CURRENT club.`,
-    `${datePrefix} ${focus} — Premier League transfer links, PL exit/arrival risk, tactical usage this season.`,
-  ];
-  if (speed === 'fast') return [clubLock, rest[0]];
-  return [clubLock, ...rest];
+  const clubLock = `${datePrefix} CURRENT CLUB & ROLE CHECK for every player named in: ${focus}. State their current club (${SIMULATION_YEAR} / ${SIMULATION_SEASON}), age, position, injury/availability, and recent minutes/form -site:futbin.com -site:sofifa.com -site:fifaindex.com`;
+  const transferContext = `${datePrefix} ${focus} — Premier League transfer links, PL exit/arrival risk, and tactical usage this season -site:futbin.com -site:sofifa.com -site:fifaindex.com`;
+  return [clubLock, transferContext];
 }
 
 /** Strip leaked grounding citations from user-facing Gaffa prose. */
@@ -511,10 +515,18 @@ export async function sendGaffaMessage(
     imageData?: string;
     contextBag?: GaffaContextBag;
     connectAttempted?: boolean;
+    savedDossiers?: PlayerProfile[];
+    conversationProfiles?: PlayerProfile[];
   },
 ): Promise<GaffaMessageResult> {
+  void fetchSupabaseCalibratedPool();
   const speed = options?.speed ?? 'default';
   const bag = options?.contextBag ?? emptyGaffaContextBag();
+  const savedDossiers = options?.savedDossiers ?? [];
+  const conversationProfiles = options?.conversationProfiles ?? [];
+  const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationProfiles);
+  const peerLedgerBlock = buildPositionalPeerLedgerBlock(savedDossiers, conversationProfiles);
+
   const kind = classifyGaffaTurn(message);
   const systemInstruction = buildGaffaSystemInstruction(bag);
   const ongoingThread = buildOngoingThreadBlock(history);
@@ -542,16 +554,41 @@ export async function sendGaffaMessage(
       const playerCandidates = Array.from(
         combinedText.matchAll(/\b([A-Z][a-zà-öø-ÿ]+(?:\s+[A-Z][a-zà-öø-ÿ'-]+)+)\b/g),
         (m) => m[1],
-      ).slice(0, 2);
-      factualFoundation = await gatherSearchFoundation(
-        buildResearchQueries(message, speed, threadHint),
+      ).slice(0, 3);
+
+      // Instant 0ms lookup against calibrated Futbolpedia dossiers first
+      const matchedDossiers = findReferencedDossiers(
+        combinedText,
+        allCalibrated,
         playerCandidates,
       );
+      const matchedDossierNotes =
+        matchedDossiers.length > 0
+          ? `[FUTBOLPEDIA CALIBRATED DOSSIERS]\n${matchedDossiers.map(serializeProfileForHistory).join('\n\n')}`
+          : '';
+
+      const unratedCandidates = playerCandidates.filter(
+        (name) => !findReferencedDossiers(name, matchedDossiers, [name]).length,
+      );
+
+      let webNotes = '';
+      if (unratedCandidates.length > 0 || matchedDossiers.length === 0) {
+        webNotes = await gatherSearchFoundation(
+          buildResearchQueries(message, threadHint),
+          unratedCandidates.length > 0 ? unratedCandidates.slice(0, 2) : playerCandidates.slice(0, 2),
+        );
+      }
+
+      factualFoundation = [matchedDossierNotes, peerLedgerBlock, webNotes]
+        .filter(Boolean)
+        .join('\n\n');
     } catch (err) {
       console.warn('[Gaffa] research foundation failed:', err);
       factualFoundation =
         'Research unavailable this turn — answer carefully and hedge where evidence is thin.';
     }
+  } else if (peerLedgerBlock) {
+    factualFoundation = peerLedgerBlock;
   }
 
   let scorecardBlock = '';
@@ -590,12 +627,10 @@ Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure e
     connectAttempted: options?.connectAttempted,
   });
 
-  // gemini-3.8-flash rejects thinkingLevel MINIMAL (API 400). Rules used MINIMAL
-  // to skip extra reasoning; that failed in ~2s and POST /api/gaffa/chat returned 502.
-  // LOW is the supported equivalent and matches squad/strategy turns. This path is
-  // prose-only — never responseSchema / dossier JSON.
-  const thinkingLevel =
-    runScorecard || kind === 'player_trade' ? 'medium' : 'low';
+  // Use 'low' thinking when a scorecard already locked the 4 factors (saving ~3.5s of redundant thinking),
+  // and 'low' across rules/strategy for snappy responses.
+  const thinkingLevel = 'low';
+  const dossiersPool = [...savedDossiers, ...conversationProfiles];
 
   const prose = await sendProseChatMessage(prompt, history, {
     imageData: options?.imageData,
@@ -603,6 +638,8 @@ Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure e
     temperature: runScorecard ? 0.25 : kind === 'player_trade' ? 0.35 : kind === 'strategy' ? 0.5 : undefined,
     systemInstruction,
     conversationProfiles: [],
+    dossiersPool,
+    gaffaBag: bag,
   });
   const cleaned = lockGaffaRosterNames(sanitizeGaffaProse(prose), bag);
   return {
