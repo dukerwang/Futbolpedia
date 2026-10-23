@@ -81,8 +81,11 @@ export interface GaffaTradeScorecard {
   outgoing: string;
   incoming: string;
   incoming_cash_eur_m: number;
+  outgoing_cash_eur_m?: number;
   outgoing_club: string;
   incoming_club: string;
+  involved_slots?: string[];
+  roster_capacity_note?: string;
   replacement: number;
   coverage: number;
   cash_deployable: number;

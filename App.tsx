@@ -35,6 +35,7 @@ const App: React.FC = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isConversationsOpen, setIsConversationsOpen] = useState(false);
+  const [newChatRevision, setNewChatRevision] = useState(0);
   const isInitializedRef = useRef(false);
 
   // Sidebar / Dossier State
@@ -483,6 +484,10 @@ const App: React.FC = () => {
     if (activeDomain === 'gaffa') {
       if (/\b(trade|swap|€|\d+\s*m)\b/i.test(userMessageText)) {
         specificLoadingMessage = 'Weighing the trade...';
+      } else if (/\b(audit|lineup|starting xi|\bxi\b|auto-?subs?|formation)\b/i.test(lowerCaseMessage)) {
+        specificLoadingMessage = 'Auditing lineup & bench cover...';
+      } else if (/\b(bid|nominate|auction|fa floor|scout'?s? fee|clause)\b/i.test(lowerCaseMessage)) {
+        specificLoadingMessage = 'Calculating bid & market math...';
       } else if (/\b(oop|auto-?sub|eligibility|formation|bench|lock|rule)\b/i.test(lowerCaseMessage)) {
         specificLoadingMessage = 'Checking the rulebook...';
       } else {
@@ -685,6 +690,7 @@ const App: React.FC = () => {
     });
 
     setActiveConversationId(newId);
+    setNewChatRevision(prev => prev + 1);
     localStorage.setItem('futbolpedia-active-conversation-id', newId);
 
     setMessages([]);
@@ -798,7 +804,8 @@ const App: React.FC = () => {
             <ChatHistory 
                 messages={messages} 
                 isLoading={isLoading} 
-                loadingMessage={loadingMessage} 
+                loadingMessage={loadingMessage}
+                conversationKey={`${activeConversationId ?? 'init'}-${newChatRevision}`}
             />
             
             {/* Input Container - Sticky Bottom */}
@@ -811,6 +818,9 @@ const App: React.FC = () => {
                         error={gaffaSyncError}
                         onSync={handleGaffaSync}
                         onDisconnect={handleGaffaDisconnect}
+                        onQuickPrompt={(prompt) => handleSendMessage(prompt, undefined, 'gaffa')}
+                        calibratedDossiers={globalDossiers}
+                        disabled={isLoading}
                       />
                     )}
                     <ChatInput

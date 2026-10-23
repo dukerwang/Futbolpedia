@@ -140,9 +140,9 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
               onNewConversation();
               if (!isDesktop) onClose();
             }}
-            className="w-full py-3 px-4 flex items-center justify-center gap-2 border border-emerald-500/30 hover:border-emerald-500 hover:bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 font-serif font-bold text-sm tracking-wide rounded-xl transition-all shadow-sm hover:shadow active:scale-98"
+            className="btn-new-chat w-full py-3 px-4 flex items-center justify-center gap-2 border border-emerald-500/30 hover:border-emerald-500 hover:bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 font-serif font-bold text-sm tracking-wide rounded-xl shadow-sm hover:shadow"
           >
-            <span className="material-symbols-outlined text-[18px]">add_comment</span>
+            <span className="material-symbols-outlined text-[18px] btn-new-chat-icon">add_comment</span>
             Start New Briefing
           </button>
         </div>
@@ -174,7 +174,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
                       if (!isDesktop) onClose();
                     }
                   }}
-                  className={`group relative flex flex-col p-3.5 rounded-xl border transition-all duration-300 cursor-pointer ${
+                  className={`conversation-row group relative flex flex-col p-3.5 rounded-xl border cursor-pointer ${
                     isActive
                       ? 'bg-cream-300/40 dark:bg-charcoal-light/55 border-emerald-500/40 shadow-paper'
                       : 'bg-white dark:bg-charcoal-surface/30 border-cream-300/60 dark:border-charcoal-border hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30'

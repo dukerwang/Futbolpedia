@@ -6,9 +6,10 @@ interface ChatHistoryProps {
   messages: ChatMessageType[];
   isLoading: boolean;
   loadingMessage: string;
+  conversationKey?: string;
 }
 
-export const ChatHistory: React.FC<ChatHistoryProps> = ({ messages, isLoading, loadingMessage }) => {
+export const ChatHistory: React.FC<ChatHistoryProps> = ({ messages, isLoading, loadingMessage, conversationKey }) => {
   const endOfMessagesRef = useRef<null | HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,11 +25,14 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({ messages, isLoading, l
       <div className="max-w-[800px] w-full mx-auto flex flex-col gap-2 px-6 pt-10">
         
         {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-[50vh] opacity-40 select-none">
-                <div className="size-16 rounded-full border-2 border-charcoal/20 dark:border-cream-400/20 flex items-center justify-center mb-4">
-                     <span className="font-serif italic text-4xl text-charcoal/40 dark:text-cream-400/40 font-bold">F</span>
+            <div
+                key={conversationKey || 'empty'}
+                className="new-chat-stage flex flex-col items-center justify-center h-[50vh] select-none"
+            >
+                <div className="new-chat-crest size-16 rounded-full border-2 border-charcoal/15 dark:border-cream-400/15 flex items-center justify-center mb-4">
+                     <span className="font-serif italic text-4xl text-charcoal/25 dark:text-cream-400/25 font-bold">F</span>
                 </div>
-                <p className="font-serif italic text-lg text-charcoal/60 dark:text-cream-400">Awaiting Query...</p>
+                <p className="new-chat-caption font-serif italic text-lg text-charcoal/35 dark:text-cream-400/40">Awaiting Query...</p>
             </div>
         )}
 

@@ -1,5 +1,6 @@
-import type { GaffaContextBag } from '../types';
+import type { GaffaContextBag, PlayerProfile } from '../types';
 import { SIMULATION_YEAR, SIMULATION_SEASON } from '../prompts/scoutCore';
+import { buildDossierLookupMap, lookupPlayerDossier } from '../services/gaffaLineupAudit';
 
 /** Bump when the snapshot is refreshed from Gaffa's USER_GUIDE. */
 export const GAFFA_RULES_VERSION = '2026-09-15';
@@ -109,7 +110,11 @@ export function emptyGaffaContextBag(): GaffaContextBag {
   };
 }
 
-function buildContextBagBlock(bag: GaffaContextBag): string {
+function buildContextBagBlock(
+  bag: GaffaContextBag,
+  calibratedDossiers: PlayerProfile[] = [],
+): string {
+  const dossierMap = buildDossierLookupMap(calibratedDossiers);
   const lines = [
     '=== GAFFA CONTEXT BAG ===',
     `Rules snapshot version: ${bag.gaffa_rules_version}`,
@@ -174,8 +179,12 @@ function buildContextBagBlock(bag: GaffaContextBag): string {
       const alias =
         p.display_name && p.display_name !== p.name ? ` (aka ${p.display_name})` : '';
       const sec = p.secondary_positions?.length ? `/${p.secondary_positions.join(',')}` : '';
+      const dossier = lookupPlayerDossier(p.name, p.display_name, dossierMap);
+      const scoutTag = dossier
+        ? ` | Scout: ${dossier.ratings.overall} OVR / ${dossier.ratings.potential} POT (${dossier.playstyleAndRole?.playstyle?.archetype ?? 'calibrated'})`
+        : '';
       lines.push(
-        `  - ${p.name}${alias} | ${p.primary_position}${sec} | ${p.status} | ${p.pl_team ?? '?'}`,
+        `  - ${p.name}${alias} | ${p.primary_position}${sec} | ${p.status} | ${p.pl_team ?? '?'}${scoutTag}`,
       );
     }
   }
@@ -194,26 +203,31 @@ function buildContextBagBlock(bag: GaffaContextBag): string {
     );
   }
 
-  lines.push(...formatLockedMarketLines(bag));
+  lines.push(...formatLockedMarketLines(bag, calibratedDossiers));
 
   return lines.join('\n');
 }
 
-function formatFaPlayerLine(p: {
-  name: string;
-  display_name?: string;
-  position: string;
-  pl_team?: string | null;
-  market_value_eur_m?: number | null;
-  age?: number | null;
-  live_auction?: boolean;
-}): string {
+function formatFaPlayerLine(
+  p: {
+    name: string;
+    display_name?: string;
+    position: string;
+    pl_team?: string | null;
+    market_value_eur_m?: number | null;
+    age?: number | null;
+    live_auction?: boolean;
+  },
+  dossierMap?: Map<string, PlayerProfile>,
+): string {
   const alias = p.display_name && p.display_name !== p.name ? ` (aka ${p.display_name})` : '';
+  const dossier = dossierMap ? lookupPlayerDossier(p.name, p.display_name, dossierMap) : undefined;
   const bits = [
     `${p.name}${alias} | ${p.position}`,
     p.pl_team || null,
     p.market_value_eur_m != null ? `€${p.market_value_eur_m}m` : null,
     p.age != null ? `age ${p.age}` : null,
+    dossier ? `Scout ${dossier.ratings.overall} OVR / ${dossier.ratings.potential} POT` : null,
     p.live_auction ? 'LIVE AUCTION (bid now)' : null,
   ].filter(Boolean);
   return `  - ${bits.join(' · ')}`;
@@ -225,7 +239,11 @@ function formatFaPlayerLine(p: {
  * Empty auctions/listings ≠ empty FA. Only an empty `free_agents` array is empty FA.
  * A missing `free_agents` field is a legacy bag — do not claim the pool is empty.
  */
-export function formatLockedMarketLines(bag: GaffaContextBag): string[] {
+export function formatLockedMarketLines(
+  bag: GaffaContextBag,
+  calibratedDossiers: PlayerProfile[] = [],
+): string[] {
+  const dossierMap = buildDossierLookupMap(calibratedDossiers);
   const listings = bag.open_listings ?? [];
   const auctions = bag.open_auctions ?? [];
   const fa = bag.free_agents;
@@ -246,7 +264,7 @@ export function formatLockedMarketLines(bag: GaffaContextBag): string[] {
     lines.push(
       `FA POOL (free agency / unowned in THIS league): ${fa.length} players. THIS is free agency — not listings, not "empty because no live auctions".`,
       'You can nominate anyone below to open an FA auction (FA floor applies). LIVE AUCTION means a bid is already open.',
-      `Rank "highest potential" only among THESE names. The bag has market value and age, not scout POT/OVR — do not invent overall or potential ratings. ${liveCount} currently on a live auction.`,
+      `Rank "highest potential" only among THESE names. Use calibrated Scout OVR/POT where tagged below, and market value / age otherwise — do not invent overall or potential ratings for untagged players. ${liveCount} currently on a live auction.`,
     );
     const inlineCap = 60;
     const sortedFa =
@@ -258,11 +276,11 @@ export function formatLockedMarketLines(bag: GaffaContextBag): string[] {
           )
         : fa;
     for (const p of sortedFa.slice(0, inlineCap)) {
-      lines.push(formatFaPlayerLine(p));
+      lines.push(formatFaPlayerLine(p, dossierMap));
     }
     if (fa.length > inlineCap) {
       lines.push(
-        `  ... plus ${fa.length - inlineCap} more unowned FA players in this league. Use the \`grep_gaffa_market\` tool to filter all ${fa.length} unowned players by position, age (e.g. U21), club, or keyword in <1ms.`,
+        `  ... plus ${fa.length - inlineCap} more unowned FA players in this league. Use the \`grep_gaffa_market\` tool to filter all ${fa.length} unowned players by position, age (e.g. U21), Scout OVR/POT, club, or keyword in <1ms.`,
       );
     }
   }
@@ -313,7 +331,10 @@ export function formatLockedMarketLines(bag: GaffaContextBag): string[] {
 }
 
 /** Compact turn-level lock so first-turn FA questions cannot ignore the system bag. */
-export function buildLockedMarketTurnBlock(bag: GaffaContextBag): string {
+export function buildLockedMarketTurnBlock(
+  bag: GaffaContextBag,
+  calibratedDossiers: PlayerProfile[] = [],
+): string {
   if (!bag.connected) {
     return `<locked_market>
 No live Gaffa bag this turn. If the user asks about free agency / FA / unowned / highest potential available: you do not have this league's unowned pool — say so. Do not invent a market from real-world unattached players, EAFC, Liga MX licensing, or other sports.
@@ -337,14 +358,17 @@ This turn is already inside Gaffa (${bag.league_name ?? 'league'} / ${bag.club_n
 Answer market / FA / unowned / "can I buy X from FA" / "highest potential" availability ONLY from names below. Closed set = roster + listings + live auctions + FA pool. If the FA pool list is present and empty, say so — do not invent a market. If the FA pool list is missing, do not treat empty auctions as empty FA.
 Empty live auctions / listings does not mean free agency is empty.
 
-${formatLockedMarketLines(bag).join('\n')}
+${formatLockedMarketLines(bag, calibratedDossiers).join('\n')}
 ${settings}
 Roster names (not FA): ${rosterNames.join(', ') || 'none listed'}.
 </locked_market>`;
 }
 
 /** System instruction for Gaffa-mode chat — separate from MASTER_INSTRUCTION_SET. */
-export function buildGaffaSystemInstruction(bag: GaffaContextBag = emptyGaffaContextBag()): string {
+export function buildGaffaSystemInstruction(
+  bag: GaffaContextBag = emptyGaffaContextBag(),
+  calibratedDossiers: PlayerProfile[] = [],
+): string {
   return `⚽ FUTBOLPEDIA — GAFFA MODE (v1.5)
 
 PRIME DIRECTIVE
@@ -418,7 +442,7 @@ CONVERSATION CONTINUITY
 
 ${GAFFA_RULES_SNAPSHOT}
 
-${buildContextBagBlock(bag)}
+${buildContextBagBlock(bag, calibratedDossiers)}
 `;
 }
 
@@ -430,16 +454,23 @@ export interface GaffaMarketGrepParams {
   minAge?: number;
   minMarketValue?: number;
   maxMarketValue?: number;
+  minOverall?: number;
+  minPotential?: number;
   query?: string;
-  sortBy?: 'market_value' | 'age';
+  sortBy?: 'market_value' | 'age' | 'overall' | 'potential';
   limit?: number;
 }
 
 /**
  * Instant (<1ms) structured grep over the connected Gaffa club bag
- * (unowned FA pool, club roster, open listings, and live auctions).
+ * (unowned FA pool, club roster, open listings, and live auctions),
+ * cross-linked with calibrated Futbolpedia dossiers when available.
  */
-export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams = {}) {
+export function grepGaffaBag(
+  bag: GaffaContextBag,
+  params: GaffaMarketGrepParams = {},
+  calibratedDossiers: PlayerProfile[] = [],
+) {
   if (!bag.connected) {
     return {
       connected: false,
@@ -448,6 +479,7 @@ export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams
     };
   }
 
+  const dossierMap = buildDossierLookupMap(calibratedDossiers);
   const poolType = params.pool ?? 'all';
   const posFilter = params.position?.trim().toUpperCase();
   const teamFilter = params.plTeam?.trim().toLowerCase();
@@ -459,6 +491,23 @@ export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams
         .filter(Boolean)
     : [];
 
+  const attachScoutMeta = (name: string, displayName?: string) => {
+    const d = lookupPlayerDossier(name, displayName, dossierMap);
+    if (!d) return {};
+    const topAttrs = Object.entries(d.attributes || {})
+      .filter(([, v]) => typeof v === 'number' && v > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+    const scout_top_attributes: Record<string, number> = {};
+    for (const [k, v] of topAttrs) scout_top_attributes[k] = v;
+    return {
+      scout_ovr: d.ratings?.overall,
+      scout_pot: d.ratings?.potential,
+      scout_archetype: d.playstyleAndRole?.playstyle?.archetype,
+      scout_top_attributes,
+    };
+  };
+
   const items: Array<{
     pool: string;
     name: string;
@@ -469,6 +518,10 @@ export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams
     market_value_eur_m?: number | null;
     status?: string;
     detail?: string;
+    scout_ovr?: number;
+    scout_pot?: number;
+    scout_archetype?: string;
+    scout_top_attributes?: Record<string, number>;
   }> = [];
 
   if (poolType === 'all' || poolType === 'free_agents') {
@@ -482,6 +535,7 @@ export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams
         age: p.age,
         market_value_eur_m: p.market_value_eur_m,
         detail: p.live_auction ? 'LIVE AUCTION' : 'unowned (nominate to open auction)',
+        ...attachScoutMeta(p.name, p.display_name),
       });
     }
   }
@@ -496,6 +550,7 @@ export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams
         position: pos,
         pl_team: p.pl_team,
         status: p.status,
+        ...attachScoutMeta(p.name, p.display_name),
       });
     }
   }
@@ -509,6 +564,7 @@ export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams
         position: l.position,
         market_value_eur_m: price,
         detail: `Seller: ${l.seller_club_name}${l.yours ? ' (YOURS)' : ''}`,
+        ...attachScoutMeta(l.name),
       });
     }
   }
@@ -521,6 +577,7 @@ export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams
         position: a.position,
         market_value_eur_m: a.highest_bid_eur_m ?? null,
         detail: `Kind: ${a.kind}${a.highest_bid_eur_m != null ? `, high €${a.highest_bid_eur_m}m` : ''}`,
+        ...attachScoutMeta(a.name),
       });
     }
   }
@@ -556,8 +613,28 @@ export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams
     ) {
       return false;
     }
+    if (
+      typeof params.minOverall === 'number' &&
+      (item.scout_ovr == null || item.scout_ovr < params.minOverall)
+    ) {
+      return false;
+    }
+    if (
+      typeof params.minPotential === 'number' &&
+      (item.scout_pot == null || item.scout_pot < params.minPotential)
+    ) {
+      return false;
+    }
     if (queryTokens.length > 0) {
-      const hay = [item.name, item.display_name, item.position, item.pl_team, item.status, item.detail]
+      const hay = [
+        item.name,
+        item.display_name,
+        item.position,
+        item.pl_team,
+        item.status,
+        item.detail,
+        item.scout_archetype,
+      ]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
@@ -568,6 +645,18 @@ export function grepGaffaBag(bag: GaffaContextBag, params: GaffaMarketGrepParams
 
   if (params.sortBy === 'age') {
     filtered.sort((a, b) => (a.age ?? 99) - (b.age ?? 99));
+  } else if (params.sortBy === 'overall') {
+    filtered.sort(
+      (a, b) =>
+        (b.scout_ovr ?? -1) - (a.scout_ovr ?? -1) ||
+        (b.market_value_eur_m ?? -1) - (a.market_value_eur_m ?? -1),
+    );
+  } else if (params.sortBy === 'potential') {
+    filtered.sort(
+      (a, b) =>
+        (b.scout_pot ?? -1) - (a.scout_pot ?? -1) ||
+        (b.market_value_eur_m ?? -1) - (a.market_value_eur_m ?? -1),
+    );
   } else {
     filtered.sort((a, b) => (b.market_value_eur_m ?? -1) - (a.market_value_eur_m ?? -1));
   }

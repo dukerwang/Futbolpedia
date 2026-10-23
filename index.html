@@ -99,9 +99,151 @@
 </script>
 
 <style>
+  :root {
+      --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  }
+
   body {
       transition: background-color 0.3s ease, color 0.3s ease;
   }
+
+  /* Button press feedback for New Chat triggers */
+  .btn-new-chat {
+      transition:
+          transform 150ms var(--ease-out),
+          background-color 150ms ease,
+          color 150ms ease,
+          border-color 150ms ease,
+          box-shadow 150ms ease;
+  }
+  .btn-new-chat:active {
+      transform: scale(0.96);
+  }
+  @media (hover: hover) and (pointer: fine) {
+      .btn-new-chat:hover .btn-new-chat-icon {
+          transform: scale(1.06);
+      }
+  }
+  .btn-new-chat-icon {
+      transition: transform 150ms var(--ease-out);
+  }
+
+  /* New Chat empty stage & staggered children */
+  .new-chat-stage {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      transition:
+          opacity 220ms var(--ease-out),
+          transform 220ms var(--ease-out);
+      transition-behavior: allow-discrete;
+  }
+  .new-chat-crest {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      transition:
+          opacity 200ms var(--ease-out),
+          transform 200ms var(--ease-out);
+      transition-behavior: allow-discrete;
+  }
+  .new-chat-caption {
+      opacity: 1;
+      transform: translateY(0);
+      transition:
+          opacity 220ms var(--ease-out) 40ms,
+          transform 220ms var(--ease-out) 40ms;
+      transition-behavior: allow-discrete;
+  }
+
+  /* Newly created conversation row in Saved Briefs */
+  .conversation-row {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      transition:
+          opacity 220ms var(--ease-out),
+          transform 220ms var(--ease-out),
+          background-color 200ms ease,
+          border-color 200ms ease,
+          box-shadow 200ms ease;
+      transition-behavior: allow-discrete;
+  }
+
+  @starting-style {
+      .new-chat-stage {
+          opacity: 0;
+          transform: translateY(8px) scale(0.98);
+      }
+      .new-chat-crest {
+          opacity: 0;
+          transform: translateY(4px) scale(0.95);
+      }
+      .new-chat-caption {
+          opacity: 0;
+          transform: translateY(6px);
+      }
+      .conversation-row {
+          opacity: 0;
+          transform: translateY(-6px) scale(0.98);
+      }
+  }
+
+  @supports not (transition-behavior: allow-discrete) {
+      @keyframes newChatStageEnter {
+          from {
+              opacity: 0;
+              transform: translateY(8px) scale(0.98);
+          }
+          to {
+              opacity: 1;
+              transform: translateY(0) scale(1);
+          }
+      }
+      @keyframes convRowEnter {
+          from {
+              opacity: 0;
+              transform: translateY(-6px) scale(0.98);
+          }
+          to {
+              opacity: 1;
+              transform: translateY(0) scale(1);
+          }
+      }
+      .new-chat-stage {
+          animation: newChatStageEnter 220ms var(--ease-out) both;
+      }
+      .conversation-row {
+          animation: convRowEnter 220ms var(--ease-out) both;
+      }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+      .btn-new-chat,
+      .btn-new-chat-icon {
+          transition-duration: 100ms;
+      }
+      .btn-new-chat:active,
+      .btn-new-chat:hover .btn-new-chat-icon {
+          transform: none;
+      }
+      .new-chat-stage,
+      .new-chat-crest,
+      .new-chat-caption,
+      .conversation-row {
+          transform: none;
+          transition-duration: 120ms;
+          transition-delay: 0ms;
+          animation: none;
+      }
+      @starting-style {
+          .new-chat-stage,
+          .new-chat-crest,
+          .new-chat-caption,
+          .conversation-row {
+              transform: none;
+          }
+      }
+  }
+
   ::-webkit-scrollbar {
       width: 6px;
       height: 6px;

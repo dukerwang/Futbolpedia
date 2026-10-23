@@ -77,10 +77,10 @@ export const Header: React.FC<HeaderProps> = ({
 
             <button 
                 onClick={onNewChat} 
-                className="p-2 text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light rounded-full transition-colors"
+                className="btn-new-chat p-2 text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light rounded-full"
                 title="New Chat"
             >
-                <span className="material-symbols-outlined text-[20px]">add_comment</span>
+                <span className="material-symbols-outlined text-[20px] block btn-new-chat-icon">add_comment</span>
             </button>
         </div>
     </header>

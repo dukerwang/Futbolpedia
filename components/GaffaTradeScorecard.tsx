@@ -55,12 +55,17 @@ function ScoreCell({
 }
 
 export function formatScorecardCopy(card: GaffaTradeScorecard): string {
+  const outCash =
+    card.outgoing_cash_eur_m && card.outgoing_cash_eur_m > 0
+      ? ` + €${card.outgoing_cash_eur_m}m`
+      : '';
   const cash =
     card.incoming_cash_eur_m > 0 ? ` + €${card.incoming_cash_eur_m}m` : '';
   return [
     `${VERDICT_LABEL[card.verdict]} · ${card.confidence} confidence`,
     `Replacement ${card.replacement} · Coverage ${card.coverage} · Cash ${card.cash_deployable} · Leverage ${card.starter_leverage}`,
-    `${card.outgoing} (${card.outgoing_club}) → ${card.incoming} (${card.incoming_club})${cash}`,
+    `${card.outgoing} (${card.outgoing_club})${outCash} → ${card.incoming} (${card.incoming_club})${cash}`,
+    card.roster_capacity_note ? `Capacity: ${card.roster_capacity_note}` : '',
     card.what_would_flip ? `Would flip: ${card.what_would_flip}` : '',
   ]
     .filter(Boolean)
@@ -70,6 +75,10 @@ export function formatScorecardCopy(card: GaffaTradeScorecard): string {
 export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = ({
   card,
 }) => {
+  const outCash =
+    card.outgoing_cash_eur_m && card.outgoing_cash_eur_m > 0
+      ? ` + €${card.outgoing_cash_eur_m}m`
+      : '';
   const cash =
     card.incoming_cash_eur_m > 0 ? ` + €${card.incoming_cash_eur_m}m` : '';
 
@@ -83,9 +92,16 @@ export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = 
   return (
     <div className="border border-cream-300 dark:border-charcoal-border bg-cream-50/60 dark:bg-charcoal-surface/60 px-4 py-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/50">
-          Trade lock
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/50">
+            Trade lock
+          </span>
+          {card.involved_slots && card.involved_slots.length > 0 && (
+            <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 bg-charcoal/5 dark:bg-cream-400/10 text-charcoal/60 dark:text-cream-300/70">
+              {card.involved_slots.join(' / ')}
+            </span>
+          )}
+        </div>
         <span className="font-serif italic text-charcoal dark:text-cream-100">
           {VERDICT_LABEL[card.verdict]}
           <span className="not-italic font-sans text-[11px] uppercase tracking-wider text-charcoal/45 dark:text-cream-400/45 ml-2">
@@ -97,11 +113,18 @@ export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = 
       <p className="mt-1.5 text-sm font-serif text-charcoal dark:text-cream-100">
         {card.outgoing}
         <span className="text-charcoal/45 dark:text-cream-400/45"> ({card.outgoing_club})</span>
+        {outCash}
         <span className="text-charcoal/35 dark:text-cream-400/35"> → </span>
         {card.incoming}
         <span className="text-charcoal/45 dark:text-cream-400/45"> ({card.incoming_club})</span>
         {cash}
       </p>
+
+      {card.roster_capacity_note && (
+        <p className="mt-1 text-[11px] font-sans text-charcoal/55 dark:text-cream-300/60">
+          {card.roster_capacity_note}
+        </p>
+      )}
 
       <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
         <ScoreCell label="Replacement" hint="Higher → take" value={card.replacement} />

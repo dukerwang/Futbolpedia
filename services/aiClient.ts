@@ -268,7 +268,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
           {
             name: 'grep_gaffa_market',
             description:
-              'Instant (<1ms) structured grep and filter over the connected Gaffa league bag (unowned FA pool, club roster, open listings, and live auctions). Use this to find free agents or roster players by position, age (e.g. maxAge: 21 for Academy), market value, PL club, or name.',
+              'Instant (<1ms) structured grep and filter over the connected Gaffa league bag (unowned FA pool, club roster, open listings, and live auctions), cross-linked with calibrated Futbolpedia dossiers (scout_ovr, scout_pot, scout_archetype). Use this to find free agents or roster players by position, age (e.g. maxAge: 21 for Academy), market value, calibrated Scout OVR/POT, PL club, or name.',
             parameters: {
               type: Type.OBJECT,
               properties: {
@@ -301,13 +301,21 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
                   type: Type.NUMBER,
                   description: 'Maximum market value in €m.',
                 },
+                minOverall: {
+                  type: Type.NUMBER,
+                  description: 'Minimum calibrated Futbolpedia Overall rating (1-99).',
+                },
+                minPotential: {
+                  type: Type.NUMBER,
+                  description: 'Minimum calibrated Futbolpedia Potential rating (1-99).',
+                },
                 query: {
                   type: Type.STRING,
-                  description: 'Optional name or keyword search.',
+                  description: 'Optional name, archetype, or keyword search.',
                 },
                 sortBy: {
                   type: Type.STRING,
-                  enum: ['market_value', 'age'],
+                  enum: ['market_value', 'age', 'overall', 'potential'],
                   description: 'Sort order (default "market_value").',
                 },
                 limit: {
@@ -373,7 +381,11 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
           if (functionCall.name === 'grep_saved_dossiers') {
             apiResult = grepDossiers(params.dossiersPool ?? [], args as DossierGrepParams);
           } else if (functionCall.name === 'grep_gaffa_market' && params.gaffaBag) {
-            apiResult = grepGaffaBag(params.gaffaBag, args as GaffaMarketGrepParams);
+            apiResult = grepGaffaBag(
+              params.gaffaBag,
+              args as GaffaMarketGrepParams,
+              params.dossiersPool ?? [],
+            );
           } else if (functionCall.name === 'get_player_fact_sheet') {
             if (args.name) {
               const fetchRes = await fetch(
