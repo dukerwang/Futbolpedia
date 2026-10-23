@@ -2,7 +2,7 @@ import type { GaffaContextBag } from '../types';
 import { SIMULATION_YEAR, SIMULATION_SEASON } from '../prompts/scoutCore';
 
 /** Bump when the snapshot is refreshed from Gaffa's USER_GUIDE. */
-export const GAFFA_RULES_VERSION = '2026-09-15';
+export const GAFFA_RULES_VERSION = '2026-10-19';
 
 /**
  * Curated rules brief for Gaffa Q&A — distilled from Fantasy Futbol/docs/USER_GUIDE.md.
@@ -14,7 +14,8 @@ Disclaimer: Many figures are commissioner-tunable. Treat the numbers below as co
 THESIS
 - Dynasty Premier League fantasy: win by being right about footballers, not by farming a points table.
 - Players are graded against position-specific expectations (match-rating style), then converted to fantasy points.
-- Squads carry forever after one inaugural snake draft; thereafter change via auctions, trades, loans.
+- Dynasty (the main format): squads carry forever after one inaugural snake draft; thereafter change via auctions, trades, loans.
+- Redraft leagues also exist: a new draft every season and fewer systems. The context bag's is_dynasty says which one this league is. See LEAGUE FORMATS.
 
 POSITIONS & FORMATIONS
 - 12 tactical positions (no DEF/MID/FWD buckets): GK; CB, LB, RB, LWB, RWB; DM, CM, AM; LW, RW, ST.
@@ -30,7 +31,7 @@ LOCKS
 SQUAD STATUS
 - Active/Bench count toward roster (commonly 22).
 - IR (Injured Reserve): parking for injured players; common cap 2 (3 for a club that bought the Club Facilities upgrade); does not count toward active roster. Cannot place an auction bid while a healthy player sits on IR.
-- Academy: U21 prospect stash (commonly 3 slots, up to 5 with Club Facilities upgrades); not counted in active roster.
+- Academy: prospect stash for players aged 21 or younger on 1 August, the start of the season (commonly 3 slots, up to 5 with Club Facilities upgrades); not counted in active roster.
 - Loaned out / loaned in. A player loaned out still counts toward the LENDER's squad, not the borrower's.
 - Held: a player who arrived when the squad was full (loan expiry, retained player returning to the PL, an auction won when no bidder with room bid). Still owned, off the squad, not counted. See HELD PLAYERS.
 - On Loan Abroad: a player who left the PL on loan. Uses no squad place and no retained slot, gets no compensation, rejoins automatically on return. See FINANCE / ACADEMY / DEPARTURES.
@@ -95,11 +96,27 @@ PL-ONLY & DYNASTY
 
 FINANCE / ACADEMY / DEPARTURES (BRIEF)
 - Match revenue every 4 GWs (win/draw/loss payments). Club Balance is a permanent dynasty asset.
-- Academy holds U21s; turning 21 forces promotion when space exists.
+- Academy eligibility is age on 1 August, the start of the season: 21 or younger on that date qualifies for the whole season, so a mid-season birthday changes nothing. He is judged again each 1 August.
+- An aged-out player is never moved or dropped automatically. He may stay in the Academy, but while he does the club can't bid or move anyone else into the Academy until he's promoted or dropped.
 - Departure from the PL (transfer abroad, relegation, retirement): the manager chooses RELEASE (60% of market value as compensation, barred from the return auction) or RETAIN (no cash, keep his rights in a scarce retained slot, commonly 3). Retained rights are tradeable; the return-auction bar stays with whoever took compensation.
 - A retained player who returns joins the squad if there's room; otherwise he's held, and the manager can decline him for nothing (he goes to auction).
 - A player who leaves the PL ON LOAN gets no Release/Retain choice: he's On Loan Abroad, uses no squad place or retained slot, gets no compensation, and rejoins automatically when back (held if the squad is full). He can be traded or dropped for nothing. If a new season starts and he hasn't returned, it's treated as a permanent departure.
 - Offseason reset exists — do not invent league-specific payout tables unless present here.
+
+MANAGERS LEAVING (CARETAKER)
+- Before the draft, leaving removes the club. After the draft, a club whose manager leaves or is removed stays in the league, run by the Caretaker until a new manager takes it over from the invite code. It keeps its squad, Club Balance, record and fixtures, so tables and cup brackets never change.
+- On handover the manager's live bids are withdrawn and open trade/loan offers and unbid listings cancelled; deals already agreed still complete at the end of the gameweek.
+- The Caretaker never does business: no bids, sales, trades or loans, and nobody can propose a trade or loan to a Caretaker club. It picks the best lineup from projected points before each gameweek, moves injured players to IR and back between gameweeks, and activates held players when there's room.
+- Inactivity: opening the league or the dashboard counts as active. After 5 full gameweeks without a visit the manager is warned; after one more, the commissioner is told. Removing a manager is always the commissioner's decision. International breaks and the summer don't count.
+- Commissioner tools in Settings: see when each manager was last active, remove a manager, transfer the commissioner role. A commissioner must hand the role on before leaving a league that has drafted.
+
+LEAGUE FORMATS
+- Dynasty is the default and everything above describes it.
+- Redraft (chosen when the league is created): a new snake draft every season, with squads cleared and Club Balances reset to the league budget (recommended €100m). Same positions, scoring, lineups, auto-subs, matchups, draw band and cups. Trades, IR and free-agent auctions still exist.
+  - Switched off in redraft: Academy, loans, Club Facilities, listings, severance (drops are free), the retained list (a departing player simply leaves; no compensation), Match Revenue, prizes, and the solidarity/Scout's Fee split.
+  - Every free agent opens at €1m regardless of market value.
+  - Transfer Day: all redraft bids settle together 24 hours before the gameweek's first kickoff (in a congested week, halfway between the previous gameweek's last match and the next one's first). Highest bidder with room wins, top-priced players first. After Transfer Day, any free agent nobody bid on can be signed instantly for free with Sign Now, until his club kicks off. A dropped player goes to auction until the next Transfer Day.
+- Expansion draft (dynasty only, offseason, before Kickoff): the commissioner adds up to 4 clubs. Each existing club protects 8 senior players (Academy and loaned-out players are exempt on top). New clubs pick in a random order from unprotected players and free agents; no existing club loses more than 2. New clubs start with the league's median Club Balance; nobody pays or is paid for players taken. When the last squad is full, fixtures and cups are rebuilt.
 `;
 
 export function emptyGaffaContextBag(): GaffaContextBag {
