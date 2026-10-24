@@ -87,7 +87,7 @@ export interface GroundedSearchResult {
 }
 
 const SEARCH_DIGEST_SYSTEM_INSTRUCTION =
-  'You are a high-precision football scouting fact extractor. Summarize verified search results into a dense, factual bullet digest (max 160 words). Always state exact figures (age, appearances, goals, assists, minutes), confirmed current club, confirmed current head coach, most recent match date/score, major honours (UCL, Ballon d\'Or, FIFPro, league titles), and concrete on-pitch traits/limitations. Omit filler, introductions, and speculation.';
+  'You are a high-precision football scouting and tactical fact extractor. Summarize verified search results into a dense, factual bullet digest (max 190 words). For player queries, state exact figures (age, appearances, starts, minutes, goals, assists, or key defensive/passing metrics across competitions), confirmed current club, confirmed current head coach, most recent match date/score/fitness, major honours (UCL, Ballon d\'Or, FIFPro, league titles), and concrete on-pitch traits/limitations. For club, tactical, or ranking queries, state confirmed current head coach, primary formation and phase-of-play mechanics (build-up, pressing, rest-defense), current starting XI and key transfers/loans in or out, recent match results/standings, and statistical standouts. Omit filler, introductions, and speculation.';
 
 export async function runGroundedSearch(
   query: string,
@@ -102,7 +102,7 @@ export async function runGroundedSearch(
       config: {
         systemInstruction: SEARCH_DIGEST_SYSTEM_INSTRUCTION,
         temperature: 0.1,
-        maxOutputTokens: 360,
+        maxOutputTokens: 420,
         tools: [{ googleSearch: {} }],
         // Cap thinkingLevel to LOW during search grounding so Flash does not run
         // multi-second dynamic thinking just to summarize search results.

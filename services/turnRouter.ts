@@ -131,6 +131,26 @@ export const extractReferencedClubs = (message: string): string[] => {
   return [...normalized];
 };
 
+/**
+ * Resolves clubs referenced directly in `message`, or carries forward the active club(s)
+ * from recent conversation turns when the user asks an implicit follow-up
+ * (e.g. "Which full-back is tucking in?", "Why did you mention Cucurella?", "What about their midfield?").
+ */
+export const extractThreadClubs = (message: string, history: ChatMessage[]): string[] => {
+  const direct = extractReferencedClubs(message);
+  if (direct.length > 0) return direct;
+  if (history.length === 0) return [];
+
+  for (let i = history.length - 1; i >= Math.max(0, history.length - 4); i--) {
+    const msg = history[i];
+    if (typeof msg.content === 'string') {
+      const clubs = extractReferencedClubs(msg.content);
+      if (clubs.length > 0) return clubs.slice(0, 2);
+    }
+  }
+  return [];
+};
+
 const stripClubAndDossierQualifiers = (message: string): string =>
   message
     .replace(/\b(give me a?n?|create|generate|can you|please|show me|pull up|what is|what's)\b/gi, '')
@@ -438,7 +458,7 @@ export async function classifyTurn(params: {
       targetPlayers: [],
       targetClubs: referencedClubs,
       searchQueries: [`${trimmed} world football rankings performance stats`],
-      reasoningComplexity: 'medium',
+      reasoningComplexity: 'high',
       isHistorical,
       wantsRegeneration: false,
       needsSearch: true,
@@ -459,15 +479,17 @@ export async function classifyTurn(params: {
     const isSquadMode = /\b(squad|lineup|starting\s+xi|signings|targets|transfer|recruitment)\b/i.test(
       trimmed,
     );
+    const clubLabel = referencedClubs.join(' ');
     return {
       intent: 'tactical_chat',
       analyticalMode: isSquadMode ? 'squad_or_recruitment' : 'tactical_or_system',
       targetPlayers: [],
       targetClubs: referencedClubs,
       searchQueries: [
-        `${referencedClubs.join(' ')} current head coach tactical system starting XI ${trimmed}`,
+        `${clubLabel} 2026 transfers out departed players sold loaned out Summer 2026 and new signings current active roster`,
+        `${clubLabel} current head coach tactical system starting XI by position and player roles: ${trimmed}`,
       ],
-      reasoningComplexity: 'medium',
+      reasoningComplexity: 'high',
       isHistorical,
       wantsRegeneration: false,
       needsSearch: true,

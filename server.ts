@@ -97,7 +97,13 @@ async function startServer() {
   const teamIdCache = new Map<string, number>();
   const teamContextCache = new Map<
     number,
-    { expiresAt: number; coach: string | null; recentFixtures: any[]; upcomingFixtures: any[] }
+    {
+      expiresAt: number;
+      coach: string | null;
+      recentFixtures: any[];
+      upcomingFixtures: any[];
+      squad: Array<{ name: string; position: string | null; age: number | null }>;
+    }
   >();
 
   const getTeamContextById = async (teamId: number) => {
@@ -106,7 +112,7 @@ async function startServer() {
       return cached;
     }
 
-    const [lastFixturesRes, nextFixturesRes, coachRes] = await Promise.allSettled([
+    const [lastFixturesRes, nextFixturesRes, coachRes, squadRes] = await Promise.allSettled([
       axios.get(`${API_URL}/fixtures`, {
         params: { team: teamId, last: 5 },
         headers: { "x-apisports-key": API_KEY },
@@ -118,6 +124,11 @@ async function startServer() {
         timeout: 4500,
       }),
       axios.get(`${API_URL}/coachs`, {
+        params: { team: teamId },
+        headers: { "x-apisports-key": API_KEY },
+        timeout: 4500,
+      }),
+      axios.get(`${API_URL}/players/squads`, {
         params: { team: teamId },
         headers: { "x-apisports-key": API_KEY },
         timeout: 4500,
@@ -161,11 +172,23 @@ async function startServer() {
       }
     }
 
+    const squad: Array<{ name: string; position: string | null; age: number | null }> =
+      squadRes.status === "fulfilled"
+        ? (squadRes.value.data?.response?.[0]?.players ?? [])
+            .filter((p: any) => p?.name)
+            .map((p: any) => ({
+              name: String(p.name),
+              position: p.position ? String(p.position) : null,
+              age: typeof p.age === "number" ? p.age : null,
+            }))
+        : [];
+
     const entry = {
       expiresAt: Date.now() + PLAYER_CACHE_TTL_MS,
       coach,
       recentFixtures,
       upcomingFixtures,
+      squad,
     };
     teamContextCache.set(teamId, entry);
     return entry;
@@ -423,6 +446,7 @@ async function startServer() {
         coach: ctx.coach,
         recentFixtures: ctx.recentFixtures,
         upcomingFixtures: ctx.upcomingFixtures,
+        squad: ctx.squad,
       });
     } catch (error: any) {
       console.warn("[api/football/fixtures] lookup failed:", error?.message || error);

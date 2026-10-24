@@ -180,11 +180,18 @@ ${apiPlayer.coach ? `- Registered Head Coach: ${apiPlayer.coach} (update only if
   };
 }
 
+export interface ApiFootballSquadMember {
+  name: string;
+  position: string | null;
+  age: number | null;
+}
+
 export interface ApiFootballTeamContext {
   team: string;
   coach: string | null;
   recentFixtures: ApiFootballFixtureItem[];
   upcomingFixtures: ApiFootballFixtureItem[];
+  squad?: ApiFootballSquadMember[];
 }
 
 export async function fetchApiFootballTeamContext(
@@ -208,6 +215,7 @@ export async function fetchApiFootballTeamContext(
       coach: data.coach ?? null,
       recentFixtures: Array.isArray(data.recentFixtures) ? data.recentFixtures : [],
       upcomingFixtures: Array.isArray(data.upcomingFixtures) ? data.upcomingFixtures : [],
+      squad: Array.isArray(data.squad) ? data.squad : [],
     };
   } catch {
     return null;
@@ -230,9 +238,35 @@ export function formatApiFootballTeamContextBlock(ctx: ApiFootballTeamContext | 
           .map((f) => `${f.date ?? '?'} [${f.competition ?? 'Match'}] ${f.homeTeam} vs ${f.awayTeam}`)
           .join(' | ')}`
       : '';
+
+  let squadBlock = '';
+  if (Array.isArray(ctx.squad) && ctx.squad.length > 0) {
+    const byGroup: Record<string, string[]> = {
+      Goalkeepers: [],
+      Defenders: [],
+      Midfielders: [],
+      Attackers: [],
+    };
+    for (const member of ctx.squad) {
+      const pos = (member.position || '').toLowerCase();
+      const label = member.age ? `${member.name} (${member.age})` : member.name;
+      if (pos.includes('goal') || pos === 'gk') byGroup.Goalkeepers.push(label);
+      else if (pos.includes('defend')) byGroup.Defenders.push(label);
+      else if (pos.includes('midfield')) byGroup.Midfielders.push(label);
+      else byGroup.Attackers.push(label);
+    }
+    const groupLines = Object.entries(byGroup)
+      .filter(([, list]) => list.length > 0)
+      .map(([group, list]) => `  - ${group}: ${list.join(', ')}`);
+    if (groupLines.length > 0) {
+      squadBlock = `Registered Active Squad (API-Football — use only these verified squad members plus confirmed current-season signings; never cite departed players):\n${groupLines.join('\n')}`;
+    }
+  }
+
   return [
     `[API-FOOTBALL CLUB CONTEXT — ${ctx.team}]`,
     ctx.coach ? `Registered Head Coach: ${ctx.coach}` : '',
+    squadBlock,
     recentLine,
     upcomingLine,
   ]
