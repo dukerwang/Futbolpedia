@@ -131,6 +131,8 @@ export interface ConversationalScoutParams {
   savedDossiersBlock: string;
   peerLedgerBlock?: string;
   onDossierUpdated?: (updatedProfile: PlayerProfile) => void;
+  onStreamChunk?: (accumulatedText: string) => void;
+  onStageChange?: (stageLabel: string) => void;
 }
 
 export async function runConversationalScout(
@@ -148,6 +150,8 @@ export async function runConversationalScout(
     savedDossiersBlock,
     peerLedgerBlock,
     onDossierUpdated,
+    onStreamChunk,
+    onStageChange,
   } = params;
 
   const { year, month, currentSeason } = getCurrentSeasonInfo();
@@ -166,10 +170,11 @@ export async function runConversationalScout(
 
     let groundingNotes = '';
     if (route.needsSearch) {
+      onStageChange?.(`Verifying ${targetDossier.basicInfo.name}'s ${currentSeason} records...`);
       try {
         const customQueries =
           route.searchQueries && route.searchQueries.length > 0
-            ? route.searchQueries.slice(0, 2)
+            ? route.searchQueries.slice(0, 1)
             : [
                 `[Date: ${month} ${year}] ${targetDossier.basicInfo.name}: ${message} (${currentSeason} stats and scouting verification)`,
               ];
@@ -181,6 +186,8 @@ export async function runConversationalScout(
         groundingNotes = '';
       }
     }
+
+    onStageChange?.(`Evaluating ${targetDossier.basicInfo.name}'s dossier calibration...`);
 
     try {
       const challengePrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
@@ -204,7 +211,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         prompt: challengePrompt,
         systemInstruction,
         schema: CHALLENGE_TURN_SCHEMA,
-        thinkingLevelOverride: 'medium',
+        thinkingLevelOverride: 'low',
       });
 
       if (result.revisedDossier && result.dossierPatch) {
@@ -213,7 +220,9 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         onDossierUpdated?.(updatedProfile);
       }
 
-      return sanitizeScoutProse(result.replyProse);
+      const cleanedReply = sanitizeScoutProse(result.replyProse);
+      onStreamChunk?.(cleanedReply);
+      return cleanedReply;
     } catch (e) {
       console.warn('[ConversationalScout] Structured challenge path failed, falling back to prose:', e);
     }
@@ -249,25 +258,45 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     }
 
     const targetClubs = route.targetClubs ?? [];
+    const asksLiveSeasonUpdate =
+      /\b(stats?|goals?|assists?|appearances?|minutes|form|injured|injury|lineup|starting\s+xi|fixtures?|table|standings|transfer|manager|coach)\b/i.test(
+        message,
+      );
+
+    // If all compared players are already locked in calibrated dossiers and the user isn't asking
+    // for live stats/fixture updates, skip redundant web search and stream directly from locked dossiers.
+    const allTargetsAlreadyCalibrated =
+      route.targetPlayers.length > 0 &&
+      unratedPlayers.length === 0 &&
+      targetClubs.length === 0 &&
+      !asksLiveSeasonUpdate;
+
     const shouldPreGround =
-      unratedPlayers.length > 0 ||
-      targetClubs.length > 0 ||
-      (route.needsSearch && Boolean(route.searchQueries?.length));
+      !allTargetsAlreadyCalibrated &&
+      (unratedPlayers.length > 0 ||
+        targetClubs.length > 0 ||
+        (route.needsSearch && Boolean(route.searchQueries?.length)));
 
     if (shouldPreGround) {
+      onStageChange?.(
+        unratedPlayers.length > 0
+          ? `Scouting ${unratedPlayers.slice(0, 2).join(' & ')} (${currentSeason} data)...`
+          : targetClubs.length > 0
+            ? `Verifying ${targetClubs.join(' & ')} squad & tactical setup...`
+            : `Gathering ${currentSeason} grounding data...`,
+      );
       try {
         const datePrefix = `[Date: ${month} ${year}]`;
         let queries: string[] = [];
 
         if (route.searchQueries && route.searchQueries.length > 0) {
           queries = route.searchQueries
-            .slice(0, 2)
+            .slice(0, 1)
             .map((q) => (q.includes(String(year)) ? q : `${datePrefix} ${q}`));
         } else if (unratedPlayers.length > 0) {
           const subjectLabel = unratedPlayers.join(' vs ');
           queries = [
-            `${datePrefix} ${subjectLabel} — current clubs (${year}), ages, positions, ${currentSeason} season stats, and tactical roles`,
-            `${datePrefix} ${subjectLabel} — scouting profile: technical, physical, and mental strengths, weaknesses, and peer standing`,
+            `${datePrefix} ${subjectLabel} — current clubs (${year}), confirmed head coaches, ages, positions, ${currentSeason} season stats, tactical roles, technical/physical/mental strengths, weaknesses, and global positional peer standing`,
           ];
         } else if (targetClubs.length > 0) {
           const clubLabel = targetClubs.join(' vs ');
@@ -324,16 +353,20 @@ ${savedDossiersBlock}
   const historyContents = buildHistoryContents(history, conversationDossiers);
   const dossiersPool = [...savedDossiers, ...conversationDossiers];
 
-  const isDeepAnalyticalTurn =
-    route.reasoningComplexity === 'high' ||
-    route.intent === 'compare' ||
-    analyticalMode === 'head_to_head' ||
-    analyticalMode === 'debate_or_verdict' ||
-    analyticalMode === 'ranking_or_tierlist' ||
-    analyticalMode === 'tactical_or_system' ||
-    analyticalMode === 'squad_or_recruitment';
+  // Because structured analytical blueprints, <calibrated_peer_ledger>, <locked_dossiers>, and
+  // <factual_foundation> are already injected in the prompt, 'low' thinking starts streaming in ~0.8s
+  // while preserving full dialectical depth and cutting ~2,000 redundant thinking tokens per turn.
+  const thinkingLevelOverride: ThinkingTier = 'low';
 
-  const thinkingLevelOverride: ThinkingTier = isDeepAnalyticalTurn ? 'medium' : 'low';
+  // When pre-grounding has already populated <factual_foundation> (or all compared players are locked),
+  // restrict tools to instant (<1ms) in-memory dossier grep so the model does not pause the stream
+  // to run a duplicate wave of web searches or API-Football HTTP requests.
+  const hasCompleteContext =
+    Boolean(factualFoundation) ||
+    route.intent === 'archive_inventory' ||
+    (route.targetPlayers.length > 0 && Boolean(effectiveLockedBlock));
+
+  onStageChange?.('Writing scouting analysis...');
 
   const rawReply = await generateProseTurn({
     message: fullPrompt,
@@ -341,8 +374,11 @@ ${savedDossiersBlock}
     systemInstruction,
     imageData,
     thinkingLevelOverride,
-    enableTools: true,
+    toolMode: hasCompleteContext ? 'local_only' : 'full',
     dossiersPool,
+    onStreamChunk: onStreamChunk
+      ? (partial) => onStreamChunk(sanitizeScoutProse(partial))
+      : undefined,
   });
 
   return sanitizeScoutProse(rawReply);

@@ -12,6 +12,7 @@ import { DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION } from '../prompts/dossierPrompt';
 import { generateStructured, getCurrentSeasonInfo } from './aiClient';
 import {
   findProfileManagerGroundingIssues,
+  scrubProfileManagerMentions,
   type FutbolpediaVerifiedFacts,
 } from './profileManagerGrounding';
 import type { ApiFootballPlayerFactSheet } from './groundingService';
@@ -397,13 +398,32 @@ function resolveEffectiveVerifiedFacts(
   profile: PlayerProfile,
   explicitVerifiedFacts: FutbolpediaVerifiedFacts | null,
   isHistorical: boolean,
+  foundationText?: string,
+  apiPlayer?: ApiFootballPlayerFactSheet | null,
 ): FutbolpediaVerifiedFacts | null {
   if (isHistorical) return null;
-  if (explicitVerifiedFacts) return explicitVerifiedFacts;
+  const supplementalCorpus = [
+    foundationText,
+    apiPlayer?.coach ?? undefined,
+    apiPlayer?.currentClub ?? undefined,
+    profile.basicInfo.name,
+    profile.basicInfo.club,
+  ].filter((v): v is string => Boolean(v));
+
+  if (explicitVerifiedFacts) {
+    return {
+      ...explicitVerifiedFacts,
+      supplementalCorpus: [
+        ...(explicitVerifiedFacts.supplementalCorpus ?? []),
+        ...supplementalCorpus,
+      ],
+    };
+  }
   if (!raw.calibration) return null;
   return {
     currentClub: profile.basicInfo.club,
-    currentHeadCoach: raw.calibration.verifiedCurrentHeadCoach ?? null,
+    currentHeadCoach:
+      raw.calibration.verifiedCurrentHeadCoach ?? apiPlayer?.coach ?? null,
     conflictingManagerReports: raw.calibration.conflictingManagerReports ?? [],
     season2526Stats: null,
     recentForm: null,
@@ -411,7 +431,97 @@ function resolveEffectiveVerifiedFacts(
     majorAwards: [],
     tacticalRole: null,
     mobilitySummary: null,
+    supplementalCorpus,
   };
+}
+
+/**
+ * Deterministically enforces numerical calibration invariants in 0ms so minor model
+ * boundary slips (tierBand vs Overall, spike floor, flaw ceiling, or attribute spread)
+ * never trigger a 4-second retry LLM call.
+ */
+function enforceCalibrationInvariants(
+  raw: RawSynthesizedProfile,
+  profile: PlayerProfile,
+  isHistorical: boolean,
+): PlayerProfile {
+  const tierBandId = raw.calibration?.tierBand;
+  const tierDef = tierBandId ? TIER_BAND_MAP[tierBandId] : undefined;
+
+  if (tierDef && profile.ratings.overall > 0) {
+    if (profile.ratings.overall < tierDef.min - 1) {
+      profile.ratings.overall = tierDef.min;
+    } else if (profile.ratings.overall > tierDef.max + 1) {
+      profile.ratings.overall = tierDef.max;
+    }
+    profile.ratings.potential = isHistorical
+      ? profile.ratings.overall
+      : Math.max(profile.ratings.overall, profile.ratings.potential);
+  }
+
+  const overall = profile.ratings.overall;
+  const isGK = profile.basicInfo.position.toLowerCase().includes('goalkeeper');
+
+  if (!isGK && overall >= 60) {
+    const attrs = profile.attributes;
+    const vals = Object.values(attrs).filter((v): v is number => typeof v === 'number');
+    const hasZeros = vals.some((v) => v <= 0);
+
+    if (!hasZeros && vals.length > 0) {
+      const spikes = (raw.calibration?.signatureSpikes ?? []).filter(
+        (k): k is keyof Attributes => k in attrs,
+      );
+      const spikeSet = new Set<keyof Attributes>(spikes);
+      const flaws = (raw.calibration?.genuineFlaws ?? []).filter(
+        (k): k is keyof Attributes => k in attrs && !spikeSet.has(k as keyof Attributes),
+      );
+
+      // 1. Ensure every declared signature spike reaches at least overall - 2
+      for (const spikeKey of spikes) {
+        const val = attrs[spikeKey];
+        if (typeof val === 'number' && val < overall - 2) {
+          attrs[spikeKey] = Math.min(99, Math.max(overall - 1, val));
+        }
+      }
+
+      // 2. For elite cards (overall >= 88), ensure at least one attribute reaches overall
+      const currentMax = Math.max(...Object.values(attrs));
+      if (overall >= 88 && currentMax < overall - 1) {
+        const primarySpike =
+          spikes[0] ??
+          (Object.entries(attrs).sort((a, b) => b[1] - a[1])[0]?.[0] as keyof Attributes);
+        if (primarySpike) {
+          attrs[primarySpike] = Math.min(99, overall);
+        }
+      }
+
+      // 3. Ensure every declared genuine flaw stays below max(82, overall - 2)
+      const flawCeiling = Math.max(82, overall - 2) - 2;
+      for (const flawKey of flaws) {
+        const val = attrs[flawKey];
+        if (typeof val === 'number' && val >= Math.max(82, overall - 2)) {
+          attrs[flawKey] = Math.max(45, Math.min(78, flawCeiling));
+        }
+      }
+
+      // 4. Guarantee a spiky attribute spread (max - min >= 12)
+      const updatedVals = Object.values(attrs);
+      const maxAttr = Math.max(...updatedVals);
+      const minAttr = Math.min(...updatedVals);
+      if (maxAttr - minAttr < 12) {
+        const targetFlawKey =
+          flaws[0] ??
+          (Object.entries(attrs)
+            .filter(([k]) => !spikeSet.has(k as keyof Attributes))
+            .sort((a, b) => a[1] - b[1])[0]?.[0] as keyof Attributes);
+        if (targetFlawKey) {
+          attrs[targetFlawKey] = Math.max(40, maxAttr - 14);
+        }
+      }
+    }
+  }
+
+  return profile;
 }
 
 function findSynthesisValidationIssues(
@@ -426,67 +536,16 @@ function findSynthesisValidationIssues(
     issues.push(...managerIssues);
   }
 
-  const tierBandId = raw.calibration?.tierBand;
-  const tierDef = tierBandId ? TIER_BAND_MAP[tierBandId] : undefined;
-  const overall = profile.ratings.overall;
-  if (tierDef && overall > 0) {
-    // Allow 1-point boundary tolerance before flagging a calibration mismatch
-    if (overall < tierDef.min - 1 || overall > tierDef.max + 1) {
-      issues.push(
-        `Overall rating (${overall}) contradicts selected calibration.tierBand (${tierDef.id}: ${tierDef.min}-${tierDef.max}). Keep Overall inside ${tierDef.min}-${tierDef.max} or select the matching tierBand.`,
-      );
-    }
-  }
-
   const isGK = profile.basicInfo.position.toLowerCase().includes('goalkeeper');
+  const overall = profile.ratings.overall;
   if (!isGK && overall >= 60) {
     const vals = Object.values(profile.attributes).filter(
       (v): v is number => typeof v === 'number',
     );
-    const hasZeros = vals.some((v) => v <= 0);
-    if (hasZeros) {
+    if (vals.some((v) => v <= 0)) {
       issues.push(
         'One or more outfield attributes were set to 0 for an identifiable professional player. Populate all 25 attributes with real values.',
       );
-    } else if (vals.length > 0) {
-      const maxAttr = Math.max(...vals);
-      const minAttr = Math.min(...vals);
-      const spread = maxAttr - minAttr;
-      if (spread < 12) {
-        issues.push(
-          `Outfield attributes are flattened (max-min spread is only ${spread}). Let signatureSpikes spike high and genuineFlaws stay low.`,
-        );
-      }
-
-      if (overall >= 88 && maxAttr < overall - 1) {
-        issues.push(
-          `Overall rating is ${overall}, but the highest individual attribute is only ${maxAttr}. Ensure signatureSpikes reach at least ${overall}–${Math.min(99, overall + 3)}.`,
-        );
-      }
-
-      const spikes = raw.calibration?.signatureSpikes ?? [];
-      for (const spikeKey of spikes) {
-        if (spikeKey in profile.attributes) {
-          const val = profile.attributes[spikeKey as keyof Attributes];
-          if (typeof val === 'number' && val < overall - 3) {
-            issues.push(
-              `Attribute "${spikeKey}" was listed in calibration.signatureSpikes but rated only ${val} (Overall ${overall}). Raise "${spikeKey}" to reflect an elite signature trait.`,
-            );
-          }
-        }
-      }
-
-      const flaws = raw.calibration?.genuineFlaws ?? [];
-      for (const flawKey of flaws) {
-        if (flawKey in profile.attributes) {
-          const val = profile.attributes[flawKey as keyof Attributes];
-          if (typeof val === 'number' && val >= Math.max(82, overall - 2)) {
-            issues.push(
-              `Attribute "${flawKey}" was listed in calibration.genuineFlaws but rated ${val} (Overall ${overall}). Lower "${flawKey}" so the attribute table reflects the stated limitation.`,
-            );
-          }
-        }
-      }
     }
   }
 
@@ -555,7 +614,7 @@ ${temporalRules}
       schema: PLAYER_PROFILE_SYNTHESIS_SCHEMA,
     });
 
-    const profile = sanitizeProfileData(raw);
+    let profile = sanitizeProfileData(raw);
 
     // Deterministically backfill missing bio fields from API-Football on active players
     if (!params.isHistorical && params.apiPlayer) {
@@ -577,17 +636,26 @@ ${temporalRules}
       }
     }
 
-    // Enforce Potential === Overall on historical Prime/Peak cards if the model floated Potential by 1-2 pts
-    if (params.isHistorical && profile.ratings.potential !== profile.ratings.overall) {
-      profile.ratings.potential = profile.ratings.overall;
-    }
+    // Enforce calibration invariants deterministically in 0ms
+    profile = enforceCalibrationInvariants(raw, profile, params.isHistorical);
 
     const effectiveVerifiedFacts = resolveEffectiveVerifiedFacts(
       raw,
       profile,
       params.verifiedFacts,
       params.isHistorical,
+      params.foundationText,
+      params.apiPlayer,
     );
+
+    // Surgically scrub any unverified manager mention in 0ms rather than firing a second 4s LLM call
+    if (effectiveVerifiedFacts) {
+      const managerIssues = findProfileManagerGroundingIssues(profile, effectiveVerifiedFacts);
+      if (managerIssues.length > 0) {
+        profile = scrubProfileManagerMentions(profile, effectiveVerifiedFacts);
+      }
+    }
+
     lastIssues = findSynthesisValidationIssues(raw, profile, effectiveVerifiedFacts);
 
     if (lastIssues.length === 0) {
@@ -596,15 +664,8 @@ ${temporalRules}
 
     console.warn(`[DossierSynthesizer] Validation attempt ${attempt + 1} issues:`, lastIssues);
 
-    // On final attempt, return the sanitized profile if only non-fatal calibration/spread warnings remain
-    // and no manager-grounding violation occurred.
     if (attempt === 1) {
-      const managerIssues = effectiveVerifiedFacts
-        ? findProfileManagerGroundingIssues(profile, effectiveVerifiedFacts)
-        : [];
-      if (managerIssues.length === 0) {
-        return profile;
-      }
+      return profile;
     }
   }
 

@@ -86,6 +86,9 @@ export interface GroundedSearchResult {
   formattedBlock: string;
 }
 
+const SEARCH_DIGEST_SYSTEM_INSTRUCTION =
+  'You are a high-precision football scouting fact extractor. Summarize verified search results into a dense, factual bullet digest (max 160 words). Always state exact figures (age, appearances, goals, assists, minutes), confirmed current club, confirmed current head coach, most recent match date/score, major honours (UCL, Ballon d\'Or, FIFPro, league titles), and concrete on-pitch traits/limitations. Omit filler, introductions, and speculation.';
+
 export async function runGroundedSearch(
   query: string,
   options?: { datePrefix?: string; attempt?: number },
@@ -97,6 +100,9 @@ export async function runGroundedSearch(
       model: FLASH_MODEL,
       contents: fullQuery,
       config: {
+        systemInstruction: SEARCH_DIGEST_SYSTEM_INSTRUCTION,
+        temperature: 0.1,
+        maxOutputTokens: 360,
         tools: [{ googleSearch: {} }],
         // Cap thinkingLevel to LOW during search grounding so Flash does not run
         // multi-second dynamic thinking just to summarize search results.
@@ -143,6 +149,8 @@ export async function runGroundedSearch(
   }
 }
 
+export type ProseToolMode = 'full' | 'local_only' | 'none';
+
 export interface GenerateProseTurnParams {
   message: string;
   historyContents: Content[];
@@ -152,8 +160,10 @@ export interface GenerateProseTurnParams {
   thinkingLevelOverride?: ThinkingTier;
   modelOverride?: string;
   enableTools?: boolean;
+  toolMode?: ProseToolMode;
   dossiersPool?: PlayerProfile[];
   gaffaBag?: GaffaContextBag;
+  onStreamChunk?: (accumulatedText: string) => void;
 }
 
 export async function generateProseTurn(params: GenerateProseTurnParams): Promise<string> {
@@ -163,7 +173,10 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
     temperature: params.temperatureOverride,
   });
 
-  const functionDeclarations: any[] = [
+  const effectiveToolMode: ProseToolMode =
+    params.toolMode ?? (params.enableTools === false ? 'none' : 'full');
+
+  const localFunctionDeclarations: any[] = [
     {
       name: 'grep_saved_dossiers',
       description:
@@ -216,51 +229,6 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
             description: 'Max dossiers to return (default 10, max 25).',
           },
         },
-      },
-    },
-    {
-      name: 'get_player_fact_sheet',
-      description:
-        'Fetches a player’s deterministic API-Football fact sheet (registered club, age, height, weight, injury flag, and current season appearances/goals/assists/tackles/key passes).',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          name: {
-            type: Type.STRING,
-            description: 'Full name of the footballer (e.g. "Willian Pacho", "Ousmane Dembélé").',
-          },
-        },
-        required: ['name'],
-      },
-    },
-    {
-      name: 'get_football_squad',
-      description:
-        'Gets the current active roster/squad of a football team using API-Football. Use this to verify current players for a club.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          team: {
-            type: Type.STRING,
-            description: 'The name of the football club (e.g. Real Madrid, Arsenal, PSG)',
-          },
-        },
-        required: ['team'],
-      },
-    },
-    {
-      name: 'get_team_fixtures',
-      description:
-        'Gets the last 5 completed match results, next 3 upcoming fixtures, and registered head coach for a football club using API-Football.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          team: {
-            type: Type.STRING,
-            description: 'The name of the football club (e.g. PSG, Chelsea, Barcelona)',
-          },
-        },
-        required: ['team'],
       },
     },
     ...(params.gaffaBag?.connected
@@ -329,24 +297,78 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
       : []),
   ];
 
+  const networkFunctionDeclarations: any[] = [
+    {
+      name: 'get_player_fact_sheet',
+      description:
+        'Fetches a player’s deterministic API-Football fact sheet (registered club, age, height, weight, injury flag, and current season appearances/goals/assists/tackles/key passes).',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          name: {
+            type: Type.STRING,
+            description: 'Full name of the footballer (e.g. "Willian Pacho", "Ousmane Dembélé").',
+          },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'get_football_squad',
+      description:
+        'Gets the current active roster/squad of a football team using API-Football. Use this to verify current players for a club.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          team: {
+            type: Type.STRING,
+            description: 'The name of the football club (e.g. Real Madrid, Arsenal, PSG)',
+          },
+        },
+        required: ['team'],
+      },
+    },
+    {
+      name: 'get_team_fixtures',
+      description:
+        'Gets the last 5 completed match results, next 3 upcoming fixtures, and registered head coach for a football club using API-Football.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          team: {
+            type: Type.STRING,
+            description: 'The name of the football club (e.g. PSG, Chelsea, Barcelona)',
+          },
+        },
+        required: ['team'],
+      },
+    },
+  ];
+
   const tools: any[] =
-    params.enableTools === false
+    effectiveToolMode === 'none'
       ? []
-      : [
-          { googleSearch: {} },
-          { functionDeclarations },
-        ];
+      : effectiveToolMode === 'local_only'
+        ? [{ functionDeclarations: localFunctionDeclarations }]
+        : [
+            { googleSearch: {} },
+            { functionDeclarations: [...localFunctionDeclarations, ...networkFunctionDeclarations] },
+          ];
 
   const chatSession = getAi().chats.create({
     model: resolved.model,
     config: {
       systemInstruction: params.systemInstruction,
       ...(tools.length > 0 ? { tools } : {}),
-      // @ts-ignore
-      toolConfig: {
-        // @ts-ignore
-        includeServerSideToolInvocations: true,
-      },
+      ...(effectiveToolMode === 'full'
+        ? {
+            // @ts-ignore
+            toolConfig: {
+              // @ts-ignore
+              includeServerSideToolInvocations: true,
+            },
+          }
+        : {}),
       temperature: resolved.temperature,
       thinkingConfig: {
         thinkingLevel: THINKING_LEVEL_MAP[resolved.thinkingLevel],
@@ -366,14 +388,8 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
     });
   }
 
-  let response = await chatSession.sendMessage({ message: parts });
-
-  let safetyLoopCount = 0;
-  while (response.functionCalls && response.functionCalls.length > 0 && safetyLoopCount < 4) {
-    safetyLoopCount++;
-    const calls = response.functionCalls;
-
-    const toolResponses = await Promise.all(
+  const executeToolCalls = async (calls: any[]) =>
+    Promise.all(
       calls.map(async (functionCall) => {
         let apiResult: any = {};
         const args = (functionCall.args as any) ?? {};
@@ -435,6 +451,57 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
       }),
     );
 
+  // Use live token streaming when an onStreamChunk callback is provided
+  if (params.onStreamChunk && typeof (chatSession as any).sendMessageStream === 'function') {
+    let accumulatedText = '';
+    let pendingCalls: any[] = [];
+    let lastFinishReason: string | undefined;
+
+    const consumeStream = async (messagePayload: any) => {
+      pendingCalls = [];
+      const stream = await chatSession.sendMessageStream({ message: messagePayload });
+      for await (const chunk of stream) {
+        if (chunk.functionCalls && chunk.functionCalls.length > 0) {
+          pendingCalls.push(...chunk.functionCalls);
+        }
+        const finish = chunk.candidates?.[0]?.finishReason;
+        if (finish) lastFinishReason = finish;
+
+        const chunkText = chunk.text;
+        if (typeof chunkText === 'string' && chunkText.length > 0 && pendingCalls.length === 0) {
+          accumulatedText += chunkText;
+          params.onStreamChunk?.(accumulatedText);
+        }
+      }
+    };
+
+    await consumeStream(parts);
+
+    let safetyLoopCount = 0;
+    while (pendingCalls.length > 0 && safetyLoopCount < 3) {
+      safetyLoopCount++;
+      const toolResponses = await executeToolCalls(pendingCalls);
+      await consumeStream(toolResponses);
+    }
+
+    if (!accumulatedText.trim()) {
+      if (lastFinishReason && lastFinishReason !== 'STOP') {
+        throw new Error(
+          `The model's response was blocked due to: ${lastFinishReason}. Please modify your prompt and try again.`,
+        );
+      }
+      throw new Error('The AI model failed to return a valid text response. Please try again.');
+    }
+
+    return accumulatedText;
+  }
+
+  let response = await chatSession.sendMessage({ message: parts });
+
+  let safetyLoopCount = 0;
+  while (response.functionCalls && response.functionCalls.length > 0 && safetyLoopCount < 3) {
+    safetyLoopCount++;
+    const toolResponses = await executeToolCalls(response.functionCalls);
     response = await chatSession.sendMessage({
       message: toolResponses,
     });

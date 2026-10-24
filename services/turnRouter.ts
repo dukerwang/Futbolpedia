@@ -2,7 +2,12 @@ import { Type } from '@google/genai';
 import type { ChatMessage, PlayerProfile } from '../types';
 import { CLUB_CANON } from '../constants/ratingTiers';
 import { generateStructured } from './aiClient';
-import { isPlayerProfile, toPlayerSlug, wantsSavedDossierInventory } from './dossierStore';
+import {
+  findReferencedDossiers,
+  isPlayerProfile,
+  toPlayerSlug,
+  wantsSavedDossierInventory,
+} from './dossierStore';
 
 export type TurnIntent =
   | 'single_dossier'
@@ -113,6 +118,43 @@ const TURN_ROUTE_SCHEMA: Record<string, unknown> = {
   ],
 };
 
+const KNOWN_CLUB_REGEX =
+  /\b(arsenal|chelsea|liverpool|manchester\s+city|man\s+city|manchester\s+united|man\s+utd|tottenham(?:\s+hotspur)?|spurs|newcastle(?:\s+united)?|aston\s+villa|brighton|real\s+madrid|fc\s+barcelona|barcelona|barca|atl[eé]tico\s+madrid|atletico|bayern\s+munich|bayern|borussia\s+dortmund|dortmund|bayer\s+leverkusen|leverkusen|paris\s+saint[- ]germain|psg|inter\s+milan|ac\s+milan|juventus|napoli|benfica|porto|sporting(?:\s+cp)?|ajax)\b/gi;
+
+export const extractReferencedClubs = (message: string): string[] => {
+  const matches = message.match(KNOWN_CLUB_REGEX) ?? [];
+  const normalized = new Set<string>();
+  for (const raw of matches) {
+    const key = raw.toLowerCase().replace(/[^a-z]/g, '');
+    normalized.add(CLUB_CANON[key] || raw.trim());
+  }
+  return [...normalized];
+};
+
+const stripClubAndDossierQualifiers = (message: string): string =>
+  message
+    .replace(/\b(give me a?n?|create|generate|can you|please|show me|pull up|what is|what's)\b/gi, '')
+    .replace(
+      /\b(rate|rating|profile|scout(?:ing)?(?: report)?|evaluate|dossier|how good is|rank(?:ing)?|tier|analyze|analysis|breakdown|report|brief(?:ing)?)\b/gi,
+      '',
+    )
+    // Strip possessive club prefixes like "Chelsea's Cole Palmer" or "PSG's Willian Pacho"
+    .replace(
+      /\b(arsenal|chelsea|liverpool|manchester\s+city|man\s+city|manchester\s+united|man\s+utd|tottenham|spurs|newcastle|aston\s+villa|brighton|real\s+madrid|barcelona|barca|atl[eé]tico\s+madrid|bayern\s+munich|bayern|dortmund|leverkusen|psg|paris\s+saint[- ]germain|inter\s+milan|ac\s+milan|juventus|napoli|benfica|porto|sporting|ajax)['\u2019]s\s+/gi,
+      '',
+    )
+    // Strip trailing club qualifiers like "at PSG" or "for Chelsea"
+    .replace(
+      /\b(?:at|for|from|of|in)\s+(arsenal|chelsea|liverpool|manchester\s+city|man\s+city|manchester\s+united|man\s+utd|tottenham|spurs|newcastle|aston\s+villa|brighton|real\s+madrid|fc\s+barcelona|barcelona|barca|atl[eé]tico\s+madrid|bayern\s+munich|bayern|dortmund|leverkusen|psg|paris\s+saint[- ]germain|inter\s+milan|ac\s+milan|juventus|napoli|benfica|porto|sporting|ajax)\b/gi,
+      '',
+    )
+    // Strip trailing "'s" left over after dossier keywords were removed (e.g. "Cole Palmer's [dossier]")
+    .replace(/['\u2019]s(?:\s*$)/gi, '')
+    .replace(/\b(on|for|about|of|a|an|the|me|right now|currently)\b/gi, '')
+    .replace(/[?!.,]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 /**
  * Detects whether a prompt is about a club, tactical system, group/ranking, or multi-clause question
  * rather than a single footballer's name. Prevents fast-path misrouting into single_dossier.
@@ -141,17 +183,15 @@ export const isNonSinglePlayerSubject = (message: string): boolean => {
     return true;
   }
 
-  // Club names or possessive phrases (e.g., "Arsenal's", "Barcelona", "Real Madrid")
-  if (
-    /\b(arsenal|chelsea|liverpool|manchester\s+city|man\s+city|manchester\s+united|man\s+utd|tottenham|spurs|newcastle|aston\s+villa|brighton|real\s+madrid|barcelona|barca|atletico\s+madrid|bayern\s+munich|bayern|dortmund|leverkusen|psg|paris\s+saint[- ]germain|inter\s+milan|ac\s+milan|juventus|napoli|benfica|porto|sporting|ajax)\b/i.test(
-      trimmed,
-    )
-  ) {
+  // Check if stripping dossier/club qualifiers leaves a pure club name or a specific possessive question (e.g. "Palmer's passing")
+  const stripped = stripClubAndDossierQualifiers(trimmed);
+  const strippedKey = stripped.toLowerCase().replace(/[^a-z]/g, '');
+  if (!stripped || strippedKey in CLUB_CANON) {
     return true;
   }
 
-  // Possessive 's on a subject (e.g. "Slot's system", "Palmer's passing") usually asks a specific question
-  if (/\b\w+['\u2019]s\s+\w+/i.test(trimmed)) {
+  // Possessive 's remaining on a non-dossier noun (e.g. "Slot's system", "Palmer's passing") asks a specific question
+  if (/\b\w+['\u2019]s\s+\w+/i.test(stripped)) {
     return true;
   }
 
@@ -165,16 +205,7 @@ export const isNonSinglePlayerSubject = (message: string): boolean => {
 export const extractCandidatePlayerName = (message: string): string | null => {
   if (isNonSinglePlayerSubject(message)) return null;
 
-  const candidate = message
-    .replace(/\b(give me a?n?|create|generate|can you|please|show me|pull up)\b/gi, '')
-    .replace(
-      /\b(rate|rating|profile|scout(?:ing)?(?: report)?|evaluate|dossier|how good is|rank(?:ing)?|tier|analyze|analysis|breakdown|report|brief(?:ing)?)\b/gi,
-      '',
-    )
-    .replace(/\b(on|for|about|of|a|an|the|me|right now|currently)\b/gi, '')
-    .replace(/[?!.,]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const candidate = stripClubAndDossierQualifiers(message);
   if (!candidate || candidate.length < 2 || candidate.split(' ').length > 5) return null;
   if (isNonSinglePlayerSubject(candidate)) return null;
   return candidate;
@@ -222,6 +253,69 @@ const IS_BARE_PLAYER_QUERY = (msg: string): boolean => {
   return true;
 };
 
+/** Checks whether a challenge turn explicitly cites external/live facts requiring web verification. */
+const CHALLENGE_NEEDS_WEB_SEARCH = (msg: string): boolean =>
+  /\b(stats?|goals?|assists?|appearances?|apps|minutes|mins|clean\s+sheets?|xg|xa|season|202\d|club|team|transfer|loan|signed|manager|coach|injured|injury|fit|fitness|started|match|fixture|trophy|trophies|award|ballon\s+d['\u2019]?or|champions\s+league|ucl|premier\s+league|la\s+liga|serie\s+a|bundesliga|ligue\s+1)\b/i.test(
+    msg,
+  );
+
+/**
+ * Extracts 2-4 player names from unambiguous head-to-head comparison prompts
+ * ("Compare Saka and Salah", "Wharton vs Baleba", "Who is better between Caicedo and Rice?", "Compare him to Salah").
+ */
+const extractComparedPlayersFast = (
+  message: string,
+  conversationDossiers: PlayerProfile[],
+): string[] | null => {
+  const cleaned = message
+    .replace(
+      /^(?:can you\s+|please\s+|could you\s+)?(?:compare|give me a comparison (?:of|between)|who(?:'s| is) better(?:\s+between)?|between)\s+/i,
+      '',
+    )
+    .replace(
+      /\b(?:in terms of (?:player )?profile|in raw text|in prose|right now|currently|this season|overall|as a player|for me)\b/gi,
+      '',
+    )
+    .replace(/[?!.:]/g, ' ')
+    .trim();
+
+  if (!/\b(?:vs\.?|versus|and|or|with|to)\b|,/i.test(cleaned)) return null;
+
+  const rawParts = cleaned
+    .split(/\s*(?:\b(?:vs\.?|versus|and|or|with|to)\b|,)\s*/i)
+    .map((p) => stripClubAndDossierQualifiers(p))
+    .filter(Boolean);
+
+  if (rawParts.length < 2 || rawParts.length > 4) return null;
+
+  const activeDossierName =
+    conversationDossiers.length > 0
+      ? conversationDossiers[conversationDossiers.length - 1].basicInfo.name
+      : null;
+
+  const resolved: string[] = [];
+  for (const part of rawParts) {
+    if (/^(?:he|him|his)$/i.test(part)) {
+      if (!activeDossierName) return null;
+      resolved.push(activeDossierName);
+      continue;
+    }
+    const words = part.split(/\s+/);
+    if (words.length < 1 || words.length > 4) return null;
+    if (isNonSinglePlayerSubject(part)) return null;
+    if (
+      /\b(what|why|who|how|when|where|which|should|would|could|better|worse|think)\b/i.test(
+        part,
+      )
+    ) {
+      return null;
+    }
+    resolved.push(part);
+  }
+
+  return resolved.length >= 2 ? [...new Set(resolved)] : null;
+};
+
 export async function classifyTurn(params: {
   message: string;
   history: ChatMessage[];
@@ -253,9 +347,10 @@ export async function classifyTurn(params: {
   const hasDossierTrigger = HAS_DOSSIER_TRIGGER(trimmed);
   const isBarePlayerName = IS_BARE_PLAYER_QUERY(trimmed);
   const isNonPlayerSubject = isNonSinglePlayerSubject(trimmed);
+  const referencedClubs = extractReferencedClubs(trimmed);
 
   // 2. 0ms local fast-path for unambiguous single-player dossier requests
-  // ("Rate Cole Palmer", "Rate Prime John Terry", or bare player names like "dembele", "willian pacho", "prime john terry")
+  // ("Rate Cole Palmer", "Rate Chelsea's Cole Palmer", "Rate Prime John Terry", or bare player names)
   if (
     !hasImage &&
     !isNonPlayerSubject &&
@@ -271,7 +366,7 @@ export async function classifyTurn(params: {
         intent: 'single_dossier',
         analyticalMode: 'dossier',
         targetPlayers: [candidateName],
-        targetClubs: [],
+        targetClubs: referencedClubs,
         searchQueries: [],
         reasoningComplexity: 'medium',
         isHistorical,
@@ -279,6 +374,104 @@ export async function classifyTurn(params: {
         needsSearch: true,
       };
     }
+  }
+
+  // 3. 0ms local fast-path for head-to-head player comparisons ("Wharton vs Baleba", "Compare Saka and Salah")
+  if (!hasImage && hasCompare && !hasChallenge) {
+    const comparedPlayers = extractComparedPlayersFast(trimmed, conversationDossiers);
+    if (comparedPlayers && comparedPlayers.length >= 2) {
+      return {
+        intent: 'compare',
+        analyticalMode: 'head_to_head',
+        targetPlayers: comparedPlayers,
+        targetClubs: referencedClubs,
+        searchQueries: [],
+        reasoningComplexity: 'medium',
+        isHistorical,
+        wantsRegeneration: false,
+        needsSearch: true,
+      };
+    }
+  }
+
+  // 4. 0ms local fast-path for dossier rating/attribute challenges & live revisions
+  if (
+    !hasImage &&
+    conversationDossiers.length > 0 &&
+    hasChallenge &&
+    !hasCompare &&
+    !/\b(don['\u2019]?t (?:rate|generate|make)|raw text|in prose)\b/i.test(trimmed)
+  ) {
+    const referenced = findReferencedDossiers(trimmed, conversationDossiers);
+    const targetDossier =
+      referenced[0] || conversationDossiers[conversationDossiers.length - 1];
+    if (targetDossier) {
+      const needsSearch = CHALLENGE_NEEDS_WEB_SEARCH(trimmed);
+      return {
+        intent: 'challenge_or_revise',
+        analyticalMode: 'debate_or_verdict',
+        targetPlayers: [targetDossier.basicInfo.name],
+        targetClubs: referencedClubs,
+        searchQueries: needsSearch
+          ? [`${targetDossier.basicInfo.name} ${trimmed} current season stats verification`]
+          : [],
+        reasoningComplexity: 'medium',
+        isHistorical,
+        wantsRegeneration: false,
+        needsSearch,
+      };
+    }
+  }
+
+  // 5. 0ms local fast-path for explicit positional rankings / tier lists ("Rank the top 5 CBs", "Best strikers right now")
+  if (
+    !hasImage &&
+    !hasChallenge &&
+    !hasCompare &&
+    /\b(top\s+\d+|rank\s+the|tier\s*list|best\s+(?:strikers|midfielders|defenders|wingers|full[- ]?backs|centre[- ]?backs|center[- ]?backs|goalkeepers|keepers|forwards|players|cdms|dms|cms|cams|ams|cbs|lbs|rbs|rws|lws))\b/i.test(
+      trimmed,
+    )
+  ) {
+    return {
+      intent: 'tactical_chat',
+      analyticalMode: 'ranking_or_tierlist',
+      targetPlayers: [],
+      targetClubs: referencedClubs,
+      searchQueries: [`${trimmed} world football rankings performance stats`],
+      reasoningComplexity: 'medium',
+      isHistorical,
+      wantsRegeneration: false,
+      needsSearch: true,
+    };
+  }
+
+  // 6. 0ms local fast-path for explicit club tactical / squad breakdowns ("Analyze Arsenal's midfield", "Break down Barcelona's high line")
+  if (
+    !hasImage &&
+    !hasChallenge &&
+    !hasCompare &&
+    referencedClubs.length > 0 &&
+    isNonPlayerSubject &&
+    /\b(tactics|tactical|system|formation|high\s+line|low\s+block|build[- ]?up|pressing|rest[- ]?defen[cs]e|midfield|attack|defen[cs]e|squad|lineup|starting\s+xi|signings|targets|transfer|recruitment)\b/i.test(
+      trimmed,
+    )
+  ) {
+    const isSquadMode = /\b(squad|lineup|starting\s+xi|signings|targets|transfer|recruitment)\b/i.test(
+      trimmed,
+    );
+    return {
+      intent: 'tactical_chat',
+      analyticalMode: isSquadMode ? 'squad_or_recruitment' : 'tactical_or_system',
+      targetPlayers: [],
+      targetClubs: referencedClubs,
+      searchQueries: [
+        `${referencedClubs.join(' ')} current head coach tactical system starting XI ${trimmed}`,
+      ],
+      reasoningComplexity: 'medium',
+      isHistorical,
+      wantsRegeneration: false,
+      needsSearch: true,
+    };
   }
 
   // 3. Schema-enforced LLM turn classifier for nuanced/conversational/pronoun-bearing messages

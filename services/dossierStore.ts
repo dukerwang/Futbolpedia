@@ -395,11 +395,14 @@ export const resolveSavedDossiersForRequest = (
   return { dossiers: confident, inventoryOnly: true };
 };
 
+const MAX_HISTORY_TURNS = 12;
+
 export const buildHistoryContents = (
   history: ChatMessage[],
   conversationProfiles: PlayerProfile[] = [],
 ): Content[] => {
-  const geminiHistory: Content[] = history
+  const recentHistory = history.slice(-MAX_HISTORY_TURNS);
+  const geminiHistory: Content[] = recentHistory
     .map((msg): Content | null => {
       const isUser = msg.sender === 'user';
       const parts: any[] = [];
@@ -720,6 +723,43 @@ const inferPositionalFilterFromText = (text: string): string | null => {
   return null;
 };
 
+const inferQueriedAttributesFromText = (text: string): Array<keyof Attributes> => {
+  if (!text) return [];
+  const lower = text.toLowerCase();
+  const out: Array<keyof Attributes> = [];
+  const checks: Array<[RegExp, keyof Attributes]> = [
+    [/\bfinishing\b|\bclinical\b|\bgoalscoring\b/, 'finishing'],
+    [/\bfirst\s*touch\b/, 'firstTouch'],
+    [/\bdribbl(?:e|ing|er)\b|\b1v1\b|\bball[- ]?carrying\b/, 'dribbling'],
+    [/\bvision\b|\bcreativ(?:e|ity)\b/, 'vision'],
+    [/\bretention\b|\bpress[- ]?resistan(?:ce|t)\b/, 'retention'],
+    [/\bcombination\b|\blink[- ]?up\b/, 'combinationPlay'],
+    [/\bdelivery\b|\bcross(?:ing|es)?\b|\bset[- ]?pieces?\b/, 'delivery'],
+    [/\bprogressive\s*passing\b|\bpassing\b|\bline[- ]?breaking\b/, 'progressivePassing'],
+    [/\bfootball\s*iq\b|\biq\b|\bintelligence\b/, 'footballIQ'],
+    [/\boffensive\s*positioning\b|\bmovement\b/, 'offensivePositioning'],
+    [/\bdefensive\s*positioning\b|\bpositioning\b/, 'defensivePositioning'],
+    [/\btackl(?:e|es|ing)\b/, 'tackling'],
+    [/\binterceptions?\b/, 'interceptions'],
+    [/\bpressing\b|\bwork[- ]?rate\b/, 'pressingIntensity'],
+    [/\bspeed\b|\bpace\b|\brecovery\s*pace\b/, 'speed'],
+    [/\bacceleration\b|\bburst\b/, 'acceleration'],
+    [/\bagility\b|\bbalance\b/, 'agility'],
+    [/\bstrength\b|\bphysical(?:ity)?\b/, 'strength'],
+    [/\baerial\b|\bheading\b|\bheaders?\b/, 'aerialProwess'],
+    [/\bstamina\b|\bendurance\b/, 'stamina'],
+    [/\bcomposure\b|\bcalm(?:ness)?\b/, 'composure'],
+    [/\bclutch\b|\bbig[- ]?game\b/, 'clutch'],
+    [/\bleadership\b|\bcaptain\b/, 'leadership'],
+    [/\bconsisten(?:cy|t)\b/, 'consistency'],
+    [/\bflair\b/, 'flair'],
+  ];
+  for (const [re, key] of checks) {
+    if (re.test(lower)) out.push(key);
+  }
+  return out.slice(0, 3);
+};
+
 /**
  * Builds a compact, position-aware peer calibration ledger from the user's freshly calibrated dossiers
  * (across Supabase global pool, local saved archive, and active conversation)
@@ -743,6 +783,8 @@ export function buildPositionalPeerLedgerBlock(
     options?.positionHint ||
     matchedTargets[0]?.basicInfo.position.split('/')[0] ||
     (options?.message ? inferPositionalFilterFromText(options.message) : null);
+
+  const queriedAttrs = options?.message ? inferQueriedAttributesFromText(options.message) : [];
 
   const sortedAll = [...allCalibrated].sort((a, b) => b.ratings.overall - a.ratings.overall);
   const selectedBySlug = new Map<string, PlayerProfile>();
@@ -779,7 +821,19 @@ export function buildPositionalPeerLedgerBlock(
       .slice(0, 3)
       .map(([k, v]) => `${ATTRIBUTE_LABELS[k as keyof Attributes] || k} ${v}`)
       .join(', ');
-    return `- ${p.basicInfo.name} (${p.basicInfo.position}, ${p.basicInfo.club}): ${p.ratings.overall} OVR / ${p.ratings.potential} POT${topSpikes ? ` [Spikes: ${topSpikes}]` : ''}`;
+    const queriedSlice =
+      queriedAttrs.length > 0
+        ? queriedAttrs
+            .map((k) => {
+              const val = p.attributes?.[k];
+              return typeof val === 'number' && val > 0
+                ? `${ATTRIBUTE_LABELS[k] || k} ${val}`
+                : null;
+            })
+            .filter(Boolean)
+            .join(', ')
+        : '';
+    return `- ${p.basicInfo.name} (${p.basicInfo.position}, ${p.basicInfo.club}): ${p.ratings.overall} OVR / ${p.ratings.potential} POT${topSpikes ? ` [Spikes: ${topSpikes}]` : ''}${queriedSlice ? ` [Queried: ${queriedSlice}]` : ''}`;
   });
 
   return `

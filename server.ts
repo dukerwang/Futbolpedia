@@ -304,13 +304,24 @@ async function startServer() {
               if (currentClub) {
                 teamIdCache.set(currentClub.toLowerCase(), primaryClubId);
               }
+              const teamCtxPromise = getTeamContextById(primaryClubId);
               const teamCtx = await Promise.race([
-                getTeamContextById(primaryClubId),
+                teamCtxPromise,
                 new Promise<null>((resolve) => setTimeout(() => resolve(null), 900)),
               ]);
               if (teamCtx) {
                 coach = teamCtx.coach;
                 recentFixtures = teamCtx.recentFixtures;
+              } else {
+                void teamCtxPromise
+                  .then((resolvedCtx) => {
+                    const cachedEntry = playerFactCache.get(cacheKey);
+                    if (cachedEntry?.payload?.player && resolvedCtx) {
+                      cachedEntry.payload.player.coach = resolvedCtx.coach;
+                      cachedEntry.payload.player.recentFixtures = resolvedCtx.recentFixtures;
+                    }
+                  })
+                  .catch(() => {});
               }
             }
           }

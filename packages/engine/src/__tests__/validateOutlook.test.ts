@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assertValidOutlook, validateOutlook } from '../gates/validateOutlook';
+import { findUnverifiedManagerMentions, scrubUnverifiedManagerText } from '../gates/managerMentions';
 import { buildOutlookSearchQueries } from '../pipeline/queryGen';
 import type { OutlookContextBag, OutlookExtraction, PlayerOutlook } from '../types/outlook';
 
@@ -112,5 +113,31 @@ describe('validateOutlook', () => {
     const result = validateOutlook(outlook, extraction, SAMPLE_BAG);
     expect(result.ok).toBe(false);
     expect(result.reasons.some((r) => r.includes('unverified manager'))).toBe(true);
+  });
+
+  it('does not misflag lowercase or club possessives as unverified managers', () => {
+    const text =
+      "James Tarkowski operates inside his club's system and Everton's setup while thriving under Champions League pressure.";
+    expect(
+      findUnverifiedManagerMentions(text, {
+        currentHeadCoach: null,
+        verifiedFacts: [],
+        supplementalCorpus: ['Everton'],
+      }),
+    ).toEqual([]);
+  });
+
+  it('scrubs unverified manager attributions cleanly in place', () => {
+    const raw =
+      "Estêvão thrives in Enzo Maresca's system and operates under Mauricio Pochettino at the club.";
+    const ctx = {
+      currentHeadCoach: 'Xabi Alonso',
+      verifiedFacts: ['Xabi Alonso is Chelsea head coach'],
+      supplementalCorpus: ['Chelsea'],
+    };
+    const scrubbed = scrubUnverifiedManagerText(raw, ctx);
+    expect(findUnverifiedManagerMentions(scrubbed, ctx)).toEqual([]);
+    expect(scrubbed).toContain("Xabi Alonso's system");
+    expect(scrubbed).toContain('under Xabi Alonso');
   });
 });

@@ -1,6 +1,7 @@
 import type { PlayerProfile } from '../types';
 import {
   findUnverifiedManagerMentions,
+  scrubUnverifiedManagerText,
   type ManagerVerificationContext,
 } from '../packages/engine/src/gates/managerMentions.ts';
 
@@ -15,6 +16,7 @@ export interface FutbolpediaVerifiedFacts {
   currentClub?: string | null;
   injuryStatus?: string | null;
   conflictingManagerReports?: string[];
+  supplementalCorpus?: string[];
 }
 
 export function buildManagerVerificationContext(
@@ -30,6 +32,7 @@ export function buildManagerVerificationContext(
       facts.mobilitySummary,
       ...(facts.majorAwards ?? []),
     ].filter((v): v is string => Boolean(v)),
+    supplementalCorpus: facts.supplementalCorpus,
     currentHeadCoach: facts.currentHeadCoach ?? null,
   };
 }
@@ -48,4 +51,27 @@ export function findProfileManagerGroundingIssues(
     .join('\n');
 
   return findUnverifiedManagerMentions(prose, buildManagerVerificationContext(facts));
+}
+
+/** Deterministically scrub any unverified manager mentions from profile prose in 0ms. */
+export function scrubProfileManagerMentions(
+  profile: PlayerProfile,
+  facts: FutbolpediaVerifiedFacts,
+): PlayerProfile {
+  const ctx = buildManagerVerificationContext(facts);
+  return {
+    ...profile,
+    shortBio: scrubUnverifiedManagerText(profile.shortBio, ctx),
+    latestUpdate: scrubUnverifiedManagerText(profile.latestUpdate, ctx),
+    playstyleAndRole: {
+      ...profile.playstyleAndRole,
+      playstyle: {
+        ...profile.playstyleAndRole.playstyle,
+        description: scrubUnverifiedManagerText(
+          profile.playstyleAndRole.playstyle.description,
+          ctx,
+        ),
+      },
+    },
+  };
 }

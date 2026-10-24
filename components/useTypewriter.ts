@@ -9,25 +9,38 @@ import { useState, useEffect, useRef } from 'react';
  * @param speed The interval in milliseconds between typing ticks.
  * @param chunkSize The number of characters to append on each tick.
  */
-export const useTypewriter = (text: string, active: boolean, speed = 8, chunkSize = 6) => {
+export const useTypewriter = (text: string, active: boolean, speed = 8, chunkSize = 18) => {
     const [displayedText, setDisplayedText] = useState(active ? '' : text);
     const indexRef = useRef(active ? 0 : text.length);
+    const prevTextRef = useRef(text);
     const textRef = useRef(text);
     textRef.current = text;
 
     useEffect(() => {
         if (!active) {
             setDisplayedText(text);
+            indexRef.current = text.length;
+            prevTextRef.current = text;
             return;
         }
 
-        // Initialize / Reset
-        setDisplayedText('');
-        indexRef.current = 0;
+        // Preserve progress when text is streaming incrementally
+        const isStreamingAppend =
+            prevTextRef.current.length > 0 &&
+            text.startsWith(prevTextRef.current) &&
+            indexRef.current <= text.length;
+
+        if (!isStreamingAppend) {
+            setDisplayedText('');
+            indexRef.current = 0;
+        }
+        prevTextRef.current = text;
 
         const timer = setInterval(() => {
             if (indexRef.current < textRef.current.length) {
-                const nextIndex = Math.min(indexRef.current + chunkSize, textRef.current.length);
+                const remaining = textRef.current.length - indexRef.current;
+                const dynamicChunk = Math.max(chunkSize, Math.ceil(remaining / 10));
+                const nextIndex = Math.min(indexRef.current + dynamicChunk, textRef.current.length);
                 setDisplayedText(textRef.current.slice(0, nextIndex));
                 indexRef.current = nextIndex;
             } else {

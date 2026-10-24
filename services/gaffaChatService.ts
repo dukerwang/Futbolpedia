@@ -486,9 +486,8 @@ function buildResearchQueries(message: string, threadHint?: string): string[] {
   const focus = threadHint
     ? `${message}\n(Open thread context: ${threadHint.slice(0, 280)})`
     : message;
-  const clubLock = `${datePrefix} CURRENT CLUB & ROLE CHECK for every player named in: ${focus}. State their current club (${SIMULATION_YEAR} / ${SIMULATION_SEASON}), age, position, injury/availability, and recent minutes/form -site:futbin.com -site:sofifa.com -site:fifaindex.com`;
-  const transferContext = `${datePrefix} ${focus} — Premier League transfer links, PL exit/arrival risk, and tactical usage this season -site:futbin.com -site:sofifa.com -site:fifaindex.com`;
-  return [clubLock, transferContext];
+  const combinedQuery = `${datePrefix} CURRENT CLUB, ROLE & PL MOBILITY CHECK for every player named in: ${focus}. State their current club (${SIMULATION_YEAR} / ${SIMULATION_SEASON}), age, position, injury/availability, recent minutes/form, tactical usage, and any Premier League transfer links or exit/arrival risk -site:futbin.com -site:sofifa.com -site:fifaindex.com`;
+  return [combinedQuery];
 }
 
 /** Strip leaked grounding citations from user-facing Gaffa prose. */
@@ -566,6 +565,9 @@ export async function sendGaffaMessage(
     connectAttempted?: boolean;
     savedDossiers?: PlayerProfile[];
     conversationProfiles?: PlayerProfile[];
+    onStreamChunk?: (accumulatedText: string) => void;
+    onScorecardReady?: (scorecard: GaffaTradeScorecard) => void;
+    onStageChange?: (stageLabel: string) => void;
   },
 ): Promise<GaffaMessageResult> {
   void fetchSupabaseCalibratedPool();
@@ -604,6 +606,11 @@ export async function sendGaffaMessage(
   const skipWebResearch = shouldSkipGaffaWebResearch(message, bag, kind);
 
   if (shouldResearch && !skipWebResearch) {
+    options?.onStageChange?.(
+      kind === 'lineup_audit'
+        ? 'Checking starter availability & upcoming PL fixtures...'
+        : 'Verifying current club, role & season form...',
+    );
     try {
       const priorUser = [...history]
         .reverse()
@@ -680,6 +687,7 @@ export async function sendGaffaMessage(
       history.some((m) => m.sender === 'user' && typeof m.content === 'string' && looksLikeAssetTrade(m.content)));
 
   if (runScorecard) {
+    options?.onStageChange?.('Scoring trade factors & roster capacity...');
     try {
       scorecard = await buildTradeScorecard({
         message,
@@ -688,6 +696,7 @@ export async function sendGaffaMessage(
         ongoingThread,
       });
       scorecardBlock = formatScorecardBlock(scorecard);
+      options?.onScorecardReady?.(scorecard);
     } catch (err) {
       console.warn('[Gaffa] trade scorecard failed:', err);
       scorecardBlock = `<locked_scorecard>
@@ -715,6 +724,12 @@ Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure e
   // and 'low' across rules/strategy for snappy responses.
   const thinkingLevel = 'low';
 
+  // When a scorecard is locked or web research already ran (or was skipped for pure bag/rules queries),
+  // disable external network tools so the model streams immediately without duplicate searches.
+  const toolMode = runScorecard ? 'none' : 'local_only';
+
+  options?.onStageChange?.('Writing Gaffa briefing...');
+
   const prose = await sendProseChatMessage(prompt, history, {
     imageData: options?.imageData,
     thinkingLevel,
@@ -723,6 +738,13 @@ Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure e
     conversationProfiles: [],
     dossiersPool: allCalibrated,
     gaffaBag: bag,
+    toolMode,
+    onStreamChunk: options?.onStreamChunk
+      ? (partial) => {
+          const sanitized = lockGaffaRosterNames(sanitizeGaffaProse(partial), bag);
+          options.onStreamChunk!(scorecard ? capGaffaTradeProse(sanitized) : sanitized);
+        }
+      : undefined,
   });
   const cleaned = lockGaffaRosterNames(sanitizeGaffaProse(prose), bag);
   return {

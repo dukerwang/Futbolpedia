@@ -5,6 +5,7 @@ import {
   FLASH_MODEL,
   generateProseTurn,
   generateStructured,
+  type ProseToolMode,
 } from './aiClient';
 import { runConversationalScout } from './conversationalScout';
 import {
@@ -19,6 +20,7 @@ import {
   getSharedConversation,
   grepDossiers,
   isSupabaseReady,
+  mergeAllCalibratedDossiers,
   mergeConversationDossiers,
   resolveSavedDossiersForRequest,
   shareConversation,
@@ -79,6 +81,8 @@ export const sendProseChatMessage = async (
     dossiersPool?: PlayerProfile[];
     gaffaBag?: GaffaContextBag;
     temperature?: number;
+    toolMode?: ProseToolMode;
+    onStreamChunk?: (accumulatedText: string) => void;
   },
 ): Promise<string> => {
   const historyContents = buildHistoryContents(
@@ -94,13 +98,17 @@ export const sendProseChatMessage = async (
     thinkingLevelOverride: options?.thinkingLevel ?? 'low',
     temperatureOverride: options?.temperature,
     modelOverride: FLASH_MODEL,
+    toolMode: options?.toolMode,
     dossiersPool: options?.dossiersPool,
     gaffaBag: options?.gaffaBag,
+    onStreamChunk: options?.onStreamChunk,
   });
 };
 
 export interface SendMessageOptions {
   onDossierUpdated?: (updatedProfile: PlayerProfile) => void;
+  onStreamChunk?: (accumulatedText: string) => void;
+  onStageChange?: (stageLabel: string) => void;
 }
 
 export const sendMessageToAI = async (
@@ -179,11 +187,10 @@ export const sendMessageToAI = async (
     const isFreshlyCalibrated = (p?: PlayerProfile): boolean =>
       Boolean(p?.createdAt && p.createdAt >= CALIBRATION_EPOCH_MS);
 
-    if (!imageData) {
-      // Return locked in-conversation dossier if re-requested without regeneration/historical flag
+    if (!imageData && !route.wantsRegeneration) {
+      // Return locked in-conversation dossier if re-requested without regeneration flag
       if (
         !route.isHistorical &&
-        !route.wantsRegeneration &&
         referencedDossiers.length === 1 &&
         isFreshlyCalibrated(referencedDossiers[0])
       ) {
@@ -193,7 +200,6 @@ export const sendMessageToAI = async (
       // Return saved archive dossier if explicitly requested
       if (
         !route.isHistorical &&
-        !route.wantsRegeneration &&
         wantsSavedDossierAccess(message) &&
         savedResult.dossiers.length === 1 &&
         isFreshlyCalibrated(savedResult.dossiers[0])
@@ -201,10 +207,24 @@ export const sendMessageToAI = async (
         return savedResult.dossiers[0];
       }
 
-      // Check Supabase 14-day TTL cache
-      const candidateSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
-      if (candidateSlug && !route.isHistorical && !route.wantsRegeneration) {
-        const cached = await getCachedDossier(candidateSlug);
+      // Check in-memory calibrated pool first (0ms hit for last-name or full-name matches)
+      if (!route.isHistorical && primaryPlayer) {
+        const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+        const poolHits = findReferencedDossiers(primaryPlayer, allCalibrated, [primaryPlayer]);
+        if (poolHits.length === 1 && isFreshlyCalibrated(poolHits[0])) {
+          perf('in-memory calibrated pool hit');
+          return poolHits[0];
+        }
+      }
+
+      // Check Supabase 14-day TTL cache (for both active and historical prime-<slug> cards)
+      const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
+      if (rawSlug) {
+        const lookupSlug =
+          route.isHistorical && !rawSlug.startsWith('prime-') && !rawSlug.startsWith('peak-')
+            ? `prime-${rawSlug}`
+            : rawSlug;
+        const cached = await getCachedDossier(lookupSlug);
         if (cached) {
           perf('supabase cache hit');
           return cached;
@@ -212,12 +232,22 @@ export const sendMessageToAI = async (
       }
     }
 
+    options?.onStageChange?.(
+      route.isHistorical
+        ? `Researching ${primaryPlayer || 'player'}'s career peak & honours...`
+        : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
+    );
+
     const grounding = await gatherPlayerGrounding({
       playerName: primaryPlayer,
       rawMessage: message,
       isHistorical: route.isHistorical,
     });
     perf('hybrid grounding');
+
+    options?.onStageChange?.(
+      `Calibrating 25-attribute dossier for ${grounding.apiPlayer?.name || primaryPlayer || 'player'}...`,
+    );
 
     const freshReferencedDossiers = referencedDossiers.filter(isFreshlyCalibrated);
     const synthesisLockedBlock = route.wantsRegeneration
@@ -271,6 +301,8 @@ export const sendMessageToAI = async (
     savedDossiersBlock,
     peerLedgerBlock,
     onDossierUpdated: options?.onDossierUpdated,
+    onStreamChunk: options?.onStreamChunk,
+    onStageChange: options?.onStageChange,
   });
   perf('conversational scout');
   return reply;

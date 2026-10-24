@@ -634,6 +634,10 @@ const App: React.FC = () => {
     setMessages(prev => [...prev, newUserMessage]);
 
     try {
+      const streamingMessageId = generateId();
+      let streamStarted = false;
+      let lastStreamFlushAt = 0;
+
       if (activeDomain === 'gaffa') {
         const contextBag = await resolveContextBagForSend(gaffaLink);
         if (contextBag.connected && contextBag.synced_at) {
@@ -654,14 +658,76 @@ const App: React.FC = () => {
           connectAttempted: Boolean(gaffaLink),
           savedDossiers: globalDossiers,
           conversationProfiles: allProfiles,
+          onStageChange: (label) => setLoadingMessage(label),
+          onScorecardReady: (lockedCard) => {
+            streamStarted = true;
+            setIsLoading(false);
+            setMessages(prev => {
+              const exists = prev.some(m => m.id === streamingMessageId);
+              if (exists) {
+                return prev.map(m =>
+                  m.id === streamingMessageId ? { ...m, gaffaScorecard: lockedCard } : m,
+                );
+              }
+              return [
+                ...prev,
+                {
+                  id: streamingMessageId,
+                  sender: 'ai',
+                  content: '',
+                  timestamp: Date.now(),
+                  gaffaScorecard: lockedCard,
+                },
+              ];
+            });
+          },
+          onStreamChunk: (accumulatedText) => {
+            const now = Date.now();
+            if (streamStarted && now - lastStreamFlushAt < 45) return;
+            lastStreamFlushAt = now;
+            if (!streamStarted) {
+              streamStarted = true;
+              setIsLoading(false);
+            }
+            setMessages(prev => {
+              const exists = prev.some(m => m.id === streamingMessageId);
+              if (exists) {
+                return prev.map(m =>
+                  m.id === streamingMessageId ? { ...m, content: accumulatedText } : m,
+                );
+              }
+              return [
+                ...prev,
+                {
+                  id: streamingMessageId,
+                  sender: 'ai',
+                  content: accumulatedText,
+                  timestamp: now,
+                },
+              ];
+            });
+          },
         });
-        setMessages(prev => [...prev, {
-          id: generateId(),
-          sender: 'ai',
-          content: prose,
-          timestamp: Date.now(),
-          gaffaScorecard: scorecard ?? undefined,
-        }]);
+        setMessages(prev => {
+          const exists = prev.some(m => m.id === streamingMessageId);
+          if (exists) {
+            return prev.map(m =>
+              m.id === streamingMessageId
+                ? { ...m, content: prose, gaffaScorecard: scorecard ?? m.gaffaScorecard }
+                : m,
+            );
+          }
+          return [
+            ...prev,
+            {
+              id: streamingMessageId,
+              sender: 'ai',
+              content: prose,
+              timestamp: Date.now(),
+              gaffaScorecard: scorecard ?? undefined,
+            },
+          ];
+        });
         return;
       }
 
@@ -676,6 +742,33 @@ const App: React.FC = () => {
             saveAndSetActiveProfile(updatedProfile);
             setIsPanelOpen(true);
           },
+          onStageChange: (label) => setLoadingMessage(label),
+          onStreamChunk: (accumulatedText) => {
+            const now = Date.now();
+            if (streamStarted && now - lastStreamFlushAt < 45) return;
+            lastStreamFlushAt = now;
+            if (!streamStarted) {
+              streamStarted = true;
+              setIsLoading(false);
+            }
+            setMessages(prev => {
+              const exists = prev.some(m => m.id === streamingMessageId);
+              if (exists) {
+                return prev.map(m =>
+                  m.id === streamingMessageId ? { ...m, content: accumulatedText } : m,
+                );
+              }
+              return [
+                ...prev,
+                {
+                  id: streamingMessageId,
+                  sender: 'ai',
+                  content: accumulatedText,
+                  timestamp: now,
+                },
+              ];
+            });
+          },
         },
       );
 
@@ -687,21 +780,27 @@ const App: React.FC = () => {
         setIsPanelOpen(true);
 
         newAiMessage = {
-          id: generateId(),
+          id: streamingMessageId,
           sender: 'ai',
           content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
           timestamp: Date.now(),
         };
       } else {
         newAiMessage = {
-          id: generateId(),
+          id: streamingMessageId,
           sender: 'ai',
           content: aiResponse,
           timestamp: Date.now(),
         };
       }
 
-      setMessages(prev => [...prev, newAiMessage]);
+      setMessages(prev => {
+        const exists = prev.some(m => m.id === streamingMessageId);
+        if (exists) {
+          return prev.map(m => (m.id === streamingMessageId ? newAiMessage : m));
+        }
+        return [...prev, newAiMessage];
+      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
       setMessages(prev => [...prev, {
