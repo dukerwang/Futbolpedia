@@ -8,7 +8,11 @@ import {
   ThinkingTier,
 } from '../constants/modelProfiles';
 import { GaffaMarketGrepParams, grepGaffaBag } from '../constants/gaffaRules';
-import { SIMULATION_SEASON, SIMULATION_YEAR } from '../prompts/scoutCore';
+import {
+  SIMULATION_SEASON,
+  SIMULATION_YEAR,
+  getRealWorldFootballSeason,
+} from '../prompts/scoutCore';
 import { DossierGrepParams, grepDossiers } from './dossierStore';
 
 export const FLASH_MODEL = DEFAULT_FAST_MODEL;
@@ -26,10 +30,8 @@ const THINKING_LEVEL_MAP: Record<ThinkingTier, ThinkingLevel> = {
   high: ThinkingLevel.HIGH,
 };
 
-export const getCurrentSeasonInfo = () => {
-  const now = new Date();
-  const month = now.toLocaleString('default', { month: 'long' });
-  return { year: SIMULATION_YEAR, month, currentSeason: SIMULATION_SEASON };
+export const getCurrentSeasonInfo = (refDate: Date = new Date()) => {
+  return getRealWorldFootballSeason(refDate);
 };
 
 export interface GenerateStructuredParams {

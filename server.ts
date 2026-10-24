@@ -223,7 +223,9 @@ async function startServer() {
 
   app.get("/api/football/player", async (req, res) => {
     const rawName = typeof req.query.name === "string" ? req.query.name.trim() : "";
-    const season = typeof req.query.season === "string" ? parseInt(req.query.season, 10) || 2025 : 2025;
+    const now = new Date();
+    const defaultSeason = now.getUTCMonth() >= 6 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
+    const season = typeof req.query.season === "string" ? parseInt(req.query.season, 10) || defaultSeason : defaultSeason;
     if (!rawName || rawName.length < 2) {
       return res.status(400).json({ error: "Missing player name" });
     }

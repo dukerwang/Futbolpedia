@@ -1,7 +1,7 @@
 import { Type } from '@google/genai';
 import type { ChatMessage, PlayerProfile } from '../types';
 import { CLUB_CANON } from '../constants/ratingTiers';
-import { generateStructured } from './aiClient';
+import { generateStructured, getCurrentSeasonInfo } from './aiClient';
 import {
   findReferencedDossiers,
   isPlayerProfile,
@@ -480,13 +480,14 @@ export async function classifyTurn(params: {
       trimmed,
     );
     const clubLabel = referencedClubs.join(' ');
+    const { year: currentYear } = getCurrentSeasonInfo();
     return {
       intent: 'tactical_chat',
       analyticalMode: isSquadMode ? 'squad_or_recruitment' : 'tactical_or_system',
       targetPlayers: [],
       targetClubs: referencedClubs,
       searchQueries: [
-        `${clubLabel} 2026 transfers out departed players sold loaned out Summer 2026 and new signings current active roster`,
+        `${clubLabel} ${currentYear} transfers out departed players sold loaned out Summer ${currentYear} and new signings current active roster`,
         `${clubLabel} current head coach tactical system starting XI by position and player roles: ${trimmed}`,
       ],
       reasoningComplexity: 'high',
