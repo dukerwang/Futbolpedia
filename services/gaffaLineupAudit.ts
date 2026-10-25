@@ -24,9 +24,9 @@ const SLOT_ALIASES: ReadonlyArray<readonly [RegExp, string[]]> = [
 
 /** Roster statuses: held players freeze the market; squad statuses count toward the roster cap. */
 const HELD_STATUSES = new Set(['held', 'pending_activation']);
-const SQUAD_STATUSES = new Set(['active', 'bench', 'loan_out']);
+export const SQUAD_STATUSES = new Set(['active', 'bench', 'loan_out']);
 const FIELDABLE_STATUSES = new Set(['active', 'bench', 'loan_in']);
-const ACADEMY_STATUSES = new Set(['taxi', 'academy']);
+export const ACADEMY_STATUSES = new Set(['taxi', 'academy']);
 
 const DEFAULT_ROSTER_CAP = 22;
 const DEFAULT_FA_BID_FLOOR = 0.6;

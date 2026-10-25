@@ -12,10 +12,12 @@ import {
   auditGaffaLineup,
   buildDossierLookupMap,
   computeGaffaClubAlerts,
+  ACADEMY_STATUSES,
   DEFENSIVE_SLOTS,
   faBidFloorRate,
   lookupPlayerDossier,
   openingFaFloor,
+  SQUAD_STATUSES,
 } from '../services/gaffaLineupAudit';
 
 interface GaffaConnectStripProps {
@@ -55,12 +57,16 @@ const MARKET_FILTER_MATCH: Record<MarketFilter, (p: GaffaFreeAgent, u21AgeLimit:
   ATT: (p) => ['LW', 'RW', 'ST'].includes(p.position.toUpperCase()),
 };
 
+/**
+ * Each filter matches exactly the players its label counts: ACTIVE is the squad the roster cap
+ * counts (loans out included), and OTHER is everyone outside squad, IR and academy.
+ */
 const SQUAD_FILTER_MATCH: Record<SquadFilter, (p: GaffaRosterPlayer) => boolean> = {
   ALL: () => true,
-  ACTIVE: (p) => p.status === 'active' || p.status === 'bench',
+  ACTIVE: (p) => SQUAD_STATUSES.has(p.status),
   IR: (p) => p.status === 'ir',
-  ACADEMY: (p) => p.status === 'taxi' || p.status === 'academy',
-  OTHER: (p) => !['active', 'bench', 'ir', 'taxi', 'academy'].includes(p.status),
+  ACADEMY: (p) => ACADEMY_STATUSES.has(p.status),
+  OTHER: (p) => !SQUAD_STATUSES.has(p.status) && p.status !== 'ir' && !ACADEMY_STATUSES.has(p.status),
 };
 
 const ALERT_TONE: Record<'critical' | 'warning' | 'info', string> = {
@@ -341,7 +347,7 @@ const SquadTab: React.FC<{
     { id: 'ACTIVE', label: `Active/Bench (${audit.activeBenchCount}/${audit.rosterCap})` },
     { id: 'IR', label: `IR (${audit.irPlayers.length}/${audit.irCap})` },
     { id: 'ACADEMY', label: `Academy (${audit.academyPlayers.length}/${audit.academyCap ?? '?'})` },
-    { id: 'OTHER', label: `Held/Loan (${audit.heldPlayers.length})` },
+    { id: 'OTHER', label: `Held/Loan (${(bag.roster ?? []).filter(SQUAD_FILTER_MATCH.OTHER).length})` },
   ];
   return (
     <div className="space-y-2 text-xs">
