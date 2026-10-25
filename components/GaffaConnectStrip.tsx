@@ -1,12 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { GaffaAuthUser, GaffaUserClub, PlayerProfile } from '../types';
+import type {
+  GaffaAuthUser,
+  GaffaContextBag,
+  GaffaFreeAgent,
+  GaffaRosterPlayer,
+  GaffaUserClub,
+  PlayerProfile,
+} from '../types';
 import type { GaffaLinkState } from '../services/gaffaContext';
 import {
   auditGaffaLineup,
   buildDossierLookupMap,
   computeGaffaClubAlerts,
   DEFENSIVE_SLOTS,
+  faBidFloorRate,
   lookupPlayerDossier,
+  openingFaFloor,
 } from '../services/gaffaLineupAudit';
 
 interface GaffaConnectStripProps {
@@ -29,6 +38,509 @@ interface GaffaConnectStripProps {
 type InspectorTab = 'lineup' | 'squad' | 'market';
 type MarketFilter = 'ALL' | 'U21' | 'GK' | 'DEF' | 'MID' | 'ATT';
 type SquadFilter = 'ALL' | 'ACTIVE' | 'IR' | 'ACADEMY' | 'OTHER';
+type LineupAudit = ReturnType<typeof auditGaffaLineup>;
+type DossierMap = ReturnType<typeof buildDossierLookupMap>;
+/** Present only when the parent wired quick prompts; ask buttons render only then. */
+type AskHandler = ((prompt: string) => void) | undefined;
+
+const MARKET_FILTERS: MarketFilter[] = ['ALL', 'U21', 'GK', 'DEF', 'MID', 'ATT'];
+const FA_LIST_LIMIT = 30;
+
+const MARKET_FILTER_MATCH: Record<MarketFilter, (p: GaffaFreeAgent, u21AgeLimit: number) => boolean> = {
+  ALL: () => true,
+  U21: (p, u21AgeLimit) => p.age != null && p.age <= u21AgeLimit,
+  GK: (p) => p.position.toUpperCase() === 'GK',
+  DEF: (p) => DEFENSIVE_SLOTS.has(p.position.toUpperCase()),
+  MID: (p) => ['DM', 'CM', 'AM'].includes(p.position.toUpperCase()),
+  ATT: (p) => ['LW', 'RW', 'ST'].includes(p.position.toUpperCase()),
+};
+
+const SQUAD_FILTER_MATCH: Record<SquadFilter, (p: GaffaRosterPlayer) => boolean> = {
+  ALL: () => true,
+  ACTIVE: (p) => p.status === 'active' || p.status === 'bench',
+  IR: (p) => p.status === 'ir',
+  ACADEMY: (p) => p.status === 'taxi' || p.status === 'academy',
+  OTHER: (p) => !['active', 'bench', 'ir', 'taxi', 'academy'].includes(p.status),
+};
+
+const ALERT_TONE: Record<'critical' | 'warning' | 'info', string> = {
+  critical: 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300',
+  warning: 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300',
+  info: 'border-charcoal/15 dark:border-cream-400/15 bg-cream-200/50 dark:bg-charcoal-light/50 text-charcoal/75 dark:text-cream-200/75',
+};
+
+const ASK_BUTTON_CLASS =
+  'shrink-0 text-[10px] font-sans uppercase tracking-wider text-emerald-700 dark:text-emerald-400 hover:underline disabled:opacity-40';
+const ASK_BUTTON_BOLD_CLASS =
+  'shrink-0 text-[10px] font-sans font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 hover:underline disabled:opacity-40';
+const ROW_CARD_CLASS =
+  'flex items-center justify-between gap-2 px-2 py-1.5 border border-charcoal/10 dark:border-cream-400/10 bg-cream-100/50 dark:bg-charcoal/40';
+const SECTION_LABEL_CLASS =
+  'text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/50';
+
+const clubKey = (leagueId: string, clubId: string) => `${leagueId}:${clubId}`;
+
+const AskButton: React.FC<{ label: string; prompt: string; onAsk: (prompt: string) => void; disabled: boolean; bold?: boolean }> = ({
+  label,
+  prompt,
+  onAsk,
+  disabled,
+  bold = false,
+}) => (
+  <button
+    type="button"
+    disabled={disabled}
+    onClick={() => onAsk(prompt)}
+    className={bold ? ASK_BUTTON_BOLD_CLASS : ASK_BUTTON_CLASS}
+  >
+    {label}
+  </button>
+);
+
+const ManualIdForm: React.FC<{
+  leagueId: string;
+  clubId: string;
+  onLeagueIdChange: (value: string) => void;
+  onClubIdChange: (value: string) => void;
+  onSync: (leagueId: string, clubId: string) => void;
+  busy: boolean;
+  syncing: boolean;
+  /** Compact sits under a connected club; the full-size form replaces the sign-in row. */
+  compact: boolean;
+}> = ({ leagueId, clubId, onLeagueIdChange, onClubIdChange, onSync, busy, syncing, compact }) => {
+  const inputClass = compact
+    ? 'flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1 text-xs font-mono text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400'
+    : 'flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1.5 text-sm font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400';
+  const buttonClass = compact
+    ? 'shrink-0 px-3 py-1 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[10px] font-sans uppercase tracking-wide disabled:opacity-40'
+    : 'shrink-0 px-3 py-1.5 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[11px] font-sans uppercase tracking-wide disabled:opacity-40';
+  return (
+    <div className="mt-2 flex flex-col sm:flex-row gap-2">
+      <input
+        value={leagueId}
+        onChange={(e) => onLeagueIdChange(e.target.value)}
+        placeholder="League ID"
+        className={inputClass}
+      />
+      <input
+        value={clubId}
+        onChange={(e) => onClubIdChange(e.target.value)}
+        placeholder="Club ID"
+        className={inputClass}
+      />
+      <button
+        type="button"
+        disabled={busy || !leagueId.trim() || !clubId.trim()}
+        onClick={() => onSync(leagueId.trim(), clubId.trim())}
+        className={buttonClass}
+      >
+        {syncing ? 'Syncing…' : compact ? 'Sync IDs' : 'Sync'}
+      </button>
+    </div>
+  );
+};
+
+const SignInForm: React.FC<{
+  email: string;
+  password: string;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onSubmit: (e: React.FormEvent) => void;
+  onSignInGoogle?: () => Promise<void> | void;
+  busy: boolean;
+  authLoading: boolean;
+}> = ({ email, password, onEmailChange, onPasswordChange, onSubmit, onSignInGoogle, busy, authLoading }) => (
+  <form onSubmit={onSubmit} className="mt-2 flex flex-col sm:flex-row gap-2">
+    <input
+      type="email"
+      value={email}
+      onChange={(e) => onEmailChange(e.target.value)}
+      placeholder="Gaffa email"
+      autoComplete="email"
+      className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2.5 py-1.5 text-xs font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
+    />
+    <input
+      type="password"
+      value={password}
+      onChange={(e) => onPasswordChange(e.target.value)}
+      placeholder="Password"
+      autoComplete="current-password"
+      className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2.5 py-1.5 text-xs font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
+    />
+    <div className="flex items-center gap-1.5 shrink-0">
+      <button
+        type="submit"
+        disabled={busy || !email.trim() || !password}
+        className="px-3 py-1.5 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[11px] font-sans uppercase tracking-wide disabled:opacity-40"
+      >
+        {authLoading ? 'Signing in…' : 'Sign in'}
+      </button>
+      {onSignInGoogle && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onSignInGoogle()}
+          className="px-2.5 py-1.5 border border-charcoal/20 dark:border-cream-400/20 bg-cream-100/80 dark:bg-charcoal/70 text-charcoal dark:text-cream-100 text-[11px] font-sans uppercase tracking-wide hover:border-charcoal/40 dark:hover:border-cream-400/40 disabled:opacity-40 flex items-center gap-1.5"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.81-3.5 5.44-6.5 5.44C8.36 19.27 5 15.65 5 12c0-3.65 3.36-7.27 7.2-7.27 3.09 0 4.9 1.97 4.9 1.97L19 4.72S16.56 2 12.1 2C6.42 2 2.03 6.8 2.03 12c0 5.05 4.13 10 10.22 10 5.35 0 9.25-3.67 9.25-9.09 0-1.15-.15-1.81-.15-1.81Z"
+            />
+          </svg>
+          <span>Google</span>
+        </button>
+      )}
+    </div>
+  </form>
+);
+
+const AlertList: React.FC<{
+  alerts: ReturnType<typeof computeGaffaClubAlerts>;
+  onAsk: AskHandler;
+  disabled: boolean;
+}> = ({ alerts, onAsk, disabled }) => (
+  <div className="mt-2 space-y-1">
+    {alerts.map((alert) => (
+      <div
+        key={alert.id}
+        className={`flex items-center justify-between gap-2 px-2.5 py-1 text-[11px] font-sans border ${ALERT_TONE[alert.severity]}`}
+      >
+        <span className="leading-snug">{alert.text}</span>
+        {alert.prompt && onAsk && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onAsk(alert.prompt!)}
+            className="shrink-0 text-[10px] font-bold uppercase tracking-wider underline hover:opacity-80 disabled:opacity-40"
+          >
+            Ask Scout
+          </button>
+        )}
+      </div>
+    ))}
+  </div>
+);
+
+/** Starter tabs and filter pills share this active/idle styling pattern. */
+const PillButton: React.FC<{ active: boolean; onClick: () => void; base: string; on: string; off: string; children: React.ReactNode }> = ({
+  active,
+  onClick,
+  base,
+  on,
+  off,
+  children,
+}) => (
+  <button type="button" onClick={onClick} className={`${base} ${active ? on : off}`}>
+    {children}
+  </button>
+);
+
+const LineupTab: React.FC<{ audit: LineupAudit; onAsk: AskHandler; disabled: boolean }> = ({
+  audit,
+  onAsk,
+  disabled,
+}) => (
+  <div className="max-h-56 overflow-y-auto pr-1 space-y-2 text-xs">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+      {audit.starters.map((s) => (
+        <div
+          key={`${s.slot}-${s.player_id}-${s.name}`}
+          className="flex items-center justify-between gap-2 px-2 py-1.5 border border-charcoal/10 dark:border-cream-400/10 bg-cream-100/60 dark:bg-charcoal/50"
+        >
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-[10px] font-bold px-1 bg-charcoal/10 dark:bg-cream-400/15 text-charcoal dark:text-cream-100">
+                {s.slot}
+              </span>
+              <span className="font-serif font-semibold truncate text-charcoal dark:text-cream-100">
+                {s.name}
+              </span>
+              {s.scoutOvr && (
+                <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
+                  {s.scoutOvr} OVR
+                </span>
+              )}
+              {s.oopPenalty && (
+                <span className="font-mono text-[9px] px-1 bg-amber-500/20 text-amber-800 dark:text-amber-300">
+                  −20% OOP
+                </span>
+              )}
+            </div>
+            <div className="text-[10px] font-sans text-charcoal/55 dark:text-cream-400/60 truncate mt-0.5">
+              {s.coveringBench.length > 0
+                ? `Sub cover: ${s.coveringBench.map((c) => `${c.name} (${c.benchSlot})`).join(' → ')}`
+                : '⚠ No eligible bench sub'}
+            </div>
+          </div>
+          {onAsk && (
+            <AskButton
+              label="Scout"
+              prompt={`Evaluate my ${s.slot} starter ${s.name} and my backup cover at ${s.slot}. Should I hold or look for an upgrade?`}
+              onAsk={onAsk}
+              disabled={disabled}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+
+    {audit.bench.length > 0 && (
+      <div className="pt-1">
+        <div className={`${SECTION_LABEL_CLASS} mb-1`}>Bench Auto-Sub Priority (DEF → MID → ATT → FLEX)</div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+          {audit.bench.map((b) => (
+            <div
+              key={`${b.benchSlot}-${b.player_id}`}
+              className="px-2 py-1.5 border border-charcoal/10 dark:border-cream-400/10 bg-cream-100/40 dark:bg-charcoal/40"
+            >
+              <div className="flex items-center justify-between gap-1">
+                <span className="font-mono text-[9px] font-bold uppercase text-charcoal/60 dark:text-cream-400/60">
+                  {b.benchSlot}
+                </span>
+                {b.scoutOvr && (
+                  <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
+                    {b.scoutOvr}
+                  </span>
+                )}
+              </div>
+              <div className="font-serif text-xs truncate text-charcoal dark:text-cream-100">{b.name}</div>
+              <div className="text-[10px] font-mono text-charcoal/50 dark:text-cream-400/50">
+                Covers: {b.coversStarterSlots.join('/')}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
+    <div className="text-[10px] font-sans text-charcoal/55 dark:text-cream-400/60 pt-1">
+      Cleanly fillable formations (no OOP penalty):{' '}
+      <span className="font-mono text-charcoal/80 dark:text-cream-200">
+        {audit.feasibleFormations
+          .filter((f) => f.canFillCleanly)
+          .map((f) => f.formation)
+          .join(', ') || 'none'}
+      </span>
+    </div>
+  </div>
+);
+
+const SquadTab: React.FC<{
+  bag: GaffaContextBag;
+  audit: LineupAudit;
+  players: GaffaRosterPlayer[];
+  squadFilter: SquadFilter;
+  onSquadFilterChange: (filter: SquadFilter) => void;
+  dossierMap: DossierMap;
+  onAsk: AskHandler;
+  disabled: boolean;
+}> = ({ bag, audit, players, squadFilter, onSquadFilterChange, dossierMap, onAsk, disabled }) => {
+  const filters: Array<{ id: SquadFilter; label: string }> = [
+    { id: 'ALL', label: `All (${bag.roster?.length ?? 0})` },
+    { id: 'ACTIVE', label: `Active/Bench (${audit.activeBenchCount}/${audit.rosterCap})` },
+    { id: 'IR', label: `IR (${audit.irPlayers.length}/${audit.irCap})` },
+    { id: 'ACADEMY', label: `Academy (${audit.academyPlayers.length}/${audit.academyCap ?? '?'})` },
+    { id: 'OTHER', label: `Held/Loan (${audit.heldPlayers.length})` },
+  ];
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-1">
+          {filters.map((f) => (
+            <PillButton
+              key={f.id}
+              active={squadFilter === f.id}
+              onClick={() => onSquadFilterChange(f.id)}
+              base="px-2 py-0.5 text-[10px] font-sans uppercase tracking-wider"
+              on="bg-charcoal/15 dark:bg-cream-400/20 font-bold text-charcoal dark:text-cream-100"
+              off="text-charcoal/55 dark:text-cream-400/60 hover:underline"
+            >
+              {f.label}
+            </PillButton>
+          ))}
+        </div>
+      </div>
+
+      <div className="max-h-48 overflow-y-auto pr-1 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+        {players.map((p) => {
+          const d = lookupPlayerDossier(p.name, p.display_name, dossierMap);
+          const pos = [p.primary_position, ...(p.secondary_positions ?? [])].join('/');
+          return (
+            <div key={p.player_id} className={ROW_CARD_CLASS}>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono text-[10px] font-bold text-charcoal/70 dark:text-cream-300">{pos}</span>
+                  <span className="font-serif truncate text-charcoal dark:text-cream-100">{p.name}</span>
+                  {d && (
+                    <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
+                      {d.ratings.overall}/{d.ratings.potential}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] font-sans text-charcoal/50 dark:text-cream-400/50">
+                  {p.pl_team ?? 'PL'} · <span className="uppercase font-mono">{p.status}</span>
+                </div>
+              </div>
+              {onAsk && (
+                <AskButton
+                  label="Ask"
+                  prompt={`What is ${p.name}'s dynasty outlook and trade value on my squad right now?`}
+                  onAsk={onAsk}
+                  disabled={disabled}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const MarketTab: React.FC<{
+  bag: GaffaContextBag;
+  freeAgents: GaffaFreeAgent[];
+  marketFilter: MarketFilter;
+  onMarketFilterChange: (filter: MarketFilter) => void;
+  floorRate: number;
+  dossierMap: DossierMap;
+  onAsk: AskHandler;
+  disabled: boolean;
+}> = ({ bag, freeAgents, marketFilter, onMarketFilterChange, floorRate, dossierMap, onAsk, disabled }) => (
+  <div className="space-y-2 text-xs max-h-56 overflow-y-auto pr-1">
+    {/* Live Auctions & Open Listings */}
+    {((bag.open_auctions?.length ?? 0) > 0 || (bag.open_listings?.length ?? 0) > 0) && (
+      <div className="space-y-1">
+        <div className={SECTION_LABEL_CLASS}>Live Auctions & Open Listings</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          {(bag.open_auctions ?? []).map((a) => (
+            <div
+              key={`auc-${a.player_id}`}
+              className="flex items-center justify-between gap-2 px-2 py-1.5 border border-emerald-500/30 bg-emerald-500/5"
+            >
+              <div className="min-w-0">
+                <div className="font-serif font-semibold truncate text-charcoal dark:text-cream-100">
+                  {a.name}{' '}
+                  <span className="font-mono text-[10px] font-normal text-charcoal/60 dark:text-cream-400">
+                    ({a.position})
+                  </span>
+                </div>
+                <div className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400">
+                  LIVE AUCTION · High €{a.highest_bid_eur_m ?? 0}m (next €
+                  {(a.highest_bid_eur_m ?? 0) + 1}m)
+                </div>
+              </div>
+              {onAsk && (
+                <AskButton
+                  label="Bid Math"
+                  prompt={`Should I bid on the live auction for ${a.name} (currently at €${a.highest_bid_eur_m ?? 0}m) given my squad and €${bag.budget_eur_m ?? 0}m balance, and what is my max bid ceiling?`}
+                  onAsk={onAsk}
+                  disabled={disabled}
+                  bold
+                />
+              )}
+            </div>
+          ))}
+
+          {(bag.open_listings ?? []).map((l) => {
+            const floor = l.min_bid_eur_m ?? l.ask_eur_m ?? l.release_clause_eur_m;
+            return (
+              <div key={`list-${l.player_id}`} className={ROW_CARD_CLASS}>
+                <div className="min-w-0">
+                  <div className="font-serif truncate text-charcoal dark:text-cream-100">
+                    {l.name}{' '}
+                    <span className="font-mono text-[10px] text-charcoal/60 dark:text-cream-400">
+                      ({l.position})
+                    </span>
+                  </div>
+                  <div className="text-[10px] font-sans text-charcoal/50 dark:text-cream-400/50 truncate">
+                    {l.seller_club_name}
+                    {l.yours ? ' (YOURS)' : ''}
+                    {floor != null ? ` · €${floor}m` : ''}
+                  </div>
+                </div>
+                {!l.yours && onAsk && (
+                  <AskButton
+                    label="Evaluate"
+                    prompt={`Evaluate ${l.name} listed by ${l.seller_club_name}${floor != null ? ` at €${floor}m` : ''}. Does he upgrade my squad and what offer makes sense?`}
+                    onAsk={onAsk}
+                    disabled={disabled}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )}
+
+    {/* Unowned Free Agents Pool */}
+    <div className="space-y-1.5 pt-1">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className={SECTION_LABEL_CLASS}>Unowned Free Agents ({bag.free_agents?.length ?? 0})</span>
+        <div className="flex flex-wrap gap-1">
+          {MARKET_FILTERS.map((f) => (
+            <PillButton
+              key={f}
+              active={marketFilter === f}
+              onClick={() => onMarketFilterChange(f)}
+              base="px-1.5 py-0.5 text-[10px] font-mono uppercase"
+              on="bg-charcoal/15 dark:bg-cream-400/20 font-bold text-charcoal dark:text-cream-100"
+              off="text-charcoal/50 dark:text-cream-400/50 hover:underline"
+            >
+              {f}
+            </PillButton>
+          ))}
+        </div>
+      </div>
+
+      {freeAgents.length === 0 ? (
+        <p className="text-[11px] font-serif italic text-charcoal/50 dark:text-cream-400/50 py-2">
+          No unowned players match this filter.
+        </p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          {freeAgents.map((fa) => {
+            const d = lookupPlayerDossier(fa.name, fa.display_name, dossierMap);
+            const mv = fa.market_value_eur_m ?? 0;
+            const openFloor = openingFaFloor(mv, floorRate);
+            return (
+              <div key={fa.player_id} className={ROW_CARD_CLASS}>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold text-charcoal/70 dark:text-cream-300">
+                      {fa.position}
+                    </span>
+                    <span className="font-serif truncate text-charcoal dark:text-cream-100">{fa.name}</span>
+                    {d && (
+                      <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
+                        {d.ratings.overall}/{d.ratings.potential}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[10px] font-sans text-charcoal/50 dark:text-cream-400/50">
+                    {fa.pl_team ?? 'PL'}
+                    {fa.age != null ? ` · age ${fa.age}` : ''} · MV €{mv}m · Floor €
+                    {openFloor}m
+                  </div>
+                </div>
+                {onAsk && (
+                  <AskButton
+                    label="Bid Math"
+                    prompt={`Should I nominate ${fa.name} (${fa.position}, ${fa.pl_team ?? 'PL'}, MV €${mv}m, opening floor €${openFloor}m) from free agency, and what is my bid ceiling with the 10% Scout's Fee?`}
+                    onAsk={onAsk}
+                    disabled={disabled}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  </div>
+);
 
 export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
   link,
@@ -52,6 +564,7 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
   const [password, setPassword] = useState('');
   const [manualMode, setManualMode] = useState(false);
   const [selectedClubKey, setSelectedClubKey] = useState('');
+  // Tab and filters live here so they survive the inspector closing and reopening.
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<InspectorTab>('lineup');
   const [marketFilter, setMarketFilter] = useState<MarketFilter>('ALL');
@@ -61,13 +574,13 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
     setLeagueId(link?.league_id ?? '');
     setClubId(link?.club_id ?? '');
     if (link?.league_id && link?.club_id) {
-      setSelectedClubKey(`${link.league_id}:${link.club_id}`);
+      setSelectedClubKey(clubKey(link.league_id, link.club_id));
     }
   }, [link?.league_id, link?.club_id]);
 
   useEffect(() => {
     if (!selectedClubKey && userClubs.length > 0) {
-      setSelectedClubKey(`${userClubs[0].league_id}:${userClubs[0].club_id}`);
+      setSelectedClubKey(clubKey(userClubs[0].league_id, userClubs[0].club_id));
     }
   }, [selectedClubKey, userClubs]);
 
@@ -89,34 +602,18 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
     [bag, calibratedDossiers],
   );
 
-  const floorRate = bag?.settings?.free_agent_bid_floor ?? 0.6;
+  const floorRate = faBidFloorRate(bag);
 
   const filteredFa = useMemo(() => {
-    const list = bag?.free_agents ?? [];
-    return list
-      .filter((p) => {
-        if (marketFilter === 'U21') return p.age != null && p.age <= (bag?.settings?.taxi_age_limit ?? 21);
-        if (marketFilter === 'GK') return p.position.toUpperCase() === 'GK';
-        if (marketFilter === 'DEF') return DEFENSIVE_SLOTS.has(p.position.toUpperCase());
-        if (marketFilter === 'MID') return ['DM', 'CM', 'AM'].includes(p.position.toUpperCase());
-        if (marketFilter === 'ATT') return ['LW', 'RW', 'ST'].includes(p.position.toUpperCase());
-        return true;
-      })
-      .slice(0, 30);
+    const u21AgeLimit = bag?.settings?.taxi_age_limit ?? 21;
+    const matches = MARKET_FILTER_MATCH[marketFilter];
+    return (bag?.free_agents ?? []).filter((p) => matches(p, u21AgeLimit)).slice(0, FA_LIST_LIMIT);
   }, [bag?.free_agents, bag?.settings?.taxi_age_limit, marketFilter]);
 
-  const filteredRoster = useMemo(() => {
-    const list = bag?.roster ?? [];
-    return list.filter((p) => {
-      if (squadFilter === 'ACTIVE') return p.status === 'active' || p.status === 'bench';
-      if (squadFilter === 'IR') return p.status === 'ir';
-      if (squadFilter === 'ACADEMY') return p.status === 'taxi' || p.status === 'academy';
-      if (squadFilter === 'OTHER') {
-        return !['active', 'bench', 'ir', 'taxi', 'academy'].includes(p.status);
-      }
-      return true;
-    });
-  }, [bag?.roster, squadFilter]);
+  const filteredRoster = useMemo(
+    () => (bag?.roster ?? []).filter(SQUAD_FILTER_MATCH[squadFilter]),
+    [bag?.roster, squadFilter],
+  );
 
   const quickChips = useMemo(() => {
     if (!bag?.connected) return [];
@@ -156,6 +653,7 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
     if (disabled || !onQuickPrompt) return;
     onQuickPrompt(prompt);
   };
+  const onAsk: AskHandler = onQuickPrompt ? firePrompt : undefined;
 
   const handleClubSelectChange = (val: string) => {
     setSelectedClubKey(val);
@@ -173,6 +671,15 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
   };
 
   const busy = syncing || authLoading;
+  const manualIdProps = {
+    leagueId,
+    clubId,
+    onLeagueIdChange: setLeagueId,
+    onClubIdChange: setClubId,
+    onSync,
+    busy,
+    syncing,
+  };
 
   return (
     <div className="mb-3 border border-charcoal/15 dark:border-cream-400/15 bg-cream-50/85 dark:bg-charcoal-surface/85 px-3.5 py-2.5 transition-colors">
@@ -263,7 +770,7 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
           <select
             value={
               link?.league_id && link?.club_id
-                ? `${link.league_id}:${link.club_id}`
+                ? clubKey(link.league_id, link.club_id)
                 : selectedClubKey
             }
             disabled={busy}
@@ -271,7 +778,7 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
             className="flex-1 min-w-[200px] bg-cream-100/90 dark:bg-charcoal/80 border border-charcoal/20 dark:border-cream-400/20 px-2.5 py-1 text-xs font-serif text-charcoal dark:text-cream-100 outline-none focus:border-emerald-600 dark:focus:border-emerald-400 disabled:opacity-50"
           >
             {userClubs.map((c) => {
-              const key = `${c.league_id}:${c.club_id}`;
+              const key = clubKey(c.league_id, c.club_id);
               return (
                 <option key={key} value={key}>
                   {c.club_name} · {c.league_name} (€{c.budget_eur_m}m)
@@ -325,60 +832,10 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
             ) : null}
           </div>
 
-          {manualMode && (
-            <div className="mt-2 flex flex-col sm:flex-row gap-2">
-              <input
-                value={leagueId}
-                onChange={(e) => setLeagueId(e.target.value)}
-                placeholder="League ID"
-                className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1 text-xs font-mono text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
-              />
-              <input
-                value={clubId}
-                onChange={(e) => setClubId(e.target.value)}
-                placeholder="Club ID"
-                className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1 text-xs font-mono text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
-              />
-              <button
-                type="button"
-                disabled={busy || !leagueId.trim() || !clubId.trim()}
-                onClick={() => onSync(leagueId.trim(), clubId.trim())}
-                className="shrink-0 px-3 py-1 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[10px] font-sans uppercase tracking-wide disabled:opacity-40"
-              >
-                {syncing ? 'Syncing…' : 'Sync IDs'}
-              </button>
-            </div>
-          )}
+          {manualMode && <ManualIdForm {...manualIdProps} compact />}
 
           {/* Proactive Roster-State & Lineup Alerts */}
-          {alerts.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {alerts.map((alert) => (
-                <div
-                  key={alert.id}
-                  className={`flex items-center justify-between gap-2 px-2.5 py-1 text-[11px] font-sans border ${
-                    alert.severity === 'critical'
-                      ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
-                      : alert.severity === 'warning'
-                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300'
-                        : 'border-charcoal/15 dark:border-cream-400/15 bg-cream-200/50 dark:bg-charcoal-light/50 text-charcoal/75 dark:text-cream-200/75'
-                  }`}
-                >
-                  <span className="leading-snug">{alert.text}</span>
-                  {alert.prompt && onQuickPrompt && (
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => firePrompt(alert.prompt!)}
-                      className="shrink-0 text-[10px] font-bold uppercase tracking-wider underline hover:opacity-80 disabled:opacity-40"
-                    >
-                      Ask Scout
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+          {alerts.length > 0 && <AlertList alerts={alerts} onAsk={onAsk} disabled={disabled} />}
 
           {/* Contextual Starter Chips */}
           {quickChips.length > 0 && onQuickPrompt && (
@@ -412,389 +869,50 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
                       },
                     ] as Array<{ id: InspectorTab; label: string }>
                   ).map((t) => (
-                    <button
+                    <PillButton
                       key={t.id}
-                      type="button"
+                      active={activeTab === t.id}
                       onClick={() => setActiveTab(t.id)}
-                      className={`px-2.5 py-1 text-[10px] font-sans font-bold uppercase tracking-wider transition-colors ${
-                        activeTab === t.id
-                          ? 'bg-charcoal dark:bg-emerald-600 text-cream-50'
-                          : 'bg-cream-200/70 dark:bg-charcoal-light/60 text-charcoal/65 dark:text-cream-300/70 hover:text-charcoal dark:hover:text-cream-100'
-                      }`}
+                      base="px-2.5 py-1 text-[10px] font-sans font-bold uppercase tracking-wider transition-colors"
+                      on="bg-charcoal dark:bg-emerald-600 text-cream-50"
+                      off="bg-cream-200/70 dark:bg-charcoal-light/60 text-charcoal/65 dark:text-cream-300/70 hover:text-charcoal dark:hover:text-cream-100"
                     >
                       {t.label}
-                    </button>
+                    </PillButton>
                   ))}
                 </div>
               </div>
 
-              {/* TAB 1: XI & AUTO-SUBS */}
-              {activeTab === 'lineup' && (
-                <div className="max-h-56 overflow-y-auto pr-1 space-y-2 text-xs">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {audit.starters.map((s) => (
-                      <div
-                        key={`${s.slot}-${s.player_id}-${s.name}`}
-                        className="flex items-center justify-between gap-2 px-2 py-1.5 border border-charcoal/10 dark:border-cream-400/10 bg-cream-100/60 dark:bg-charcoal/50"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-[10px] font-bold px-1 bg-charcoal/10 dark:bg-cream-400/15 text-charcoal dark:text-cream-100">
-                              {s.slot}
-                            </span>
-                            <span className="font-serif font-semibold truncate text-charcoal dark:text-cream-100">
-                              {s.name}
-                            </span>
-                            {s.scoutOvr && (
-                              <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
-                                {s.scoutOvr} OVR
-                              </span>
-                            )}
-                            {s.oopPenalty && (
-                              <span className="font-mono text-[9px] px-1 bg-amber-500/20 text-amber-800 dark:text-amber-300">
-                                −20% OOP
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px] font-sans text-charcoal/55 dark:text-cream-400/60 truncate mt-0.5">
-                            {s.coveringBench.length > 0
-                              ? `Sub cover: ${s.coveringBench.map((c) => `${c.name} (${c.benchSlot})`).join(' → ')}`
-                              : '⚠ No eligible bench sub'}
-                          </div>
-                        </div>
-                        {onQuickPrompt && (
-                          <button
-                            type="button"
-                            disabled={disabled}
-                            onClick={() =>
-                              firePrompt(
-                                `Evaluate my ${s.slot} starter ${s.name} and my backup cover at ${s.slot}. Should I hold or look for an upgrade?`,
-                              )
-                            }
-                            className="shrink-0 text-[10px] font-sans uppercase tracking-wider text-emerald-700 dark:text-emerald-400 hover:underline disabled:opacity-40"
-                          >
-                            Scout
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  {audit.bench.length > 0 && (
-                    <div className="pt-1">
-                      <div className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/50 mb-1">
-                        Bench Auto-Sub Priority (DEF → MID → ATT → FLEX)
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                        {audit.bench.map((b) => (
-                          <div
-                            key={`${b.benchSlot}-${b.player_id}`}
-                            className="px-2 py-1.5 border border-charcoal/10 dark:border-cream-400/10 bg-cream-100/40 dark:bg-charcoal/40"
-                          >
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="font-mono text-[9px] font-bold uppercase text-charcoal/60 dark:text-cream-400/60">
-                                {b.benchSlot}
-                              </span>
-                              {b.scoutOvr && (
-                                <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
-                                  {b.scoutOvr}
-                                </span>
-                              )}
-                            </div>
-                            <div className="font-serif text-xs truncate text-charcoal dark:text-cream-100">
-                              {b.name}
-                            </div>
-                            <div className="text-[10px] font-mono text-charcoal/50 dark:text-cream-400/50">
-                              Covers: {b.coversStarterSlots.join('/')}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="text-[10px] font-sans text-charcoal/55 dark:text-cream-400/60 pt-1">
-                    Cleanly fillable formations (no OOP penalty):{' '}
-                    <span className="font-mono text-charcoal/80 dark:text-cream-200">
-                      {audit.feasibleFormations
-                        .filter((f) => f.canFillCleanly)
-                        .map((f) => f.formation)
-                        .join(', ') || 'none'}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 2: SQUAD & CAPS */}
+              {activeTab === 'lineup' && <LineupTab audit={audit} onAsk={onAsk} disabled={disabled} />}
               {activeTab === 'squad' && (
-                <div className="space-y-2 text-xs">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap gap-1">
-                      {(
-                        [
-                          { id: 'ALL', label: `All (${bag.roster?.length ?? 0})` },
-                          { id: 'ACTIVE', label: `Active/Bench (${audit.activeBenchCount}/${audit.rosterCap})` },
-                          { id: 'IR', label: `IR (${audit.irPlayers.length}/${audit.irCap})` },
-                          { id: 'ACADEMY', label: `Academy (${audit.academyPlayers.length}/${audit.academyCap ?? '?'})` },
-                          { id: 'OTHER', label: `Held/Loan (${audit.heldPlayers.length})` },
-                        ] as Array<{ id: SquadFilter; label: string }>
-                      ).map((f) => (
-                        <button
-                          key={f.id}
-                          type="button"
-                          onClick={() => setSquadFilter(f.id)}
-                          className={`px-2 py-0.5 text-[10px] font-sans uppercase tracking-wider ${
-                            squadFilter === f.id
-                              ? 'bg-charcoal/15 dark:bg-cream-400/20 font-bold text-charcoal dark:text-cream-100'
-                              : 'text-charcoal/55 dark:text-cream-400/60 hover:underline'
-                          }`}
-                        >
-                          {f.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="max-h-48 overflow-y-auto pr-1 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {filteredRoster.map((p) => {
-                      const d = lookupPlayerDossier(p.name, p.display_name, dossierMap);
-                      const pos = [p.primary_position, ...(p.secondary_positions ?? [])].join('/');
-                      return (
-                        <div
-                          key={p.player_id}
-                          className="flex items-center justify-between gap-2 px-2 py-1.5 border border-charcoal/10 dark:border-cream-400/10 bg-cream-100/50 dark:bg-charcoal/40"
-                        >
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-mono text-[10px] font-bold text-charcoal/70 dark:text-cream-300">
-                                {pos}
-                              </span>
-                              <span className="font-serif truncate text-charcoal dark:text-cream-100">
-                                {p.name}
-                              </span>
-                              {d && (
-                                <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
-                                  {d.ratings.overall}/{d.ratings.potential}
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[10px] font-sans text-charcoal/50 dark:text-cream-400/50">
-                              {p.pl_team ?? 'PL'} · <span className="uppercase font-mono">{p.status}</span>
-                            </div>
-                          </div>
-                          {onQuickPrompt && (
-                            <button
-                              type="button"
-                              disabled={disabled}
-                              onClick={() =>
-                                firePrompt(
-                                  `What is ${p.name}'s dynasty outlook and trade value on my squad right now?`,
-                                )
-                              }
-                              className="shrink-0 text-[10px] font-sans uppercase tracking-wider text-emerald-700 dark:text-emerald-400 hover:underline disabled:opacity-40"
-                            >
-                              Ask
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                <SquadTab
+                  bag={bag}
+                  audit={audit}
+                  players={filteredRoster}
+                  squadFilter={squadFilter}
+                  onSquadFilterChange={setSquadFilter}
+                  dossierMap={dossierMap}
+                  onAsk={onAsk}
+                  disabled={disabled}
+                />
               )}
-
-              {/* TAB 3: MARKET & FA */}
               {activeTab === 'market' && (
-                <div className="space-y-2 text-xs max-h-56 overflow-y-auto pr-1">
-                  {/* Live Auctions & Open Listings */}
-                  {((bag.open_auctions?.length ?? 0) > 0 || (bag.open_listings?.length ?? 0) > 0) && (
-                    <div className="space-y-1">
-                      <div className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/50">
-                        Live Auctions & Open Listings
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                        {(bag.open_auctions ?? []).map((a) => (
-                          <div
-                            key={`auc-${a.player_id}`}
-                            className="flex items-center justify-between gap-2 px-2 py-1.5 border border-emerald-500/30 bg-emerald-500/5"
-                          >
-                            <div className="min-w-0">
-                              <div className="font-serif font-semibold truncate text-charcoal dark:text-cream-100">
-                                {a.name}{' '}
-                                <span className="font-mono text-[10px] font-normal text-charcoal/60 dark:text-cream-400">
-                                  ({a.position})
-                                </span>
-                              </div>
-                              <div className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400">
-                                LIVE AUCTION · High €{a.highest_bid_eur_m ?? 0}m (next €
-                                {(a.highest_bid_eur_m ?? 0) + 1}m)
-                              </div>
-                            </div>
-                            {onQuickPrompt && (
-                              <button
-                                type="button"
-                                disabled={disabled}
-                                onClick={() =>
-                                  firePrompt(
-                                    `Should I bid on the live auction for ${a.name} (currently at €${a.highest_bid_eur_m ?? 0}m) given my squad and €${bag.budget_eur_m ?? 0}m balance, and what is my max bid ceiling?`,
-                                  )
-                                }
-                                className="shrink-0 text-[10px] font-sans font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 hover:underline disabled:opacity-40"
-                              >
-                                Bid Math
-                              </button>
-                            )}
-                          </div>
-                        ))}
-
-                        {(bag.open_listings ?? []).map((l) => {
-                          const floor = l.min_bid_eur_m ?? l.ask_eur_m ?? l.release_clause_eur_m;
-                          return (
-                            <div
-                              key={`list-${l.player_id}`}
-                              className="flex items-center justify-between gap-2 px-2 py-1.5 border border-charcoal/10 dark:border-cream-400/10 bg-cream-100/50 dark:bg-charcoal/40"
-                            >
-                              <div className="min-w-0">
-                                <div className="font-serif truncate text-charcoal dark:text-cream-100">
-                                  {l.name}{' '}
-                                  <span className="font-mono text-[10px] text-charcoal/60 dark:text-cream-400">
-                                    ({l.position})
-                                  </span>
-                                </div>
-                                <div className="text-[10px] font-sans text-charcoal/50 dark:text-cream-400/50 truncate">
-                                  {l.seller_club_name}
-                                  {l.yours ? ' (YOURS)' : ''}
-                                  {floor != null ? ` · €${floor}m` : ''}
-                                </div>
-                              </div>
-                              {!l.yours && onQuickPrompt && (
-                                <button
-                                  type="button"
-                                  disabled={disabled}
-                                  onClick={() =>
-                                    firePrompt(
-                                      `Evaluate ${l.name} listed by ${l.seller_club_name}${floor != null ? ` at €${floor}m` : ''}. Does he upgrade my squad and what offer makes sense?`,
-                                    )
-                                  }
-                                  className="shrink-0 text-[10px] font-sans uppercase tracking-wider text-emerald-700 dark:text-emerald-400 hover:underline disabled:opacity-40"
-                                >
-                                  Evaluate
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Unowned Free Agents Pool */}
-                  <div className="space-y-1.5 pt-1">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/50">
-                        Unowned Free Agents ({bag.free_agents?.length ?? 0})
-                      </span>
-                      <div className="flex flex-wrap gap-1">
-                        {(['ALL', 'U21', 'GK', 'DEF', 'MID', 'ATT'] as MarketFilter[]).map((f) => (
-                          <button
-                            key={f}
-                            type="button"
-                            onClick={() => setMarketFilter(f)}
-                            className={`px-1.5 py-0.5 text-[10px] font-mono uppercase ${
-                              marketFilter === f
-                                ? 'bg-charcoal/15 dark:bg-cream-400/20 font-bold text-charcoal dark:text-cream-100'
-                                : 'text-charcoal/50 dark:text-cream-400/50 hover:underline'
-                            }`}
-                          >
-                            {f}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {filteredFa.length === 0 ? (
-                      <p className="text-[11px] font-serif italic text-charcoal/50 dark:text-cream-400/50 py-2">
-                        No unowned players match this filter.
-                      </p>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                        {filteredFa.map((fa) => {
-                          const d = lookupPlayerDossier(fa.name, fa.display_name, dossierMap);
-                          const mv = fa.market_value_eur_m ?? 0;
-                          const openFloor = mv > 0 ? Math.max(1, Math.floor(mv * floorRate)) : 1;
-                          return (
-                            <div
-                              key={fa.player_id}
-                              className="flex items-center justify-between gap-2 px-2 py-1.5 border border-charcoal/10 dark:border-cream-400/10 bg-cream-100/50 dark:bg-charcoal/40"
-                            >
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-mono text-[10px] font-bold text-charcoal/70 dark:text-cream-300">
-                                    {fa.position}
-                                  </span>
-                                  <span className="font-serif truncate text-charcoal dark:text-cream-100">
-                                    {fa.name}
-                                  </span>
-                                  {d && (
-                                    <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
-                                      {d.ratings.overall}/{d.ratings.potential}
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="text-[10px] font-sans text-charcoal/50 dark:text-cream-400/50">
-                                  {fa.pl_team ?? 'PL'}
-                                  {fa.age != null ? ` · age ${fa.age}` : ''} · MV €{mv}m · Floor €
-                                  {openFloor}m
-                                </div>
-                              </div>
-                              {onQuickPrompt && (
-                                <button
-                                  type="button"
-                                  disabled={disabled}
-                                  onClick={() =>
-                                    firePrompt(
-                                      `Should I nominate ${fa.name} (${fa.position}, ${fa.pl_team ?? 'PL'}, MV €${mv}m, opening floor €${openFloor}m) from free agency, and what is my bid ceiling with the 10% Scout's Fee?`,
-                                    )
-                                  }
-                                  className="shrink-0 text-[10px] font-sans uppercase tracking-wider text-emerald-700 dark:text-emerald-400 hover:underline disabled:opacity-40"
-                                >
-                                  Bid Math
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <MarketTab
+                  bag={bag}
+                  freeAgents={filteredFa}
+                  marketFilter={marketFilter}
+                  onMarketFilterChange={setMarketFilter}
+                  floorRate={floorRate}
+                  dossierMap={dossierMap}
+                  onAsk={onAsk}
+                  disabled={disabled}
+                />
               )}
             </div>
           )}
         </div>
       ) : manualMode ? (
-        <div className="mt-2 flex flex-col sm:flex-row gap-2">
-          <input
-            value={leagueId}
-            onChange={(e) => setLeagueId(e.target.value)}
-            placeholder="League ID"
-            className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1.5 text-sm font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
-          />
-          <input
-            value={clubId}
-            onChange={(e) => setClubId(e.target.value)}
-            placeholder="Club ID"
-            className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1.5 text-sm font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
-          />
-          <button
-            type="button"
-            disabled={busy || !leagueId.trim() || !clubId.trim()}
-            onClick={() => onSync(leagueId.trim(), clubId.trim())}
-            className="shrink-0 px-3 py-1.5 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[11px] font-sans uppercase tracking-wide disabled:opacity-40"
-          >
-            {syncing ? 'Syncing…' : 'Sync'}
-          </button>
-        </div>
+        <ManualIdForm {...manualIdProps} compact={false} />
       ) : authUser ? (
         userClubs.length === 0 ? (
           <p className="mt-1.5 text-xs font-serif italic text-charcoal/60 dark:text-cream-400/60">
@@ -802,49 +920,16 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
           </p>
         ) : null
       ) : (
-        <form onSubmit={handlePasswordSubmit} className="mt-2 flex flex-col sm:flex-row gap-2">
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Gaffa email"
-            autoComplete="email"
-            className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2.5 py-1.5 text-xs font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            autoComplete="current-password"
-            className="flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2.5 py-1.5 text-xs font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400"
-          />
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              type="submit"
-              disabled={busy || !email.trim() || !password}
-              className="px-3 py-1.5 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[11px] font-sans uppercase tracking-wide disabled:opacity-40"
-            >
-              {authLoading ? 'Signing in…' : 'Sign in'}
-            </button>
-            {onSignInGoogle && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onSignInGoogle()}
-                className="px-2.5 py-1.5 border border-charcoal/20 dark:border-cream-400/20 bg-cream-100/80 dark:bg-charcoal/70 text-charcoal dark:text-cream-100 text-[11px] font-sans uppercase tracking-wide hover:border-charcoal/40 dark:hover:border-cream-400/40 disabled:opacity-40 flex items-center gap-1.5"
-              >
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    fill="currentColor"
-                    d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.81-3.5 5.44-6.5 5.44C8.36 19.27 5 15.65 5 12c0-3.65 3.36-7.27 7.2-7.27 3.09 0 4.9 1.97 4.9 1.97L19 4.72S16.56 2 12.1 2C6.42 2 2.03 6.8 2.03 12c0 5.05 4.13 10 10.22 10 5.35 0 9.25-3.67 9.25-9.09 0-1.15-.15-1.81-.15-1.81Z"
-                  />
-                </svg>
-                <span>Google</span>
-              </button>
-            )}
-          </div>
-        </form>
+        <SignInForm
+          email={email}
+          password={password}
+          onEmailChange={setEmail}
+          onPasswordChange={setPassword}
+          onSubmit={handlePasswordSubmit}
+          onSignInGoogle={onSignInGoogle}
+          busy={busy}
+          authLoading={authLoading}
+        />
       )}
 
       {error && (
