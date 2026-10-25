@@ -1,6 +1,7 @@
 import { Type } from '@google/genai';
 import type { ChatMessage, PlayerProfile } from '../types';
 import type { ThinkingTier } from '../constants/modelProfiles';
+import { ATTRIBUTE_KEYS } from '../constants/ratingTiers';
 import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
 import { generateProseTurn, generateStructured, getCurrentSeasonInfo } from './aiClient';
 import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
@@ -15,7 +16,7 @@ import {
   toPlayerSlug,
   upsertCachedDossier,
 } from './dossierStore';
-import { gatherSearchFoundation } from './groundingService';
+import { buildSquadTurnoverQuery, gatherSearchFoundation } from './groundingService';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
 import { scrubUnverifiedManagerText } from '../packages/engine/src/gates/managerMentions.ts';
 
@@ -90,33 +91,9 @@ const CHALLENGE_TURN_SCHEMA: Record<string, unknown> = {
         attributes: {
           type: Type.OBJECT,
           nullable: true,
-          properties: {
-            finishing: { type: Type.NUMBER, nullable: true },
-            firstTouch: { type: Type.NUMBER, nullable: true },
-            dribbling: { type: Type.NUMBER, nullable: true },
-            vision: { type: Type.NUMBER, nullable: true },
-            retention: { type: Type.NUMBER, nullable: true },
-            combinationPlay: { type: Type.NUMBER, nullable: true },
-            delivery: { type: Type.NUMBER, nullable: true },
-            progressivePassing: { type: Type.NUMBER, nullable: true },
-            footballIQ: { type: Type.NUMBER, nullable: true },
-            offensivePositioning: { type: Type.NUMBER, nullable: true },
-            defensivePositioning: { type: Type.NUMBER, nullable: true },
-            tackling: { type: Type.NUMBER, nullable: true },
-            interceptions: { type: Type.NUMBER, nullable: true },
-            pressingIntensity: { type: Type.NUMBER, nullable: true },
-            speed: { type: Type.NUMBER, nullable: true },
-            acceleration: { type: Type.NUMBER, nullable: true },
-            agility: { type: Type.NUMBER, nullable: true },
-            strength: { type: Type.NUMBER, nullable: true },
-            aerialProwess: { type: Type.NUMBER, nullable: true },
-            stamina: { type: Type.NUMBER, nullable: true },
-            composure: { type: Type.NUMBER, nullable: true },
-            clutch: { type: Type.NUMBER, nullable: true },
-            leadership: { type: Type.NUMBER, nullable: true },
-            consistency: { type: Type.NUMBER, nullable: true },
-            flair: { type: Type.NUMBER, nullable: true },
-          },
+          properties: Object.fromEntries(
+            ATTRIBUTE_KEYS.map((key) => [key, { type: Type.NUMBER, nullable: true }]),
+          ),
         },
         strengths: {
           type: Type.ARRAY,
@@ -340,10 +317,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
             .slice(0, 2)
             .map((q) => (q.includes(String(year)) ? q : `${datePrefix} ${q}`));
           if (queries.length === 1 && targetClubs.length > 0) {
-            const clubLabel = targetClubs.join(' ');
-            queries.push(
-              `${datePrefix} ${clubLabel} ${year} transfers out departed players sold loaned out Summer ${year} and new signings current active roster`,
-            );
+            queries.push(`${datePrefix} ${buildSquadTurnoverQuery(targetClubs.join(' '), year)}`);
           }
         } else if (unratedPlayers.length === 2) {
           queries = unratedPlayers.map(
@@ -358,7 +332,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         } else if (targetClubs.length > 0) {
           const clubLabel = targetClubs.join(' vs ');
           queries = [
-            `${datePrefix} ${clubLabel} ${year} transfers out departed players sold loaned out Summer ${year} and new signings current active roster`,
+            `${datePrefix} ${buildSquadTurnoverQuery(clubLabel, year)}`,
             `${datePrefix} ${clubLabel} — confirmed current head coach (${year}), starting XI by position, and specific player roles in build-up and out of possession (${message})`,
           ];
         }

@@ -327,6 +327,9 @@ export const ATTRIBUTE_LABELS: Record<keyof Attributes, string> = {
   flair: 'Flair',
 };
 
+/** The 25 outfield attribute keys, in canonical display order. */
+export const ATTRIBUTE_KEYS = Object.keys(ATTRIBUTE_LABELS) as Array<keyof Attributes>;
+
 export const GK_ATTRIBUTE_LABELS: Record<keyof GoalkeeperAttributes, string> = {
   reflexes: 'Reflexes',
   handling: 'Handling',
