@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
-import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
+import { getShortTierLabel } from '../constants/ratingTiers';
 import { marked } from 'marked';
+import { describeCardEdition, pillClass, PILL_ICON_CLASS } from './pills';
 import DOMPurify from 'dompurify';
 import {
   getCardKey,
-  getDossierEvaluationDate,
   isPrimeCard,
   shareDossierCard,
 } from '../services/geminiService';
@@ -364,17 +364,15 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                                     {p.basicInfo.name}
                                                 </h4>
                                                 {isPrimeCard(p) && (
-                                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0">
-                                                        Prime
-                                                    </span>
+                                                    <span className={`${pillClass('amber', 'xs')} shrink-0`}>Prime</span>
                                                 )}
                                                 {p.confidence?.grade && (
-                                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
-                                                        Gr.{p.confidence.grade}
+                                                    <span className={`${pillClass('neutral', 'xs')} shrink-0`} title="Evidence grade">
+                                                        Grade {p.confidence.grade}
                                                     </span>
                                                 )}
                                                 {p.revision && (
-                                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 border border-indigo-500/25 shrink-0" title="Your accepted challenge of the shared card">
+                                                    <span className={`${pillClass('indigo', 'xs')} shrink-0`} title="Your accepted challenge of the shared card">
                                                         Your revision
                                                     </span>
                                                 )}
@@ -444,7 +442,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     );
   }
 
-  const isPrime = isPrimeCard(profile);
+  const edition = describeCardEdition(profile);
   const categories = profile.goalkeeperAttributes ? GK_ATTRIBUTE_CATEGORIES : ATTRIBUTE_CATEGORIES;
   const attrSource = profile.goalkeeperAttributes ? profile.goalkeeperAttributes : profile.attributes;
 
@@ -478,6 +476,17 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
                 <div className="flex justify-between items-start px-8 pt-6 pb-4">
                     <div className="flex-1 pr-4">
+                        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                            <span className={pillClass(edition.tone, 'sm')}>
+                                <span className={PILL_ICON_CLASS}>{edition.icon}</span>
+                                {edition.label}
+                            </span>
+                            {profile.revision && (
+                                <span className={pillClass('indigo', 'sm')} title="Your accepted challenge of the shared card">
+                                    Your revision
+                                </span>
+                            )}
+                        </div>
                         <h2 className="text-2xl font-serif font-bold text-charcoal dark:text-white leading-tight">{profile.basicInfo.name}</h2>
                         <p className="text-emerald-600 dark:text-emerald-400 font-serif italic text-base leading-tight mt-1 mb-1">
                             {profile.playstyleAndRole?.playstyle?.archetype}
@@ -593,73 +602,13 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 onPointerDownCapture={e => e.stopPropagation()} 
                 onTouchStart={e => e.stopPropagation()} 
             >
-                {/* 0. Card Edition, Date Stamp & Peak Context */}
-                <div className="p-4 rounded-xl bg-white dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border shadow-sm space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase border flex items-center gap-1 ${
-                                isPrime
-                                    ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
-                                    : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                            }`}>
-                                <span className="material-symbols-outlined text-[13px]">
-                                    {isPrime ? 'workspace_premium' : 'bolt'}
-                                </span>
-                                {profile.version?.label || (isPrime ? 'Prime Zenith' : 'Current Form')}
-                            </span>
-                            {profile.version?.seasonOrEra && (
-                                <span className="text-[10px] font-mono text-charcoal/60 dark:text-cream-400 font-semibold">
-                                    Era: {profile.version.seasonOrEra}
-                                </span>
-                            )}
-                            {profile.revision && (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30" title="Your accepted challenge of the shared card">
-                                    Your revision
-                                </span>
-                            )}
-                        </div>
-
-                        <div className="flex items-center gap-1 text-[11px] font-mono font-semibold text-charcoal/60 dark:text-cream-400">
-                            <span className="material-symbols-outlined text-[14px]">calendar_today</span>
-                            <span>
-                                {getDossierEvaluationDate(profile) ?? 'Undated'}
-                            </span>
-                        </div>
+                {/* 0. Peak Context (historical cards) */}
+                {profile.version?.peakContext && (
+                    <div>
+                        <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Peak Context</h3>
+                        <p className="leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light font-sans">{profile.version.peakContext}</p>
                     </div>
-
-                    {profile.version?.peakContext && (
-                        <div className="p-3 rounded-lg bg-amber-500/5 dark:bg-amber-950/20 border border-amber-500/20 text-xs font-serif italic text-charcoal/80 dark:text-amber-200 leading-relaxed">
-                            <span className="font-sans not-italic font-bold text-[9px] uppercase tracking-wider text-amber-700 dark:text-amber-400 mr-1.5">Zenith Context:</span>
-                            {profile.version.peakContext}
-                        </div>
-                    )}
-
-                    {/* Signature Ceiling Spikes & Flaws */}
-                    {((profile.signatureSpikes && profile.signatureSpikes.length > 0) || (profile.genuineFlaws && profile.genuineFlaws.length > 0)) && (
-                        <div className="pt-2 border-t border-cream-200 dark:border-charcoal-border/60 flex flex-wrap gap-2 text-xs">
-                            {profile.signatureSpikes && profile.signatureSpikes.length > 0 && (
-                                <div className="flex items-center gap-1 flex-wrap">
-                                    <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Spikes:</span>
-                                    {profile.signatureSpikes.map(spike => (
-                                        <span key={spike} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-500/20">
-                                            {getAttributeLabel(spike)}
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                            {profile.genuineFlaws && profile.genuineFlaws.length > 0 && (
-                                <div className="flex items-center gap-1 flex-wrap">
-                                    <span className="text-[9px] font-bold uppercase tracking-wider text-red-600 dark:text-red-400">Flaws:</span>
-                                    {profile.genuineFlaws.map(flaw => (
-                                        <span key={flaw} className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-700 dark:text-red-300 font-mono text-[10px] font-semibold border border-red-500/20">
-                                            {getAttributeLabel(flaw)}
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    )}
-                </div>
+                )}
 
                 {/* 1. Scout Summary */}
                 <div>
