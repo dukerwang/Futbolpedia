@@ -7,7 +7,7 @@ import {
   isPrimeCard,
   shareDossierCard,
 } from '../services/geminiService';
-import { getAttributeLabel, getTierForRating, getShortTierLabel } from '../constants/ratingTiers';
+import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
 
 interface GlobalDossierHubProps {
   isOpen: boolean;
@@ -19,6 +19,41 @@ interface GlobalDossierHubProps {
 type EditionFilter = 'all' | 'current' | 'prime';
 type PositionFilter = 'all' | 'forward' | 'midfield' | 'defender' | 'goalkeeper';
 type SortOption = 'overall_desc' | 'date_desc' | 'name_asc' | 'trajectory_desc';
+
+const EDITION_OPTIONS: Array<{ id: EditionFilter; label: string; activeClass: string }> = [
+  { id: 'all', label: 'All Cards', activeClass: 'bg-white dark:bg-charcoal text-charcoal dark:text-cream-50 shadow-xs' },
+  { id: 'current', label: 'Current Ratings', activeClass: 'bg-emerald-600 text-white shadow-xs' },
+  { id: 'prime', label: 'Prime Zeniths', activeClass: 'bg-amber-600 text-white shadow-xs' },
+];
+
+/** Substrings of a lowercased position that put a card in each position filter. */
+const POSITION_FILTER_KEYWORDS: Record<Exclude<PositionFilter, 'all'>, string[]> = {
+  forward: ['striker', 'forward', 'winger', 'st', 'cf'],
+  midfield: ['midfielder', 'cm', 'cdm', 'cam'],
+  defender: ['back', 'cb', 'lb', 'rb'],
+  goalkeeper: ['goalkeeper', 'gk'],
+};
+
+const SELECT_CLASS =
+  'px-2.5 py-1.5 text-xs font-sans rounded-lg bg-cream-100 dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border text-charcoal dark:text-cream-50 focus:outline-none focus:ring-1 focus:ring-emerald-500';
+
+const StatTile: React.FC<{
+  icon: string;
+  iconClass: string;
+  label: string;
+  valueClass: string;
+  children: React.ReactNode;
+}> = ({ icon, iconClass, label, valueClass, children }) => (
+  <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-cream-50 dark:bg-charcoal-light/40 border border-cream-300/40 dark:border-charcoal-border">
+    <span className={`material-symbols-outlined ${iconClass} text-[20px]`}>{icon}</span>
+    <div>
+      <div className="text-[10px] uppercase font-bold tracking-wider text-charcoal/40 dark:text-cream-400/60 font-mono">
+        {label}
+      </div>
+      <div className={valueClass}>{children}</div>
+    </div>
+  </div>
+);
 
 const formatPosition = (pos: string): string => {
   if (!pos) return 'N/A';
@@ -117,21 +152,10 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
 
     // Position filter
     if (positionFilter !== 'all') {
+      const keywords = POSITION_FILTER_KEYWORDS[positionFilter];
       result = result.filter((i) => {
         const pos = i.profile.basicInfo.position.toLowerCase();
-        if (positionFilter === 'forward') {
-          return pos.includes('striker') || pos.includes('forward') || pos.includes('winger') || pos.includes('st') || pos.includes('cf');
-        }
-        if (positionFilter === 'midfield') {
-          return pos.includes('midfielder') || pos.includes('cm') || pos.includes('cdm') || pos.includes('cam');
-        }
-        if (positionFilter === 'defender') {
-          return pos.includes('back') || pos.includes('cb') || pos.includes('lb') || pos.includes('rb');
-        }
-        if (positionFilter === 'goalkeeper') {
-          return pos.includes('goalkeeper') || pos.includes('gk');
-        }
-        return true;
+        return keywords.some((k) => pos.includes(k));
       });
     }
 
@@ -227,61 +251,38 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
 
         {/* Global Hub Statistics Bar */}
         <div className="max-w-7xl mx-auto mt-4 pt-4 border-t border-cream-200 dark:border-charcoal-border/60 grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-cream-50 dark:bg-charcoal-light/40 border border-cream-300/40 dark:border-charcoal-border">
-            <span className="material-symbols-outlined text-emerald-600 dark:text-emerald-400 text-[20px]">
-              style
-            </span>
-            <div>
-              <div className="text-[10px] uppercase font-bold tracking-wider text-charcoal/40 dark:text-cream-400/60 font-mono">
-                Total Dated Cards
-              </div>
-              <div className="text-lg font-mono font-bold text-charcoal dark:text-cream-50">
-                {stats.totalCards}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-cream-50 dark:bg-charcoal-light/40 border border-cream-300/40 dark:border-charcoal-border">
-            <span className="material-symbols-outlined text-blue-600 dark:text-blue-400 text-[20px]">
-              group
-            </span>
-            <div>
-              <div className="text-[10px] uppercase font-bold tracking-wider text-charcoal/40 dark:text-cream-400/60 font-mono">
-                Unique Players
-              </div>
-              <div className="text-lg font-mono font-bold text-charcoal dark:text-cream-50">
-                {stats.uniquePlayers}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-cream-50 dark:bg-charcoal-light/40 border border-cream-300/40 dark:border-charcoal-border">
-            <span className="material-symbols-outlined text-amber-500 text-[20px]">
-              stars
-            </span>
-            <div>
-              <div className="text-[10px] uppercase font-bold tracking-wider text-charcoal/40 dark:text-cream-400/60 font-mono">
-                World-Class (90+)
-              </div>
-              <div className="text-lg font-mono font-bold text-amber-600 dark:text-amber-400">
-                {stats.worldClassCount}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-cream-50 dark:bg-charcoal-light/40 border border-cream-300/40 dark:border-charcoal-border">
-            <span className="material-symbols-outlined text-purple-600 dark:text-purple-400 text-[20px]">
-              event_available
-            </span>
-            <div>
-              <div className="text-[10px] uppercase font-bold tracking-wider text-charcoal/40 dark:text-cream-400/60 font-mono">
-                Latest Evaluation
-              </div>
-              <div className="text-sm font-mono font-bold text-charcoal dark:text-cream-50 truncate">
-                {stats.latestDate}
-              </div>
-            </div>
-          </div>
+          <StatTile
+            icon="style"
+            iconClass="text-emerald-600 dark:text-emerald-400"
+            label="Total Dated Cards"
+            valueClass="text-lg font-mono font-bold text-charcoal dark:text-cream-50"
+          >
+            {stats.totalCards}
+          </StatTile>
+          <StatTile
+            icon="group"
+            iconClass="text-blue-600 dark:text-blue-400"
+            label="Unique Players"
+            valueClass="text-lg font-mono font-bold text-charcoal dark:text-cream-50"
+          >
+            {stats.uniquePlayers}
+          </StatTile>
+          <StatTile
+            icon="stars"
+            iconClass="text-amber-500"
+            label="World-Class (90+)"
+            valueClass="text-lg font-mono font-bold text-amber-600 dark:text-amber-400"
+          >
+            {stats.worldClassCount}
+          </StatTile>
+          <StatTile
+            icon="event_available"
+            iconClass="text-purple-600 dark:text-purple-400"
+            label="Latest Evaluation"
+            valueClass="text-sm font-mono font-bold text-charcoal dark:text-cream-50 truncate"
+          >
+            {stats.latestDate}
+          </StatTile>
         </div>
       </div>
 
@@ -314,43 +315,26 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             {/* Edition Selector */}
             <div className="flex items-center p-0.5 rounded-lg bg-cream-200 dark:bg-charcoal-light/50 border border-cream-300 dark:border-charcoal-border text-[11px] font-sans font-semibold">
-              <button
-                onClick={() => setEditionFilter('all')}
-                className={`px-2.5 py-1 rounded-md transition-colors ${
-                  editionFilter === 'all'
-                    ? 'bg-white dark:bg-charcoal text-charcoal dark:text-cream-50 shadow-xs'
-                    : 'text-charcoal/60 dark:text-cream-400 hover:text-charcoal'
-                }`}
-              >
-                All Cards
-              </button>
-              <button
-                onClick={() => setEditionFilter('current')}
-                className={`px-2.5 py-1 rounded-md transition-colors ${
-                  editionFilter === 'current'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-charcoal/60 dark:text-cream-400 hover:text-charcoal'
-                }`}
-              >
-                Current Ratings
-              </button>
-              <button
-                onClick={() => setEditionFilter('prime')}
-                className={`px-2.5 py-1 rounded-md transition-colors ${
-                  editionFilter === 'prime'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'text-charcoal/60 dark:text-cream-400 hover:text-charcoal'
-                }`}
-              >
-                Prime Zeniths
-              </button>
+              {EDITION_OPTIONS.map(({ id, label, activeClass }) => (
+                <button
+                  key={id}
+                  onClick={() => setEditionFilter(id)}
+                  className={`px-2.5 py-1 rounded-md transition-colors ${
+                    editionFilter === id
+                      ? activeClass
+                      : 'text-charcoal/60 dark:text-cream-400 hover:text-charcoal'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
 
             {/* Position Filter */}
             <select
               value={positionFilter}
               onChange={(e) => setPositionFilter(e.target.value as PositionFilter)}
-              className="px-2.5 py-1.5 text-xs font-sans rounded-lg bg-cream-100 dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border text-charcoal dark:text-cream-50 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className={SELECT_CLASS}
             >
               <option value="all">All Positions</option>
               <option value="forward">Attackers (ST / W)</option>
@@ -363,7 +347,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
             <select
               value={minTierFilter}
               onChange={(e) => setMinTierFilter(Number(e.target.value))}
-              className="px-2.5 py-1.5 text-xs font-sans rounded-lg bg-cream-100 dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border text-charcoal dark:text-cream-50 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className={SELECT_CLASS}
             >
               <option value={0}>All Tiers</option>
               <option value={90}>World-Class (90+)</option>
@@ -375,7 +359,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
             <select
               value={sortOption}
               onChange={(e) => setSortOption(e.target.value as SortOption)}
-              className="px-2.5 py-1.5 text-xs font-sans rounded-lg bg-cream-100 dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border text-charcoal dark:text-cream-50 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className={SELECT_CLASS}
             >
               <option value="overall_desc">Rating (High to Low)</option>
               <option value="date_desc">Evaluation Date (Newest)</option>
@@ -426,7 +410,6 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
               {filteredItems.map(({ profile, isCurrentRating, trajectoryDiff, previousRatingDate }) => {
                 const cardKey = getCardKey(profile);
                 const isPrime = isPrimeCard(profile);
-                const evalDate = profile.evaluationDate || (profile.createdAt ? new Date(profile.createdAt).toISOString().split('T')[0] : 'Undated');
                 const tierLabel = getShortTierLabel(profile.ratings.overall);
                 const isCopied = copiedSlug === cardKey;
 
@@ -481,7 +464,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                           )}
                           <div className="flex items-center gap-0.5">
                             <span className="material-symbols-outlined text-[13px]">event</span>
-                            <span>{evalDate}</span>
+                            <span>{profile.evaluationDate}</span>
                           </div>
                         </div>
                       </div>
