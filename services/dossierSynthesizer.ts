@@ -865,13 +865,29 @@ export function applyVersionRules(profile: PlayerProfile, isHistorical: boolean)
     };
   }
 
-  const type = v.type === 'current' ? 'prime' : v.type;
+  if (v.type === 'current') {
+    // The model labelled a peak request as current form, so sanitize dated, seasoned and
+    // labelled it as today's card. None of that describes a peak: leave it undated so
+    // validation asks for the real peak date.
+    const { evaluationDate: _today, ...rest } = profile;
+    return {
+      ...rest,
+      version: {
+        ...v,
+        id: `${base}-prime-undated`,
+        type: 'prime',
+        label: 'Prime Zenith',
+        evaluationDate: '',
+        seasonOrEra: '',
+      },
+    };
+  }
+
   return {
     ...profile,
     version: {
       ...v,
-      id: `${base}-${type}-${v.evaluationDate || 'undated'}`,
-      type,
+      id: `${base}-${v.type}-${v.evaluationDate || 'undated'}`,
     },
   };
 }

@@ -346,6 +346,20 @@ async function main() {
     assert.equal(ensureDossierDated(p, Date.now()), null);
   });
 
+  await test('historical route never keeps today as the peak date of a card the model called current', () => {
+    const raw = sanitizeProfileData({
+      basicInfo: { name: 'Steven Gerrard' },
+      version: { type: 'current', evaluationDate: TODAY },
+    });
+    const p = applyVersionRules(raw, true);
+    assert.equal(p.version?.type, 'prime');
+    assert.equal(p.version?.evaluationDate, '');
+    assert.equal(p.version?.seasonOrEra, '');
+    assert.equal(p.version?.label, 'Prime Zenith');
+    assert.equal(p.evaluationDate, undefined);
+    assert.equal(ensureDossierDated(p, Date.now()), null);
+  });
+
   console.log(`${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }
