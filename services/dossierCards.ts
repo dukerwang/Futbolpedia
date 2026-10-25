@@ -116,6 +116,28 @@ export const getDossierEvaluationDate = (p: PlayerProfile): string | null => {
 };
 
 /**
+ * Renames a card without changing its edition. A legacy card with no `version` gets its edition
+ * from its name ("Prime Kaká"), so renaming it to "Kaká" would silently turn a prime card into a
+ * current one, and the reverse. Record the edition and date on the card before the name changes.
+ */
+export const renameDossierCard = (p: PlayerProfile, newName: string): PlayerProfile => {
+  const renamed = { ...p, basicInfo: { ...p.basicInfo, name: newName } };
+  if (p.version?.type) return renamed;
+  const prime = isPrimeCard(p);
+  const date = getDossierEvaluationDate(p) ?? '';
+  return {
+    ...renamed,
+    version: {
+      id: `${toBasePlayerSlug(p.basicInfo.name)}-${prime ? 'prime' : 'current'}-${date || 'undated'}`,
+      type: prime ? 'prime' : 'current',
+      label: prime ? 'Prime Zenith' : 'Current Form',
+      evaluationDate: date,
+      seasonOrEra: '',
+    },
+  };
+};
+
+/**
  * Check whether a dossier has a valid, verifiable evaluation date.
  */
 export const isDossierDated = (p: PlayerProfile): boolean => {

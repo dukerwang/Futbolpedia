@@ -30,6 +30,7 @@ import {
   type DossierRevisionRow,
   mostRecentlyShownCard,
   pickCardPerPlayer,
+  renameDossierCard,
 } from '../services/dossierStore';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
@@ -491,6 +492,26 @@ async function main() {
     assert.equal(mostRecentlyShownCard(history as any, [terryNow, terryPrime]), terryPrime);
     assert.equal(mostRecentlyShownCard(history.slice(0, 1) as any, [terryNow, terryPrime]), terryNow);
     assert.equal(mostRecentlyShownCard([], [terryNow]), undefined);
+  });
+
+  await test('renaming a card never changes its edition', () => {
+    // Legacy prime card: no version, prime only because its name says so.
+    const legacyPrime = card('Prime Kaká', { version: undefined, evaluationDate: undefined });
+    assert.equal(isPrimeCard(legacyPrime), true);
+    const renamed = renameDossierCard(legacyPrime, 'Kaká');
+    assert.equal(renamed.basicInfo.name, 'Kaká');
+    assert.equal(isPrimeCard(renamed), true);
+    assert.equal(getDossierEvaluationDate(renamed), null);
+
+    // Legacy current card renamed to something that reads as prime stays current, same date.
+    const legacyCurrent = card('Bukayo Saka', { version: undefined, evaluationDate: undefined, createdAt: MAY_2020_MS });
+    const peakName = renameDossierCard(legacyCurrent, 'Saka (Peak form)');
+    assert.equal(isPrimeCard(peakName), false);
+    assert.equal(getDossierEvaluationDate(peakName), getDossierEvaluationDate(legacyCurrent));
+
+    // A versioned card keeps its version untouched.
+    const prime = primeCard('John Terry', '2005-05-07');
+    assert.deepEqual(renameDossierCard(prime, 'JT').version, prime.version);
   });
 
   console.log(`${passes} passed, ${failures} failed`);
