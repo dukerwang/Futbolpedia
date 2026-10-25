@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { assertValidOutlook, validateOutlook } from '../gates/validateOutlook';
-import { findUnverifiedManagerMentions, scrubUnverifiedManagerText } from '../gates/managerMentions';
+import {
+  correctStaleCoachRecord,
+  findUnverifiedManagerMentions,
+  scrubUnverifiedManagerText,
+} from '../gates/managerMentions';
 import { buildOutlookSearchQueries } from '../pipeline/queryGen';
 import type { OutlookContextBag, OutlookExtraction, PlayerOutlook } from '../types/outlook';
 
@@ -152,5 +156,20 @@ describe('validateOutlook', () => {
     expect(scrubbed).not.toContain('Maresca');
     expect(scrubbed).toContain('Under Xabi Alonso');
     expect(scrubbed).toContain("Xabi Alonso's tactical setup");
+  });
+});
+
+describe('correctStaleCoachRecord', () => {
+  it('replaces a missing or stale coach for a listed club', () => {
+    expect(correctStaleCoachRecord('Chelsea', null)).toBe('Xabi Alonso');
+    expect(correctStaleCoachRecord('Chelsea', 'Enzo Maresca')).toBe('Xabi Alonso');
+    expect(correctStaleCoachRecord('Barcelona', 'Xavi Hernandez')).toBe('Hansi Flick');
+  });
+
+  it('keeps a non-stale coach and leaves unlisted clubs untouched', () => {
+    expect(correctStaleCoachRecord('Chelsea', 'Xabi Alonso')).toBe('Xabi Alonso');
+    expect(correctStaleCoachRecord('Coventry City', 'Frank Lampard')).toBe('Frank Lampard');
+    expect(correctStaleCoachRecord('West Ham', 'Graham Potter')).toBe('Graham Potter');
+    expect(correctStaleCoachRecord(null, null)).toBeNull();
   });
 });

@@ -50,6 +50,30 @@ export const KNOWN_STALE_CLUB_MANAGERS: Record<string, { currentCoach: string; s
   },
 };
 
+const normalizeClubKey = (club: string): string =>
+  club.toLowerCase().replace(/\bfc\b/g, '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Corrects a club's head-coach record (e.g. from API-Football, which lags managerial changes)
+ * when the club is listed in KNOWN_STALE_CLUB_MANAGERS and the record is missing or names a
+ * known former coach. Coaches of unlisted clubs pass through untouched.
+ */
+export function correctStaleCoachRecord(
+  club: string | null | undefined,
+  coach: string | null | undefined,
+): string | null {
+  const clubKey = club ? normalizeClubKey(club) : '';
+  const entry = clubKey
+    ? Object.entries(KNOWN_STALE_CLUB_MANAGERS).find(
+        ([name]) => normalizeClubKey(name) === clubKey,
+      )?.[1]
+    : undefined;
+  if (!entry) return coach ?? null;
+  const coachLower = coach?.toLowerCase() ?? '';
+  const isStale = entry.stale.some((name) => coachLower.includes(name.toLowerCase()));
+  return !coach || isStale ? entry.currentCoach : coach;
+}
+
 export function scrubKnownStaleManagers(text: string): string {
   if (!text) return text;
   let result = text;
