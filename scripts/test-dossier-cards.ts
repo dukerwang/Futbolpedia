@@ -34,7 +34,10 @@ import {
   mostRecentlyShownCard,
   pickCardPerPlayer,
   renameDossierCard,
+  parseRequestedSeason,
+  seasonMatches,
 } from '../services/dossierStore';
+import { extractCandidatePlayerName } from '../services/turnRouter';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
 import { getAttributeLabel, normalizePosition, resolveLiberoPosition } from '../constants/ratingTiers';
@@ -493,6 +496,43 @@ async function main() {
     assert.equal(p.version?.label, 'Prime Zenith');
     assert.equal(p.evaluationDate, undefined);
     assert.equal(ensureDossierDated(p, Date.now()), null);
+  });
+
+  await test('a named season becomes a season card, never the prime', () => {
+    const asPrime = sanitizeProfileData({
+      basicInfo: { name: 'Thierry Henry' },
+      version: { type: 'prime', evaluationDate: '2006-05-17', seasonOrEra: '2005-06', peakContext: 'UCL final.' },
+    });
+    const p = applyVersionRules(asPrime, true, '2006');
+    assert.equal(p.version?.type, 'season_snapshot');
+    assert.equal(p.version?.label, 'Season (2005-06)');
+    assert.equal(p.version?.id, 'thierry-henry-season_snapshot-2006-05-17');
+    assert.equal(getCardKey(p), 'thierry-henry:season_snapshot:2006-05-17');
+
+    // A season request the model labelled current carries no trustworthy date.
+    const asCurrent = sanitizeProfileData({
+      basicInfo: { name: 'Thierry Henry' },
+      version: { type: 'current', evaluationDate: TODAY, seasonOrEra: '2026-27' },
+    });
+    const q = applyVersionRules(asCurrent, true, '2006');
+    assert.equal(q.version?.type, 'season_snapshot');
+    assert.equal(q.version?.evaluationDate, '');
+    assert.equal(ensureDossierDated(q, Date.now()), null);
+  });
+
+  await test('seasons parse from messages and match card seasons', () => {
+    assert.equal(parseRequestedSeason('Rate Henry 2006'), '2006');
+    assert.equal(parseRequestedSeason('Kaká 2006/07'), '2006-07');
+    assert.equal(parseRequestedSeason('Kaká 2006-2007'), '2006-07');
+    assert.equal(parseRequestedSeason('Rooney in the 2000s'), null);
+    assert.equal(parseRequestedSeason('Rate Cole Palmer'), null);
+    assert.equal(seasonMatches('2005-06', '2006'), true);
+    assert.equal(seasonMatches('2006-07', '2006'), true);
+    assert.equal(seasonMatches('2004-05', '2006'), false);
+    assert.equal(seasonMatches('2006-07', '2005-06'), false);
+    assert.equal(seasonMatches('2005-06', '2005-06'), true);
+    assert.equal(extractCandidatePlayerName('Rate Thierry Henry 2006'), 'Thierry Henry');
+    assert.equal(extractCandidatePlayerName('Ronaldo 2007/08'), 'Ronaldo');
   });
 
   await test('accented and unaccented names resolve to the same shared card slug', () => {

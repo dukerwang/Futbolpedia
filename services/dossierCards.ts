@@ -98,6 +98,39 @@ export const isPrimeCard = (p: PlayerProfile): boolean => {
   return EDITION_NAME_RE.test(p.basicInfo?.name ?? '');
 };
 
+/**
+ * The season a message names, if any: "2005/06", "2005-2006" and "2005–06" become "2005-06";
+ * a bare year ("Henry 2006") stays "2006", since it could mean either season it touches.
+ */
+export const parseRequestedSeason = (text: string): string | null => {
+  const m = text.match(/\b((?:19|20)\d{2})(?:\s*[-/–]\s*((?:19|20)?\d{2}))?\b/);
+  if (!m) return null;
+  const start = Number(m[1]);
+  if (!m[2]) return m[1];
+  const end = Number(m[2].length === 2 ? `${m[1].slice(0, 2)}${m[2]}` : m[2]);
+  return end === start + 1 ? `${start}-${String(end).slice(2)}` : m[1];
+};
+
+/** First calendar year a season reference covers: "2005-06" -> 2005, "2006" -> 2006. */
+export const seasonStartYear = (season: string): number | null => {
+  const m = season.match(/(?:19|20)\d{2}/);
+  return m ? Number(m[0]) : null;
+};
+
+/**
+ * Whether a card's season describes the requested one. A range must match exactly; a bare
+ * year matches either season it touches ("2006" matches 2005-06 and 2006-07).
+ */
+export const seasonMatches = (seasonOrEra: string | null | undefined, requested: string): boolean => {
+  if (!seasonOrEra) return false;
+  const cardStart = seasonStartYear(seasonOrEra);
+  const reqStart = seasonStartYear(requested);
+  if (cardStart == null || reqStart == null) return false;
+  const cardIsRange = /\d{4}\s*[-/–]\s*\d{2}/.test(seasonOrEra);
+  if (/^\d{4}-\d{2}$/.test(requested)) return cardStart === reqStart;
+  return cardStart === reqStart || (cardIsRange && cardStart + 1 === reqStart);
+};
+
 /** Edition segment of card keys and archive slugs. */
 export const cardEdition = (p: PlayerProfile): string =>
   isPrimeCard(p) ? p.version?.type ?? 'prime' : 'current';

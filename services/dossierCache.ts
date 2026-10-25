@@ -1,9 +1,11 @@
 import type { Conversation, PlayerProfile } from '../types';
 import {
+  cardEdition,
   ensureDossierDated,
   getCardKey,
   isCardInRefreshWindow,
   isPrimeCard,
+  seasonMatches,
   toBasePlayerSlug,
   toDossierCardSlug,
   toVersionedSlug,
@@ -81,6 +83,41 @@ export const getCachedDossier = async (
 };
 
 /**
+ * The shared card that rates `name` in `season`: a season card, or a prime card whose peak is
+ * that season. Archive rows are immutable, so whichever was published first is the card.
+ */
+export const getCachedSeasonCard = async (
+  name: string,
+  season: string,
+): Promise<PlayerProfile | null> => {
+  const base = toBasePlayerSlug(name);
+  if (!supabase || !base) return null;
+  try {
+    const { data, error } = await supabase
+      .from('player_profiles')
+      .select('player_slug, player_data, updated_at')
+      .or(`player_slug.like.${base}--season_snapshot--%,player_slug.like.${base}--prime--%`)
+      .order('updated_at', { ascending: true });
+    if (error || !Array.isArray(data)) return null;
+    for (const row of data as PlayerProfileRow[]) {
+      const at = rowTimeMs(row.updated_at);
+      const card = ensureDossierDated(row.player_data, at);
+      if (
+        card &&
+        isPrimeCard(card) &&
+        isRatedOnCurrentScale(card, at) &&
+        seasonMatches(card.version?.seasonOrEra, season)
+      ) {
+        return card;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
  * Persists a dated card. Writes the mutable "latest" pointer slug and an immutable versioned
  * slug, and archives whatever card previously occupied the pointer so a re-rating never
  * erases history. The `_slug` argument is kept for call-site compatibility; the pointer slug
@@ -112,6 +149,19 @@ export const upsertCachedDossier = async (
   try {
     const nowIso = new Date().toISOString();
     const rows: PlayerProfileRow[] = [];
+
+    // A season card is one of many historical versions of a player: it lives only under its
+    // archive slug, so it never takes the prime pointer.
+    if (cardEdition(stamped) === 'season_snapshot') {
+      if (versioned) {
+        await supabase
+          .from('player_profiles')
+          .upsert([{ player_slug: versioned, player_data: stamped, updated_at: nowIso }], {
+            onConflict: 'player_slug',
+          });
+      }
+      return;
+    }
 
     const { data: existing } = await supabase
       .from('player_profiles')

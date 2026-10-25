@@ -5,6 +5,8 @@ import { generateStructured, getCurrentSeasonInfo } from './aiClient';
 import {
   findReferencedDossiers,
   isPlayerProfile,
+  parseRequestedSeason,
+  seasonStartYear,
   toPlayerSlug,
   wantsSavedDossierInventory,
 } from './dossierStore';
@@ -39,6 +41,13 @@ export interface TurnRoute {
   searchQueries?: string[];
   reasoningComplexity?: 'low' | 'medium' | 'high';
   isHistorical: boolean;
+  /**
+   * A past season the message names ("2005-06", or a bare "2006"). A dossier then rates the
+   * player as he was that season instead of at his prime.
+   */
+  requestedSeason?: string | null;
+  /** The message explicitly asks about the player now ("current", "right now", "this season"). */
+  wantsCurrentForm?: boolean;
   wantsRegeneration: boolean;
   needsSearch: boolean;
 }
@@ -96,7 +105,8 @@ const TURN_ROUTE_SCHEMA: Record<string, unknown> = {
     },
     isHistorical: {
       type: Type.BOOLEAN,
-      description: 'True if evaluating a historical/prime/peak/all-time version of a player or era.',
+      description:
+        'True if evaluating a historical version of a player (prime, peak, a past season, or a retired player) or a past era. A dossier always rates one version of a player, never a whole career.',
     },
     wantsRegeneration: {
       type: Type.BOOLEAN,
@@ -211,6 +221,9 @@ const stripClubAndDossierQualifiers = (message: string): string =>
     // Strip trailing "'s" left over after dossier keywords were removed (e.g. "Cole Palmer's [dossier]")
     .replace(/['\u2019]s(?:\s*$)/gi, '')
     .replace(/\b(on|for|about|of|a|an|the|me|right now|currently)\b/gi, '')
+    // Timeframes ("Henry 2006", "Kaká in the 2006-07 season") are read separately.
+    .replace(/\b(?:19|20)\d{2}(?:\s*[-/–]\s*(?:19|20)?\d{2})?\b/g, '')
+    .replace(/\b(in|during|season|campaign|version)\b/gi, '')
     .replace(/[?!.,]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -291,8 +304,23 @@ const hasRegenCue = (msg: string): boolean =>
     msg,
   );
 
+const hasHistoricalWordCue = (msg: string): boolean =>
+  /\b(prime|peak|all[- ]time|historical)\b/i.test(msg);
+
+/** The season a message names, when it is earlier than the current one. */
+const pastSeasonIn = (msg: string): string | null => {
+  const season = parseRequestedSeason(msg);
+  if (!season) return null;
+  const start = seasonStartYear(season);
+  const currentStart = seasonStartYear(getCurrentSeasonInfo().currentSeason);
+  return start != null && currentStart != null && start < currentStart ? season : null;
+};
+
 const hasHistoricalCue = (msg: string): boolean =>
-  /\b(prime|peak|all[- ]time|historical|\b(?:19|20)\d{2}(?:[/-]\d{2,4})?\b)\b/i.test(msg);
+  hasHistoricalWordCue(msg) || pastSeasonIn(msg) !== null;
+
+const hasCurrentFormCue = (msg: string): boolean =>
+  /\b(current(?:ly)?|right now|nowadays|today|this season|these days|at the moment)\b/i.test(msg);
 
 const hasDossierTriggerCue = (msg: string): boolean =>
   /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good is|rank|tier|analyze|breakdown)\b/i.test(
@@ -377,6 +405,28 @@ const extractComparedPlayersFast = (
 };
 
 export async function classifyTurn(params: {
+  message: string;
+  history: ChatMessage[];
+  conversationDossiers: PlayerProfile[];
+  hasImage: boolean;
+}): Promise<TurnRoute> {
+  const route = await classifyTurnBase(params);
+  // Timeframes are read deterministically, whichever path classified the turn: a named past
+  // season is a historical version of the player; a current-season year alone is not.
+  const message = params.message.trim();
+  const requestedSeason = pastSeasonIn(message);
+  const wantsCurrentForm = hasCurrentFormCue(message);
+  return {
+    ...route,
+    requestedSeason,
+    wantsCurrentForm,
+    isHistorical:
+      requestedSeason !== null ||
+      (route.isHistorical && (hasHistoricalWordCue(message) || !parseRequestedSeason(message))),
+  };
+}
+
+async function classifyTurnBase(params: {
   message: string;
   history: ChatMessage[];
   conversationDossiers: PlayerProfile[];

@@ -1,4 +1,7 @@
+import { ThinkingLevel } from '@google/genai';
 import {
+  FLASH_MODEL,
+  getAi,
   getCurrentSeasonInfo,
   runGroundedSearch,
 } from './aiClient';
@@ -141,6 +144,8 @@ export async function gatherPlayerGrounding(params: {
   playerName: string;
   rawMessage: string;
   isHistorical: boolean;
+  /** A past season to rate instead of the player's prime ("2005-06" or a bare "2006"). */
+  season?: string | null;
 }): Promise<PlayerGroundingBundle> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
   const datePrefix = `[Date: ${month} ${year}]`;
@@ -148,7 +153,9 @@ export async function gatherPlayerGrounding(params: {
 
   if (params.isHistorical) {
     const searchResult = await runGroundedSearch(
-      `${subject} career peak prime seasons major honours Ballon d'Or FIFPro World XI best season stats tactical profile ${ANTI_GAME_FILTER}`,
+      params.season
+        ? `${subject} in the ${params.season} season: club, age, position and role, appearances, goals, assists, honours, form and tactical profile that season ${ANTI_GAME_FILTER}`
+        : `${subject} career peak prime seasons major honours Ballon d'Or FIFPro World XI best season stats tactical profile ${ANTI_GAME_FILTER}`,
     );
     return {
       foundationText: searchResult.formattedBlock,
@@ -173,14 +180,14 @@ export async function gatherPlayerGrounding(params: {
   const foundationText = [apiBlock, searchBlock].filter(Boolean).join('\n\n===\n\n');
 
   const verifiedFactsBlock = apiPlayer
-    ? `<deterministic_bio_anchor>
+    ? `<deterministic_bio_record>
 Authoritative API-Football record for ${apiPlayer.name}:
 - Age: ${apiPlayer.age ?? 'verify from search'}
 - Nationality: ${apiPlayer.nationality ?? 'verify from search'}
 - Height: ${apiPlayer.height ?? 'verify from search'}
 - Weight: ${apiPlayer.weight ?? 'verify from search'}
 - Registered Club: ${apiPlayer.currentClub ?? 'verify from search'} (update only if search confirms a more recent ${year} transfer/loan)
-</deterministic_bio_anchor>`
+</deterministic_bio_record>`
     : '';
 
   return {
@@ -318,4 +325,42 @@ export async function gatherSearchFoundation(
   });
 
   return chunks.join('\n\n') || 'No grounded search results available for this turn.';
+}
+
+export type CareerStatus = 'active' | 'retired' | 'unknown';
+
+const careerStatusCache = new Map<string, Promise<CareerStatus>>();
+
+/**
+ * Whether a player still plays professionally, from a focused grounded search. A dossier on a
+ * retired player with no timeframe rates his prime, since he has no current form to rate.
+ * Anything short of a clear answer is 'unknown', which callers treat as active.
+ */
+export function getCareerStatus(playerName: string): Promise<CareerStatus> {
+  const key = playerName.trim().toLowerCase();
+  if (!key) return Promise.resolve('unknown');
+  const cached = careerStatusCache.get(key);
+  if (cached) return cached;
+  const { month, year } = getCurrentSeasonInfo();
+  const job = getAi()
+    .models.generateContent({
+      model: FLASH_MODEL,
+      contents: `As of ${month} ${year}, is the footballer ${playerName} still playing professionally, or has he retired from playing? Reply with exactly one word: ACTIVE, RETIRED, or UNKNOWN.`,
+      config: {
+        temperature: 0,
+        maxOutputTokens: 10,
+        tools: [{ googleSearch: {} }],
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      },
+    })
+    .then((res): CareerStatus => {
+      const word = (res.text ?? '').trim().toUpperCase();
+      return word.startsWith('RETIRED') ? 'retired' : word.startsWith('ACTIVE') ? 'active' : 'unknown';
+    })
+    .catch((): CareerStatus => {
+      careerStatusCache.delete(key);
+      return 'unknown';
+    });
+  careerStatusCache.set(key, job);
+  return job;
 }

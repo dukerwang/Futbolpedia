@@ -6,13 +6,14 @@ VI. DOSSIER SYNTHESIS & CALIBRATION WORKFLOW
 You are generating a structured scouting dossier JSON object representing an official, dated player version card. Follow this exact sequence inside the schema:
 
 0. **Step 0 — Card Version & Temporal Dating (\`version\`):**
-   - **Current Player Evaluation (default):**
+   - A card rates one version of a player — the footballer he was at one point in time — never his career or legacy. Pick the version from the request: a named season gets a season card, "prime"/"peak" or a retired player with no timeframe gets his prime, and an active player with no timeframe gets his current form. The instructions in \`<synthesis_instructions>\` say which applies.
+   - **Current Player Evaluation (default for active players):**
      - Set \`version.type\` to \`"current"\`.
      - Set \`version.evaluationDate\` to the exact current evaluation date provided in \`<context>\` (formatted as YYYY-MM-DD).
      - Set \`version.seasonOrEra\` to the current season (e.g., "2026-27").
      - Set \`version.label\` to \`"Current Form (<Month> <Year>)"\` (e.g., "Current Form (Oct 2026)").
      - Set \`version.peakContext\` to \`null\`.
-   - **Historical / Peak / Prime Player Evaluation (e.g., "Prime Steven Gerrard", "Prime Joshua Kimmich", "Pelé"):**
+   - **Historical / Peak / Prime Player Evaluation (e.g., "Prime Steven Gerrard", "Prime Joshua Kimmich", or a retired player such as "Pelé"):**
      - You MUST identify and evaluate the player at their ABSOLUTE CAREER ZENITH.
      - Research and pinpoint the exact peak season (e.g. 2008–09 for Gerrard, 2019–20 for Kimmich) and the specific peak date (YYYY-MM-DD, e.g. the conclusion date of that defining campaign or tournament triumph).
      - Set \`version.type\` to \`"prime"\`.
@@ -49,8 +50,8 @@ You are generating a structured scouting dossier JSON object representing an off
    - \`strengths\` & \`weaknesses\`: Format each item as \`**Bold Title:** Concrete analytical explanation.\` Explain the *on-pitch mechanism and tactical impact* of the trait (e.g., how his half-turn reception breaks the first line of pressure, or why a specific limitation surfaces under high pressing), not a generic restatement of the attribute name.
    - \`playstyleAndRole.playstyle.archetype\`: An evocative, specific 3–5 word title capturing the player's exact footballing mould (Protocol D: never a single generic word, never "Enganche").
    - \`playstyleAndRole.bestRoles\`: Short (1–4 word) standard tactical role labels (e.g., "Deep-Lying Playmaker", "Inverted Winger", "Ball-Playing Centre-Back", "False 9").
-   - \`playstyleAndRole.playstyle.description\` (Min 80 words — Protocol T "Tactico View"): Capture WHO the player is as a footballer — his mould, signature on-pitch mechanics (receiving angles, ball-carrying cadence, spatial reading, out-of-possession discipline), how he compares to the positional norm, and his real limitations. Write flowing scouting prose — never a robotic chain of "He does X. He does Y." action sentences, never anchor his permanent identity to a transient club formation, and never open with a negative contrast ("Unlike...", "While...", "Not...").
-   - \`shortBio\` (Min 80 words — Protocols I & L): A fresh, accurate snapshot of who the player is right now — his standing, trajectory, and current situation, anchored in specific evidence from grounding. Actively vary the opening and closing structure across players (e.g., open with a decisive statistical reality, a defining big-game performance, a blunt identity thesis, or a tactical/career tension); never use the cliché mould ("Affectionately known as... following a transfer... silenced skeptics... enters new season under new manager").
+   - \`playstyleAndRole.playstyle.description\` (Min 80 words — Protocol T "Tactico View"): Capture WHO the player is as a footballer — his mould, signature on-pitch mechanics (receiving angles, ball-carrying cadence, spatial reading, out-of-possession discipline), how he compares to the positional norm, and his real limitations. Write flowing scouting prose — never a robotic chain of "He does X. He does Y." action sentences, never tie his permanent identity to a transient club formation, and never open with a negative contrast ("Unlike...", "While...", "Not...").
+   - \`shortBio\` (Min 80 words — Protocols I & L): A fresh, accurate snapshot of who the player is right now — his standing, trajectory, and current situation, backed by specific evidence from grounding. Actively vary the opening and closing structure across players (e.g., open with a decisive statistical reality, a defining big-game performance, a blunt identity thesis, or a tactical/career tension); never use the cliché mould ("Affectionately known as... following a transfer... silenced skeptics... enters new season under new manager").
    - \`latestUpdate\` (Protocols E & M): Grounded strictly in verified facts from the current turn (season appearances/output, recent match log, fitness/injury status, and transfer/loan mobility if applicable). Never cite unverified statistics, fabricated match events, or an unverified head coach.
 
 5. **Step 5 — Evidence Grade & Confidence (\`confidence\`):**
