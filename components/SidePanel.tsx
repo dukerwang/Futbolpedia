@@ -367,11 +367,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                                 {isPrimeCard(p) && (
                                                     <span className={`${pillClass('amber', 'xs')} shrink-0`}>Prime</span>
                                                 )}
-                                                {p.confidence?.grade && (
-                                                    <span className={`${pillClass('neutral', 'xs')} shrink-0`} title="Evidence grade">
-                                                        Grade {p.confidence.grade}
-                                                    </span>
-                                                )}
                                                 {p.revision && (
                                                     <span className={`${pillClass('indigo', 'xs')} shrink-0`} title="Your accepted challenge of the shared card">
                                                         Your revision
@@ -478,7 +473,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 <div className="flex justify-between items-start px-8 pt-6 pb-4">
                     <div className="flex-1 pr-4">
                         <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                            <span className={pillClass(edition.tone, 'sm')}>
+                            <span className={pillClass(edition.tone, 'sm')} title={edition.title}>
                                 <span className={PILL_ICON_CLASS}>{edition.icon}</span>
                                 {edition.label}
                             </span>

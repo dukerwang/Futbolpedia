@@ -8,9 +8,8 @@ import {
   shareDossierCard,
 } from '../services/geminiService';
 import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
-import { describeCardEdition, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
+import { describeCardEdition, pillClass, PILL_ICON_CLASS } from './pills';
 
-const GRADE_TONE: Record<string, PillTone> = { A: 'emerald', B: 'blue', C: 'amber' };
 
 interface GlobalDossierHubProps {
   isOpen: boolean;
@@ -428,16 +427,10 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                     {/* Top Stamp Bar */}
                     <div>
                       <div className="flex items-center justify-between gap-2 mb-3">
-                        <span className={pillClass(isCurrentRating || isPrime ? edition.tone : 'neutral', 'sm')}>
+                        <span className={pillClass(isCurrentRating || isPrime ? edition.tone : 'neutral', 'sm')} title={edition.title}>
                           <span className={PILL_ICON_CLASS}>{isCurrentRating || isPrime ? edition.icon : 'history'}</span>
                           {isCurrentRating || isPrime ? edition.label : edition.label.replace('Current form', 'Earlier rating')}
                         </span>
-
-                        {profile.confidence?.grade && (
-                          <span className={pillClass(GRADE_TONE[profile.confidence.grade] ?? 'amber', 'xs')} title="Evidence grade">
-                            Grade {profile.confidence.grade}
-                          </span>
-                        )}
                       </div>
 
                       {/* Player Headline */}
@@ -452,23 +445,21 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                         </div>
 
                         {/* Rating Block */}
-                        <div className="flex flex-col items-end shrink-0">
-                          <div className="flex items-baseline gap-1 bg-cream-100 dark:bg-charcoal-light px-3 py-1 rounded-xl border border-cream-300 dark:border-charcoal-border">
-                            <span
-                              className={`text-2xl font-mono font-bold leading-none ${
-                                profile.ratings.overall >= 90
-                                  ? 'text-emerald-600 dark:text-emerald-400'
-                                  : 'text-charcoal dark:text-cream-50'
-                              }`}
-                            >
-                              {profile.ratings.overall}
-                            </span>
-                            <span className="text-[9px] font-mono font-bold text-charcoal/40 dark:text-cream-400">
-                              OVR
-                            </span>
-                          </div>
-                          <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-charcoal/40 dark:text-cream-400 mt-1">
+                        <div className="flex flex-col items-end text-right shrink-0">
+                          <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5 whitespace-nowrap">
                             {tierLabel}
+                          </span>
+                          <span
+                            className={`text-2xl font-mono font-bold leading-none ${
+                              profile.ratings.overall >= 90
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-charcoal dark:text-cream-50'
+                            }`}
+                          >
+                            {profile.ratings.overall}
+                          </span>
+                          <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">
+                            OVR
                           </span>
                         </div>
                       </div>
