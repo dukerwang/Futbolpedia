@@ -6,7 +6,12 @@ import type {
   GaffaRosterPlayer,
   PlayerProfile,
 } from '../types';
-import { getDossierEvaluationDate, isPrimeCard, toBasePlayerSlug } from './dossierStore';
+import {
+  foldPlayerName,
+  getDossierEvaluationDate,
+  isPrimeCard,
+  toBasePlayerSlug,
+} from './dossierStore';
 
 export const DEFENSIVE_SLOTS = new Set(['CB', 'LB', 'RB', 'LWB', 'RWB']);
 const MID_ATT_SLOTS = new Set(['DM', 'CM', 'AM', 'LW', 'RW', 'ST']);
@@ -33,6 +38,28 @@ const DEFAULT_FA_BID_FLOOR = 0.6;
 
 export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Whole-word match on accent-folded text, so "Rice" never matches inside "price". */
+const containsWord = (foldedText: string, foldedWord: string): boolean =>
+  new RegExp(`(?<![a-z0-9])${escapeRegExp(foldedWord)}(?![a-z0-9])`).test(foldedText);
+
+const foldedSurname = (name: string): string => foldPlayerName(name.trim()).split(/\s+/).pop() ?? '';
+
+/**
+ * How a player name appears in a message folded with `foldPlayerName`: as the full name, as a
+ * surname of at least 4 letters, or not at all. Accent-insensitive ("odegaard" finds Ødegaard).
+ */
+type NameMatch = 'full' | 'surname' | null;
+
+function matchPlayerName(name: string | undefined, foldedMessage: string): NameMatch {
+  if (!name || name.trim().length < 3) return null;
+  const full = foldPlayerName(name.trim()).replace(/\s+/g, ' ');
+  if (containsWord(foldedMessage, full)) return 'full';
+  const surname = foldedSurname(name);
+  return surname !== full && surname.length >= 4 && containsWord(foldedMessage, surname)
+    ? 'surname'
+    : null;
 }
 
 function heldPlayersOf(roster: GaffaRosterPlayer[]): GaffaRosterPlayer[] {
@@ -434,18 +461,11 @@ ${benchLines.join('\n') || '  (empty)'}
  */
 export function inferInvolvedGaffaSlots(message: string, bag: GaffaContextBag): string[] {
   const slots = new Set<string>();
-  const lower = message.toLowerCase();
+  const folded = foldPlayerName(message);
 
   // 1. Check any player from roster, listings, auctions, or free agents mentioned in the message
   const checkName = (name: string | undefined, pos: string, sec?: string[]) => {
-    if (!name || name.trim().length < 3) return;
-    const fullLower = name.trim().toLowerCase();
-    const parts = fullLower.split(/\s+/);
-    const last = parts[parts.length - 1];
-    if (
-      lower.includes(fullLower) ||
-      (last.length >= 4 && new RegExp(`\\b${escapeRegExp(last)}\\b`, 'i').test(message))
-    ) {
+    if (matchPlayerName(name, folded)) {
       if (pos) {
         pos
           .split(/[/,\s]+/)
@@ -524,24 +544,36 @@ export function buildGaffaBidValuationBlock(
 
   const floorRate = faBidFloorRate(bag);
   const dossierMap = buildDossierLookupMap(calibratedDossiers);
-  const lower = message.toLowerCase();
+  const folded = foldPlayerName(message);
 
-  const matchesMessage = (name?: string) => {
-    if (!name || name.trim().length < 3) return false;
-    const n = name.trim().toLowerCase();
-    const last = n.split(/\s+/).pop() || '';
-    return lower.includes(n) || (last.length >= 4 && lower.includes(last));
+  type Candidate<T> = { item: T; name: string; level: NameMatch };
+  const candidate = <T,>(item: T, name: string, ...aliases: Array<string | undefined>): Candidate<T> => {
+    const levels = [name, ...aliases].map((n) => matchPlayerName(n, folded));
+    const level = levels.includes('full') ? 'full' : levels.includes('surname') ? 'surname' : null;
+    return { item, name, level };
   };
+  const fa = (bag.free_agents ?? []).map((p) => candidate(p, p.name, p.display_name));
+  const auctions = (bag.open_auctions ?? []).map((a) => candidate(a, a.name));
+  const listings = (bag.open_listings ?? []).map((l) => candidate(l, l.name));
 
-  const matchedFa: GaffaFreeAgent[] = (bag.free_agents ?? []).filter(
-    (p) => matchesMessage(p.name) || matchesMessage(p.display_name),
+  // A full-name hit ("Reece James") outranks surname-only hits on other players ("Daniel James").
+  const fullSurnames = new Set(
+    [...fa, ...auctions, ...listings]
+      .filter((m) => m.level === 'full')
+      .map((m) => foldedSurname(m.name)),
   );
-  const matchedAuctions: GaffaOpenAuction[] = (bag.open_auctions ?? []).filter((a) =>
-    matchesMessage(a.name),
-  );
-  const matchedListings: GaffaOpenListing[] = (bag.open_listings ?? []).filter((l) =>
-    matchesMessage(l.name),
-  );
+  const keep = <T,>(matches: Candidate<T>[]): T[] =>
+    matches
+      .filter(
+        (m) =>
+          m.level === 'full' ||
+          (m.level === 'surname' && !fullSurnames.has(foldedSurname(m.name))),
+      )
+      .map((m) => m.item);
+
+  const matchedFa: GaffaFreeAgent[] = keep(fa);
+  const matchedAuctions: GaffaOpenAuction[] = keep(auctions);
+  const matchedListings: GaffaOpenListing[] = keep(listings);
 
   if (
     matchedFa.length === 0 &&
