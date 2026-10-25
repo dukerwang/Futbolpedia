@@ -4,7 +4,12 @@ import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
 import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { getCardKey, isPrimeCard, shareDossierCard } from '../services/geminiService';
+import {
+  getCardKey,
+  getDossierEvaluationDate,
+  isPrimeCard,
+  shareDossierCard,
+} from '../services/geminiService';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -599,7 +604,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                         <div className="flex items-center gap-1 text-[11px] font-mono font-semibold text-charcoal/60 dark:text-cream-400">
                             <span className="material-symbols-outlined text-[14px]">calendar_today</span>
                             <span>
-                                {profile.evaluationDate || (profile.createdAt ? new Date(profile.createdAt).toISOString().split('T')[0] : 'Undated')}
+                                {getDossierEvaluationDate(profile) ?? 'Undated'}
                             </span>
                         </div>
                     </div>

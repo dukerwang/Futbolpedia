@@ -4,6 +4,7 @@ import { AttributeTable } from './AttributeTable';
 import { getAttributeLabel, getTierForRating } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { getDossierEvaluationDate, isPrimeCard } from '../services/geminiService';
 
 interface PlayerProfileDisplayProps {
   profile: PlayerProfile;
@@ -47,9 +48,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
 
   const getRatingTier = (rating: number) => getTierForRating(rating);
 
-  const evalDate =
-    profile.evaluationDate ||
-    (profile.createdAt ? new Date(profile.createdAt).toISOString().split('T')[0] : null);
+  const evalDate = getDossierEvaluationDate(profile);
   const formattedDate = evalDate
     ? new Date(`${evalDate}T12:00:00Z`).toLocaleDateString('en-US', {
         month: 'short',
@@ -58,15 +57,14 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
       })
     : 'Undated Card';
 
-  const versionType =
-    profile.version?.type ||
-    (basicInfo.name.toLowerCase().includes('prime') ? 'prime' : 'current');
-  const isPrime = versionType === 'prime';
+  const isPrime = isPrimeCard(profile);
   const versionLabel =
     profile.version?.label ||
     (isPrime
       ? `Prime Zenith (${profile.version?.seasonOrEra || 'Apex'})`
-      : `Current Form (${evalDate || '2026'})`);
+      : evalDate
+        ? `Current Form (${evalDate})`
+        : 'Current Form');
 
   const confidence = profile.confidence;
   const scoutingDebate = profile.scoutingDebate;
