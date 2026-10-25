@@ -424,18 +424,15 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                     }}
                     className="group relative flex flex-col justify-between p-6 rounded-2xl bg-white dark:bg-charcoal-surface border border-cream-300/80 dark:border-charcoal-border hover:border-emerald-500/50 dark:hover:border-emerald-500/50 shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer overflow-hidden"
                   >
-                    {/* Top Stamp Bar */}
                     <div>
-                      <div className="flex items-center justify-between gap-2 mb-3">
-                        <span className={pillClass(isCurrentRating || isPrime ? edition.tone : 'neutral', 'sm')} title={edition.title}>
-                          <span className={PILL_ICON_CLASS}>{isCurrentRating || isPrime ? edition.icon : 'history'}</span>
-                          {isCurrentRating || isPrime ? edition.label : edition.label.replace('Current form', 'Earlier rating')}
-                        </span>
-                      </div>
-
-                      {/* Player Headline */}
-                      <div className="flex items-start justify-between gap-3 mb-2">
-                        <div>
+                      {/* Headline: edition pill, name and archetype on the left; the rating block
+                          starts level with the pill so the meta line sits right under the archetype. */}
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="min-w-0">
+                          <span className={`${pillClass(isCurrentRating || isPrime ? edition.tone : 'neutral', 'sm')} mb-3`} title={edition.title}>
+                            <span className={PILL_ICON_CLASS}>{isCurrentRating || isPrime ? edition.icon : 'history'}</span>
+                            {isCurrentRating || isPrime ? edition.label : edition.label.replace('Current form', 'Earlier rating')}
+                          </span>
                           <h3 className="text-xl font-serif font-bold text-charcoal dark:text-cream-50 leading-tight group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
                             {profile.basicInfo.name}
                           </h3>
@@ -445,7 +442,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                         </div>
 
                         {/* Rating Block */}
-                        <div className="flex flex-col items-end text-right shrink-0">
+                        <div className="flex flex-col items-end text-right shrink-0 pt-1">
                           <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5 whitespace-nowrap">
                             {tierLabel}
                           </span>
