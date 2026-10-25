@@ -28,6 +28,17 @@ export const isSupabaseReady = () => !!supabase;
 // so previously under-calibrated dossiers regenerate fresh when requested.
 export const CALIBRATION_EPOCH_MS = Date.parse('2026-10-20T21:15:00Z');
 
+/**
+ * Whether a card was rated on the current scale. Uses the card's own creation stamp, falling back
+ * to its row time, because re-sharing an old card gives its row a fresh timestamp. Cards rated
+ * before the recalibration must never feed trajectory memory, the Hub, or the shared store: their
+ * numbers would pull new ratings back toward the old scale.
+ */
+export const isRatedOnCurrentScale = (p: PlayerProfile, rowTimeMsFallback?: number): boolean => {
+  const ratedAtMs = p.createdAt || rowTimeMsFallback;
+  return !!ratedAtMs && ratedAtMs >= CALIBRATION_EPOCH_MS;
+};
+
 let supabaseCalibratedPool: PlayerProfile[] = [];
 let supabasePoolFetchedAt = 0;
 const SUPABASE_POOL_TTL_MS = 60 * 1000; // 60 seconds
@@ -147,6 +158,11 @@ export const upsertCachedDossier = async (
  */
 export const shareDossierCard = async (profile: PlayerProfile): Promise<string> => {
   if (!supabase) throw new Error('Database not available.');
+  if (!isRatedOnCurrentScale(profile)) {
+    throw new Error(
+      'This dossier was rated on Futbolpedia’s previous rating scale, so it can’t be shared. Re-rate the player to share a current card.',
+    );
+  }
   const dated = ensureDossierDated(profile, Date.now());
   const versioned = dated ? toVersionedSlug(dated) : null;
   // A revision gets its own slug so sharing it never overwrites the shared card's archive row.
@@ -223,6 +239,7 @@ export async function fetchPriorDossiersForPlayer(
     base === targetSlug || (targetSlug.length >= 4 && base.split('-').includes(targetSlug));
 
   const checkAndAdd = (p: PlayerProfile, fallbackMs?: number) => {
+    if (!isRatedOnCurrentScale(p, fallbackMs)) return;
     const dated = ensureDossierDated(p, fallbackMs);
     if (!dated || dated.revision) return;
     const base = toBasePlayerSlug(dated.basicInfo.name);
@@ -283,6 +300,7 @@ export async function fetchGlobalHubDossiers(
 
   const ingest = (raw: unknown, fallbackDateMs?: number) => {
     if (!raw || typeof raw !== 'object') return;
+    if (!isRatedOnCurrentScale(raw as PlayerProfile, fallbackDateMs)) return;
     const dated = ensureDossierDated(raw as PlayerProfile, fallbackDateMs);
     if (!dated || dated.revision || !dated.basicInfo?.name || (dated.ratings?.overall ?? 0) < 60) {
       return;

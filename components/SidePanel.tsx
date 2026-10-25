@@ -136,6 +136,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     } catch (err) {
         console.error(err);
         setShareStatus('idle');
+        if (err instanceof Error) window.alert(err.message);
     }
   };
 
@@ -245,6 +246,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
       setTimeout(() => setSharedKey(null), 2000);
     } catch (err) {
       console.error('Failed to share dossier:', err);
+      if (err instanceof Error) window.alert(err.message);
     } finally {
       setSharingKey(null);
     }
