@@ -360,18 +360,20 @@ export async function fetchPriorDossiersForPlayer(
   const targetSlug = toBasePlayerSlug(playerName);
   if (!targetSlug) return [];
 
-  const matched = new Map<string, PlayerProfile>();
+  // Cards per matching player, so a surname-only request ("Kimmich") can resolve to one player.
+  const matchedByPlayer = new Map<string, Map<string, PlayerProfile>>();
 
-  // Exact name match, or a whole-token match for surname-only requests ("Kimmich").
+  // Exact name match, or a whole-token match for surname-only requests.
   const isSamePlayer = (base: string): boolean =>
     base === targetSlug || (targetSlug.length >= 4 && base.split('-').includes(targetSlug));
 
   const checkAndAdd = (p: PlayerProfile, fallbackMs?: number) => {
     const dated = ensureDossierDated(p, fallbackMs);
     if (!dated) return;
-    if (isSamePlayer(toBasePlayerSlug(dated.basicInfo.name))) {
-      matched.set(getCardKey(dated), dated);
-    }
+    const base = toBasePlayerSlug(dated.basicInfo.name);
+    if (!isSamePlayer(base)) return;
+    if (!matchedByPlayer.has(base)) matchedByPlayer.set(base, new Map());
+    matchedByPlayer.get(base)!.set(getCardKey(dated), dated);
   };
 
   for (const p of extraPool) checkAndAdd(p);
@@ -396,6 +398,12 @@ export async function fetchPriorDossiersForPlayer(
     }
   }
 
+  // A surname shared by several rated players ("Silva") is ambiguous: their ratings aren't this
+  // player's history, so attach none rather than another player's cards.
+  const matched =
+    matchedByPlayer.get(targetSlug) ??
+    (matchedByPlayer.size === 1 ? [...matchedByPlayer.values()][0] : undefined);
+  if (!matched) return [];
   const list = [...matched.values()];
   list.sort((a, b) => (a.evaluationDate || '').localeCompare(b.evaluationDate || ''));
   return list;

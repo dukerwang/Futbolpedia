@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import type { PlayerProfile } from '../types';
 import {
   ensureDossierDated,
+  fetchPriorDossiersForPlayer,
   findReferencedDossiers,
   getCardKey,
   getDossierEvaluationDate,
@@ -227,6 +228,20 @@ async function main() {
     assert.deepEqual(conv.map((p) => p.ratings.overall), [89]);
     const saved = resolveSavedDossiersForRequest('pull up my saved dossier on Pedri', [older, newer], []);
     assert.deepEqual(saved.dossiers.map((p) => p.ratings.overall), [89]);
+  });
+
+  await test('prior-rating memory matches one player, never a namesake', async () => {
+    const bernardo = currentCard('Bernardo Silva', '2026-09-01');
+    const thiago = currentCard('Thiago Silva', '2026-09-02');
+    const xhakaOld = currentCard('Granit Xhaka', '2026-09-01');
+    const xhakaPrime = primeCard('Granit Xhaka', '2020-08-23');
+    const pool = [bernardo, thiago, xhakaOld, xhakaPrime];
+
+    const bySurname = await fetchPriorDossiersForPlayer('Xhaka', pool);
+    assert.deepEqual(bySurname.map(getCardKey), [getCardKey(xhakaPrime), getCardKey(xhakaOld)]);
+    assert.deepEqual(await fetchPriorDossiersForPlayer('Silva', pool), []);
+    const exact = await fetchPriorDossiersForPlayer('Bernardo Silva', pool);
+    assert.deepEqual(exact.map((p) => p.basicInfo.name), ['Bernardo Silva']);
   });
 
   // ── Sanitization ─────────────────────────────────────────────────────────
