@@ -1,4 +1,4 @@
-import type { GaffaContextBag, PlayerProfile } from '../types';
+import type { GaffaContextBag, GaffaFreeAgent, PlayerProfile } from '../types';
 import { SIMULATION_YEAR, SIMULATION_SEASON } from '../prompts/scoutCore';
 import { buildDossierLookupMap, lookupPlayerDossier } from '../services/gaffaLineupAudit';
 
@@ -203,25 +203,14 @@ function buildContextBagBlock(
     );
   }
 
-  lines.push(...formatLockedMarketLines(bag, calibratedDossiers));
+  lines.push(...formatLockedMarketLines(bag, dossierMap));
 
   return lines.join('\n');
 }
 
-function formatFaPlayerLine(
-  p: {
-    name: string;
-    display_name?: string;
-    position: string;
-    pl_team?: string | null;
-    market_value_eur_m?: number | null;
-    age?: number | null;
-    live_auction?: boolean;
-  },
-  dossierMap?: Map<string, PlayerProfile>,
-): string {
+function formatFaPlayerLine(p: GaffaFreeAgent, dossierMap: Map<string, PlayerProfile>): string {
   const alias = p.display_name && p.display_name !== p.name ? ` (aka ${p.display_name})` : '';
-  const dossier = dossierMap ? lookupPlayerDossier(p.name, p.display_name, dossierMap) : undefined;
+  const dossier = lookupPlayerDossier(p.name, p.display_name, dossierMap);
   const bits = [
     `${p.name}${alias} | ${p.position}`,
     p.pl_team || null,
@@ -233,17 +222,19 @@ function formatFaPlayerLine(
   return `  - ${bits.join(' · ')}`;
 }
 
+/** FA players listed inline; past this the model filters the rest with `grep_gaffa_market`. */
+const FA_INLINE_CAP = 60;
+
 /**
  * FA pool = unowned active PL players in THIS league (Gaffa free-agents board).
  * Live auctions are only the subset currently being bid on. Listings are owned.
  * Empty auctions/listings ≠ empty FA. Only an empty `free_agents` array is empty FA.
  * A missing `free_agents` field is a legacy bag — do not claim the pool is empty.
  */
-export function formatLockedMarketLines(
+function formatLockedMarketLines(
   bag: GaffaContextBag,
-  calibratedDossiers: PlayerProfile[] = [],
+  dossierMap: Map<string, PlayerProfile>,
 ): string[] {
-  const dossierMap = buildDossierLookupMap(calibratedDossiers);
   const listings = bag.open_listings ?? [];
   const auctions = bag.open_auctions ?? [];
   const fa = bag.free_agents;
@@ -266,21 +257,20 @@ export function formatLockedMarketLines(
       'You can nominate anyone below to open an FA auction (FA floor applies). LIVE AUCTION means a bid is already open.',
       `Rank "highest potential" only among THESE names. Use calibrated Scout OVR/POT where tagged below, and market value / age otherwise — do not invent overall or potential ratings for untagged players. ${liveCount} currently on a live auction.`,
     );
-    const inlineCap = 60;
     const sortedFa =
-      fa.length > inlineCap
+      fa.length > FA_INLINE_CAP
         ? [...fa].sort(
             (a, b) =>
               Number(Boolean(b.live_auction)) - Number(Boolean(a.live_auction)) ||
               (b.market_value_eur_m ?? 0) - (a.market_value_eur_m ?? 0),
           )
         : fa;
-    for (const p of sortedFa.slice(0, inlineCap)) {
+    for (const p of sortedFa.slice(0, FA_INLINE_CAP)) {
       lines.push(formatFaPlayerLine(p, dossierMap));
     }
-    if (fa.length > inlineCap) {
+    if (fa.length > FA_INLINE_CAP) {
       lines.push(
-        `  ... plus ${fa.length - inlineCap} more unowned FA players in this league. Use the \`grep_gaffa_market\` tool to filter all ${fa.length} unowned players by position, age (e.g. U21), Scout OVR/POT, club, or keyword in <1ms.`,
+        `  ... plus ${fa.length - FA_INLINE_CAP} more unowned FA players in this league. Use the \`grep_gaffa_market\` tool to filter all ${fa.length} unowned players by position, age (e.g. U21), Scout OVR/POT, club, or keyword in <1ms.`,
       );
     }
   }
@@ -358,7 +348,7 @@ This turn is already inside Gaffa (${bag.league_name ?? 'league'} / ${bag.club_n
 Answer market / FA / unowned / "can I buy X from FA" / "highest potential" availability ONLY from names below. Closed set = roster + listings + live auctions + FA pool. If the FA pool list is present and empty, say so — do not invent a market. If the FA pool list is missing, do not treat empty auctions as empty FA.
 Empty live auctions / listings does not mean free agency is empty.
 
-${formatLockedMarketLines(bag, calibratedDossiers).join('\n')}
+${formatLockedMarketLines(bag, buildDossierLookupMap(calibratedDossiers)).join('\n')}
 ${settings}
 Roster names (not FA): ${rosterNames.join(', ') || 'none listed'}.
 </locked_market>`;
@@ -446,6 +436,22 @@ ${buildContextBagBlock(bag, calibratedDossiers)}
 `;
 }
 
+interface GaffaGrepItem {
+  pool: string;
+  name: string;
+  display_name?: string;
+  position: string;
+  pl_team?: string | null;
+  age?: number | null;
+  market_value_eur_m?: number | null;
+  status?: string;
+  detail?: string;
+  scout_ovr?: number;
+  scout_pot?: number;
+  scout_archetype?: string;
+  scout_top_attributes?: Record<string, number>;
+}
+
 export interface GaffaMarketGrepParams {
   pool?: 'free_agents' | 'roster' | 'listings' | 'auctions' | 'all';
   position?: string;
@@ -460,6 +466,36 @@ export interface GaffaMarketGrepParams {
   sortBy?: 'market_value' | 'age' | 'overall' | 'potential';
   limit?: number;
 }
+
+/** Numeric grep bounds: [param, item field, bound]. Items missing the field never match a bound. */
+const GREP_RANGE_FILTERS: ReadonlyArray<
+  readonly [
+    'maxAge' | 'minAge' | 'minMarketValue' | 'maxMarketValue' | 'minOverall' | 'minPotential',
+    'age' | 'market_value_eur_m' | 'scout_ovr' | 'scout_pot',
+    'min' | 'max',
+  ]
+> = [
+  ['maxAge', 'age', 'max'],
+  ['minAge', 'age', 'min'],
+  ['minMarketValue', 'market_value_eur_m', 'min'],
+  ['maxMarketValue', 'market_value_eur_m', 'max'],
+  ['minOverall', 'scout_ovr', 'min'],
+  ['minPotential', 'scout_pot', 'min'],
+];
+
+const byMarketValueDesc = (a: GaffaGrepItem, b: GaffaGrepItem) =>
+  (b.market_value_eur_m ?? -1) - (a.market_value_eur_m ?? -1);
+
+/** Youngest first for age; highest first otherwise, with scout sorts tie-broken by market value. */
+const GREP_SORTS: Record<
+  NonNullable<GaffaMarketGrepParams['sortBy']>,
+  (a: GaffaGrepItem, b: GaffaGrepItem) => number
+> = {
+  market_value: byMarketValueDesc,
+  age: (a, b) => (a.age ?? 99) - (b.age ?? 99),
+  overall: (a, b) => (b.scout_ovr ?? -1) - (a.scout_ovr ?? -1) || byMarketValueDesc(a, b),
+  potential: (a, b) => (b.scout_pot ?? -1) - (a.scout_pot ?? -1) || byMarketValueDesc(a, b),
+};
 
 /**
  * Instant (<1ms) structured grep over the connected Gaffa club bag
@@ -508,23 +544,11 @@ export function grepGaffaBag(
     };
   };
 
-  const items: Array<{
-    pool: string;
-    name: string;
-    display_name?: string;
-    position: string;
-    pl_team?: string | null;
-    age?: number | null;
-    market_value_eur_m?: number | null;
-    status?: string;
-    detail?: string;
-    scout_ovr?: number;
-    scout_pot?: number;
-    scout_archetype?: string;
-    scout_top_attributes?: Record<string, number>;
-  }> = [];
+  const items: GaffaGrepItem[] = [];
+  const wants = (pool: NonNullable<GaffaMarketGrepParams['pool']>) =>
+    poolType === 'all' || poolType === pool;
 
-  if (poolType === 'all' || poolType === 'free_agents') {
+  if (wants('free_agents')) {
     for (const p of bag.free_agents ?? []) {
       items.push({
         pool: 'free_agent',
@@ -540,7 +564,7 @@ export function grepGaffaBag(
     }
   }
 
-  if (poolType === 'all' || poolType === 'roster') {
+  if (wants('roster')) {
     for (const p of bag.roster ?? []) {
       const pos = [p.primary_position, ...(p.secondary_positions ?? [])].join('/');
       items.push({
@@ -555,7 +579,7 @@ export function grepGaffaBag(
     }
   }
 
-  if (poolType === 'all' || poolType === 'listings') {
+  if (wants('listings')) {
     for (const l of bag.open_listings ?? []) {
       const price = l.min_bid_eur_m ?? l.ask_eur_m ?? l.release_clause_eur_m ?? null;
       items.push({
@@ -569,7 +593,7 @@ export function grepGaffaBag(
     }
   }
 
-  if (poolType === 'all' || poolType === 'auctions') {
+  if (wants('auctions')) {
     for (const a of bag.open_auctions ?? []) {
       items.push({
         pool: 'auction',
@@ -583,47 +607,18 @@ export function grepGaffaBag(
   }
 
   const filtered = items.filter((item) => {
-    if (posFilter) {
-      const itemPosParts = item.position
-        .toUpperCase()
-        .split(/[/,\s]+/)
-        .filter(Boolean);
-      if (!itemPosParts.includes(posFilter) && !item.position.toUpperCase().includes(posFilter)) {
-        return false;
-      }
+    // A substring match also covers a whole token of a multi-position string like "CM/DM".
+    if (posFilter && !item.position.toUpperCase().includes(posFilter)) {
+      return false;
     }
     if (teamFilter && !(item.pl_team || '').toLowerCase().includes(teamFilter)) {
       return false;
     }
-    if (typeof params.maxAge === 'number' && (item.age == null || item.age > params.maxAge)) {
-      return false;
-    }
-    if (typeof params.minAge === 'number' && (item.age == null || item.age < params.minAge)) {
-      return false;
-    }
-    if (
-      typeof params.minMarketValue === 'number' &&
-      (item.market_value_eur_m == null || item.market_value_eur_m < params.minMarketValue)
-    ) {
-      return false;
-    }
-    if (
-      typeof params.maxMarketValue === 'number' &&
-      (item.market_value_eur_m == null || item.market_value_eur_m > params.maxMarketValue)
-    ) {
-      return false;
-    }
-    if (
-      typeof params.minOverall === 'number' &&
-      (item.scout_ovr == null || item.scout_ovr < params.minOverall)
-    ) {
-      return false;
-    }
-    if (
-      typeof params.minPotential === 'number' &&
-      (item.scout_pot == null || item.scout_pot < params.minPotential)
-    ) {
-      return false;
+    for (const [paramKey, itemKey, bound] of GREP_RANGE_FILTERS) {
+      const limit = params[paramKey];
+      if (typeof limit !== 'number') continue;
+      const value = item[itemKey];
+      if (value == null || (bound === 'min' ? value < limit : value > limit)) return false;
     }
     if (queryTokens.length > 0) {
       const hay = [
@@ -643,23 +638,9 @@ export function grepGaffaBag(
     return true;
   });
 
-  if (params.sortBy === 'age') {
-    filtered.sort((a, b) => (a.age ?? 99) - (b.age ?? 99));
-  } else if (params.sortBy === 'overall') {
-    filtered.sort(
-      (a, b) =>
-        (b.scout_ovr ?? -1) - (a.scout_ovr ?? -1) ||
-        (b.market_value_eur_m ?? -1) - (a.market_value_eur_m ?? -1),
-    );
-  } else if (params.sortBy === 'potential') {
-    filtered.sort(
-      (a, b) =>
-        (b.scout_pot ?? -1) - (a.scout_pot ?? -1) ||
-        (b.market_value_eur_m ?? -1) - (a.market_value_eur_m ?? -1),
-    );
-  } else {
-    filtered.sort((a, b) => (b.market_value_eur_m ?? -1) - (a.market_value_eur_m ?? -1));
-  }
+  // sortBy arrives from a model tool call, so anything unrecognised falls back to market value.
+  const sortBy = params.sortBy && Object.hasOwn(GREP_SORTS, params.sortBy) ? params.sortBy : 'market_value';
+  filtered.sort(GREP_SORTS[sortBy]);
 
   const limit = Math.max(1, Math.min(50, params.limit ?? 25));
   return {
