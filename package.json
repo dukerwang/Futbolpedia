@@ -7,7 +7,9 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "tsx server.ts"
+    "start": "tsx server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx scripts/test-dossier-cards.ts && tsx scripts/test-gaffa-name-matching.ts"
   },
   "dependencies": {
     "@google/genai": "^1.28.0",

@@ -10,7 +10,13 @@ npm run build    # Vite production build to /dist
 npm start        # Run production server (serves /dist statically)
 ```
 
-TypeScript type-check: `npx tsc --noEmit` (the only errors on a fresh clone are missing `vitest` types under `packages/engine` until you install that package). The app has no test runner; the outlook engine does: `cd packages/engine && npm ci && npx vitest run`.
+```bash
+npm run typecheck   # tsc --noEmit (run `npm ci` in packages/engine first for its vitest types)
+npm test            # offline app checks: scripts/test-dossier-cards.ts, scripts/test-gaffa-name-matching.ts
+cd packages/engine && npm ci && npm test   # outlook engine + manager-fidelity vitest suite
+```
+
+CI (`.github/workflows/ci.yml`) runs all of the above plus `npm run build` on every PR and push to `main`. The tests need no network or API keys; add new offline checks to `npm test`.
 
 ## Environment Variables
 
