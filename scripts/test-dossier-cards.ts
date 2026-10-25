@@ -442,6 +442,22 @@ async function main() {
     assert.equal(ensureDossierDated(p, Date.now()), null);
   });
 
+  await test('accented and unaccented names resolve to the same shared card slug', () => {
+    assert.equal(toDossierCardSlug('João Pedro'), 'joao-pedro');
+    assert.equal(toDossierCardSlug('joao pedro'), 'joao-pedro');
+    assert.equal(toDossierCardSlug('Kylian Mbappé'), toDossierCardSlug('kylian mbappe'));
+    assert.equal(toDossierCardSlug('Martin Ødegaard'), 'martin-odegaard');
+    assert.equal(toDossierCardSlug('Pelé', true), 'prime-pele');
+  });
+
+  await test('name references match across accents', () => {
+    const joao = card('João Pedro');
+    const neto = card('Pedro Neto');
+    assert.deepEqual(findReferencedDossiers('rate joao pedro', [joao]).map((p) => p.basicInfo.name), ['João Pedro']);
+    assert.deepEqual(findReferencedDossiers('how good is Joao?', [joao, neto]).map((p) => p.basicInfo.name), ['João Pedro']);
+    assert.deepEqual(findReferencedDossiers('rate odegaard', [card('Martin Ødegaard')]).length, 1);
+  });
+
   console.log(`${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }

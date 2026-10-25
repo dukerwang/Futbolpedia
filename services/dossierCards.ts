@@ -5,9 +5,32 @@ import type { PlayerProfile } from '../types';
  * one player on one evaluation date.
  */
 
-export const toPlayerSlug = (name: string): string =>
+/** Letters NFD doesn't decompose into a base letter plus accent. */
+const UNDECOMPOSABLE_LETTERS: Record<string, string> = {
+  ø: 'o',
+  æ: 'ae',
+  œ: 'oe',
+  ß: 'ss',
+  ł: 'l',
+  đ: 'd',
+  ð: 'd',
+  þ: 'th',
+  ı: 'i',
+};
+
+/**
+ * Lowercases and strips accents ("João" -> "joao", "Ødegaard" -> "odegaard"), so names typed
+ * with or without accents resolve to the same shared card.
+ */
+export const foldPlayerName = (name: string): string =>
   name
     .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[øæœßłđðþı]/g, (ch) => UNDECOMPOSABLE_LETTERS[ch]);
+
+export const toPlayerSlug = (name: string): string =>
+  foldPlayerName(name)
     .trim()
     .replace(/\s+/g, '-')
     .replace(/[^a-z0-9-]/g, '');

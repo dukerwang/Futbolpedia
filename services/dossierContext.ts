@@ -4,6 +4,7 @@ import { ATTRIBUTE_LABELS, GK_ATTRIBUTE_LABELS } from '../constants/ratingTiers'
 import { dataUrlToInlinePart } from './aiClient';
 import {
   formatIsoDate,
+  foldPlayerName,
   getCardKey,
   getDossierEvaluationDate,
   isConfidentDossier,
@@ -129,13 +130,14 @@ export const findReferencedDossiers = (
   explicitNames: string[] = [],
 ): PlayerProfile[] => {
   if (dossiers.length === 0) return [];
-  const lower = message.toLowerCase();
   const matched = new Map<string, PlayerProfile>();
 
-  const checkText = [lower, ...explicitNames.map((n) => n.toLowerCase())].join(' ');
+  // Accent-folded on both sides: "joao pedro" must find "João Pedro", and \b never matches
+  // next to an accented letter.
+  const checkText = [message, ...explicitNames].map(foldPlayerName).join(' ');
 
   for (const d of dossiers) {
-    const name = d.basicInfo.name.toLowerCase();
+    const name = foldPlayerName(d.basicInfo.name);
     const tokens = name.split(/\s+/).filter((t) => t.length >= 4);
     const hit =
       checkText.includes(name) ||

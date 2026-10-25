@@ -25,13 +25,14 @@ import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
 import {
   buildGaffaBidValuationBlock,
   buildRosterCapacityNote,
+  escapeRegExp,
   formatLineupAuditPromptBlock,
   inferInvolvedGaffaSlots,
 } from './gaffaLineupAudit';
 
-export type GaffaTurnKind = 'rules' | 'strategy' | 'player_trade' | 'lineup_audit';
+type GaffaTurnKind = 'rules' | 'strategy' | 'player_trade' | 'lineup_audit';
 
-export interface GaffaMessageResult {
+interface GaffaMessageResult {
   prose: string;
   scorecard: GaffaTradeScorecard | null;
 }
@@ -43,8 +44,16 @@ function clampScore(n: number): number {
   return Math.max(1, Math.min(5, Math.round(n)));
 }
 
+/** Highest net (inclusive) for each verdict; anything above the last band is a take. */
+const VERDICT_BANDS: ReadonlyArray<readonly [number, GaffaTradeVerdict]> = [
+  [5, 'hold'],
+  [7, 'lean_hold'],
+  [9, 'toss_up'],
+  [11, 'lean_take'],
+];
+
 /** 5 = favors taking the incoming package; starter_leverage 5 = favors keeping the outgoing. */
-export function deriveTradeVerdict(card: Pick<GaffaTradeScorecardRaw, 'replacement' | 'coverage' | 'cash_deployable' | 'starter_leverage'>): {
+function deriveTradeVerdict(card: Pick<GaffaTradeScorecardRaw, 'replacement' | 'coverage' | 'cash_deployable' | 'starter_leverage'>): {
   verdict: GaffaTradeVerdict;
   confidence: 'low' | 'medium';
   net: number;
@@ -53,14 +62,9 @@ export function deriveTradeVerdict(card: Pick<GaffaTradeScorecardRaw, 'replaceme
   const coverage = clampScore(card.coverage);
   const cash = clampScore(card.cash_deployable);
   const leverage = clampScore(card.starter_leverage);
+  // Clamped scores are integers, so net always lands on a band edge or between two.
   const net = replacement + coverage + cash - leverage;
-
-  let verdict: GaffaTradeVerdict;
-  if (net <= 5) verdict = 'hold';
-  else if (net === 6 || net === 7) verdict = 'lean_hold';
-  else if (net === 8 || net === 9) verdict = 'toss_up';
-  else if (net === 10 || net === 11) verdict = 'lean_take';
-  else verdict = 'take';
+  const verdict = VERDICT_BANDS.find(([maxNet]) => net <= maxNet)?.[1] ?? 'take';
 
   // Mixed factors (quality drop vs unused cash vs starter leverage) stay uncertain.
   const spread =
@@ -134,15 +138,11 @@ function slotCoverSummary(bag: GaffaContextBag, slot: string): string {
   return `XI ${slot}: ${xi.join(', ') || 'none'}. Roster ${slot}: ${named.join(', ') || 'none listed'}. Bench: ${bench.join(', ') || 'none'}.`;
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /**
  * Stop the model swapping in lookalike names or PL teammates
  * (Mahamadou Sangaré, Bergvall/Fernandes).
  */
-export function lockGaffaRosterNames(prose: string, bag: GaffaContextBag): string {
+function lockGaffaRosterNames(prose: string, bag: GaffaContextBag): string {
   if (!bag.connected) return prose;
 
   const lastNames = new Set<string>();
@@ -224,6 +224,9 @@ function marketSpendSummary(bag: GaffaContextBag): string {
   return `Bid-able listings: ${listingBits.join('; ') || 'none'}. Live auctions: ${auctionBits.join('; ') || 'none'}. ${faBit}.`;
 }
 
+const NOTE_MAX_WORDS = 22;
+const FLIP_MAX_WORDS = 36;
+
 async function buildTradeScorecard(params: {
   message: string;
   factualFoundation: string;
@@ -275,22 +278,22 @@ Score the four factors.`,
     ...raw,
     involved_slots: involvedSlots,
     roster_capacity_note: rosterCapacityNote || undefined,
-    replacement_note: clipClause(raw.replacement_note, 22),
-    coverage_note: clipClause(raw.coverage_note, 22),
-    cash_note: clipClause(raw.cash_note, 22),
-    leverage_note: clipClause(raw.leverage_note, 22),
-    what_would_flip: clipClause(raw.what_would_flip, 36),
+    replacement_note: clipClause(raw.replacement_note, NOTE_MAX_WORDS),
+    coverage_note: clipClause(raw.coverage_note, NOTE_MAX_WORDS),
+    cash_note: clipClause(raw.cash_note, NOTE_MAX_WORDS),
+    leverage_note: clipClause(raw.leverage_note, NOTE_MAX_WORDS),
+    what_would_flip: clipClause(raw.what_would_flip, FLIP_MAX_WORDS),
     ...derived,
   };
 }
 
+function cashSuffix(eurM: number | undefined): string {
+  return eurM && eurM > 0 ? ` + €${eurM}m` : '';
+}
+
 function formatScorecardBlock(card: GaffaTradeScorecard): string {
-  const outCash =
-    card.outgoing_cash_eur_m && card.outgoing_cash_eur_m > 0
-      ? ` + €${card.outgoing_cash_eur_m}m`
-      : '';
-  const inCash =
-    card.incoming_cash_eur_m > 0 ? ` + €${card.incoming_cash_eur_m}m` : '';
+  const outCash = cashSuffix(card.outgoing_cash_eur_m);
+  const inCash = cashSuffix(card.incoming_cash_eur_m);
   return `<locked_scorecard>
 Verdict (computed in code, not by you): ${card.verdict}
 Confidence (max allowed): ${card.confidence}
@@ -310,11 +313,15 @@ Banned: outstanding, do not pull the trigger, obliterates, without hesitation, t
 </locked_scorecard>`;
 }
 
+const SCORECARD_FAILED_BLOCK = `<locked_scorecard>
+Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure either way. Give both sides and what you would need to lock a call. Max 120 words.
+</locked_scorecard>`;
+
 const TRADE_PROSE_MAX_WORDS = 120;
 const TRADE_PROSE_MAX_PARAS = 2;
 
 /** Keep scorecard replies short so prose cannot out-talk the lock. */
-export function capGaffaTradeProse(text: string): string {
+function capGaffaTradeProse(text: string): string {
   const paras = text
     .trim()
     .split(/\n{2,}/)
@@ -340,7 +347,7 @@ export function capGaffaTradeProse(text: string): string {
 }
 
 /** FA / unowned / auction-board questions — Gaffa pool, never real-world free agency. */
-export function looksLikeGaffaMarketQuery(message: string): boolean {
+function looksLikeGaffaMarketQuery(message: string): boolean {
   // "FA floor" is a league setting, not the auction board.
   if (/\bfa\s+floor\b/i.test(message) && !/\b(unowned|waiver|auction|listings?)\b/i.test(message)) {
     return false;
@@ -356,14 +363,11 @@ export function looksLikeGaffaMarketQuery(message: string): boolean {
   if (/\b(auction board|live auctions?|on auction|open listings?)\b/i.test(message)) {
     return true;
   }
-  if (
+  return (
     /\b(highest|best|top)\b/i.test(message) &&
     /\b(potential|upside|prospects?)\b/i.test(message) &&
     /\b(available|unowned|market|sign|bid|buy|claim)\b/i.test(message)
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 function bagMarketNames(bag: GaffaContextBag): string[] {
@@ -392,7 +396,7 @@ function messageMentionsBagName(message: string, names: string[]): boolean {
 }
 
 /** Availability / buy-from-FA questions, including named unowned players. */
-export function looksLikeGaffaAvailabilityQuery(message: string, bag: GaffaContextBag): boolean {
+function looksLikeGaffaAvailabilityQuery(message: string, bag: GaffaContextBag): boolean {
   if (looksLikeGaffaMarketQuery(message)) return true;
   if (!bag.connected) return false;
   if (
@@ -405,7 +409,8 @@ export function looksLikeGaffaAvailabilityQuery(message: string, bag: GaffaConte
   return messageMentionsBagName(message, bagMarketNames(bag));
 }
 
-export function shouldSkipGaffaWebResearch(
+/** Connected questions about the user's own squad or the live market are answered from the bag. */
+function shouldSkipGaffaWebResearch(
   message: string,
   bag: GaffaContextBag,
   kind: GaffaTurnKind,
@@ -414,21 +419,14 @@ export function shouldSkipGaffaWebResearch(
   if (looksLikeAssetTrade(message)) return false;
   if (looksLikeGaffaAvailabilityQuery(message, bag)) return true;
   if (kind === 'player_trade' || kind === 'lineup_audit') return false;
-  if (
-    /\b(i|i'm|im|we|our|my|this club|squad|roster|depth|strongest|weakest|position group)\b/i.test(
-      message,
-    )
-  ) {
-    return true;
-  }
-  return false;
+  return /\b(i|i'm|im|we|our|my|this club|squad|roster|depth|strongest|weakest|position group)\b/i.test(
+    message,
+  );
 }
 
-export function classifyGaffaTurn(message: string): GaffaTurnKind {
+function classifyGaffaTurn(message: string): GaffaTurnKind {
   const hasNamedPlayerish = /\b[A-Z][a-zà-öø-ÿ]+(?:\s+[A-Z][a-zà-öø-ÿ]+)+\b/.test(message);
-  const hasTradeMoney =
-    /\b(trade|swap|package)\b/i.test(message) ||
-    (/€|\b\d+(\.\d+)?\s*m\b/i.test(message) && /\b(for|and|vs|versus)\b/i.test(message));
+  const hasTradeMoney = looksLikeAssetTrade(message);
   const hasPlayerEval =
     /\b(rate|rating|scout|profile|evaluate|how good|nailed|minutes|role|compare|versus|\bvs\.?\b)\b/i.test(
       message,
@@ -467,31 +465,35 @@ export function classifyGaffaTurn(message: string): GaffaTurnKind {
   if (hasTradeMoney || ((hasNamedPlayerish || hasPlayerEval) && !hasRulesCue)) {
     return 'player_trade';
   }
-  if (hasRulesCue && !hasNamedPlayerish) return 'rules';
   if (hasRulesCue) return 'rules';
   return 'strategy';
 }
 
-/** If the open thread was a trade/player eval, keep researching those assets on context follow-ups. */
-function threadNeedsPlayerResearch(history: ChatMessage[]): boolean {
-  const recentUser = [...history]
-    .reverse()
-    .find((m) => m.sender === 'user' && typeof m.content === 'string');
-  if (!recentUser || typeof recentUser.content !== 'string') return false;
-  return classifyGaffaTurn(recentUser.content) === 'player_trade';
+function latestUserText(history: ChatMessage[]): string | undefined {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.sender === 'user' && typeof m.content === 'string') return m.content;
+  }
+  return undefined;
 }
 
-function buildResearchQueries(message: string, threadHint?: string): string[] {
-  const datePrefix = `[Date context: ${SIMULATION_SEASON} / ${SIMULATION_YEAR}]`;
+/** If the open thread was a trade/player eval, keep researching those assets on context follow-ups. */
+function threadNeedsPlayerResearch(history: ChatMessage[]): boolean {
+  const recentUser = latestUserText(history);
+  return recentUser != null && classifyGaffaTurn(recentUser) === 'player_trade';
+}
+
+const DATE_CONTEXT = `[Date context: ${SIMULATION_SEASON} / ${SIMULATION_YEAR}]`;
+
+function buildPlayerResearchQuery(message: string, threadHint?: string): string {
   const focus = threadHint
     ? `${message}\n(Open thread context: ${threadHint.slice(0, 280)})`
     : message;
-  const combinedQuery = `${datePrefix} CURRENT CLUB, ROLE & PL MOBILITY CHECK for every player named in: ${focus}. State their current club (${SIMULATION_YEAR} / ${SIMULATION_SEASON}), age, position, injury/availability, recent minutes/form, tactical usage, and any Premier League transfer links or exit/arrival risk -site:futbin.com -site:sofifa.com -site:fifaindex.com`;
-  return [combinedQuery];
+  return `${DATE_CONTEXT} CURRENT CLUB, ROLE & PL MOBILITY CHECK for every player named in: ${focus}. State their current club (${SIMULATION_YEAR} / ${SIMULATION_SEASON}), age, position, injury/availability, recent minutes/form, tactical usage, and any Premier League transfer links or exit/arrival risk -site:futbin.com -site:sofifa.com -site:fifaindex.com`;
 }
 
 /** Strip leaked grounding citations from user-facing Gaffa prose. */
-export function sanitizeGaffaProse(text: string): string {
+function sanitizeGaffaProse(text: string): string {
   return text
     .replace(/\s*\[(?:Search|Source|Grounding)\s*\d+(?:\s*[,&]\s*(?:Search|Source|Grounding)\s*\d+)*\]/gi, '')
     .replace(/\s*\((?:Search|Source)\s*\d+(?:\s*[,&]\s*(?:Search|Source)\s*\d+)*\)/gi, '')
@@ -500,7 +502,27 @@ export function sanitizeGaffaProse(text: string): string {
     .trim();
 }
 
-export function assembleGaffaTurnPrompt(params: {
+const GAFFA_TURN_REMINDERS = `- Prose Markdown: **bold** and paragraphs. No # headings. Never print the scorecard XML, locked_market XML, locked_lineup_audit XML, or locked_bid_calculator XML.
+- This chat is already Gaffa. Do not wait for the user to say "in the Gaffa league". First turn must use the live bag immediately.
+- Free agency / FA / unowned / highest potential unowned = the unowned FA pool in locked_market, never real-world unattached, EAFC regen lore, Liga MX licensing, NBA, or other sports. Live auctions are only the subset currently being bid on.
+- When the bag is connected: name only players in roster, open listings, live auctions, and the FA pool. If free_agents is present and empty, say FA is empty — do not invent a market. If free_agents is missing, do not treat empty auctions as empty FA. A player in the FA pool with no live auction can still be bought by nominating an FA auction.
+- If a locked_lineup_audit or locked_bid_calculator is present: use its exact OOP flags, auto-sub chains (DEF → MID → ATT → FLEX), uncovered slots, FA floor €m, 10% Scout's Fee rebate, and 20% MV drop severance numbers.
+- Prefer the rules snapshot for mechanics questions.
+- If not connected to a club, do not invent roster/standings/prices; caveat unknown club context on trade takes.
+- Never use fantasy points as proof of football quality.
+- If a locked_scorecard is present: match its verdict and confidence. Do not out-confident it. Close calls stay close.
+- Surplus cash without a named near-term spend is not a reason to sell a locked starter.
+- Confirm each named player's CURRENT club from the foundation or locked roster before describing their role. Do not default to last season's club.
+- When connected: exact Full name spelling. No slash-compounds with players who are not on the list. PL club tags are not a license to name real-life teammates.
+- Never write [Search 1], [Search 2], or similar citations.
+- Once you have a verdict in this thread, do not reverse it without naming a new material fact.
+- A user fact-correction updates the fact; it does not automatically strengthen your prior take.
+- ${CONTINUITY_REMINDER}
+- Prefer a flowing scout take over checklist labels like "DO IT IF" / "HOLD IF" unless the user asks for a decision framework.
+- Do not lecture on scoring-curve math unless asked how points work.
+- If a locked_scorecard is present: max 110 words, two short paragraphs. Do not repeat Would flip — the card has it.`;
+
+function assembleGaffaTurnPrompt(params: {
   message: string;
   kind: GaffaTurnKind;
   speed: 'default' | 'fast';
@@ -532,27 +554,75 @@ ${params.scorecardBlock ? `${params.scorecardBlock}\n` : ''}
 ${params.message}
 </task>
 <reminders>
-- Prose Markdown: **bold** and paragraphs. No # headings. Never print the scorecard XML, locked_market XML, locked_lineup_audit XML, or locked_bid_calculator XML.
-- This chat is already Gaffa. Do not wait for the user to say "in the Gaffa league". First turn must use the live bag immediately.
-- Free agency / FA / unowned / highest potential unowned = the unowned FA pool in locked_market, never real-world unattached, EAFC regen lore, Liga MX licensing, NBA, or other sports. Live auctions are only the subset currently being bid on.
-- When the bag is connected: name only players in roster, open listings, live auctions, and the FA pool. If free_agents is present and empty, say FA is empty — do not invent a market. If free_agents is missing, do not treat empty auctions as empty FA. A player in the FA pool with no live auction can still be bought by nominating an FA auction.
-- If a locked_lineup_audit or locked_bid_calculator is present: use its exact OOP flags, auto-sub chains (DEF → MID → ATT → FLEX), uncovered slots, FA floor €m, 10% Scout's Fee rebate, and 20% MV drop severance numbers.
-- Prefer the rules snapshot for mechanics questions.
-- If not connected to a club, do not invent roster/standings/prices; caveat unknown club context on trade takes.
-- Never use fantasy points as proof of football quality.
-- If a locked_scorecard is present: match its verdict and confidence. Do not out-confident it. Close calls stay close.
-- Surplus cash without a named near-term spend is not a reason to sell a locked starter.
-- Confirm each named player's CURRENT club from the foundation or locked roster before describing their role. Do not default to last season's club.
-- When connected: exact Full name spelling. No slash-compounds with players who are not on the list. PL club tags are not a license to name real-life teammates.
-- Never write [Search 1], [Search 2], or similar citations.
-- Once you have a verdict in this thread, do not reverse it without naming a new material fact.
-- A user fact-correction updates the fact; it does not automatically strengthen your prior take.
-- ${CONTINUITY_REMINDER}
-- Prefer a flowing scout take over checklist labels like "DO IT IF" / "HOLD IF" unless the user asks for a decision framework.
-- Do not lecture on scoring-curve math unless asked how points work.
-- If a locked_scorecard is present: max 110 words, two short paragraphs. Do not repeat Would flip — the card has it.${connectMiss}
+${GAFFA_TURN_REMINDERS}${connectMiss}
 </reminders>
 </gaffa_turn>`;
+}
+
+const LINEUP_AUDIT_CUE = /\b(lineup|xi|bench|auto-?sub|oop|formation|uncovered|cover|held)\b/i;
+const STRATEGY_RESEARCH_CUE = /\b(player|squad|minutes|form|injury|transfer|striker|backup)\b/i;
+const PLAYER_NAME_CANDIDATE = /\b([A-Z][a-zà-öø-ÿ]+(?:\s+[A-Z][a-zà-ÿ'-]+)+)\b/g;
+const RESEARCH_UNAVAILABLE =
+  'Research unavailable this turn — answer carefully and hedge where evidence is thin.';
+
+/** Sampling temperature by turn kind; a locked scorecard overrides it. Unlisted kinds use the profile default. */
+const TURN_TEMPERATURE: Partial<Record<GaffaTurnKind, number>> = {
+  player_trade: 0.35,
+  strategy: 0.5,
+};
+const SCORECARD_TEMPERATURE = 0.25;
+
+/** Starters' PL clubs, so the lineup-audit search also pulls their fixture context. */
+function starterClubNames(bag: GaffaContextBag): string[] {
+  const starters = bag.lineup?.starters ?? [];
+  const clubs = (bag.roster ?? [])
+    .filter((p) => starters.some((s) => s.player_id === p.player_id || s.name === p.name))
+    .map((p) => p.pl_team)
+    .filter((t): t is string => Boolean(t));
+  return [...new Set(clubs)].slice(0, 2);
+}
+
+/**
+ * Calibrated dossiers for named players first, then web grounding: starter availability for
+ * lineup audits, or current-club checks for any named player without a dossier.
+ */
+async function gatherGaffaFoundation(params: {
+  message: string;
+  kind: GaffaTurnKind;
+  bag: GaffaContextBag;
+  threadHint?: string;
+  allCalibrated: PlayerProfile[];
+  peerLedgerBlock: string;
+}): Promise<string> {
+  const { message, kind, bag, threadHint, allCalibrated } = params;
+  const combinedText = [message, threadHint].filter(Boolean).join(' ');
+  const playerCandidates = Array.from(combinedText.matchAll(PLAYER_NAME_CANDIDATE), (m) => m[1]).slice(
+    0,
+    3,
+  );
+
+  const matchedDossiers = findReferencedDossiers(combinedText, allCalibrated, playerCandidates);
+  const matchedDossierNotes =
+    matchedDossiers.length > 0
+      ? `[FUTBOLPEDIA CALIBRATED DOSSIERS]\n${matchedDossiers.map(serializeProfileForHistory).join('\n\n')}`
+      : '';
+  const unratedCandidates = playerCandidates.filter(
+    (name) => !findReferencedDossiers(name, matchedDossiers, [name]).length,
+  );
+
+  let webNotes = '';
+  if (kind === 'lineup_audit' && bag.connected) {
+    const starterNames = (bag.lineup?.starters ?? []).map((s) => s.name).slice(0, 6);
+    const auditQuery = `${DATE_CONTEXT} Premier League injury, suspension, and starting XI rotation status this week for: ${starterNames.join(', ')}`;
+    webNotes = await gatherSearchFoundation([auditQuery], starterNames.slice(0, 2), starterClubNames(bag));
+  } else if (unratedCandidates.length > 0 || matchedDossiers.length === 0) {
+    webNotes = await gatherSearchFoundation(
+      [buildPlayerResearchQuery(message, threadHint)],
+      (unratedCandidates.length > 0 ? unratedCandidates : playerCandidates).slice(0, 2),
+    );
+  }
+
+  return [matchedDossierNotes, params.peerLedgerBlock, webNotes].filter(Boolean).join('\n\n');
 }
 
 export async function sendGaffaMessage(
@@ -586,97 +656,39 @@ export async function sendGaffaMessage(
   const continuePriorTrade = Boolean(ongoingThread) && threadNeedsPlayerResearch(history);
 
   const lineupAuditBlock =
-    bag.connected &&
-    (kind === 'lineup_audit' ||
-      /\b(lineup|xi|bench|auto-?sub|oop|formation|uncovered|cover|held)\b/i.test(message))
+    bag.connected && (kind === 'lineup_audit' || LINEUP_AUDIT_CUE.test(message))
       ? formatLineupAuditPromptBlock(bag, allCalibrated)
       : '';
   const bidValuationBlock = bag.connected
     ? buildGaffaBidValuationBlock(message, bag, allCalibrated)
     : '';
 
-  let factualFoundation = '';
+  let factualFoundation = peerLedgerBlock;
   const shouldResearch =
     kind === 'player_trade' ||
     kind === 'lineup_audit' ||
     continuePriorTrade ||
-    (kind === 'strategy' &&
-      /\b(player|squad|minutes|form|injury|transfer|striker|backup)\b/i.test(message));
+    (kind === 'strategy' && STRATEGY_RESEARCH_CUE.test(message));
 
-  const skipWebResearch = shouldSkipGaffaWebResearch(message, bag, kind);
-
-  if (shouldResearch && !skipWebResearch) {
+  if (shouldResearch && !shouldSkipGaffaWebResearch(message, bag, kind)) {
     options?.onStageChange?.(
       kind === 'lineup_audit'
         ? 'Checking starter availability & upcoming PL fixtures...'
         : 'Verifying current club, role & season form...',
     );
     try {
-      const priorUser = [...history]
-        .reverse()
-        .find((m) => m.sender === 'user' && typeof m.content === 'string');
-      const threadHint =
-        continuePriorTrade && priorUser && typeof priorUser.content === 'string'
-          ? priorUser.content
-          : undefined;
-      const combinedText = [message, threadHint].filter(Boolean).join(' ');
-      const playerCandidates = Array.from(
-        combinedText.matchAll(/\b([A-Z][a-zà-öø-ÿ]+(?:\s+[A-Z][a-zà-ÿ'-]+)+)\b/g),
-        (m) => m[1],
-      ).slice(0, 3);
-
-      // Instant 0ms lookup against calibrated Futbolpedia dossiers first
-      const matchedDossiers = findReferencedDossiers(
-        combinedText,
+      factualFoundation = await gatherGaffaFoundation({
+        message,
+        kind,
+        bag,
+        threadHint: continuePriorTrade ? latestUserText(history) : undefined,
         allCalibrated,
-        playerCandidates,
-      );
-      const matchedDossierNotes =
-        matchedDossiers.length > 0
-          ? `[FUTBOLPEDIA CALIBRATED DOSSIERS]\n${matchedDossiers.map(serializeProfileForHistory).join('\n\n')}`
-          : '';
-
-      const unratedCandidates = playerCandidates.filter(
-        (name) => !findReferencedDossiers(name, matchedDossiers, [name]).length,
-      );
-
-      // For lineup audits, fetch upcoming PL club fixtures/context for the starters' clubs
-      const xiClubNames =
-        kind === 'lineup_audit' && bag.connected
-          ? [
-              ...new Set(
-                (bag.roster ?? [])
-                  .filter((p) =>
-                    (bag.lineup?.starters ?? []).some((s) => s.player_id === p.player_id || s.name === p.name),
-                  )
-                  .map((p) => p.pl_team)
-                  .filter((t): t is string => Boolean(t)),
-              ),
-            ].slice(0, 2)
-          : [];
-
-      let webNotes = '';
-      if (kind === 'lineup_audit' && bag.connected) {
-        const starterNames = (bag.lineup?.starters ?? []).map((s) => s.name).slice(0, 6);
-        const auditQuery = `[Date context: ${SIMULATION_SEASON} / ${SIMULATION_YEAR}] Premier League injury, suspension, and starting XI rotation status this week for: ${starterNames.join(', ')}`;
-        webNotes = await gatherSearchFoundation([auditQuery], starterNames.slice(0, 2), xiClubNames);
-      } else if (unratedCandidates.length > 0 || matchedDossiers.length === 0) {
-        webNotes = await gatherSearchFoundation(
-          buildResearchQueries(message, threadHint),
-          unratedCandidates.length > 0 ? unratedCandidates.slice(0, 2) : playerCandidates.slice(0, 2),
-        );
-      }
-
-      factualFoundation = [matchedDossierNotes, peerLedgerBlock, webNotes]
-        .filter(Boolean)
-        .join('\n\n');
+        peerLedgerBlock,
+      });
     } catch (err) {
       console.warn('[Gaffa] research foundation failed:', err);
-      factualFoundation =
-        'Research unavailable this turn — answer carefully and hedge where evidence is thin.';
+      factualFoundation = RESEARCH_UNAVAILABLE;
     }
-  } else if (peerLedgerBlock) {
-    factualFoundation = peerLedgerBlock;
   }
 
   let scorecardBlock = '';
@@ -699,9 +711,7 @@ export async function sendGaffaMessage(
       options?.onScorecardReady?.(scorecard);
     } catch (err) {
       console.warn('[Gaffa] trade scorecard failed:', err);
-      scorecardBlock = `<locked_scorecard>
-Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure either way. Give both sides and what you would need to lock a call. Max 120 words.
-</locked_scorecard>`;
+      scorecardBlock = SCORECARD_FAILED_BLOCK;
     }
   }
 
@@ -720,35 +730,27 @@ Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure e
     connectAttempted: options?.connectAttempted,
   });
 
-  // Use 'low' thinking when a scorecard already locked the 4 factors (saving ~3.5s of redundant thinking),
-  // and 'low' across rules/strategy for snappy responses.
-  const thinkingLevel = 'low';
-
-  // When a scorecard is locked or web research already ran (or was skipped for pure bag/rules queries),
-  // disable external network tools so the model streams immediately without duplicate searches.
-  const toolMode = runScorecard ? 'none' : 'local_only';
+  const finishProse = (text: string): string => {
+    const cleaned = lockGaffaRosterNames(sanitizeGaffaProse(text), bag);
+    return scorecard ? capGaffaTradeProse(cleaned) : cleaned;
+  };
+  const onStreamChunk = options?.onStreamChunk;
 
   options?.onStageChange?.('Writing Gaffa briefing...');
 
   const prose = await sendProseChatMessage(prompt, history, {
     imageData: options?.imageData,
-    thinkingLevel,
-    temperature: runScorecard ? 0.25 : kind === 'player_trade' ? 0.35 : kind === 'strategy' ? 0.5 : undefined,
+    // Low on every turn: a locked scorecard already settled the four factors, and other turns favor speed.
+    thinkingLevel: 'low',
+    temperature: runScorecard ? SCORECARD_TEMPERATURE : TURN_TEMPERATURE[kind],
     systemInstruction,
     conversationProfiles: [],
     dossiersPool: allCalibrated,
     gaffaBag: bag,
-    toolMode,
-    onStreamChunk: options?.onStreamChunk
-      ? (partial) => {
-          const sanitized = lockGaffaRosterNames(sanitizeGaffaProse(partial), bag);
-          options.onStreamChunk!(scorecard ? capGaffaTradeProse(sanitized) : sanitized);
-        }
-      : undefined,
+    // A locked scorecard turn gets no tools at all; every other turn keeps the local bag/dossier
+    // greps but no network tools, since any web research already ran above.
+    toolMode: runScorecard ? 'none' : 'local_only',
+    onStreamChunk: onStreamChunk ? (partial) => onStreamChunk(finishProse(partial)) : undefined,
   });
-  const cleaned = lockGaffaRosterNames(sanitizeGaffaProse(prose), bag);
-  return {
-    prose: scorecard ? capGaffaTradeProse(cleaned) : cleaned,
-    scorecard,
-  };
+  return { prose: finishProse(prose), scorecard };
 }

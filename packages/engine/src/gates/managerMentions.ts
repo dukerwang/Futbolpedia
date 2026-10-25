@@ -2,6 +2,8 @@ export interface ManagerVerificationContext {
   verifiedFacts: string[];
   supplementalCorpus?: string[];
   currentHeadCoach: string | null;
+  /** Club the verified coach manages; lets the stale-name scrub use the live coach for that club. */
+  currentClub?: string | null;
 }
 
 export interface KnownClubManager {
@@ -74,10 +76,52 @@ export const KNOWN_CLUB_MANAGERS: Record<string, KnownClubManager> = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const KNOWN_CLUB_MANAGERS_VERIFIED_MS = Date.parse(`${KNOWN_CLUB_MANAGERS_VERIFIED_ON}T00:00:00Z`);
+
+/** Whole days until the table expires; zero or negative once it has. */
+export function daysUntilKnownClubManagersTableExpires(now: Date = new Date()): number {
+  const expiresMs = KNOWN_CLUB_MANAGERS_VERIFIED_MS + KNOWN_CLUB_MANAGERS_MAX_AGE_DAYS * DAY_MS;
+  return Math.floor((expiresMs - now.getTime()) / DAY_MS);
+}
+
 /** False once the hand-verified table is too old to trust; callers then defer to live data. */
 export function isKnownClubManagersTableFresh(now: Date = new Date()): boolean {
-  const verifiedMs = Date.parse(`${KNOWN_CLUB_MANAGERS_VERIFIED_ON}T00:00:00Z`);
-  return now.getTime() - verifiedMs <= KNOWN_CLUB_MANAGERS_MAX_AGE_DAYS * DAY_MS;
+  return now.getTime() - KNOWN_CLUB_MANAGERS_VERIFIED_MS <= KNOWN_CLUB_MANAGERS_MAX_AGE_DAYS * DAY_MS;
+}
+
+export interface CurrentCoachRecord {
+  coach: string | null;
+  /** Start date (YYYY-MM-DD) of the coach's open stint at the team, when API-Football has one. */
+  coachSince: string | null;
+}
+
+/**
+ * Picks a team's current head coach from an API-Football `/coachs?team=<id>` response. The
+ * response lists every coach who ever managed the team, so take the open stint (`end === null`)
+ * at this team with the latest start; fall back to the first entry, undated, when none is open.
+ */
+export function pickCurrentCoach(coaches: unknown, teamId: number): CurrentCoachRecord {
+  const list: any[] = Array.isArray(coaches) ? coaches : [];
+  let best: { coach: any; since: string | null; sinceMs: number } | null = null;
+  for (const coach of list) {
+    if (!Array.isArray(coach?.career)) continue;
+    for (const stint of coach.career) {
+      if (stint?.team?.id !== teamId || stint?.end !== null) continue;
+      const since = typeof stint.start === 'string' ? stint.start.slice(0, 10) : null;
+      const parsed = since ? Date.parse(since) : NaN;
+      const sinceMs = Number.isNaN(parsed) ? -Infinity : parsed;
+      if (!best || sinceMs > best.sinceMs) best = { coach, since, sinceMs };
+    }
+  }
+  const chosen = best?.coach ?? list[0];
+  if (!chosen?.name) return { coach: null, coachSince: null };
+  return {
+    coach:
+      chosen.firstname && chosen.lastname
+        ? `${chosen.firstname} ${chosen.lastname}`
+        : String(chosen.name),
+    coachSince: best?.since ?? null,
+  };
 }
 
 /** Never rewrite a name that is some listed club's current coach (e.g. a coach who moved clubs). */
@@ -95,21 +139,35 @@ const findKnownClubManager = (club: string): KnownClubManager | undefined => {
   )?.[1];
 };
 
+const coachNamesMatch = (a: string, b: string): boolean => {
+  const aLower = a.toLowerCase();
+  const bLower = b.toLowerCase();
+  return aLower.includes(bLower) || bLower.includes(aLower);
+};
+
 /**
  * Corrects a club's head-coach record (e.g. from API-Football, which lags managerial changes)
- * when the club is listed in KNOWN_CLUB_MANAGERS and the record is missing or names a known
- * former coach. Unlisted clubs, and every club once the table has expired, pass through untouched.
+ * when the club is listed in KNOWN_CLUB_MANAGERS. Live data wins unless the record is missing,
+ * names a known former coach, or started its stint (`coachSince`) before the table was verified
+ * — a coach appointed after that date is newer than the table. Unlisted clubs, and every club
+ * once the table has expired, pass through untouched.
  */
 export function correctStaleCoachRecord(
   club: string | null | undefined,
   coach: string | null | undefined,
+  coachSince: string | null | undefined = null,
   now: Date = new Date(),
 ): string | null {
   const entry = club && isKnownClubManagersTableFresh(now) ? findKnownClubManager(club) : undefined;
   if (!entry) return coach ?? null;
-  const coachLower = coach?.toLowerCase() ?? '';
-  const isStale = entry.stale.some((name) => coachLower.includes(name.toLowerCase()));
-  return !coach || isStale ? entry.currentCoach : coach;
+  if (!coach) return entry.currentCoach;
+  const coachLower = coach.toLowerCase();
+  if (entry.stale.some((name) => coachLower.includes(name.toLowerCase()))) return entry.currentCoach;
+  if (coachNamesMatch(coach, entry.currentCoach)) return coach;
+  const sinceMs = coachSince ? Date.parse(coachSince.slice(0, 10)) : NaN;
+  return !Number.isNaN(sinceMs) && sinceMs < KNOWN_CLUB_MANAGERS_VERIFIED_MS
+    ? entry.currentCoach
+    : coach;
 }
 
 /** One prompt line listing the verified current coaches, or '' once the table has expired. */
@@ -123,18 +181,37 @@ export function formatKnownClubManagersForPrompt(now: Date = new Date()): string
 
 /**
  * Rewrites "under [former coach]" / "[former coach]'s system"-style attributions to the club's
- * current coach. Only runs for clubs the text actually mentions, skips anyone who currently
- * coaches a listed club, and does nothing once the table has expired.
+ * current coach — the turn's verified coach when `verified` names this club, else the table's.
+ * Only runs for clubs the text actually mentions, skips anyone who currently coaches a listed
+ * club or the verified club, and does nothing once the table has expired.
  */
-export function scrubKnownStaleManagers(text: string, now: Date = new Date()): string {
+export function scrubKnownStaleManagers(
+  text: string,
+  now: Date = new Date(),
+  verified?: { club?: string | null; coach?: string | null },
+): string {
   if (!text || !isKnownClubManagersTableFresh(now)) return text;
   const lowerText = text.toLowerCase();
+  const verifiedCoach = verified?.coach?.trim() || null;
+  const verifiedEntry =
+    verifiedCoach && verified?.club ? findKnownClubManager(verified.club) : undefined;
   let result = text;
 
-  for (const { currentCoach, aliases, stale } of Object.values(KNOWN_CLUB_MANAGERS)) {
+  for (const entry of Object.values(KNOWN_CLUB_MANAGERS)) {
+    const { aliases, stale } = entry;
     if (!aliases.some((alias) => lowerText.includes(alias))) continue;
+    // A verified coach the table lists as this club's former coach loses, as in correctStaleCoachRecord.
+    const useVerified =
+      entry === verifiedEntry &&
+      verifiedCoach !== null &&
+      !stale.some((name) => coachNamesMatch(name, verifiedCoach));
+    const currentCoach = useVerified && verifiedCoach ? verifiedCoach : entry.currentCoach;
     for (const staleName of stale) {
       if (CURRENT_COACHES_LOWER.has(staleName.toLowerCase())) continue;
+      // Nor a former coach the turn verified at another club (e.g. Pochettino coaching elsewhere).
+      if (verifiedCoach && verified?.club && entry !== verifiedEntry && coachNamesMatch(staleName, verifiedCoach)) {
+        continue;
+      }
       const escaped = staleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
       // 1. "Under [Stale]" -> "Under [CurrentCoach]"
@@ -371,7 +448,10 @@ export function scrubUnverifiedManagerText(
   if (!text) return text;
 
   // 1. First, scrub any known stale / sacked managers across major clubs
-  let out = scrubKnownStaleManagers(text);
+  let out = scrubKnownStaleManagers(text, new Date(), {
+    club: ctx.currentClub,
+    coach: ctx.currentHeadCoach,
+  });
 
   const corpus = verificationCorpus(ctx);
   const verifiedCoach = ctx.currentHeadCoach?.trim() ?? null;

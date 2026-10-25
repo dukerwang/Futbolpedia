@@ -296,6 +296,26 @@ export const sendMessageToAI = async (
     ]);
     perf('hybrid grounding');
 
+    // The typed name may not match the shared card's ("pedro", a nickname, a fuller name).
+    // Grounding has resolved the registered name, so look for this week's shared card under it
+    // before synthesizing a duplicate.
+    const canonicalName = grounding.apiPlayer?.name;
+    if (
+      !imageData &&
+      !supersede &&
+      canonicalName &&
+      toPlayerSlug(canonicalName) !== toPlayerSlug(primaryPlayer)
+    ) {
+      const cached = await getCachedDossier(toDossierCardSlug(canonicalName, route.isHistorical));
+      if (cached) {
+        supersede = hasRevisionConsensus(await fetchRevisionsForCard(cached));
+        if (!supersede) {
+          perf('supabase cache hit (registered name)');
+          return cached;
+        }
+      }
+    }
+
     options?.onStageChange?.(
       `Calibrating 25-attribute dossier for ${grounding.apiPlayer?.name || primaryPlayer || 'player'}...`,
     );

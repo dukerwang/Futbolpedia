@@ -9,6 +9,21 @@ const VERDICT_LABEL: Record<GaffaTradeVerdict, string> = {
   take: 'Take',
 };
 
+const SCORE_CELLS: Array<{
+  label: string;
+  hint: string;
+  key: 'replacement' | 'coverage' | 'cash_deployable' | 'starter_leverage';
+}> = [
+  { label: 'Replacement', hint: 'Higher → take', key: 'replacement' },
+  { label: 'Coverage', hint: 'Higher → take', key: 'coverage' },
+  { label: 'Cash', hint: 'Higher → take', key: 'cash_deployable' },
+  { label: 'Leverage', hint: 'Higher → hold', key: 'starter_leverage' },
+];
+
+function cashSuffix(eurM: number | undefined): string {
+  return eurM && eurM > 0 ? ` + €${eurM}m` : '';
+}
+
 function ScoreTicks({ value }: { value: number }) {
   const n = Math.max(1, Math.min(5, Math.round(value)));
   return (
@@ -55,12 +70,8 @@ function ScoreCell({
 }
 
 export function formatScorecardCopy(card: GaffaTradeScorecard): string {
-  const outCash =
-    card.outgoing_cash_eur_m && card.outgoing_cash_eur_m > 0
-      ? ` + €${card.outgoing_cash_eur_m}m`
-      : '';
-  const cash =
-    card.incoming_cash_eur_m > 0 ? ` + €${card.incoming_cash_eur_m}m` : '';
+  const outCash = cashSuffix(card.outgoing_cash_eur_m);
+  const cash = cashSuffix(card.incoming_cash_eur_m);
   return [
     `${VERDICT_LABEL[card.verdict]} · ${card.confidence} confidence`,
     `Replacement ${card.replacement} · Coverage ${card.coverage} · Cash ${card.cash_deployable} · Leverage ${card.starter_leverage}`,
@@ -75,12 +86,8 @@ export function formatScorecardCopy(card: GaffaTradeScorecard): string {
 export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = ({
   card,
 }) => {
-  const outCash =
-    card.outgoing_cash_eur_m && card.outgoing_cash_eur_m > 0
-      ? ` + €${card.outgoing_cash_eur_m}m`
-      : '';
-  const cash =
-    card.incoming_cash_eur_m > 0 ? ` + €${card.incoming_cash_eur_m}m` : '';
+  const outCash = cashSuffix(card.outgoing_cash_eur_m);
+  const cash = cashSuffix(card.incoming_cash_eur_m);
 
   const notes = [
     { label: 'Replacement', text: card.replacement_note },
@@ -127,10 +134,9 @@ export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = 
       )}
 
       <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-        <ScoreCell label="Replacement" hint="Higher → take" value={card.replacement} />
-        <ScoreCell label="Coverage" hint="Higher → take" value={card.coverage} />
-        <ScoreCell label="Cash" hint="Higher → take" value={card.cash_deployable} />
-        <ScoreCell label="Leverage" hint="Higher → hold" value={card.starter_leverage} />
+        {SCORE_CELLS.map((c) => (
+          <ScoreCell key={c.key} label={c.label} hint={c.hint} value={card[c.key]} />
+        ))}
       </div>
 
       {notes.length > 0 ? (
