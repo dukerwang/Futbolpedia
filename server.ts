@@ -3,12 +3,7 @@ import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import path from "path";
 import axios from "axios";
-import {
-  KNOWN_CLUB_MANAGERS_VERIFIED_ON,
-  correctStaleCoachRecord,
-  daysUntilKnownClubManagersTableExpires,
-  pickCurrentCoach,
-} from "./packages/engine/src/gates/managerMentions.ts";
+import { pickCurrentCoach } from "./packages/engine/src/gates/managerMentions.ts";
 import { getRealWorldFootballSeason } from "./prompts/scoutCore";
 
 async function startServer() {
@@ -97,14 +92,6 @@ async function startServer() {
   const API_KEY = process.env.API_FOOTBALL_KEY;
   const API_URL = "https://v3.football.api-sports.io";
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
-  const coachTableDaysLeft = daysUntilKnownClubManagersTableExpires();
-  if (coachTableDaysLeft <= 14) {
-    console.warn(
-      coachTableDaysLeft <= 0
-        ? `[startup] KNOWN_CLUB_MANAGERS (verified ${KNOWN_CLUB_MANAGERS_VERIFIED_ON}) has expired and is ignored; re-verify it and bump the date.`
-        : `[startup] KNOWN_CLUB_MANAGERS (verified ${KNOWN_CLUB_MANAGERS_VERIFIED_ON}) expires in ${coachTableDaysLeft} days; re-verify it and bump the date.`,
-    );
-  }
   console.log(`[startup] GEMINI_API_KEY set: ${!!GEMINI_API_KEY} (${GEMINI_API_KEY ? GEMINI_API_KEY.slice(0, 6) + '...' : 'MISSING'})`);
 
   const apiFootballGet = (endpoint: string, params: Record<string, unknown>, timeout?: number) =>
@@ -129,7 +116,7 @@ async function startServer() {
     }
   >();
 
-  const getTeamContextById = async (teamId: number, teamName: string | null) => {
+  const getTeamContextById = async (teamId: number) => {
     const cached = teamContextCache.get(teamId);
     if (cached && cached.expiresAt > Date.now()) {
       return cached;
@@ -163,15 +150,12 @@ async function startServer() {
         ? (nextFixturesRes.value.data?.response ?? []).map(formatFixture)
         : [];
 
-    const liveCoach =
+    // API-Football's record lags managerial changes. The app treats it only as a cross-check for
+    // the live manager lookup (services/clubManagers.ts), never as the source of truth.
+    const { coach, coachSince } =
       coachRes.status === "fulfilled"
         ? pickCurrentCoach(coachRes.value.data?.response, teamId)
         : { coach: null, coachSince: null };
-
-    // API-Football lags managerial changes; correct known stale records. An overridden coach's
-    // start date belongs to the replaced record, so drop it.
-    const coach = correctStaleCoachRecord(teamName, liveCoach.coach, liveCoach.coachSince);
-    const coachSince = coach === liveCoach.coach ? liveCoach.coachSince : null;
 
     const squad: Array<{ name: string; position: string | null; age: number | null }> =
       squadRes.status === "fulfilled"
@@ -323,7 +307,7 @@ async function startServer() {
               if (currentClub) {
                 teamIdCache.set(currentClub.toLowerCase(), primaryClubId);
               }
-              const teamCtxPromise = getTeamContextById(primaryClubId, currentClub);
+              const teamCtxPromise = getTeamContextById(primaryClubId);
               const teamCtx = await Promise.race([
                 teamCtxPromise,
                 new Promise<null>((resolve) => setTimeout(() => resolve(null), 900)),
@@ -345,9 +329,6 @@ async function startServer() {
                   .catch(() => {});
               }
             }
-            const correctedCoach = correctStaleCoachRecord(currentClub, coach, coachSince);
-            if (correctedCoach !== coach) coachSince = null;
-            coach = correctedCoach;
           }
         } catch (statsErr) {
           // Non-fatal: still return profile bio facts
@@ -431,7 +412,7 @@ async function startServer() {
         if (first.name) teamIdCache.set(String(first.name).toLowerCase(), teamId);
       }
 
-      const ctx = await getTeamContextById(teamId, resolvedTeamName);
+      const ctx = await getTeamContextById(teamId);
       return res.json({
         available: true,
         team: resolvedTeamName,

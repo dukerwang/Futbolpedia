@@ -611,7 +611,6 @@ function resolveEffectiveVerifiedFacts(
   if (isHistorical) return null;
   const supplementalCorpus = [
     foundationText,
-    apiPlayer?.coach ?? undefined,
     apiPlayer?.currentClub ?? undefined,
     profile.basicInfo.name,
     profile.basicInfo.club,
@@ -629,8 +628,8 @@ function resolveEffectiveVerifiedFacts(
   if (!raw.calibration) return null;
   return {
     currentClub: profile.basicInfo.club,
-    currentHeadCoach:
-      raw.calibration.verifiedCurrentHeadCoach ?? apiPlayer?.coach ?? null,
+    // API-Football's coach record lags managerial changes, so it is never a fallback here.
+    currentHeadCoach: raw.calibration.verifiedCurrentHeadCoach ?? null,
     conflictingManagerReports: raw.calibration.conflictingManagerReports ?? [],
     season2526Stats: null,
     recentForm: null,
@@ -851,7 +850,7 @@ export async function synthesizePlayerDossier(
     - DATING REQUIREMENT: Set \`version.type\` = "current", \`version.evaluationDate\` = "${currentDateIso}", \`version.seasonOrEra\` = "${currentSeason}", \`version.label\` = "Current Form (${month} ${year})", and \`version.peakContext\` = null.
     - NO REPUTATION LAG: If the player is already performing as a Top 3–5 player in the world at their position for an elite club right now (e.g., Willian Pacho at PSG), rate their current Overall in \`90_92_WORLD_CLASS\` (90–92) — do not undersell them at 87–89 Borderline World-Class and hide their current level in Potential.
     - APEX CONTINENTAL STARS: If the player is the primary talisman/focal point of a Champions League-winning or Ballon d'Or-caliber campaign (e.g., Ousmane Dembélé at PSG), rate them at 92–94 rather than scraping the 91 floor.
-    - Set \`calibration.verifiedCurrentHeadCoach\` ONLY if <factual_foundation> explicitly confirms the current head coach of the player's current club as of ${month} ${year}. Never name a head coach in shortBio, playstyle, or latestUpdate when \`verifiedCurrentHeadCoach\` is null.
+    - Set \`calibration.verifiedCurrentHeadCoach\` ONLY if <factual_foundation> explicitly confirms the current head coach of the player's current club as of ${month} ${year}. Never name a head coach or manager anywhere in the card's prose; the app attaches the verified manager separately.
     - If grounding shows the player started a recent match, treat them as match fit.
     - Never write a stat-based qualifier in latestUpdate without a specific verified number from the grounding data.`;
 

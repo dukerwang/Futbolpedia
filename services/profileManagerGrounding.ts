@@ -1,4 +1,5 @@
 import type { PlayerProfile } from '../types';
+import type { ClubManagerRecord } from './clubManagers';
 import {
   findUnverifiedManagerMentions,
   scrubUnverifiedManagerText,
@@ -54,25 +55,51 @@ export function findProfileManagerGroundingIssues(
   return findUnverifiedManagerMentions(prose, buildManagerVerificationContext(facts));
 }
 
+const scrubProfileProse = (profile: PlayerProfile, ctx: ManagerVerificationContext): PlayerProfile => ({
+  ...profile,
+  shortBio: scrubUnverifiedManagerText(profile.shortBio, ctx),
+  latestUpdate: scrubUnverifiedManagerText(profile.latestUpdate, ctx),
+  playstyleAndRole: {
+    ...profile.playstyleAndRole,
+    playstyle: {
+      ...profile.playstyleAndRole.playstyle,
+      description: scrubUnverifiedManagerText(profile.playstyleAndRole.playstyle.description, ctx),
+    },
+  },
+});
+
 /** Deterministically scrub any unverified manager mentions from profile prose in 0ms. */
 export function scrubProfileManagerMentions(
   profile: PlayerProfile,
   facts: FutbolpediaVerifiedFacts,
 ): PlayerProfile {
-  const ctx = buildManagerVerificationContext(facts);
+  return scrubProfileProse(profile, buildManagerVerificationContext(facts));
+}
+
+/**
+ * Attaches the live manager lookup's answer to a current card and makes the prose agree with it:
+ * only the verified coach may be named, and when the lookup confirmed nobody, no coach is named
+ * at all. The model never decides who the manager is.
+ */
+export function attachVerifiedManager(
+  profile: PlayerProfile,
+  manager: ClubManagerRecord | null,
+): PlayerProfile {
+  const coach = manager?.coach ?? null;
+  const scrubbed = scrubProfileProse(profile, {
+    verifiedFacts: [],
+    currentHeadCoach: coach,
+    currentClub: manager?.club ?? profile.basicInfo.club,
+    strictCurrentCoach: true,
+    clubManagers:
+      manager && coach ? [{ club: manager.club, coach, previousCoach: manager.previousCoach }] : [],
+  });
+  if (!manager || !coach) {
+    const { clubManager: _stale, ...rest } = scrubbed;
+    return rest;
+  }
   return {
-    ...profile,
-    shortBio: scrubUnverifiedManagerText(profile.shortBio, ctx),
-    latestUpdate: scrubUnverifiedManagerText(profile.latestUpdate, ctx),
-    playstyleAndRole: {
-      ...profile.playstyleAndRole,
-      playstyle: {
-        ...profile.playstyleAndRole.playstyle,
-        description: scrubUnverifiedManagerText(
-          profile.playstyleAndRole.playstyle.description,
-          ctx,
-        ),
-      },
-    },
+    ...scrubbed,
+    clubManager: { name: coach, verifiedOn: manager.verifiedOn, sourceUrl: manager.sourceUrl },
   };
 }
