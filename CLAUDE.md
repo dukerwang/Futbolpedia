@@ -10,48 +10,51 @@ npm run build    # Vite production build to /dist
 npm start        # Run production server (serves /dist statically)
 ```
 
-No test runner is configured. TypeScript type-check: `npx tsc --noEmit`.
+TypeScript type-check: `npx tsc --noEmit` (the only errors on a fresh clone are missing `vitest` types under `packages/engine` until you install that package). The app has no test runner; the outlook engine does: `cd packages/engine && npm ci && npx vitest run`.
 
 ## Environment Variables
 
-- `API_KEY` — Google Gemini API key (used by `services/geminiService.ts`)
+- `GEMINI_API_KEY` — Google Gemini key. Vite injects it into the client as `process.env.API_KEY` (read by `services/aiClient.ts`); the server's `/gemini-api-proxy/*` also uses it.
 - `API_FOOTBALL_KEY` — API-Football key (used by `server.ts`)
+- `GAFFA_BASE_URL`, `FUTBOLPEDIA_READ_SECRET` — server-only Gaffa integration (see `.env.example`)
 
-Supabase credentials are hardcoded in `geminiService.ts` (publishable key, safe for client exposure). The Supabase JS client is loaded via a `<script>` tag in `index.html` and accessed at `window.supabase`, not via an npm package — see the guard at the top of `geminiService.ts`.
+Supabase publishable keys are hardcoded (safe for client exposure): Futbolpedia's in `services/dossierStore.ts`, Gaffa's in `services/gaffaAuth.ts`. The Supabase JS client is loaded via a `<script>` tag in `index.html` and accessed at `window.supabase`, not via an npm package.
 
 ## Architecture
 
 ### Server (`server.ts`)
 A single Express server handles everything:
-- `/api/football/squad` and `/api/football/proxy/*` — Backend proxy to API-Football (hides `API_FOOTBALL_KEY` from the client)
-- In dev: Vite is mounted as Express middleware (`middlewareMode: true`)
-- In prod: serves the built `/dist` directory
+- `/api/football/player`, `/api/football/squad`, `/api/football/fixtures`, `/api/football/proxy/*` — API-Football proxy (hides `API_FOOTBALL_KEY`), with in-memory caches for player facts and team context
+- `/api/gaffa/context`, `/api/gaffa/chat` — Gaffa integration behind `FUTBOLPEDIA_READ_SECRET`
+- `/gemini-api-proxy/*` — forwards AI Studio's redirected Gemini calls with the server-side key
+- In dev: Vite is mounted as Express middleware (`middlewareMode: true`); in prod: serves `/dist`
 
-### AI Pipeline (`services/geminiService.ts`)
-The core complexity lives here. There are two chat modes:
+### AI pipeline (`services/`)
+`geminiService.ts` is the entry point (`sendMessageToAI`) and a re-export barrel for older imports. Each turn:
+1. **Route** — `turnRouter.ts` `classifyTurn` tries 0ms regex fast paths (archive, single dossier, compare, challenge, ranking, club tactics), then falls back to a schema-enforced Flash classifier. The result is a `TurnRoute` (`intent`, `analyticalMode`, target players/clubs, search queries).
+2. **Single dossier** — checks the in-conversation dossier, the saved archive, the in-memory calibrated pool, and the Supabase 14-day cache (`dossierStore.ts`), in that order. On a miss, `groundingService.ts` runs API-Football and Google Search grounding in parallel and `dossierSynthesizer.ts` generates the card with `responseSchema`. It then enforces calibration invariants deterministically and scrubs unverified manager mentions.
+3. **Everything else** — `conversationalScout.ts` handles live dossier challenges (structured patch → `applyDossierPatch`) and prose turns (comparisons, debates, rankings, tactics), pre-grounding with search when needed.
 
-**Default mode** (formal profile/comparison requests) runs a 3-stage pipeline:
-1. **Query generation** — Flash model generates 4 targeted search vectors as structured JSON
-2. **Factual foundation** — Runs those queries in parallel via `googleSearch` tool, captures grounding source URLs
-3. **Extraction** — Distills raw search results into a verified fact object (identifies data gaps for Protocol P)
-4. **Synthesis** — `synthesizeFormalResponse()` calls `generateContent` with `responseSchema` to guarantee schema-valid JSON. Falls back to `sendChatMessage` if schema enforcement fails.
-
-**Fast mode** skips steps 1–3 and goes straight to the chat model with a compressed prompt.
+`aiClient.ts` wraps `@google/genai`: `generateStructured` (schema JSON), `runGroundedSearch`, and `generateProseTurn` (streaming chat with local tools `grep_saved_dossiers` / `grep_gaffa_market` and network tools backed by the API-Football routes). Per-task model, thinking level and temperature come from `constants/modelProfiles.ts`.
 
 ### Gaffa mode (`services/gaffaChatService.ts`)
 Separate chat domain from dossier synthesis. When the ChatInput **Gaffa** toggle is on, `App` routes to `sendGaffaMessage` — prose only, never `responseSchema` dossiers. Rules come from curated `constants/gaffaRules.ts` (`GAFFA_RULES_SNAPSHOT`, versioned). Soft auto-detect in `services/gaffaDetect.ts` nudges switching mode when default chat looks Gaffa-specific; it does not silently inject Gaffa context.
 
-**Phase 2 club connect:** paste league + club IDs in the Gaffa connect strip, or open `#/gaffa/<leagueId>/<clubId>` (Gaffa club page **Ask Futbolpedia**). Express `GET /api/gaffa/context` proxies to Gaffa `GET /api/integrations/futbolpedia/context` with server-only `FUTBOLPEDIA_READ_SECRET` + `GAFFA_BASE_URL`. Live bag fills `GaffaContextBag` for roster/budget/standings/matchup/XI plus listings, live auctions, and league settings.
+**Club connect:** sign in through `services/gaffaAuth.ts` and pick a club (RLS context loader), paste league + club IDs in the connect strip, or open `#/gaffa/<leagueId>/<clubId>`. Express `GET /api/gaffa/context` proxies to Gaffa `GET /api/integrations/futbolpedia/context`. The live bag fills `GaffaContextBag` (roster, budget, standings, matchup, XI, listings, auctions, FA pool, league settings); `gaffaLineupAudit.ts` derives lineup audits, alerts and bid valuations from it.
+
+### Manager fidelity
+API-Football and model memory both lag coaching changes. `packages/engine/src/gates/managerMentions.ts` holds `KNOWN_STALE_CLUB_MANAGERS`: `correctStaleCoachRecord` fixes API coach records, and `scrubUnverifiedManagerText` / `scrubKnownStaleManagers` clean prose. Update that table when a listed club changes coach.
 
 **Critical quirks:**
-- `ThinkingLevel` + `responseSchema` conflict on Gemini Flash — the synthesis step deliberately omits `thinkingConfig` to prevent malformed JSON output. Use `MINIMAL` thinking in any fallback path that parses JSON.
-- `SIMULATION_YEAR` / `SIMULATION_SEASON` in `constants.ts` are compile-time constants, not `new Date()`. This is intentional — keeping the system instruction byte-stable enables Gemini's implicit prompt caching.
-- The EAFC playstyle directory in `constants.ts` is only injected into the system instruction when the query matches an EAFC-specific pattern. `getMasterInstructions(includeEAFC)` controls this.
+- `gemini-3.8-flash` rejects `ThinkingLevel.MINIMAL` (HTTP 400); `aiClient.ts` maps the `minimal` tier to `LOW`.
+- `SIMULATION_YEAR` / `SIMULATION_SEASON` (`prompts/scoutCore.ts`) are computed once at module load from the real date via `getRealWorldFootballSeason`, so the system instruction stays byte-stable within a process for Gemini's implicit prompt caching. Per-turn prompts read the date through `getCurrentSeasonInfo()`.
+- The EAFC playstyle directory is only injected when the query matches an EAFC pattern — `buildConversationalScoutInstruction(includeEAFC)` controls this.
+- `CALIBRATION_EPOCH_MS` in `dossierStore.ts` invalidates cached dossiers from before the last rating recalibration; bump it when the rating scale changes.
 
 ### Frontend State
 `App.tsx` manages all state via React hooks. Two persistence layers:
 - **`localStorage`** — Conversations (`futbolpedia-conversations`), active dossiers (`futbolpedia-global-dossiers`), theme, active conversation ID
-- **Supabase** (`profiles` table, `player_data` JSONB column) — Read-only profile sharing via `#/player/<uuid>` URL hash
+- **Supabase** — `player_profiles` (dossier cache, `player_data` JSONB) and `shared_conversations` (share codes)
 
 On init, `App.tsx` runs a migration path: old `futbolpedia-chat-history` / `futbolpedia-all-profiles` keys are consolidated into the newer `futbolpedia-conversations` schema.
 
@@ -60,8 +63,8 @@ On init, `App.tsx` runs a migration path: old `futbolpedia-chat-history` / `futb
 - `Conversation` — Wraps an array of `ChatMessage` plus the `activeProfile` and `allProfiles` at the time.
 - `ChatMessage.content` is a union: `string | PlayerProfile | ReactNode`.
 
-### Prompt Engineering (`constants.ts`)
-The `MASTER_INSTRUCTION_SET` is a ~300-line system prompt. Key concepts when modifying it:
-- **Protocols A–Q** are named rules the model must follow (B = injury quarantine, E = stat-lock anti-hallucination, M = temporal firewall, P = data gap → set attribute to 0, etc.)
-- The **25-attribute schema** and **rating tier scale** (60–99) are defined here and must match `types.ts`
-- `CRITICAL_FINAL_CHECKS` (Section X) is appended last and lists the most frequently violated rules — edit this section when the model repeatedly breaks a specific rule
+### Prompt Engineering (`prompts/`, re-exported by `constants.ts`)
+- `scoutCore.ts` — shared scouting philosophy, Section III rating tier scale, the 25+7 attribute framework, and named protocols (A–Q: B = injury quarantine, E = stat-lock, M = temporal firewall, Q = contextual triangulation, …). Kept byte-stable as the cached prompt prefix.
+- `chatPrompt.ts` — conversational scouting mandate (Section VIII) built by `buildConversationalScoutInstruction`.
+- `dossierPrompt.ts` — schema-aligned calibration and synthesis workflow (Section VI).
+- Tier bands, canonical positions, club/position normalization and attribute labels live in `constants/ratingTiers.ts` and must match `types.ts` and the synthesis schema.
