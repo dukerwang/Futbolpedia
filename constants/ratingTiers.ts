@@ -56,7 +56,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'World-Class Elite',
     shortLabel: 'World-Class Elite',
     description:
-      'The absolute apex of a position in a given era or an all-time league/continental benchmark (e.g., the #1 player in the world at their position at their peak, an all-time Premier League/UCL positional standard-bearer like peak John Terry at 94–95, or a Ballon d\'Or-caliber superstar dominating European football). Applies equally to defenders, midfielders, goalkeepers, and attackers.',
+      'The absolute apex of a position in a given era or an all-time league/continental benchmark: the #1 player in the world at their position at their peak, an all-time standard-bearer at the position, or a Ballon d\'Or-caliber superstar dominating European football. Applies equally to defenders, midfielders, goalkeepers, and attackers.',
   },
   {
     id: '90_92_WORLD_CLASS',
@@ -65,7 +65,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'World-Class',
     shortLabel: 'World-Class',
     description:
-      'Undisputed World-Class players at their position globally (typically Top 3–5 in the world in their role). Any player who is already performing as a top-3 to top-5 player in the world at their position for an elite club (such as Willian Pacho at PSG) belongs here at 90–92, never down in Borderline World-Class.',
+      'Undisputed World-Class players at their position globally (typically Top 3–5 in the world in their role). Any player who is already performing as a top-3 to top-5 player in the world at their position for an elite club belongs here at 90–92, never down in Borderline World-Class.',
   },
   {
     id: '87_89_BORDERLINE_WC',

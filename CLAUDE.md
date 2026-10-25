@@ -80,4 +80,5 @@ On init, `App.tsx` runs a migration path: old `futbolpedia-chat-history` / `futb
 - `scoutCore.ts` — shared scouting philosophy, Section III rating tier scale, the 25+7 attribute framework, and named protocols (A–Q: B = injury quarantine, E = stat-lock, M = temporal firewall, Q = contextual triangulation, …). Kept byte-stable as the cached prompt prefix.
 - `chatPrompt.ts` — conversational scouting mandate (Section VIII) built by `buildConversationalScoutInstruction`.
 - `dossierPrompt.ts` — schema-aligned calibration and synthesis workflow (Section VI).
+- **No specific examples in prompts.** Guidance that shapes cards or chat prose must be descriptive: no player names, rating anchors, quoted sample phrases or jargon lists, because the model reuses them. Format specs (YYYY-YY, label templates, enum values) are fine.
 - Tier bands, canonical positions, club/position normalization and attribute labels live in `constants/ratingTiers.ts` and must match `types.ts` and the synthesis schema.

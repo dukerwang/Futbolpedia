@@ -178,7 +178,7 @@ const GREP_SAVED_DOSSIERS_DECLARATION = {
       },
       club: {
         type: Type.STRING,
-        description: 'Optional club filter (e.g. "PSG", "Chelsea", "Arsenal").',
+        description: 'Optional club filter: a club name or common short name.',
       },
       minOverall: {
         type: Type.NUMBER,
@@ -285,7 +285,7 @@ const NETWORK_FUNCTION_DECLARATIONS = [
       properties: {
         name: {
           type: Type.STRING,
-          description: 'Full name of the footballer (e.g. "Willian Pacho", "Ousmane Dembélé").',
+          description: 'Full name of the footballer.',
         },
       },
       required: ['name'],
@@ -300,7 +300,7 @@ const NETWORK_FUNCTION_DECLARATIONS = [
       properties: {
         team: {
           type: Type.STRING,
-          description: 'The name of the football club (e.g. Real Madrid, Arsenal, PSG)',
+          description: 'The name of the football club.',
         },
       },
       required: ['team'],
@@ -315,7 +315,7 @@ const NETWORK_FUNCTION_DECLARATIONS = [
       properties: {
         team: {
           type: Type.STRING,
-          description: 'The name of the football club (e.g. PSG, Chelsea, Barcelona)',
+          description: 'The name of the football club.',
         },
       },
       required: ['team'],
