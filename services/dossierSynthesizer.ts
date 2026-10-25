@@ -243,7 +243,8 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
       properties: {
         playsLikeBlend: {
           type: Type.STRING,
-          description: '1 composite player blend, e.g. "Joshua Kimmich central vision crossed with Kyle Walker recovery pace".',
+          description:
+            "One composite blend of two (at most three) real players, each lending one specific trait that matches this player's own spikes: \"<Player A>'s <trait> with <Player B>'s <trait>\". Choose players by profile, not club, nationality, era or fame.",
         },
         holisticProjection: {
           type: Type.STRING,
@@ -253,7 +254,8 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         playstyleTags: {
           type: Type.ARRAY,
           items: { type: Type.STRING },
-          description: '4 to 6 concise, highly accurate trait chips (e.g. ["Deep-Lying Dictator", "Press-Resistant Pivot", "Laser Diagonal Switch"]).',
+          description:
+            '4 to 6 short trait chips (2–3 words) naming observable on-pitch behaviours specific to this player and supported by the card; no generic praise or bare position names.',
         },
         tacticalSynergy: {
           type: Type.STRING,

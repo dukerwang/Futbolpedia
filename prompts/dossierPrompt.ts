@@ -65,9 +65,9 @@ You are generating a structured scouting dossier JSON object representing an off
    - \`caseForLower\`: The sharpest analytical and metric counter-argument for a -2 OVR lower rating. Cite genuine vulnerabilities: transitional liability against elite speed, pressing fade, or heavy system dependence.
 
 7. **Step 7 — Holistic Archetyping & Tactical Synergies (\`archetypeAnalysis\`):**
-   - \`playsLikeBlend\`: 1 evocative composite archetype comparison fusing distinct players (e.g., "Joshua Kimmich's distribution geometry fused with Kyle Walker's recovery engine").
+   - \`playsLikeBlend\`: One composite comparison fusing two (at most three) real players, each contributing one specific, named trait — format: "<Player A>'s <specific trait> with <Player B>'s <specific trait>". Pick the comparison players from this player's actual attribute spikes and on-pitch habits, not from shared club, nationality, era, or fame. Each borrowed trait must correspond to one of this card's \`signatureSpikes\` or a defining habit in the grounding.
    - \`holisticProjection\`: **CRITICAL PRINCIPLE**: Evaluate the player's native athletic, physical, and technical profile as a complete footballer, independent of the tactical role their current manager happens to deploy them in. Identify whether their natural toolset profiles for alternative positions or higher-ceiling systemic roles where their specific spikes would be maximized and weaknesses masked.
-   - \`playstyleTags\`: 4 to 6 concise, accurate trait chips (e.g., \`["Deep-Lying Dictator", "Press-Resistant Pivot", "Laser Diagonal Switch", "Box-Edge Retainer"]\`).
+   - \`playstyleTags\`: 4 to 6 short trait chips (2–3 words each) naming observable on-pitch behaviours specific to this player — how they receive, carry, pass, defend, or move. Every tag must be supported by this card's attributes or the grounding. No generic praise ("World Class", "Complete Player") and no bare position names.
    - \`tacticalSynergy\`: The optimal tactical system, formation, and partner dynamic that unlocks this player's absolute ceiling.
    - \`tacticalKryptonite\`: The tactical setup, pressing scheme, or matchup dynamic that isolates and exploits their weaknesses.
 
