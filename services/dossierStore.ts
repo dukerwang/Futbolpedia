@@ -39,6 +39,141 @@ export const toPlayerSlug = (name: string): string =>
     .replace(/\s+/g, '-')
     .replace(/[^a-z0-9-]/g, '');
 
+/** Name slug with edition markers removed, so "Joshua Kimmich (Prime)" becomes "joshua-kimmich". */
+export const toBasePlayerSlug = (name: string): string =>
+  toPlayerSlug(name)
+    .replace(/^(prime|peak)-/, '')
+    .replace(/-(prime|peak)$/, '');
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const todayIso = (): string => new Date().toISOString().split('T')[0];
+
+/** True for a well-formed YYYY-MM-DD that isn't in the future. */
+const isValidEvaluationDate = (s?: string | null): s is string =>
+  typeof s === 'string' && ISO_DATE_RE.test(s) && s <= todayIso();
+
+/**
+ * Resolves or formats a date to standard YYYY-MM-DD.
+ */
+export const formatIsoDate = (input?: string | number | Date | null): string | null => {
+  if (!input) return null;
+  try {
+    const d =
+      typeof input === 'string' && ISO_DATE_RE.test(input)
+        ? new Date(`${input}T12:00:00Z`)
+        : new Date(input);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString().split('T')[0];
+  } catch {
+    return null;
+  }
+};
+
+/** European season label for a calendar date (Jul–Dec starts the season, Jan–Jun ends it). */
+const seasonForDate = (dateStr: string): string => {
+  const d = new Date(`${dateStr}T12:00:00Z`);
+  const y = d.getUTCFullYear();
+  const start = d.getUTCMonth() >= 6 ? y : y - 1;
+  return `${start}-${String(start + 1).slice(-2)}`;
+};
+
+/**
+ * True for any non-"current" card (prime, season snapshot, retro). Legacy cards with no
+ * version fall back to an edition marker in the name.
+ */
+export const isPrimeCard = (p: PlayerProfile): boolean => {
+  const t = p.version?.type;
+  if (t) return t !== 'current';
+  return /\b(prime|peak)\b/i.test(p.basicInfo?.name ?? '');
+};
+
+/**
+ * Returns the verified evaluation date of a dossier, or null if it can't be dated.
+ * A current card may fall back to the day it was created, because that is the day it was
+ * rated. A historical card never falls back: its date must be the verified peak date.
+ */
+export const getDossierEvaluationDate = (p: PlayerProfile): string | null => {
+  if (isValidEvaluationDate(p.version?.evaluationDate)) return p.version!.evaluationDate;
+  if (isValidEvaluationDate(p.evaluationDate)) return p.evaluationDate!;
+  if (isPrimeCard(p)) return null;
+  if (p.createdAt && p.createdAt > 0) return formatIsoDate(p.createdAt);
+  return null;
+};
+
+/**
+ * Check whether a dossier has a valid, verifiable evaluation date.
+ */
+export const isDossierDated = (p: PlayerProfile): boolean => {
+  return Boolean(getDossierEvaluationDate(p));
+};
+
+/**
+ * Strictly ensures a dossier is dated. If it cannot be dated, returns null.
+ * When dateable, guarantees p.evaluationDate and p.version are fully populated.
+ */
+export const ensureDossierDated = (
+  p: PlayerProfile,
+  fallbackMs?: number,
+): PlayerProfile | null => {
+  if (!p || !p.basicInfo?.name) return null;
+  const prime = isPrimeCard(p);
+  const dateStr =
+    getDossierEvaluationDate(p) || (!prime && fallbackMs ? formatIsoDate(fallbackMs) : null);
+  if (!dateStr) {
+    return null; // Enforce rule: undated dossiers cannot be used in the shared database
+  }
+
+  const versionType = p.version?.type || (prime ? 'prime' : 'current');
+  const d = new Date(`${dateStr}T12:00:00Z`);
+  const monthName = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+  const season = seasonForDate(dateStr);
+
+  const version = p.version || {
+    id: `${toBasePlayerSlug(p.basicInfo.name)}-${versionType}-${dateStr}`,
+    type: versionType,
+    label: prime
+      ? `Prime Zenith (${season})`
+      : `Current Form (${monthName} ${d.getUTCFullYear()})`,
+    evaluationDate: dateStr,
+    seasonOrEra: season,
+    peakContext: null,
+  };
+
+  return {
+    ...p,
+    evaluationDate: dateStr,
+    createdAt: p.createdAt || d.getTime(),
+    version: {
+      ...version,
+      evaluationDate: dateStr,
+    },
+  };
+};
+
+/**
+ * Stable identity for one card version of one player. Two cards of the same player share a
+ * key only when edition and evaluation date both match.
+ */
+export const getCardKey = (p: PlayerProfile): string =>
+  `${toBasePlayerSlug(p.basicInfo.name)}:${
+    isPrimeCard(p) ? p.version?.type ?? 'prime' : 'current'
+  }:${getDossierEvaluationDate(p) ?? p.createdAt ?? 'undated'}`;
+
+/** Immutable archive slug for a dated card, e.g. "joshua-kimmich--current--2026-10-25". */
+export const toVersionedSlug = (p: PlayerProfile): string | null => {
+  const date = getDossierEvaluationDate(p);
+  if (!date) return null;
+  const type = isPrimeCard(p) ? p.version?.type ?? 'prime' : 'current';
+  return `${toBasePlayerSlug(p.basicInfo.name)}--${type}--${date}`;
+};
+
+/** Mutable "latest card" pointer slug. Share links and cache lookups use this one. */
+export const toDossierCardSlug = (name: string, isHistorical = false): string => {
+  const base = toBasePlayerSlug(name);
+  return isHistorical ? `prime-${base}` : base;
+};
+
 export const getCachedDossier = async (
   slug: string,
   checkTTL = true,
@@ -59,25 +194,43 @@ export const getCachedDossier = async (
       return null;
     }
     const profile = data.player_data as PlayerProfile;
+    const dated = ensureDossierDated(profile, updatedAtMs);
+    if (!dated) {
+      // Undated legacy cards stay viewable through a direct share link, but never serve as cache hits.
+      return checkTTL ? null : { ...profile, createdAt: profile.createdAt || updatedAtMs };
+    }
     return {
-      ...profile,
-      createdAt: profile.createdAt || updatedAtMs,
+      ...dated,
+      createdAt: dated.createdAt || updatedAtMs,
     };
   } catch {
     return null;
   }
 };
 
-export const upsertCachedDossier = async (slug: string, profile: PlayerProfile): Promise<void> => {
-  if (!slug) return;
+/**
+ * Persists a dated card. Writes the mutable "latest" pointer slug and an immutable versioned
+ * slug, and archives whatever card previously occupied the pointer so a re-rating never
+ * erases history. The `_slug` argument is kept for call-site compatibility; the pointer slug
+ * is derived from the card's own edition.
+ */
+export const upsertCachedDossier = async (
+  _slug: string,
+  profile: PlayerProfile,
+): Promise<void> => {
+  const dated = ensureDossierDated(profile, Date.now());
+  if (!dated) return; // Enforce: undated dossiers cannot be used in the shared database
+
   const stamped: PlayerProfile = {
-    ...profile,
-    createdAt: profile.createdAt || Date.now(),
+    ...dated,
+    createdAt: dated.createdAt || Date.now(),
   };
+  const key = getCardKey(stamped);
+  const alias = toDossierCardSlug(stamped.basicInfo.name, isPrimeCard(stamped));
+  const versioned = toVersionedSlug(stamped);
+
   // Update in-memory Supabase calibrated pool immediately
-  const existingIdx = supabaseCalibratedPool.findIndex(
-    (p) => toPlayerSlug(p.basicInfo.name) === slug,
-  );
+  const existingIdx = supabaseCalibratedPool.findIndex((p) => getCardKey(p) === key);
   if (existingIdx >= 0) {
     supabaseCalibratedPool[existingIdx] = stamped;
   } else {
@@ -86,13 +239,56 @@ export const upsertCachedDossier = async (slug: string, profile: PlayerProfile):
 
   if (!supabase) return;
   try {
-    await supabase.from('player_profiles').upsert(
-      { player_slug: slug, player_data: stamped, updated_at: new Date().toISOString() },
-      { onConflict: 'player_slug' },
-    );
+    const nowIso = new Date().toISOString();
+    const rows: Array<{ player_slug: string; player_data: PlayerProfile; updated_at: string }> = [];
+
+    const { data: existing } = await supabase
+      .from('player_profiles')
+      .select('player_data, updated_at')
+      .eq('player_slug', alias)
+      .maybeSingle();
+    if (existing?.player_data) {
+      const prev = ensureDossierDated(
+        existing.player_data as PlayerProfile,
+        new Date(existing.updated_at).getTime(),
+      );
+      const prevSlug = prev ? toVersionedSlug(prev) : null;
+      if (prev && prevSlug && getCardKey(prev) !== key) {
+        rows.push({ player_slug: prevSlug, player_data: prev, updated_at: existing.updated_at });
+      }
+    }
+
+    rows.push({ player_slug: alias, player_data: stamped, updated_at: nowIso });
+    if (versioned) {
+      rows.push({ player_slug: versioned, player_data: stamped, updated_at: nowIso });
+    }
+    await supabase.from('player_profiles').upsert(rows, { onConflict: 'player_slug' });
   } catch (e) {
     console.warn('[Cache] Upsert failed:', e);
   }
+};
+
+/**
+ * Publishes one card under its immutable versioned slug and returns the slug for a share link.
+ * It never touches the "latest" pointer, so sharing an old card can't clobber a newer one.
+ */
+export const shareDossierCard = async (profile: PlayerProfile): Promise<string> => {
+  if (!supabase) throw new Error('Database not available.');
+  const dated = ensureDossierDated(profile, Date.now());
+  const slug = dated ? toVersionedSlug(dated) : null;
+  if (!dated || !slug) {
+    throw new Error(
+      'This dossier has no verified evaluation date, so it can’t be shared yet. Re-rate the player to generate a dated card.',
+    );
+  }
+  const { error } = await supabase
+    .from('player_profiles')
+    .upsert(
+      { player_slug: slug, player_data: dated, updated_at: new Date().toISOString() },
+      { onConflict: 'player_slug' },
+    );
+  if (error) throw error;
+  return slug;
 };
 
 /**
@@ -117,10 +313,13 @@ export const fetchSupabaseCalibratedPool = async (): Promise<PlayerProfile[]> =>
       for (const row of data) {
         const p = row?.player_data as PlayerProfile | undefined;
         if (p && p.basicInfo?.name && p.ratings?.overall >= 60) {
-          loaded.push({
-            ...p,
-            createdAt: p.createdAt || new Date(row.updated_at).getTime(),
-          });
+          const dated = ensureDossierDated(p, new Date(row.updated_at).getTime());
+          if (dated) {
+            loaded.push({
+              ...dated,
+              createdAt: dated.createdAt || new Date(row.updated_at).getTime(),
+            });
+          }
         }
       }
       supabaseCalibratedPool = loaded;
@@ -131,6 +330,209 @@ export const fetchSupabaseCalibratedPool = async (): Promise<PlayerProfile[]> =>
   }
   return supabaseCalibratedPool;
 };
+
+/**
+ * Looks up all prior authored dossiers for a given player name across local and Supabase stores.
+ * Sorts them chronologically (oldest to newest) so rating progression/trajectory can be weighed.
+ */
+export async function fetchPriorDossiersForPlayer(
+  playerName: string,
+  extraPool: PlayerProfile[] = [],
+): Promise<PlayerProfile[]> {
+  const targetSlug = toBasePlayerSlug(playerName);
+  if (!targetSlug) return [];
+
+  const matched = new Map<string, PlayerProfile>();
+
+  // Exact name match, or a whole-token match for surname-only requests ("Kimmich").
+  const isSamePlayer = (base: string): boolean =>
+    base === targetSlug || (targetSlug.length >= 4 && base.split('-').includes(targetSlug));
+
+  const checkAndAdd = (p: PlayerProfile, fallbackMs?: number) => {
+    const dated = ensureDossierDated(p, fallbackMs);
+    if (!dated) return;
+    if (isSamePlayer(toBasePlayerSlug(dated.basicInfo.name))) {
+      matched.set(getCardKey(dated), dated);
+    }
+  };
+
+  for (const p of extraPool) checkAndAdd(p);
+  for (const p of supabaseCalibratedPool) checkAndAdd(p);
+
+  if (supabase && targetSlug.length >= 4) {
+    try {
+      // Matches the pointer slugs, prime pointer slugs, and every versioned archive slug.
+      const { data } = await supabase
+        .from('player_profiles')
+        .select('player_data, updated_at')
+        .ilike('player_slug', `%${targetSlug}%`);
+      if (Array.isArray(data)) {
+        for (const row of data) {
+          if (row?.player_data) {
+            checkAndAdd(row.player_data, new Date(row.updated_at).getTime());
+          }
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  const list = [...matched.values()];
+  list.sort((a, b) => (a.evaluationDate || '').localeCompare(b.evaluationDate || ''));
+  return list;
+}
+
+/**
+ * Formats prior authored ratings into a structured prompt block so Futbolpedia weighs
+ * previous ratings and evaluation dates when generating a new rating for this player.
+ */
+export function buildPriorDossierTrajectoryBlock(
+  priorDossiers: PlayerProfile[],
+  targetPlayer: string,
+): string {
+  const datedPriors = priorDossiers.filter(isDossierDated);
+  if (datedPriors.length === 0) return '';
+
+  const entries = datedPriors.map((p) => {
+    const date = p.evaluationDate || formatIsoDate(p.createdAt) || 'Previous Date';
+    const edition = p.version?.label || (p.version?.type === 'prime' ? 'Prime Zenith' : 'Current Form');
+    const topAttrs = Object.entries(p.attributes || {})
+      .filter(([, v]) => typeof v === 'number' && v >= 85)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([k, v]) => `${ATTRIBUTE_LABELS[k as keyof Attributes] || k} ${v}`)
+      .join(', ');
+
+    return `- [${edition} · Evaluated ${date}]: Overall ${p.ratings.overall} / Potential ${p.ratings.potential} (${p.basicInfo.club}, ${p.basicInfo.position})
+  Archetype: ${p.playstyleAndRole?.playstyle?.archetype || 'N/A'}${topAttrs ? ` | Key Spikes: ${topAttrs}` : ''}`;
+  });
+
+  return `
+<prior_authored_dossiers>
+Futbolpedia previously authored the following dated dossier card(s) for ${targetPlayer}:
+${entries.join('\n')}
+
+TRAJECTORY & RATING MEMORY PROTOCOL:
+You are authoring a new evaluation for this player. Factor in this authored historical baseline:
+1. Explain or reflect what has changed since that evaluation date (form progression, tactical role change, trophy triumph, age decline, or steady consistency) rather than making arbitrary, ungrounded rating swings.
+2. Maintain thoughtful longitudinal consistency while honoring verified recent trajectory.
+</prior_authored_dossiers>`;
+}
+
+export interface GlobalHubDossierItem {
+  profile: PlayerProfile;
+  isCurrentRating: boolean;
+  trajectoryDiff?: number;
+  previousRatingDate?: string;
+}
+
+/**
+ * Fetches all public dated dossiers from Supabase and local archives for the Global Dossier Hub.
+ * Enforces the rule: any dossier that cannot be dated is excluded from this database.
+ * Identifies the latest 'current' dated dossier for each player as their official current rating.
+ */
+export async function fetchGlobalHubDossiers(
+  localSaved: PlayerProfile[] = [],
+): Promise<GlobalHubDossierItem[]> {
+  const mapByCardKey = new Map<string, PlayerProfile>();
+
+  const ingest = (raw: any, fallbackDateMs?: number) => {
+    if (!raw || typeof raw !== 'object') return;
+    const dated = ensureDossierDated(raw as PlayerProfile, fallbackDateMs);
+    if (!dated || !dated.basicInfo?.name || (dated.ratings?.overall ?? 0) < 60) return;
+    mapByCardKey.set(getCardKey(dated), dated);
+  };
+
+  // 1. Local profiles only stand in when the shared database is unreachable.
+  if (!supabase) {
+    for (const p of localSaved) ingest(p);
+  }
+
+  // 2. Ingest Supabase public player_profiles. Pointer and archive rows for the same card
+  // share a card key, so they collapse into one entry.
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('player_profiles')
+        .select('player_slug, player_data, updated_at, created_at')
+        .order('updated_at', { ascending: false })
+        .limit(1000);
+
+      if (!error && Array.isArray(data)) {
+        for (const row of data) {
+          const fallback = row.updated_at
+            ? new Date(row.updated_at).getTime()
+            : row.created_at
+            ? new Date(row.created_at).getTime()
+            : undefined;
+          ingest(row.player_data, fallback);
+        }
+      }
+    } catch (e) {
+      console.warn('[GlobalHub] Fetch failed:', e);
+    }
+  }
+
+  const allDossiers = [...mapByCardKey.values()];
+
+  // Group by player normalized name to determine each player's official "Current" rating and trajectory
+  const byPlayer = new Map<string, PlayerProfile[]>();
+  for (const p of allDossiers) {
+    const base = toBasePlayerSlug(p.basicInfo.name);
+    if (!byPlayer.has(base)) byPlayer.set(base, []);
+    byPlayer.get(base)!.push(p);
+  }
+
+  const results: GlobalHubDossierItem[] = [];
+
+  for (const [, cards] of byPlayer.entries()) {
+    // Separate current cards from prime cards
+    const currentCards = cards
+      .filter((c) => c.version?.type === 'current')
+      .sort((a, b) => (b.evaluationDate || '').localeCompare(a.evaluationDate || ''));
+
+    const primeCards = cards.filter((c) => c.version?.type !== 'current');
+
+    // Newest current card is the player's official Current rating
+    const newestCurrent = currentCards[0];
+    const previousCurrent = currentCards[1];
+
+    for (const card of currentCards) {
+      const isLatest = card === newestCurrent;
+      let trajectoryDiff: number | undefined;
+      let previousRatingDate: string | undefined;
+
+      if (isLatest && previousCurrent) {
+        trajectoryDiff = card.ratings.overall - previousCurrent.ratings.overall;
+        previousRatingDate = previousCurrent.evaluationDate;
+      }
+
+      results.push({
+        profile: card,
+        isCurrentRating: isLatest,
+        trajectoryDiff,
+        previousRatingDate,
+      });
+    }
+
+    for (const card of primeCards) {
+      results.push({
+        profile: card,
+        isCurrentRating: false,
+      });
+    }
+  }
+
+  // Sort: current official ratings first, then by Overall descending
+  results.sort((a, b) => {
+    if (a.isCurrentRating && !b.isCurrentRating) return -1;
+    if (!a.isCurrentRating && b.isCurrentRating) return 1;
+    return b.profile.ratings.overall - a.profile.ratings.overall;
+  });
+
+  return results;
+}
 
 const SHARE_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -200,6 +602,9 @@ export const serializeProfileForHistory = (p: PlayerProfile): string => {
   return [
     `[DOSSIER YOU (Futbolpedia) PREVIOUSLY GENERATED — this is your authored analysis; stay consistent with it unless you explicitly revise a value and say so]`,
     `Name: ${bi?.name} | Age: ${bi?.age} | Nationality: ${bi?.nationality} | Club: ${bi?.club} | Position: ${bi?.position}`,
+    p.version
+      ? `Edition: ${p.version.label} | Evaluated: ${getDossierEvaluationDate(p) ?? 'undated'}`
+      : '',
     `Overall: ${p.ratings?.overall} | Potential: ${p.ratings?.potential}`,
     `Archetype: ${p.playstyleAndRole?.playstyle?.archetype} | Best Roles: ${roles}`,
     `${p.goalkeeperAttributes ? 'Goalkeeper Attributes' : 'Attributes'} (0-99): ${attrs}`,
@@ -250,10 +655,10 @@ export const mergeConversationDossiers = (
 ): PlayerProfile[] => {
   const bySlug = new Map<string, PlayerProfile>();
   for (const p of collectDossiersFromHistory(history)) {
-    bySlug.set(toPlayerSlug(p.basicInfo.name), p);
+    bySlug.set(getCardKey(p), p);
   }
   for (const p of conversationProfiles) {
-    if (isConfidentDossier(p)) bySlug.set(toPlayerSlug(p.basicInfo.name), p);
+    if (isConfidentDossier(p)) bySlug.set(getCardKey(p), p);
   }
   return [...bySlug.values()];
 };
@@ -263,10 +668,10 @@ const dossierSlugsCoveredInHistory = (history: ChatMessage[]): Set<string> => {
   for (const msg of history) {
     if (msg.sender !== 'ai') continue;
     if (isPlayerProfile(msg.content)) {
-      slugs.add(toPlayerSlug(msg.content.basicInfo.name));
+      slugs.add(getCardKey(msg.content));
     } else if (isLegacyComparisonContent(msg.content)) {
       for (const p of msg.content.players || []) {
-        slugs.add(toPlayerSlug(p.basicInfo.name));
+        slugs.add(getCardKey(p));
       }
     }
   }
@@ -292,12 +697,12 @@ export const findReferencedDossiers = (
     const hit =
       checkText.includes(name) ||
       tokens.some((t) => new RegExp(`\\b${escapeRegExp(t)}\\b`).test(checkText));
-    if (hit) matched.set(toPlayerSlug(d.basicInfo.name), d);
+    if (hit) matched.set(getCardKey(d), d);
   }
 
   if (matched.size === 0 && /\b(he|him|his|they|them|their)\b/i.test(message)) {
     const latest = dossiers[dossiers.length - 1];
-    matched.set(toPlayerSlug(latest.basicInfo.name), latest);
+    matched.set(getCardKey(latest), latest);
   }
 
   return [...matched.values()];
@@ -376,7 +781,7 @@ export const resolveSavedDossiersForRequest = (
     return { dossiers: [], inventoryOnly: false };
   }
 
-  const convSlugs = new Set(conversationDossiers.map((p) => toPlayerSlug(p.basicInfo.name)));
+  const convSlugs = new Set(conversationDossiers.map((p) => getCardKey(p)));
   const referenced = findReferencedDossiers(message, confident, explicitNames);
   const inventoryOnly = wantsSavedDossierInventory(message) && referenced.length === 0;
 
@@ -384,7 +789,7 @@ export const resolveSavedDossiersForRequest = (
 
   if (referenced.length > 0) {
     const notInConversation = referenced.filter(
-      (p) => !convSlugs.has(toPlayerSlug(p.basicInfo.name)),
+      (p) => !convSlugs.has(getCardKey(p)),
     );
     return {
       dossiers: notInConversation.length > 0 ? notInConversation : referenced,
@@ -438,7 +843,7 @@ export const buildHistoryContents = (
   const covered = dossierSlugsCoveredInHistory(history);
   for (const p of conversationProfiles) {
     if (!isConfidentDossier(p)) continue;
-    if (covered.has(toPlayerSlug(p.basicInfo.name))) continue;
+    if (covered.has(getCardKey(p))) continue;
     geminiHistory.push({
       role: 'model',
       parts: [{ text: serializeProfileForHistory(p) }],
@@ -585,7 +990,7 @@ export function grepDossiers(
   const bySlug = new Map<string, PlayerProfile>();
   for (const d of [...supabaseCalibratedPool, ...dossiers]) {
     if (isConfidentDossier(d)) {
-      bySlug.set(toPlayerSlug(d.basicInfo.name), d);
+      bySlug.set(getCardKey(d), d);
     }
   }
   let pool = [...bySlug.values()];
@@ -695,7 +1100,7 @@ export function mergeAllCalibratedDossiers(
   for (const d of [...supabaseCalibratedPool, ...savedDossiers, ...conversationDossiers]) {
     if (!isConfidentDossier(d)) continue;
     if (!d.createdAt || d.createdAt < CALIBRATION_EPOCH_MS) continue;
-    bySlug.set(toPlayerSlug(d.basicInfo.name), d);
+    bySlug.set(getCardKey(d), d);
   }
   return [...bySlug.values()];
 }
@@ -791,7 +1196,7 @@ export function buildPositionalPeerLedgerBlock(
 
   // 1. Prioritize direct target matches so their exact ratings are always visible
   for (const t of matchedTargets) {
-    selectedBySlug.set(toPlayerSlug(t.basicInfo.name), t);
+    selectedBySlug.set(getCardKey(t), t);
   }
 
   // 2. Prioritize same-position calibrated peers across all rating tiers (up to 10)
@@ -800,14 +1205,14 @@ export function buildPositionalPeerLedgerBlock(
       matchesPositionalFilter(p.basicInfo.position, detectedPos),
     );
     for (const p of positionalPeers.slice(0, 10)) {
-      selectedBySlug.set(toPlayerSlug(p.basicInfo.name), p);
+      selectedBySlug.set(getCardKey(p), p);
     }
   }
 
   // 3. Fill remaining slots up to 18 with global top-rated anchors
   for (const p of sortedAll) {
     if (selectedBySlug.size >= 18) break;
-    selectedBySlug.set(toPlayerSlug(p.basicInfo.name), p);
+    selectedBySlug.set(getCardKey(p), p);
   }
 
   const finalList = [...selectedBySlug.values()].sort(
@@ -833,7 +1238,8 @@ export function buildPositionalPeerLedgerBlock(
             .filter(Boolean)
             .join(', ')
         : '';
-    return `- ${p.basicInfo.name} (${p.basicInfo.position}, ${p.basicInfo.club}): ${p.ratings.overall} OVR / ${p.ratings.potential} POT${topSpikes ? ` [Spikes: ${topSpikes}]` : ''}${queriedSlice ? ` [Queried: ${queriedSlice}]` : ''}`;
+    const editionTag = isPrimeCard(p) ? ` [Prime ${p.version?.seasonOrEra ?? ''}]`.replace(' ]', ']') : '';
+    return `- ${p.basicInfo.name}${editionTag} (${p.basicInfo.position}, ${p.basicInfo.club}): ${p.ratings.overall} OVR / ${p.ratings.potential} POT${topSpikes ? ` [Spikes: ${topSpikes}]` : ''}${queriedSlice ? ` [Queried: ${queriedSlice}]` : ''}`;
   });
 
   return `

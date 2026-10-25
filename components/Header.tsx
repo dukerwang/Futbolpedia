@@ -9,6 +9,8 @@ interface HeaderProps {
     isPanelOpen: boolean;
     onToggleConversations: () => void;
     isConversationsOpen: boolean;
+    onOpenHub: () => void;
+    isHubOpen?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -19,7 +21,9 @@ export const Header: React.FC<HeaderProps> = ({
     onToggleDossier,
     isPanelOpen,
     onToggleConversations,
-    isConversationsOpen
+    isConversationsOpen,
+    onOpenHub,
+    isHubOpen
 }) => {
   return (
     <header className="sticky top-0 w-full flex items-center justify-between px-8 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-5 bg-cream-200 dark:bg-charcoal z-50 shrink-0 border-b border-cream-300 dark:border-charcoal-border select-none transition-colors duration-300">
@@ -34,6 +38,18 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
         
         <div className="flex items-center gap-3">
+            <button
+                onClick={onOpenHub}
+                className={`p-2 rounded-full transition-colors ${
+                    isHubOpen 
+                    ? 'bg-emerald-500 text-white hover:bg-emerald-600' 
+                    : 'text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light'
+                }`}
+                title="Global Dossier Hub"
+            >
+                <span className="material-symbols-outlined text-[20px] block">public</span>
+            </button>
+
             <button
                 onClick={onToggleConversations}
                 className={`p-2 rounded-full transition-colors ${

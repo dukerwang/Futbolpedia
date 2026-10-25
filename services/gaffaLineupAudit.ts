@@ -6,7 +6,7 @@ import type {
   GaffaRosterPlayer,
   PlayerProfile,
 } from '../types';
-import { toPlayerSlug } from './dossierStore';
+import { getDossierEvaluationDate, isPrimeCard, toBasePlayerSlug } from './dossierStore';
 
 export const DEFENSIVE_SLOTS = new Set(['CB', 'LB', 'RB', 'LWB', 'RWB']);
 export const MID_ATT_SLOTS = new Set(['DM', 'CM', 'AM', 'LW', 'RW', 'ST']);
@@ -71,7 +71,15 @@ export function buildDossierLookupMap(dossiers: PlayerProfile[] = []): Map<strin
   const map = new Map<string, PlayerProfile>();
   for (const d of dossiers) {
     if (!d?.basicInfo?.name) continue;
-    map.set(toPlayerSlug(d.basicInfo.name), d);
+    // Gaffa fields current players, so a prime card must never stand in for the live rating.
+    if (isPrimeCard(d)) continue;
+    const key = toBasePlayerSlug(d.basicInfo.name);
+    const existing = map.get(key);
+    // Several dated current cards can exist for one player. Keep the newest.
+    if (existing && (getDossierEvaluationDate(existing) ?? '') > (getDossierEvaluationDate(d) ?? '')) {
+      continue;
+    }
+    map.set(key, d);
   }
   return map;
 }
@@ -81,10 +89,10 @@ export function lookupPlayerDossier(
   displayName: string | undefined,
   dossierMap: Map<string, PlayerProfile>,
 ): PlayerProfile | undefined {
-  const byFull = dossierMap.get(toPlayerSlug(name));
+  const byFull = dossierMap.get(toBasePlayerSlug(name));
   if (byFull) return byFull;
   if (displayName) {
-    return dossierMap.get(toPlayerSlug(displayName));
+    return dossierMap.get(toBasePlayerSlug(displayName));
   }
   return undefined;
 }

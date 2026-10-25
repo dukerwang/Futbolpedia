@@ -13,18 +13,29 @@ import {
   buildHistoryContents,
   buildLockedDossiersBlock,
   buildPositionalPeerLedgerBlock,
+  buildPriorDossierTrajectoryBlock,
   buildSavedDossiersBlock,
+  ensureDossierDated,
+  fetchGlobalHubDossiers,
+  type GlobalHubDossierItem,
+  fetchPriorDossiersForPlayer,
   fetchSupabaseCalibratedPool,
   findReferencedDossiers,
   getCachedDossier,
+  getCardKey,
+  getDossierEvaluationDate,
   getSharedConversation,
   grepDossiers,
+  isDossierDated,
+  isPrimeCard,
   isSupabaseReady,
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
   resolveSavedDossiersForRequest,
   shareConversation,
+  shareDossierCard,
   supabase,
+  toDossierCardSlug,
   toPlayerSlug,
   upsertCachedDossier,
   wantsSavedDossierAccess,
@@ -37,11 +48,21 @@ export {
   supabase,
   isSupabaseReady,
   toPlayerSlug,
+  toDossierCardSlug,
   getCachedDossier,
   upsertCachedDossier,
   shareConversation,
   getSharedConversation,
   gatherSearchFoundation,
+  fetchGlobalHubDossiers,
+  type GlobalHubDossierItem,
+  fetchPriorDossiersForPlayer,
+  ensureDossierDated,
+  isDossierDated,
+  getDossierEvaluationDate,
+  getCardKey,
+  shareDossierCard,
+  isPrimeCard,
 };
 
 /**
@@ -164,8 +185,8 @@ export const sendMessageToAI = async (
   );
   if (!savedResult.inventoryOnly) {
     for (const p of savedResult.dossiers) {
-      const slug = toPlayerSlug(p.basicInfo.name);
-      if (!referencedDossiers.some((x) => toPlayerSlug(x.basicInfo.name) === slug)) {
+      const key = getCardKey(p);
+      if (!referencedDossiers.some((x) => getCardKey(x) === key)) {
         referencedDossiers.push(p);
       }
     }
@@ -187,29 +208,38 @@ export const sendMessageToAI = async (
     const isFreshlyCalibrated = (p?: PlayerProfile): boolean =>
       Boolean(p?.createdAt && p.createdAt >= CALIBRATION_EPOCH_MS);
 
+    // A player can hold several cards (current plus prime). Shortcuts and locks only consider
+    // cards of the edition this request is asking for.
+    const matchesRequestedEdition = (p: PlayerProfile): boolean =>
+      isPrimeCard(p) === route.isHistorical;
+    const currentReferenced = referencedDossiers.filter((p) => !isPrimeCard(p));
+    const currentSaved = savedResult.dossiers.filter((p) => !isPrimeCard(p));
+
     if (!imageData && !route.wantsRegeneration) {
       // Return locked in-conversation dossier if re-requested without regeneration flag
       if (
         !route.isHistorical &&
-        referencedDossiers.length === 1 &&
-        isFreshlyCalibrated(referencedDossiers[0])
+        currentReferenced.length === 1 &&
+        isFreshlyCalibrated(currentReferenced[0])
       ) {
-        return referencedDossiers[0];
+        return currentReferenced[0];
       }
 
       // Return saved archive dossier if explicitly requested
       if (
         !route.isHistorical &&
         wantsSavedDossierAccess(message) &&
-        savedResult.dossiers.length === 1 &&
-        isFreshlyCalibrated(savedResult.dossiers[0])
+        currentSaved.length === 1 &&
+        isFreshlyCalibrated(currentSaved[0])
       ) {
-        return savedResult.dossiers[0];
+        return currentSaved[0];
       }
 
       // Check in-memory calibrated pool first (0ms hit for last-name or full-name matches)
       if (!route.isHistorical && primaryPlayer) {
-        const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+        const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers).filter(
+          (p) => !isPrimeCard(p),
+        );
         const poolHits = findReferencedDossiers(primaryPlayer, allCalibrated, [primaryPlayer]);
         if (poolHits.length === 1 && isFreshlyCalibrated(poolHits[0])) {
           perf('in-memory calibrated pool hit');
@@ -249,7 +279,9 @@ export const sendMessageToAI = async (
       `Calibrating 25-attribute dossier for ${grounding.apiPlayer?.name || primaryPlayer || 'player'}...`,
     );
 
-    const freshReferencedDossiers = referencedDossiers.filter(isFreshlyCalibrated);
+    const freshReferencedDossiers = referencedDossiers
+      .filter(matchesRequestedEdition)
+      .filter(isFreshlyCalibrated);
     const synthesisLockedBlock = route.wantsRegeneration
       ? ''
       : buildLockedDossiersBlock(freshReferencedDossiers);
@@ -261,6 +293,16 @@ export const sendMessageToAI = async (
         })
       : peerLedgerBlock;
 
+    // Retrieve prior authored dossiers for longitudinal memory and trajectory weighing
+    const priorDossiers = await fetchPriorDossiersForPlayer(primaryPlayer, [
+      ...savedDossiers,
+      ...conversationDossiers,
+    ]);
+    const priorTrajectoryBlock = buildPriorDossierTrajectoryBlock(
+      priorDossiers,
+      grounding.apiPlayer?.name || primaryPlayer || 'player',
+    );
+
     const profile = await synthesizePlayerDossier({
       rawMessage: message,
       isHistorical: route.isHistorical,
@@ -271,19 +313,19 @@ export const sendMessageToAI = async (
       lockedDossiersBlock: synthesisLockedBlock,
       savedDossiersBlock,
       peerLedgerBlock: synthesisPeerLedgerBlock,
+      priorTrajectoryBlock,
     });
     perf('calibrated synthesis');
 
-    const stampedProfile: PlayerProfile = {
+    const stampedProfile: PlayerProfile = ensureDossierDated(profile, Date.now()) || {
       ...profile,
       createdAt: Date.now(),
     };
 
-    const baseSlug = toPlayerSlug(stampedProfile.basicInfo.name);
-    const cacheSlug =
-      route.isHistorical && !baseSlug.startsWith('prime-') && !baseSlug.startsWith('peak-')
-        ? `prime-${baseSlug}`
-        : baseSlug;
+    const cacheSlug = toDossierCardSlug(
+      stampedProfile.basicInfo.name,
+      route.isHistorical,
+    );
     upsertCachedDossier(cacheSlug, stampedProfile);
     return stampedProfile;
   }

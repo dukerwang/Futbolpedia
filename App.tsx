@@ -5,6 +5,7 @@ import { ChatInput } from './components/ChatInput';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import { WhatsNewPopup } from './components/WhatsNewPopup';
+import { GlobalDossierHub } from './components/GlobalDossierHub';
 import type {
   ChatMessage,
   PlayerProfile,
@@ -13,7 +14,14 @@ import type {
   GaffaAuthUser,
   GaffaUserClub,
 } from './types';
-import { sendMessageToAI, resetChat, getCachedDossier, getSharedConversation } from './services/geminiService';
+import {
+  sendMessageToAI,
+  resetChat,
+  getCachedDossier,
+  getSharedConversation,
+  ensureDossierDated,
+  getCardKey,
+} from './services/geminiService';
 import { sendGaffaMessage } from './services/gaffaChatService';
 import { looksLikeGaffaQuestion } from './services/gaffaDetect';
 import {
@@ -58,6 +66,7 @@ const App: React.FC = () => {
   const [activeProfile, setActiveProfile] = useState<PlayerProfile | null>(null);
   const [allProfiles, setAllProfiles] = useState<PlayerProfile[]>([]);
   const [globalDossiers, setGlobalDossiers] = useState<PlayerProfile[]>([]);
+  const [isHubOpen, setIsHubOpen] = useState(false);
 
   // Chat domain (Futbolpedia default vs Gaffa Q&A) — persisted per conversation
   const [domain, setDomain] = useState<ChatDomain>('default');
@@ -101,34 +110,37 @@ const App: React.FC = () => {
   const saveAndSetActiveProfile = useCallback((profile: PlayerProfile | null) => {
     setActiveProfile(profile);
     if (profile) {
-      const profileWithDate = {
+      const datedProfile = ensureDossierDated(profile, Date.now()) || {
         ...profile,
-        createdAt: Date.now()
+        createdAt: profile.createdAt || Date.now(),
       };
       
-      localStorage.setItem(ACTIVE_PROFILE_KEY, JSON.stringify(profileWithDate));
+      localStorage.setItem(ACTIVE_PROFILE_KEY, JSON.stringify(datedProfile));
+
+      const isSameCardVersion = (a: PlayerProfile, b: PlayerProfile): boolean =>
+        getCardKey(a) === getCardKey(b);
       
       setGlobalDossiers(prev => {
-        const existsIndex = prev.findIndex(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
+        const existsIndex = prev.findIndex(p => isSameCardVersion(p, datedProfile));
         let updated: PlayerProfile[];
         if (existsIndex === -1) {
-          updated = [...prev, profileWithDate];
+          updated = [...prev, datedProfile];
         } else {
           updated = [...prev];
-          updated[existsIndex] = profileWithDate;
+          updated[existsIndex] = datedProfile;
         }
         localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
         return updated;
       });
 
       setAllProfiles(prev => {
-        const existsIndex = prev.findIndex(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
+        const existsIndex = prev.findIndex(p => isSameCardVersion(p, datedProfile));
         let updated: PlayerProfile[];
         if (existsIndex === -1) {
-          updated = [...prev, profileWithDate];
+          updated = [...prev, datedProfile];
         } else {
           updated = [...prev];
-          updated[existsIndex] = profileWithDate;
+          updated[existsIndex] = datedProfile;
         }
         localStorage.setItem('futbolpedia-all-profiles', JSON.stringify(updated));
         return updated;
@@ -210,17 +222,22 @@ const App: React.FC = () => {
     try {
       const storedGlobal = localStorage.getItem('futbolpedia-global-dossiers');
       if (storedGlobal) {
-        savedGlobalDossiers = JSON.parse(storedGlobal);
+        const parsed = JSON.parse(storedGlobal);
+        if (Array.isArray(parsed)) {
+          // Undated legacy cards stay in the personal library; only the shared registry requires a date.
+          savedGlobalDossiers = parsed.map(
+            (p: any) => ensureDossierDated(p, p.createdAt || Date.now()) ?? p,
+          );
+        }
       } else {
         // Migrate from 'futbolpedia-all-profiles'
         const oldProfilesStr = localStorage.getItem('futbolpedia-all-profiles');
         if (oldProfilesStr) {
           const parsedOld = JSON.parse(oldProfilesStr);
           if (Array.isArray(parsedOld)) {
-            savedGlobalDossiers = parsedOld.map((p: any) => ({
-              ...p,
-              createdAt: p.createdAt || Date.now()
-            }));
+            savedGlobalDossiers = parsedOld.map(
+              (p: any) => ensureDossierDated(p, p.createdAt || Date.now()) ?? p,
+            );
           }
         }
 
@@ -228,12 +245,11 @@ const App: React.FC = () => {
         savedConvs.forEach(conv => {
           if (conv.allProfiles) {
             conv.allProfiles.forEach(prof => {
-              const exists = savedGlobalDossiers.some(p => p.basicInfo.name.toLowerCase() === prof.basicInfo.name.toLowerCase());
+              const datedProf =
+                ensureDossierDated(prof, prof.createdAt || conv.createdAt || Date.now()) ?? prof;
+              const exists = savedGlobalDossiers.some(p => getCardKey(p) === getCardKey(datedProf));
               if (!exists) {
-                savedGlobalDossiers.push({
-                  ...prof,
-                  createdAt: prof.createdAt || conv.createdAt || Date.now()
-                });
+                savedGlobalDossiers.push(datedProf);
               }
             });
           }
@@ -823,10 +839,10 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const handleRenameDossier = useCallback((oldName: string, newName: string) => {
+  const handleRenameDossier = useCallback((cardKeyOrName: string, newName: string) => {
     setGlobalDossiers(prev => {
       const updated = prev.map(d => {
-        if (d.basicInfo.name.toLowerCase() === oldName.toLowerCase()) {
+        if (getCardKey(d) === cardKeyOrName || d.basicInfo.name.toLowerCase() === cardKeyOrName.toLowerCase()) {
           return {
             ...d,
             basicInfo: {
@@ -842,7 +858,7 @@ const App: React.FC = () => {
     });
 
     setActiveProfile(prev => {
-      if (prev && prev.basicInfo.name.toLowerCase() === oldName.toLowerCase()) {
+      if (prev && (getCardKey(prev) === cardKeyOrName || prev.basicInfo.name.toLowerCase() === cardKeyOrName.toLowerCase())) {
         const updated = {
           ...prev,
           basicInfo: {
@@ -857,15 +873,15 @@ const App: React.FC = () => {
     });
   }, []);
 
-  const handleDeleteDossier = useCallback((playerName: string) => {
+  const handleDeleteDossier = useCallback((cardKey: string) => {
     setGlobalDossiers(prev => {
-      const filtered = prev.filter(d => d.basicInfo.name.toLowerCase() !== playerName.toLowerCase());
+      const filtered = prev.filter(d => getCardKey(d) !== cardKey);
       localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(filtered));
       return filtered;
     });
 
     setActiveProfile(prev => {
-      if (prev && prev.basicInfo.name.toLowerCase() === playerName.toLowerCase()) {
+      if (prev && getCardKey(prev) === cardKey) {
         localStorage.removeItem(ACTIVE_PROFILE_KEY);
         return null;
       }
@@ -990,6 +1006,19 @@ const App: React.FC = () => {
         isPanelOpen={isPanelOpen}
         onToggleConversations={toggleConversations}
         isConversationsOpen={isConversationsOpen}
+        onOpenHub={() => setIsHubOpen(true)}
+        isHubOpen={isHubOpen}
+      />
+
+      {/* Global Dossier Hub Modal */}
+      <GlobalDossierHub
+        isOpen={isHubOpen}
+        onClose={() => setIsHubOpen(false)}
+        onSelectDossier={(p) => {
+          saveAndSetActiveProfile(p);
+          setIsPanelOpen(true);
+        }}
+        localSavedProfiles={globalDossiers}
       />
       
       {/* Slide-out Dossier Panel - LEFT SIDED */}
