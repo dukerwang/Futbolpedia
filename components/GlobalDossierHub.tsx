@@ -199,6 +199,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
       setTimeout(() => setCopiedSlug(null), 2000);
     } catch (err) {
       console.error('Share failed:', err);
+      if (err instanceof Error) window.alert(err.message);
     }
   };
 

@@ -28,6 +28,8 @@ import {
   buildRevisionRow,
   hasRevisionConsensus,
   type DossierRevisionRow,
+  CALIBRATION_EPOCH_MS,
+  isRatedOnCurrentScale,
   mostRecentlyShownCard,
   pickCardPerPlayer,
   renameDossierCard,
@@ -257,10 +259,11 @@ async function main() {
   });
 
   await test('prior-rating memory matches one player, never a namesake', async () => {
-    const bernardo = currentCard('Bernardo Silva', '2026-09-01');
-    const thiago = currentCard('Thiago Silva', '2026-09-02');
-    const xhakaOld = currentCard('Granit Xhaka', '2026-09-01');
-    const xhakaPrime = primeCard('Granit Xhaka', '2020-08-23');
+    const rated = { createdAt: CALIBRATION_EPOCH_MS + 1 };
+    const bernardo = currentCard('Bernardo Silva', '2026-09-01', rated);
+    const thiago = currentCard('Thiago Silva', '2026-09-02', rated);
+    const xhakaOld = currentCard('Granit Xhaka', '2026-09-01', rated);
+    const xhakaPrime = primeCard('Granit Xhaka', '2020-08-23', rated);
     const pool = [bernardo, thiago, xhakaOld, xhakaPrime];
 
     const bySurname = await fetchPriorDossiersForPlayer('Xhaka', pool);
@@ -268,6 +271,20 @@ async function main() {
     assert.deepEqual(await fetchPriorDossiersForPlayer('Silva', pool), []);
     const exact = await fetchPriorDossiersForPlayer('Bernardo Silva', pool);
     assert.deepEqual(exact.map((p) => p.basicInfo.name), ['Bernardo Silva']);
+  });
+
+  await test('cards rated before the recalibration never anchor a re-rating or get shared', async () => {
+    const oldScale = currentCard('Pedri', '2026-09-01', { createdAt: CALIBRATION_EPOCH_MS - 1 });
+    const unstamped = currentCard('Pedri', '2026-08-01');
+    const newScale = currentCard('Pedri', '2026-10-24', { createdAt: CALIBRATION_EPOCH_MS + 1 });
+    assert.equal(isRatedOnCurrentScale(oldScale), false);
+    assert.equal(isRatedOnCurrentScale(unstamped), false);
+    assert.equal(isRatedOnCurrentScale(unstamped, CALIBRATION_EPOCH_MS + 1), true);
+    assert.equal(isRatedOnCurrentScale(newScale), true);
+
+    const prior = await fetchPriorDossiersForPlayer('Pedri', [oldScale, unstamped, newScale]);
+    assert.deepEqual(prior.map(getCardKey), [getCardKey(newScale)]);
+    assert.deepEqual(await fetchPriorDossiersForPlayer('Pedri', [oldScale, unstamped]), []);
   });
 
   // ── Challenges and revisions ─────────────────────────────────────────────

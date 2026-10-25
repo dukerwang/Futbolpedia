@@ -59,7 +59,7 @@ API-Football and model memory both lag coaching changes, so neither decides who 
 - `gemini-3.8-flash` rejects `ThinkingLevel.MINIMAL` (HTTP 400); `aiClient.ts` maps the `minimal` tier to `LOW`.
 - `SIMULATION_YEAR` / `SIMULATION_SEASON` (`prompts/scoutCore.ts`) are computed once at module load from the real date via `getRealWorldFootballSeason`, so the system instruction stays byte-stable within a process for Gemini's implicit prompt caching. Per-turn prompts read the date through `getCurrentSeasonInfo()`.
 - The EAFC playstyle directory is only injected when the query matches an EAFC pattern — `buildConversationalScoutInstruction(includeEAFC)` controls this.
-- `CALIBRATION_EPOCH_MS` in `dossierCache.ts` invalidates cached dossiers from before the last rating recalibration; bump it when the rating scale changes.
+- `CALIBRATION_EPOCH_MS` in `dossierCache.ts` marks the last rating recalibration. `isRatedOnCurrentScale` keeps older cards (by their own `createdAt`, falling back to row time) out of the cache, peer ledger, prior-rating memory, the Hub and sharing, so old-scale numbers never anchor a new rating. Cards rated before the 2026-10-20 recalibration were moved to the RLS-locked `player_profiles_pre_recalibration` table. When you change the scale, bump the epoch and archive the same way.
 - Shared cards: a current card is the one shared card for `CARD_REFRESH_DAYS` (7) from its evaluation date, prime cards are frozen, and accepted challenges stay personal revisions logged to `dossier_revisions` (3 agreeing people re-rate early). The `enforce_dossier_refresh_window` trigger (`supabase/migrations/`) mirrors `CARD_REFRESH_DAYS`, `CALIBRATION_EPOCH_MS` and `REVISION_CONSENSUS_USERS`, so change them in both places.
 
 ### Frontend State
