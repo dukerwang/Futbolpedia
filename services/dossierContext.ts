@@ -60,6 +60,9 @@ const serializeCard = (p: PlayerProfile, header: string): string => {
   return [
     header,
     `Name: ${bi?.name} | Age: ${bi?.age} | Nationality: ${bi?.nationality} | Club: ${bi?.club} | Position: ${bi?.position}`,
+    p.clubManager
+      ? `Club manager (verified by live search on ${p.clubManager.verifiedOn}): ${p.clubManager.name}`
+      : '',
     p.version
       ? `Edition: ${p.version.label} | Evaluated: ${getDossierEvaluationDate(p) ?? 'undated'}`
       : '',

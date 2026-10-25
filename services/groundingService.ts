@@ -3,7 +3,6 @@ import {
   runGroundedSearch,
 } from './aiClient';
 import type { FutbolpediaVerifiedFacts } from './profileManagerGrounding';
-import { correctStaleCoachRecord } from '../packages/engine/src/gates/managerMentions.ts';
 
 export interface ApiFootballFixtureItem {
   date: string | null;
@@ -101,8 +100,6 @@ export function formatApiFootballFactSheetBlock(player: ApiFootballPlayerFactShe
     ? `Season ${stats.season} (API-Football): ${stats.appearances ?? 0} apps (${stats.lineups ?? 0} starts, ${stats.minutes ?? 0} mins), ${stats.goals ?? 0} goals, ${stats.assists ?? 0} assists${stats.keyPasses != null ? `, ${stats.keyPasses} key passes` : ''}${stats.tackles != null ? `, ${stats.tackles} tackles` : ''}${stats.interceptions != null ? `, ${stats.interceptions} interceptions` : ''}.`
     : 'Season stats: not available in API-Football.';
 
-  const coach = correctStaleCoachRecord(player.currentClub, player.coach, player.coachSince);
-
   const fixturesLine =
     Array.isArray(player.recentFixtures) && player.recentFixtures.length > 0
       ? `Recent Club Match Log: ${player.recentFixtures
@@ -114,7 +111,7 @@ export function formatApiFootballFactSheetBlock(player: ApiFootballPlayerFactShe
   return [
     `[API-FOOTBALL DETERMINISTIC RECORD — ${player.name}]`,
     `Age: ${player.age ?? 'N/A'} | Nationality: ${player.nationality ?? 'N/A'} | Height: ${player.height ?? 'N/A'} | Weight: ${player.weight ?? 'N/A'}`,
-    `Position: ${player.position ?? 'N/A'} | Registered Club: ${player.currentClub ?? 'N/A'}${player.league ? ` (${player.league})` : ''}${coach ? ` | Registered Head Coach: ${coach}` : ''} | Injured flag: ${player.injured ?? 'unknown'}`,
+    `Position: ${player.position ?? 'N/A'} | Registered Club: ${player.currentClub ?? 'N/A'}${player.league ? ` (${player.league})` : ''} | Injured flag: ${player.injured ?? 'unknown'}`,
     statsLine,
     fixturesLine,
   ]
@@ -162,7 +159,7 @@ export async function gatherPlayerGrounding(params: {
   }
 
   const searchQueries = [
-    `${subject} — current club as of ${month} ${year}, confirmed current head coach, recent match appearances, injury status, ${currentSeason} season stats, and major honours ${ANTI_GAME_FILTER}`,
+    `${subject} — current club as of ${month} ${year}, recent match appearances, injury status, ${currentSeason} season stats, and major honours ${ANTI_GAME_FILTER}`,
     `${subject} — tactical scouting report: playing style, positional standing in world football, technical/physical/mental strengths and weaknesses ${ANTI_GAME_FILTER}`,
   ];
 
@@ -183,7 +180,6 @@ Authoritative API-Football record for ${apiPlayer.name}:
 - Height: ${apiPlayer.height ?? 'verify from search'}
 - Weight: ${apiPlayer.weight ?? 'verify from search'}
 - Registered Club: ${apiPlayer.currentClub ?? 'verify from search'} (update only if search confirms a more recent ${year} transfer/loan)
-${apiPlayer.coach ? `- Registered Head Coach: ${apiPlayer.coach} (update only if search confirms a more recent coaching change)` : ''}
 </deterministic_bio_anchor>`
     : '';
 
@@ -271,11 +267,8 @@ export function formatApiFootballTeamContextBlock(ctx: ApiFootballTeamContext | 
     }
   }
 
-  const coach = correctStaleCoachRecord(ctx.team, ctx.coach, ctx.coachSince);
-
   return [
     `[API-FOOTBALL CLUB CONTEXT — ${ctx.team}]`,
-    coach ? `Registered Head Coach: ${coach}` : '',
     squadBlock,
     recentLine,
     upcomingLine,

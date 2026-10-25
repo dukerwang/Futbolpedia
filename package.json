@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "start": "tsx server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/test-dossier-cards.ts && tsx scripts/test-gaffa-name-matching.ts"
+    "test": "tsx scripts/test-dossier-cards.ts && tsx scripts/test-gaffa-name-matching.ts && tsx scripts/test-club-managers.ts"
   },
   "dependencies": {
     "@google/genai": "^1.28.0",

@@ -49,6 +49,8 @@ import {
   wantsSavedDossierAccess,
 } from './dossierStore';
 import { synthesizePlayerDossier } from './dossierSynthesizer';
+import { getClubManager, toClubKey } from './clubManagers';
+import { attachVerifiedManager } from './profileManagerGrounding';
 import { gatherPlayerGrounding, gatherSearchFoundation } from './groundingService';
 import { classifyTurn, extractCandidateSlug } from './turnRouter';
 
@@ -358,7 +360,12 @@ export const sendMessageToAI = async (
         grounding.apiPlayer?.name || primaryPlayer || 'player',
       ) + buildRevisionProposalsBlock(replacedCardChallenges);
 
-    const profile = await synthesizePlayerDossier({
+    // Look up the club's verified manager while the card is synthesized; prime cards skip it.
+    const managerPromise = route.isHistorical
+      ? Promise.resolve(null)
+      : getClubManager(grounding.apiPlayer?.currentClub).catch(() => null);
+
+    const synthesized = await synthesizePlayerDossier({
       rawMessage: message,
       isHistorical: route.isHistorical,
       foundationText: grounding.foundationText,
@@ -371,6 +378,20 @@ export const sendMessageToAI = async (
       priorTrajectoryBlock,
     });
     perf('calibrated synthesis');
+
+    let profile = synthesized;
+    if (!route.isHistorical) {
+      let manager = await managerPromise;
+      // The card's club wins when it differs from API-Football's (e.g. a recent transfer).
+      if (
+        profile.basicInfo.club !== 'N/A' &&
+        (!manager || toClubKey(manager.club) !== toClubKey(profile.basicInfo.club))
+      ) {
+        manager = await getClubManager(profile.basicInfo.club).catch(() => null);
+      }
+      profile = attachVerifiedManager(profile, manager);
+      perf('verified manager');
+    }
 
     const stampedProfile = stampDossier(profile, Date.now());
     upsertCachedDossier(

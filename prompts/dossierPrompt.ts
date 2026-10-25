@@ -29,7 +29,8 @@ You are generating a structured scouting dossier JSON object representing an off
    - Write \`peerBenchmark\`: name 1–2 real-world same-position peers (preferring calibrated peers from \`<calibrated_peer_ledger>\` when applicable, or indisputable global positional peers in the same tier) with their ratings to lock the exact integer within that tier band.
    - List 3–4 \`signatureSpikes\`: the exact attribute keys that define this player's ceiling and best on-pitch qualities.
    - List 2–3 \`genuineFlaws\`: the exact attribute keys that represent genuine limitations or non-strengths in their game.
-   - Set \`verifiedCurrentHeadCoach\` ONLY if \`<factual_foundation>\` or \`<deterministic_bio_anchor>\` explicitly confirms the current head coach of the player's current club. Set to \`null\` if unconfirmed, historical, or if sources conflict.
+   - Set \`verifiedCurrentHeadCoach\` ONLY if \`<factual_foundation>\` explicitly confirms the current head coach of the player's current club. Set to \`null\` if unconfirmed, historical, or if sources conflict.
+   - **No manager names in card prose:** never name a head coach or manager in \`shortBio\`, \`playstyle.description\`, \`latestUpdate\`, or \`archetypeAnalysis\`. The app attaches the verified manager to the card separately. Describe the tactical setup and the player's role in it instead.
 
 2. **Step 2 — Ratings & Spiky Sub-Archetype Attributes (\`ratings\`, \`attributes\`):**
    - \`ratings.overall\` MUST sit inside the integer range of your chosen \`calibration.tierBand\` and represent a **position- and archetype-weighted synthesis** of the player's key role attributes (never an unweighted average of all 25 attributes).

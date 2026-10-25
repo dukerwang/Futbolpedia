@@ -155,6 +155,18 @@ export interface PlayerProfile {
   ageCurve?: AgeCurveOutlook;
   /** Defining career moments (optional for veterans/legends) */
   definingMoments?: DefiningMoment[];
+  /**
+   * The player's club manager from the live manager lookup (services/clubManagers.ts), attached
+   * after synthesis. The model never writes it; card prose doesn't name managers.
+   */
+  clubManager?: ClubManagerSnapshot;
+}
+
+export interface ClubManagerSnapshot {
+  name: string;
+  /** YYYY-MM-DD the lookup confirmed it. */
+  verifiedOn: string;
+  sourceUrl?: string | null;
 }
 
 export type GaffaTradeVerdict = 'hold' | 'lean_hold' | 'toss_up' | 'lean_take' | 'take';

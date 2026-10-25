@@ -12,7 +12,7 @@ npm start        # Run production server (serves /dist statically)
 
 ```bash
 npm run typecheck   # tsc --noEmit (run `npm ci` in packages/engine first for its vitest types)
-npm test            # offline app checks: scripts/test-dossier-cards.ts, scripts/test-gaffa-name-matching.ts
+npm test            # offline app checks: scripts/test-dossier-cards.ts, test-gaffa-name-matching.ts, test-club-managers.ts
 cd packages/engine && npm ci && npm test   # outlook engine + manager-fidelity vitest suite
 ```
 
@@ -49,7 +49,11 @@ Separate chat domain from dossier synthesis. When the ChatInput **Gaffa** toggle
 **Club connect:** sign in through `services/gaffaAuth.ts` and pick a club (RLS context loader), paste league + club IDs in the connect strip, or open `#/gaffa/<leagueId>/<clubId>`. Express `GET /api/gaffa/context` proxies to Gaffa `GET /api/integrations/futbolpedia/context`. The live bag fills `GaffaContextBag` (roster, budget, standings, matchup, XI, listings, auctions, FA pool, league settings); `gaffaLineupAudit.ts` derives lineup audits, alerts and bid valuations from it.
 
 ### Manager fidelity
-API-Football and model memory both lag coaching changes. Live data comes first: `pickCurrentCoach` takes the open `/coachs` stint at the team with the latest start, and the team context and `/api/football/player` / `/fixtures` payloads carry `coach` plus `coachSince`. `packages/engine/src/gates/managerMentions.ts` also holds `KNOWN_CLUB_MANAGERS`, a hand-verified override (not a source of truth) dated by `KNOWN_CLUB_MANAGERS_VERIFIED_ON`. It drives `correctStaleCoachRecord` (overrides an API coach record only when it is missing, names a listed stale coach, or has a `coachSince` before the verified date), `scrubKnownStaleManagers` (club-scoped prose rewrites, using the turn's verified coach for the verified club) and `formatKnownClubManagersForPrompt` (scout prompt line). The whole table switches off 120 days after its verified date (the server warns at startup from 14 days out), so when you touch it, re-verify every entry and bump the date together. Use full names only in `stale`, and never list someone who coaches another listed club. `scrubUnverifiedManagerText` separately replaces any coach name that the turn's grounding didn't verify.
+API-Football and model memory both lag coaching changes, so neither decides who manages a club. `services/clubManagers.ts` looks it up live: a focused Google-grounded Flash search per club (coach, appointment date, immediate predecessor, source), cross-checked against API-Football's `pickCurrentCoach` record (the search wins a disagreement; no search answer means nobody is named). Results are shared through the Supabase `club_managers` table and refreshed at most once a day per club. Nothing is maintained by hand.
+- **Cards:** the dossier prompt forbids manager names in card prose. After synthesis, `attachVerifiedManager` sets `profile.clubManager` (shown on the card with its verified date) and scrubs the prose in strict mode, so only the verified coach can be named, and nobody when the lookup found no one.
+- **Chat:** `conversationalScout` looks up the clubs in play, passes them to the model as `<verified_managers>`, and gives them to the scrub as `clubManagers`.
+- **Gates** (`packages/engine/src/gates/managerMentions.ts`): `scrubUnverifiedManagerText` replaces coach names the turn didn't verify. `scrubFormerCoaches` rewrites a club's immediate predecessor to its current coach, only for clubs the text names and never for someone currently coaching another club in play. `strictCurrentCoach` closes the loophole where a sacked coach counts as verified because search text mentions him.
+- API-Football's coach is no longer written into grounding text. It's kept only as the lookup's cross-check.
 
 **Critical quirks:**
 - `gemini-3.8-flash` rejects `ThinkingLevel.MINIMAL` (HTTP 400); `aiClient.ts` maps the `minimal` tier to `LOW`.

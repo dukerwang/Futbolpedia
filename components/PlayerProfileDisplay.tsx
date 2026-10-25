@@ -75,6 +75,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
     archetypeAnalysis,
     ageCurve,
     definingMoments,
+    clubManager,
   } = profile;
 
   const evalDate = getDossierEvaluationDate(profile);
@@ -249,6 +250,14 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
           <span className={META_PILL_CLASS}>
             {basicInfo.club}
           </span>
+          {clubManager && (
+            <span
+              className={META_PILL_CLASS}
+              title={`Verified by live search on ${clubManager.verifiedOn}`}
+            >
+              Manager: {clubManager.name}
+            </span>
+          )}
           <span className={META_PILL_CLASS}>
             {basicInfo.nationality}
           </span>

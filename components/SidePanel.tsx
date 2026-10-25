@@ -484,6 +484,14 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 <span className="font-semibold text-charcoal dark:text-cream-200">{formatPosition(profile.basicInfo.position)}</span>
                                 <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
                                 <span className="line-clamp-1">{profile.basicInfo.club}</span>
+                                {profile.clubManager && (
+                                    <span
+                                        className="line-clamp-1"
+                                        title={`Manager verified by live search on ${profile.clubManager.verifiedOn}`}
+                                    >
+                                        · {profile.clubManager.name}
+                                    </span>
+                                )}
                                 {profile.basicInfo.age != null && (
                                     <>
                                         <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>

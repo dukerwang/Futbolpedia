@@ -21,9 +21,10 @@ import {
 import { buildSquadTurnoverQuery, gatherSearchFoundation } from './groundingService';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
 import {
-  formatKnownClubManagersForPrompt,
   scrubUnverifiedManagerText,
+  type VerifiedClubManager,
 } from '../packages/engine/src/gates/managerMentions.ts';
+import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubManagers';
 
 /**
  * Retains the most recent verified `<factual_foundation>` for the active conversation thread
@@ -42,7 +43,7 @@ function getThreadSignature(history: ChatMessage[]): string {
 /** Strip leaked internal grounding tags or search citations from user-facing prose and enforce manager fidelity. */
 function sanitizeScoutProse(
   text: string,
-  managerCtx?: { currentHeadCoach?: string | null; verifiedFacts?: string[] },
+  managerCtx?: { verifiedFacts?: string[]; clubManagers?: VerifiedClubManager[] },
 ): string {
   const stripped = text
     .replace(
@@ -58,8 +59,9 @@ function sanitizeScoutProse(
     .trim();
 
   return scrubUnverifiedManagerText(stripped, {
-    currentHeadCoach: managerCtx?.currentHeadCoach ?? null,
+    currentHeadCoach: null,
     verifiedFacts: managerCtx?.verifiedFacts ?? [],
+    clubManagers: managerCtx?.clubManagers ?? [],
   });
 }
 
@@ -179,6 +181,7 @@ export async function runConversationalScout(
       referenced[0] ??
       conversationDossiers[conversationDossiers.length - 1];
 
+    const challengeManagersPromise = getVerifiedClubManagers([targetDossier.basicInfo.club]);
     let groundingNotes = '';
     if (route.needsSearch) {
       onStageChange?.(`Verifying ${targetDossier.basicInfo.name}'s ${currentSeason} records...`);
@@ -201,8 +204,10 @@ export async function runConversationalScout(
     onStageChange?.(`Evaluating ${targetDossier.basicInfo.name}'s dossier calibration...`);
 
     try {
+      const challengeManagers = await challengeManagersPromise;
       const challengePrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
+${formatVerifiedManagersBlock(challengeManagers)}
 ${peerLedgerBlock ?? ''}
 <active_dossier>
 ${serializeProfileForHistory(targetDossier)}
@@ -232,7 +237,10 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         onDossierUpdated?.(updatedProfile);
       }
 
-      const cleanedReply = sanitizeScoutProse(result.replyProse);
+      const cleanedReply = sanitizeScoutProse(result.replyProse, {
+        verifiedFacts: groundingNotes ? [groundingNotes] : [],
+        clubManagers: challengeManagers,
+      });
       onStreamChunk?.(cleanedReply);
       return cleanedReply;
     } catch (e) {
@@ -243,6 +251,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   // 2. Universal Calibrated Ledger Matching & Pre-Grounding across Comparisons, Debates, Rankings & Tactical Chat
   let factualFoundation = '';
   let effectiveLockedBlock = lockedDossiersBlock;
+  let verifiedManagers: VerifiedClubManager[] = [];
 
   if (!imageData && route.intent !== 'archive_inventory') {
     const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
@@ -268,6 +277,12 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       route.targetClubs && route.targetClubs.length > 0
         ? route.targetClubs
         : extractThreadClubs(message, history);
+
+    // Verified managers for the clubs in play, looked up alongside pre-grounding.
+    const managersPromise = getVerifiedClubManagers([
+      ...targetClubs,
+      ...lockedCards.filter((c) => !isPrimeCard(c)).map((c) => c.basicInfo.club),
+    ]);
 
     // Extract any capitalized 2-word player names mentioned in the message (e.g. "Marc Cucurella", "Malo Gusto")
     // so API-Football player lookup verifies their registered club even on tactical/pushback turns.
@@ -354,6 +369,8 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       }
     }
 
+    verifiedManagers = await managersPromise;
+
     const currentSig = getThreadSignature(history);
     if (factualFoundation) {
       if (currentSig && currentSig === lastThreadSignature && lastThreadGrounding && !factualFoundation.includes(lastThreadGrounding.slice(0, 120))) {
@@ -398,13 +415,14 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
 ${factualFoundation ? `<factual_foundation>\n${factualFoundation}\n</factual_foundation>` : ''}
+${formatVerifiedManagersBlock(verifiedManagers)}
 ${peerLedgerBlock ?? ''}
 ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}
 2. Current-state facts (club, manager, squad membership, injuries, ${currentSeason} stats) must come from <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, \`get_team_fixtures\`, Google Search), or existing dossiers — never stale training memory. Never name an unverified head coach.
-3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. ${formatKnownClubManagersForPrompt()} Ground tactical roles in verified current managers or describe intrinsic player mechanics without naming a manager.
+3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.
 4. ${CONTINUITY_REMINDER}
 </instructions>
 <task>${message}</task>`;
@@ -429,6 +447,7 @@ ${savedDossiersBlock}
 
   const scoutManagerContext = {
     verifiedFacts: factualFoundation ? [factualFoundation] : [],
+    clubManagers: verifiedManagers,
   };
 
   const rawReply = await generateProseTurn({
