@@ -265,11 +265,15 @@ export const sendMessageToAI = async (
         : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
     );
 
-    const grounding = await gatherPlayerGrounding({
-      playerName: primaryPlayer,
-      rawMessage: message,
-      isHistorical: route.isHistorical,
-    });
+    // Prior authored cards (longitudinal memory) only need the name, so fetch them alongside grounding.
+    const [grounding, priorDossiers] = await Promise.all([
+      gatherPlayerGrounding({
+        playerName: primaryPlayer,
+        rawMessage: message,
+        isHistorical: route.isHistorical,
+      }),
+      fetchPriorDossiersForPlayer(primaryPlayer, [...savedDossiers, ...conversationDossiers]),
+    ]);
     perf('hybrid grounding');
 
     options?.onStageChange?.(
@@ -290,11 +294,6 @@ export const sendMessageToAI = async (
         })
       : peerLedgerBlock;
 
-    // Retrieve prior authored dossiers for longitudinal memory and trajectory weighing
-    const priorDossiers = await fetchPriorDossiersForPlayer(primaryPlayer, [
-      ...savedDossiers,
-      ...conversationDossiers,
-    ]);
     const priorTrajectoryBlock = buildPriorDossierTrajectoryBlock(
       priorDossiers,
       grounding.apiPlayer?.name || primaryPlayer || 'player',
