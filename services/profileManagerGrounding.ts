@@ -34,6 +34,7 @@ export function buildManagerVerificationContext(
     ].filter((v): v is string => Boolean(v)),
     supplementalCorpus: facts.supplementalCorpus,
     currentHeadCoach: facts.currentHeadCoach ?? null,
+    currentClub: facts.currentClub ?? null,
   };
 }
 
