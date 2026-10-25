@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { PlayerProfile } from '../types';
+import type { EvidenceGrade, PlayerProfile } from '../types';
 import { AttributeTable } from './AttributeTable';
 import { getAttributeLabel, getTierForRating } from '../constants/ratingTiers';
 import { marked } from 'marked';
@@ -31,6 +31,32 @@ const ProfileSection: React.FC<{
   </div>
 );
 
+const renderMarkdown = (text: string | undefined) => {
+  if (!text) return { __html: '' };
+  try {
+    const rawMarkup = marked.parse(text, { gfm: true, breaks: true }) as string;
+    return { __html: DOMPurify.sanitize(rawMarkup) };
+  } catch (e) {
+    console.error('Markdown rendering error:', e);
+    return { __html: text };
+  }
+};
+
+const GRADE_BUTTON_CLASS: Record<EvidenceGrade, string> = {
+  A: 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
+  B: 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-500/30',
+  C: 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30',
+};
+
+const GRADE_PILL_CLASS: Record<EvidenceGrade, string> = {
+  A: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  B: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+  C: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+};
+
+const META_PILL_CLASS =
+  'px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border';
+
 export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ profile }) => {
   const [showEvidenceModal, setShowEvidenceModal] = useState(false);
 
@@ -44,9 +70,12 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
     shortBio,
     playstyleAndRole,
     latestUpdate,
+    confidence,
+    scoutingDebate,
+    archetypeAnalysis,
+    ageCurve,
+    definingMoments,
   } = profile;
-
-  const getRatingTier = (rating: number) => getTierForRating(rating);
 
   const evalDate = getDossierEvaluationDate(profile);
   const formattedDate = evalDate
@@ -66,23 +95,6 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
         ? `Current Form (${evalDate})`
         : 'Current Form');
 
-  const confidence = profile.confidence;
-  const scoutingDebate = profile.scoutingDebate;
-  const archetypeAnalysis = profile.archetypeAnalysis;
-  const ageCurve = profile.ageCurve;
-  const definingMoments = profile.definingMoments;
-
-  const renderMarkdown = (text: string | undefined) => {
-    if (!text) return { __html: '' };
-    try {
-      const rawMarkup = marked.parse(text, { gfm: true, breaks: true }) as string;
-      const sanitizedMarkup = DOMPurify.sanitize(rawMarkup);
-      return { __html: sanitizedMarkup };
-    } catch (e) {
-      console.error('Markdown rendering error:', e);
-      return { __html: text };
-    }
-  };
 
   return (
     <div className="space-y-8 animate-fade-in w-full max-w-5xl mx-auto pb-12">
@@ -140,13 +152,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
                 <button
                   type="button"
                   onClick={() => setShowEvidenceModal((prev) => !prev)}
-                  className={`group px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border flex items-center gap-1.5 transition-all cursor-pointer ${
-                    confidence.grade === 'A'
-                      ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                      : confidence.grade === 'B'
-                        ? 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-500/30'
-                        : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30'
-                  }`}
+                  className={`group px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border flex items-center gap-1.5 transition-all cursor-pointer ${GRADE_BUTTON_CLASS[confidence.grade] ?? GRADE_BUTTON_CLASS.C}`}
                   title="Click to view scouting evidence report and data confidence"
                 >
                   <span className="material-symbols-outlined text-[13px]">verified</span>
@@ -169,13 +175,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
                           Scouting Evidence Report
                         </span>
                         <span
-                          className={`px-1.5 py-0.5 rounded font-mono font-bold text-[10px] ${
-                            confidence.grade === 'A'
-                              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                              : confidence.grade === 'B'
-                                ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
-                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                          }`}
+                          className={`px-1.5 py-0.5 rounded font-mono font-bold text-[10px] ${GRADE_PILL_CLASS[confidence.grade] ?? GRADE_PILL_CLASS.C}`}
                         >
                           Grade {confidence.grade}
                         </span>
@@ -237,22 +237,22 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
           <span className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-mono font-bold border border-emerald-500/25">
             {basicInfo.position}
           </span>
-          <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border">
+          <span className={META_PILL_CLASS}>
             {basicInfo.club}
           </span>
-          <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border">
+          <span className={META_PILL_CLASS}>
             {basicInfo.nationality}
           </span>
-          <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border font-mono">
+          <span className={`${META_PILL_CLASS} font-mono`}>
             Age {basicInfo.age}
           </span>
           {basicInfo.height && basicInfo.height !== 'N/A' && (
-            <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border">
+            <span className={META_PILL_CLASS}>
               {basicInfo.height}
             </span>
           )}
           {basicInfo.weight && basicInfo.weight !== 'N/A' && (
-            <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border">
+            <span className={META_PILL_CLASS}>
               {basicInfo.weight}
             </span>
           )}
@@ -268,7 +268,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
               {ratings.overall}
             </p>
             <p className="text-emerald-700 dark:text-emerald-300 text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 inline-block">
-              {getRatingTier(ratings.overall)}
+              {getTierForRating(ratings.overall)}
             </p>
           </div>
 
@@ -282,7 +282,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
               {ratings.potential}
             </p>
             <p className="text-teal-700 dark:text-teal-300 text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-teal-500/10 border border-teal-500/20 inline-block">
-              {getRatingTier(ratings.potential)}
+              {getTierForRating(ratings.potential)}
             </p>
           </div>
         </div>
