@@ -33,6 +33,7 @@ import {
   resolveSavedDossiersForRequest,
   shareConversation,
   shareDossierCard,
+  stampDossier,
   supabase,
   toDossierCardSlug,
   toPlayerSlug,
@@ -62,6 +63,7 @@ export {
   getCardKey,
   shareDossierCard,
   isPrimeCard,
+  stampDossier,
 };
 
 const isFreshlyCalibrated = (p?: PlayerProfile): boolean =>
@@ -312,16 +314,11 @@ export const sendMessageToAI = async (
     });
     perf('calibrated synthesis');
 
-    const stampedProfile: PlayerProfile = ensureDossierDated(profile, Date.now()) || {
-      ...profile,
-      createdAt: Date.now(),
-    };
-
-    const cacheSlug = toDossierCardSlug(
-      stampedProfile.basicInfo.name,
-      route.isHistorical,
+    const stampedProfile = stampDossier(profile, Date.now());
+    upsertCachedDossier(
+      toDossierCardSlug(stampedProfile.basicInfo.name, route.isHistorical),
+      stampedProfile,
     );
-    upsertCachedDossier(cacheSlug, stampedProfile);
     return stampedProfile;
   }
 
