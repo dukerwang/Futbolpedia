@@ -1,10 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
-import { getShortTierLabel } from '../constants/ratingTiers';
+import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { supabase, toPlayerSlug } from '../services/geminiService';
+import {
+  getCardKey,
+  getDossierEvaluationDate,
+  isPrimeCard,
+  shareDossierCard,
+} from '../services/geminiService';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -13,8 +18,8 @@ interface SidePanelProps {
   allProfiles: PlayerProfile[];
   onSelectProfile: (profile: PlayerProfile | null) => void;
   onBackToHome: () => void;
-  onRenameDossier?: (oldName: string, newName: string) => void;
-  onDeleteDossier?: (playerName: string) => void;
+  onRenameDossier?: (cardKey: string, newName: string) => void;
+  onDeleteDossier?: (cardKey: string) => void;
 }
 
 const getTierColorClass = (rating: number) => {
@@ -22,6 +27,37 @@ const getTierColorClass = (rating: number) => {
     if (rating >= 80) return 'bg-emerald-400'; // 80-89 Sage/Light Green
     if (rating >= 70) return 'bg-charcoal/50 dark:bg-gray-400'; // 70-79 Charcoal Light
     return 'bg-gray-200 dark:bg-gray-700'; // <70 Faint Grey
+};
+
+const renderMarkdown = (text: string) => {
+    if (!text) return { __html: '' };
+    return { __html: DOMPurify.sanitize(marked.parse(text) as string) };
+};
+
+/** Short codes for canonical position names, keyed by lowercase name. */
+const POSITION_ABBREVIATIONS: Record<string, string> = {
+    'goalkeeper': 'GK',
+    'center back': 'CB', 'centre back': 'CB', 'centre-back': 'CB',
+    'left back': 'LB', 'left-back': 'LB',
+    'right back': 'RB', 'right-back': 'RB',
+    'left wing back': 'LWB', 'left wing-back': 'LWB',
+    'right wing back': 'RWB', 'right wing-back': 'RWB',
+    'defensive midfielder': 'CDM',
+    'central midfielder': 'CM',
+    'attacking midfielder': 'CAM',
+    'left winger': 'LW', 'left midfielder': 'LM',
+    'right winger': 'RW', 'right midfielder': 'RM',
+    'striker': 'ST', 'centre forward': 'CF', 'center forward': 'CF',
+    'second striker': 'SS', 'forward': 'FW',
+};
+
+const formatPosition = (position: string) => {
+    if (!position) return '';
+    return position.split(/[\/,]/).map(p => {
+        const trimmed = p.trim();
+        const key = trimmed.toLowerCase();
+        return Object.hasOwn(POSITION_ABBREVIATIONS, key) ? POSITION_ABBREVIATIONS[key] : trimmed;
+    }).join('/');
 };
 
 const AttributeLine: React.FC<{ label: string; rating: number }> = ({ label: attrLabel, rating }) => {
@@ -57,15 +93,14 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const [isVisible, setIsVisible] = useState(false);
   
   // Dossier list editing states
-  const [editingName, setEditingName] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editNameText, setEditNameText] = useState('');
-  const [confirmDeleteName, setConfirmDeleteName] = useState<string | null>(null);
-  const [sharingName, setSharingName] = useState<string | null>(null);
-  const [sharedName, setSharedName] = useState<string | null>(null);
+  const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
+  const [sharingKey, setSharingKey] = useState<string | null>(null);
+  const [sharedKey, setSharedKey] = useState<string | null>(null);
 
-  const currentIndex = profile && allProfiles
-    ? allProfiles.findIndex(p => p.basicInfo.name.toLowerCase() === profile.basicInfo.name.toLowerCase())
-    : -1;
+  const profileKey = profile ? getCardKey(profile) : null;
+  const currentIndex = profileKey ? allProfiles.findIndex(p => getCardKey(p) === profileKey) : -1;
   
   // Mobile Gesture State
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -89,26 +124,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     }
   }, [isOpen]);
 
-  const getTierText = (rating: number) => getShortTierLabel(rating);
-
-  const renderMarkdown = (text: string) => {
-      if (!text) return { __html: '' };
-      const safeText = DOMPurify.sanitize(marked.parse(text) as string);
-      return { __html: safeText };
-  };
-
   const handleShare = async () => {
-    if (!profile || !supabase) return;
+    if (!profile) return;
     setShareStatus('saving');
     try {
-        const slug = toPlayerSlug(profile.basicInfo.name);
-        const { error } = await supabase
-          .from('player_profiles')
-          .upsert(
-            { player_slug: slug, player_data: profile, updated_at: new Date().toISOString() },
-            { onConflict: 'player_slug' }
-          );
-        if (error) throw error;
+        const slug = await shareDossierCard(profile);
         const shareUrl = `${window.location.origin}/#/p/${slug}`;
         await navigator.clipboard.writeText(shareUrl);
         setShareStatus('copied');
@@ -117,31 +137,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({
         console.error(err);
         setShareStatus('idle');
     }
-  };
-
-  const formatPosition = (position: string) => {
-      if (!position) return '';
-      const mappings: Record<string, string> = {
-          'Goalkeeper': 'GK',
-          'Center Back': 'CB', 'Centre Back': 'CB', 'Centre-Back': 'CB',
-          'Left Back': 'LB', 'Left-Back': 'LB',
-          'Right Back': 'RB', 'Right-Back': 'RB',
-          'Left Wing Back': 'LWB', 'Left Wing-Back': 'LWB',
-          'Right Wing Back': 'RWB', 'Right Wing-Back': 'RWB',
-          'Defensive Midfielder': 'CDM',
-          'Central Midfielder': 'CM',
-          'Attacking Midfielder': 'CAM',
-          'Left Winger': 'LW', 'Left Midfielder': 'LM',
-          'Right Winger': 'RW', 'Right Midfielder': 'RM',
-          'Striker': 'ST', 'Centre Forward': 'CF', 'Center Forward': 'CF',
-          'Second Striker': 'SS', 'Forward': 'FW'
-      };
-      
-      return position.split(/[\/,]/).map(p => {
-          const trimmed = p.trim();
-          const key = Object.keys(mappings).find(k => k.toLowerCase() === trimmed.toLowerCase());
-          return key ? mappings[key] : trimmed;
-      }).join('/');
   };
 
   // --- NATIVE SWIPE LOGIC ---
@@ -204,60 +199,54 @@ export const SidePanel: React.FC<SidePanelProps> = ({
       }
   };
 
-  const handleStartRename = (name: string, e: React.MouseEvent) => {
+  const handleStartRename = (cardKey: string, name: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setEditingName(name);
+    setEditingKey(cardKey);
     setEditNameText(name);
   };
 
-  const handleSaveRename = (oldName: string, e: React.FormEvent) => {
+  const handleSaveRename = (targetCardKey: string, e: React.FormEvent) => {
     e.preventDefault();
     if (editNameText.trim() && onRenameDossier) {
-      onRenameDossier(oldName, editNameText.trim());
+      onRenameDossier(targetCardKey, editNameText.trim());
     }
-    setEditingName(null);
+    setEditingKey(null);
   };
 
   const handleCancelRename = () => {
-    setEditingName(null);
+    setEditingKey(null);
   };
 
-  const handleDeleteClick = (name: string, e: React.MouseEvent) => {
+  const handleDeleteClick = (cardKey: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirmDeleteName === name) {
+    if (confirmDeleteKey === cardKey) {
       if (onDeleteDossier) {
-        onDeleteDossier(name);
+        onDeleteDossier(cardKey);
       }
-      setConfirmDeleteName(null);
+      setConfirmDeleteKey(null);
     } else {
-      setConfirmDeleteName(name);
+      setConfirmDeleteKey(cardKey);
       // Automatically reset confirmation after 3 seconds
       setTimeout(() => {
-        setConfirmDeleteName(prev => prev === name ? null : prev);
+        setConfirmDeleteKey(prev => prev === cardKey ? null : prev);
       }, 3000);
     }
   };
 
   const handleShareDossierItem = async (p: PlayerProfile, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (sharingName || !supabase) return;
-    setSharingName(p.basicInfo.name);
+    const cardKey = getCardKey(p);
+    if (sharingKey) return;
+    setSharingKey(cardKey);
     try {
-      const slug = toPlayerSlug(p.basicInfo.name);
-      const { error } = await supabase
-        .from('player_profiles')
-        .upsert(
-          { player_slug: slug, player_data: p, updated_at: new Date().toISOString() },
-          { onConflict: 'player_slug' }
-        );
-      if (error) throw error;
+      const slug = await shareDossierCard(p);
       await navigator.clipboard.writeText(`${window.location.origin}/#/p/${slug}`);
-      setSharedName(p.basicInfo.name);
-      setTimeout(() => setSharedName(null), 2000);
+      setSharedKey(cardKey);
+      setTimeout(() => setSharedKey(null), 2000);
     } catch (err) {
       console.error('Failed to share dossier:', err);
     } finally {
-      setSharingName(null);
+      setSharingKey(null);
     }
   };
 
@@ -311,8 +300,9 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     </div>
                 ) : (
                     allProfiles.map((p) => {
-                        const isEditing = editingName === p.basicInfo.name;
-                        const isDeleting = confirmDeleteName === p.basicInfo.name;
+                        const cardKey = getCardKey(p);
+                        const isEditing = editingKey === cardKey;
+                        const isDeleting = confirmDeleteKey === cardKey;
                         const formattedDate = new Date(p.createdAt || Date.now()).toLocaleDateString(undefined, {
                             month: 'short',
                             day: 'numeric',
@@ -321,7 +311,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
                         return (
                             <div
-                                key={p.basicInfo.name}
+                                key={cardKey}
                                 onClick={() => {
                                     if (!isEditing) {
                                         onSelectProfile(p);
@@ -331,7 +321,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             >
                                 {isEditing ? (
                                     <form
-                                        onSubmit={(e) => handleSaveRename(p.basicInfo.name, e)}
+                                        onSubmit={(e) => handleSaveRename(cardKey, e)}
                                         onClick={(e) => e.stopPropagation()}
                                         className="flex items-center gap-1.5 w-full"
                                     >
@@ -343,7 +333,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                             onBlur={() => {
                                                 // Wait for form actions to proceed
                                                 setTimeout(() => {
-                                                    setEditingName(null);
+                                                    setEditingKey(null);
                                                 }, 200);
                                             }}
                                             className="flex-1 px-3 py-1.5 text-xs font-serif bg-cream-100 dark:bg-charcoal border border-emerald-500/50 rounded focus:outline-none focus:ring-1 focus:ring-emerald-500 text-charcoal dark:text-cream-50"
@@ -367,11 +357,28 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 ) : (
                                     <div className="flex justify-between items-center pr-12">
                                         <div className="flex flex-col">
-                                            <h4 className="font-serif font-bold text-sm tracking-tight text-charcoal dark:text-cream-50 line-clamp-1">
-                                                {p.basicInfo.name}
-                                            </h4>
+                                            <div className="flex items-center gap-2">
+                                                <h4 className="font-serif font-bold text-sm tracking-tight text-charcoal dark:text-cream-50 line-clamp-1">
+                                                    {p.basicInfo.name}
+                                                </h4>
+                                                {isPrimeCard(p) && (
+                                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0">
+                                                        Prime
+                                                    </span>
+                                                )}
+                                                {p.confidence?.grade && (
+                                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
+                                                        Gr.{p.confidence.grade}
+                                                    </span>
+                                                )}
+                                                {p.revision && (
+                                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 border border-indigo-500/25 shrink-0" title="Your accepted challenge of the shared card">
+                                                        Your revision
+                                                    </span>
+                                                )}
+                                            </div>
                                             <div className="flex items-center gap-1.5 mt-1 text-[10px] font-mono text-charcoal/50 dark:text-cream-400 font-medium">
-                                                <span>{formattedDate}</span>
+                                                <span>{p.evaluationDate || p.version?.evaluationDate || formattedDate}</span>
                                                 <span className="size-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20"></span>
                                                 <span>{formatPosition(p.basicInfo.position)}</span>
                                                 <span className="size-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20"></span>
@@ -389,27 +396,27 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                     <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity bg-gradient-to-l from-white dark:from-charcoal-surface via-white dark:via-charcoal-surface to-transparent pl-4 py-1.5 rounded-r-xl">
                                         <button
                                             onClick={(e) => handleShareDossierItem(p, e)}
-                                            disabled={sharingName === p.basicInfo.name}
+                                            disabled={sharingKey === cardKey}
                                             className={`p-1 rounded transition-all ${
-                                                sharedName === p.basicInfo.name
+                                                sharedKey === cardKey
                                                     ? 'text-emerald-600 dark:text-emerald-400'
                                                     : 'text-charcoal/50 dark:text-cream-400/60 hover:text-blue-500 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40'
                                             }`}
                                             title="Share Dossier"
                                         >
                                             <span className="material-symbols-outlined text-[14px] block">
-                                                {sharingName === p.basicInfo.name ? 'hourglass_empty' : sharedName === p.basicInfo.name ? 'check' : 'link'}
+                                                {sharingKey === cardKey ? 'hourglass_empty' : sharedKey === cardKey ? 'check' : 'link'}
                                             </span>
                                         </button>
                                         <button
-                                            onClick={(e) => handleStartRename(p.basicInfo.name, e)}
+                                            onClick={(e) => handleStartRename(cardKey, p.basicInfo.name, e)}
                                             className="p-1 text-charcoal/50 dark:text-cream-400/60 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40 rounded transition-all"
                                             title="Rename Dossier"
                                         >
                                             <span className="material-symbols-outlined text-[14px] block">edit</span>
                                         </button>
                                         <button
-                                            onClick={(e) => handleDeleteClick(p.basicInfo.name, e)}
+                                            onClick={(e) => handleDeleteClick(cardKey, e)}
                                             className={`p-1 rounded transition-all ${
                                                 isDeleting
                                                     ? 'bg-red-500/10 text-red-600 border border-red-500/30 hover:bg-red-500 hover:text-white px-2'
@@ -435,6 +442,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     );
   }
 
+  const isPrime = isPrimeCard(profile);
   const categories = profile.goalkeeperAttributes ? GK_ATTRIBUTE_CATEGORIES : ATTRIBUTE_CATEGORIES;
   const attrSource = profile.goalkeeperAttributes ? profile.goalkeeperAttributes : profile.attributes;
 
@@ -492,7 +500,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     </div>
                     
                     <div className="flex flex-col items-end text-right shrink-0">
-                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getTierText(profile.ratings.overall)}</span>
+                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getShortTierLabel(profile.ratings.overall)}</span>
                         
                         <div className="flex gap-4">
                             <div className="flex flex-col items-center">
@@ -575,7 +583,74 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 onPointerDownCapture={e => e.stopPropagation()} 
                 onTouchStart={e => e.stopPropagation()} 
             >
-                
+                {/* 0. Card Edition, Date Stamp & Peak Context */}
+                <div className="p-4 rounded-xl bg-white dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border shadow-sm space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase border flex items-center gap-1 ${
+                                isPrime
+                                    ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                                    : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                            }`}>
+                                <span className="material-symbols-outlined text-[13px]">
+                                    {isPrime ? 'workspace_premium' : 'bolt'}
+                                </span>
+                                {profile.version?.label || (isPrime ? 'Prime Zenith' : 'Current Form')}
+                            </span>
+                            {profile.version?.seasonOrEra && (
+                                <span className="text-[10px] font-mono text-charcoal/60 dark:text-cream-400 font-semibold">
+                                    Era: {profile.version.seasonOrEra}
+                                </span>
+                            )}
+                            {profile.revision && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30" title="Your accepted challenge of the shared card">
+                                    Your revision
+                                </span>
+                            )}
+                        </div>
+
+                        <div className="flex items-center gap-1 text-[11px] font-mono font-semibold text-charcoal/60 dark:text-cream-400">
+                            <span className="material-symbols-outlined text-[14px]">calendar_today</span>
+                            <span>
+                                {getDossierEvaluationDate(profile) ?? 'Undated'}
+                            </span>
+                        </div>
+                    </div>
+
+                    {profile.version?.peakContext && (
+                        <div className="p-3 rounded-lg bg-amber-500/5 dark:bg-amber-950/20 border border-amber-500/20 text-xs font-serif italic text-charcoal/80 dark:text-amber-200 leading-relaxed">
+                            <span className="font-sans not-italic font-bold text-[9px] uppercase tracking-wider text-amber-700 dark:text-amber-400 mr-1.5">Zenith Context:</span>
+                            {profile.version.peakContext}
+                        </div>
+                    )}
+
+                    {/* Signature Ceiling Spikes & Flaws */}
+                    {((profile.signatureSpikes && profile.signatureSpikes.length > 0) || (profile.genuineFlaws && profile.genuineFlaws.length > 0)) && (
+                        <div className="pt-2 border-t border-cream-200 dark:border-charcoal-border/60 flex flex-wrap gap-2 text-xs">
+                            {profile.signatureSpikes && profile.signatureSpikes.length > 0 && (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                    <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Spikes:</span>
+                                    {profile.signatureSpikes.map(spike => (
+                                        <span key={spike} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-500/20">
+                                            {getAttributeLabel(spike)}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                            {profile.genuineFlaws && profile.genuineFlaws.length > 0 && (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                    <span className="text-[9px] font-bold uppercase tracking-wider text-red-600 dark:text-red-400">Flaws:</span>
+                                    {profile.genuineFlaws.map(flaw => (
+                                        <span key={flaw} className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-700 dark:text-red-300 font-mono text-[10px] font-semibold border border-red-500/20">
+                                            {getAttributeLabel(flaw)}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+
                 {/* 1. Scout Summary */}
                 <div>
                         <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Scout Summary</h3>

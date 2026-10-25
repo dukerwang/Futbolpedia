@@ -327,6 +327,9 @@ export const ATTRIBUTE_LABELS: Record<keyof Attributes, string> = {
   flair: 'Flair',
 };
 
+/** The 25 outfield attribute keys, in canonical display order. */
+export const ATTRIBUTE_KEYS = Object.keys(ATTRIBUTE_LABELS) as Array<keyof Attributes>;
+
 export const GK_ATTRIBUTE_LABELS: Record<keyof GoalkeeperAttributes, string> = {
   reflexes: 'Reflexes',
   handling: 'Handling',
@@ -336,6 +339,12 @@ export const GK_ATTRIBUTE_LABELS: Record<keyof GoalkeeperAttributes, string> = {
   sweeping: 'Sweeping',
   ballPlaying: 'Ball Playing',
 };
+
+/** Display label for an attribute key ("progressivePassing" → "Progressive Passing"). */
+export const getAttributeLabel = (key: string): string =>
+  ATTRIBUTE_LABELS[key as keyof Attributes] ??
+  GK_ATTRIBUTE_LABELS[key as keyof GoalkeeperAttributes] ??
+  key;
 
 export const ATTRIBUTE_CATEGORIES: Record<string, Array<{ key: string; label: string }>> = {
   Technical: [

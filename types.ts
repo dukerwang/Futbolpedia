@@ -61,6 +61,67 @@ export interface PlaystyleAndRole {
   bestRoles: string[];
 }
 
+export type DossierVersionType = 'current' | 'prime' | 'season_snapshot' | 'retro';
+
+export interface DossierVersion {
+  id: string;
+  type: DossierVersionType;
+  label: string;
+  evaluationDate: string; // ISO YYYY-MM-DD (e.g. "2026-10-25" or peak snapshot date)
+  seasonOrEra: string; // e.g. "2026-27" or "2008-09"
+  peakContext?: string | null;
+}
+
+export type EvidenceGrade = 'A' | 'B' | 'C';
+
+export interface DossierConfidence {
+  grade: EvidenceGrade;
+  sampleSize: string;
+  dataGaps: string[];
+  verdict: string;
+}
+
+export interface ScoutingDebate {
+  caseForHigher: string;
+  caseForLower: string;
+}
+
+export interface ArchetypeAnalysis {
+  playsLikeBlend: string;
+  holisticProjection: string;
+  playstyleTags: string[];
+  tacticalSynergy: string;
+  tacticalKryptonite: string;
+}
+
+export type AgeCurvePhase =
+  | 'Emergent Runway'
+  | 'Prime Ascent'
+  | 'Apex Window'
+  | 'Post-Peak Adaptation'
+  | 'Late Career Mastery';
+
+export interface AgeCurveOutlook {
+  phase: AgeCurvePhase;
+  trajectoryNote: string;
+}
+
+export interface DefiningMoment {
+  year: string;
+  title: string;
+  description: string;
+}
+
+/**
+ * Marks a user's accepted challenge of a shared card. A revision lives only in that user's
+ * library and conversations; the shared card changes only at its next weekly re-rating.
+ */
+export interface DossierRevision {
+  /** Card key of the shared card this revision patches. */
+  baseCardKey: string;
+  revisedAt: number;
+}
+
 export interface PlayerProfile {
   basicInfo: BasicInfo;
   ratings: Ratings;
@@ -72,6 +133,28 @@ export interface PlayerProfile {
   playstyleAndRole: PlaystyleAndRole;
   latestUpdate: string;
   createdAt?: number;
+  /** Set when this is the user's revision of a shared card rather than the shared card itself */
+  revision?: DossierRevision;
+  /** Formal card versioning metadata */
+  version?: DossierVersion;
+  /** ISO date string (YYYY-MM-DD) representing the exact date of this evaluation snapshot */
+  evaluationDate?: string;
+  /** Key attribute ceiling spikes persisted for card-level prominence */
+  signatureSpikes?: string[];
+  /** Key attribute flaws persisted for card-level prominence */
+  genuineFlaws?: string[];
+  /** Real-world positional peer benchmarks recorded at calibration */
+  peerBenchmark?: string;
+  /** Evidence grade and sample size evaluation */
+  confidence?: DossierConfidence;
+  /** Dialectical arguments for higher or lower rating */
+  scoutingDebate?: ScoutingDebate;
+  /** Holistic archetype projection and tactical synergies */
+  archetypeAnalysis?: ArchetypeAnalysis;
+  /** Career development phase and trajectory projection */
+  ageCurve?: AgeCurveOutlook;
+  /** Defining career moments (optional for veterans/legends) */
+  definingMoments?: DefiningMoment[];
 }
 
 export type GaffaTradeVerdict = 'hold' | 'lean_hold' | 'toss_up' | 'lean_take' | 'take';

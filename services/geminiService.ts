@@ -13,19 +13,36 @@ import {
   buildHistoryContents,
   buildLockedDossiersBlock,
   buildPositionalPeerLedgerBlock,
+  buildPriorDossierTrajectoryBlock,
+  buildRevisionProposalsBlock,
   buildSavedDossiersBlock,
+  ensureDossierDated,
+  fetchGlobalHubDossiers,
+  type GlobalHubDossierItem,
+  fetchPriorDossiersForPlayer,
+  fetchRevisionsForCard,
+  fetchRevisionsForPlayer,
   fetchSupabaseCalibratedPool,
   findReferencedDossiers,
   getCachedDossier,
+  getCardKey,
+  getDossierEvaluationDate,
   getSharedConversation,
-  grepDossiers,
+  hasRevisionConsensus,
+  isCardInRefreshWindow,
+  isDossierDated,
+  isPrimeCard,
   isSupabaseReady,
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
   resolveSavedDossiersForRequest,
   shareConversation,
+  shareDossierCard,
+  stampDossier,
   supabase,
+  toDossierCardSlug,
   toPlayerSlug,
+  toVersionedSlug,
   upsertCachedDossier,
   wantsSavedDossierAccess,
 } from './dossierStore';
@@ -37,12 +54,26 @@ export {
   supabase,
   isSupabaseReady,
   toPlayerSlug,
+  toDossierCardSlug,
   getCachedDossier,
   upsertCachedDossier,
   shareConversation,
   getSharedConversation,
   gatherSearchFoundation,
+  fetchGlobalHubDossiers,
+  type GlobalHubDossierItem,
+  fetchPriorDossiersForPlayer,
+  ensureDossierDated,
+  isDossierDated,
+  getDossierEvaluationDate,
+  getCardKey,
+  shareDossierCard,
+  isPrimeCard,
+  stampDossier,
 };
+
+const isFreshlyCalibrated = (p?: PlayerProfile): boolean =>
+  Boolean(p?.createdAt && p.createdAt >= CALIBRATION_EPOCH_MS);
 
 /**
  * Retained for backward compatibility with App.tsx conversation switching.
@@ -164,8 +195,8 @@ export const sendMessageToAI = async (
   );
   if (!savedResult.inventoryOnly) {
     for (const p of savedResult.dossiers) {
-      const slug = toPlayerSlug(p.basicInfo.name);
-      if (!referencedDossiers.some((x) => toPlayerSlug(x.basicInfo.name) === slug)) {
+      const key = getCardKey(p);
+      if (!referencedDossiers.some((x) => getCardKey(x) === key)) {
         referencedDossiers.push(p);
       }
     }
@@ -184,50 +215,65 @@ export const sendMessageToAI = async (
       extractCandidateSlug(message) ||
       '';
 
-    const isFreshlyCalibrated = (p?: PlayerProfile): boolean =>
-      Boolean(p?.createdAt && p.createdAt >= CALIBRATION_EPOCH_MS);
+    // A player can hold several cards (current plus prime). Shortcuts and locks only consider
+    // cards of the edition this request is asking for.
+    const matchesRequestedEdition = (p: PlayerProfile): boolean =>
+      isPrimeCard(p) === route.isHistorical;
+    const currentReferenced = referencedDossiers.filter((p) => !isPrimeCard(p));
+    const currentSaved = savedResult.dossiers.filter((p) => !isPrimeCard(p));
 
     if (!imageData && !route.wantsRegeneration) {
       // Return locked in-conversation dossier if re-requested without regeneration flag
       if (
         !route.isHistorical &&
-        referencedDossiers.length === 1 &&
-        isFreshlyCalibrated(referencedDossiers[0])
+        currentReferenced.length === 1 &&
+        isFreshlyCalibrated(currentReferenced[0])
       ) {
-        return referencedDossiers[0];
+        return currentReferenced[0];
       }
 
       // Return saved archive dossier if explicitly requested
       if (
         !route.isHistorical &&
         wantsSavedDossierAccess(message) &&
-        savedResult.dossiers.length === 1 &&
-        isFreshlyCalibrated(savedResult.dossiers[0])
+        currentSaved.length === 1 &&
+        isFreshlyCalibrated(currentSaved[0])
       ) {
-        return savedResult.dossiers[0];
+        return currentSaved[0];
       }
 
       // Check in-memory calibrated pool first (0ms hit for last-name or full-name matches)
       if (!route.isHistorical && primaryPlayer) {
-        const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+        const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers).filter(
+          (p) => !isPrimeCard(p),
+        );
         const poolHits = findReferencedDossiers(primaryPlayer, allCalibrated, [primaryPlayer]);
-        if (poolHits.length === 1 && isFreshlyCalibrated(poolHits[0])) {
+        if (
+          poolHits.length === 1 &&
+          isFreshlyCalibrated(poolHits[0]) &&
+          isCardInRefreshWindow(poolHits[0])
+        ) {
           perf('in-memory calibrated pool hit');
           return poolHits[0];
         }
       }
+    }
 
-      // Check Supabase 14-day TTL cache (for both active and historical prime-<slug> cards)
+    // Shared cards: one current card per player per week, and prime cards are frozen, so even a
+    // regeneration request gets the published card while it's in its refresh window. The one
+    // exception is consensus: enough people independently challenging it the same way.
+    let supersede = false;
+    if (!imageData) {
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
-        const lookupSlug =
-          route.isHistorical && !rawSlug.startsWith('prime-') && !rawSlug.startsWith('peak-')
-            ? `prime-${rawSlug}`
-            : rawSlug;
-        const cached = await getCachedDossier(lookupSlug);
+        const cached = await getCachedDossier(toDossierCardSlug(rawSlug, route.isHistorical));
         if (cached) {
-          perf('supabase cache hit');
-          return cached;
+          supersede = hasRevisionConsensus(await fetchRevisionsForCard(cached));
+          if (!supersede) {
+            perf('supabase cache hit');
+            return cached;
+          }
+          perf('challenge consensus: re-rating early');
         }
       }
     }
@@ -238,18 +284,25 @@ export const sendMessageToAI = async (
         : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
     );
 
-    const grounding = await gatherPlayerGrounding({
-      playerName: primaryPlayer,
-      rawMessage: message,
-      isHistorical: route.isHistorical,
-    });
+    // Prior authored cards (longitudinal memory) only need the name, so fetch them alongside grounding.
+    const [grounding, priorDossiers, challengeRows] = await Promise.all([
+      gatherPlayerGrounding({
+        playerName: primaryPlayer,
+        rawMessage: message,
+        isHistorical: route.isHistorical,
+      }),
+      fetchPriorDossiersForPlayer(primaryPlayer, [...savedDossiers, ...conversationDossiers]),
+      fetchRevisionsForPlayer(primaryPlayer),
+    ]);
     perf('hybrid grounding');
 
     options?.onStageChange?.(
       `Calibrating 25-attribute dossier for ${grounding.apiPlayer?.name || primaryPlayer || 'player'}...`,
     );
 
-    const freshReferencedDossiers = referencedDossiers.filter(isFreshlyCalibrated);
+    const freshReferencedDossiers = referencedDossiers
+      .filter(matchesRequestedEdition)
+      .filter(isFreshlyCalibrated);
     const synthesisLockedBlock = route.wantsRegeneration
       ? ''
       : buildLockedDossiersBlock(freshReferencedDossiers);
@@ -261,6 +314,18 @@ export const sendMessageToAI = async (
         })
       : peerLedgerBlock;
 
+    // Challenges count only against the shared card this rating replaces: the newest prior card
+    // of the requested edition (priorDossiers is oldest first).
+    const replacedCard = priorDossiers.filter(matchesRequestedEdition).at(-1);
+    const replacedSlug = replacedCard ? toVersionedSlug(replacedCard) : null;
+    const replacedCardChallenges = challengeRows.filter((r) => r.card_slug === replacedSlug);
+
+    const priorTrajectoryBlock =
+      buildPriorDossierTrajectoryBlock(
+        priorDossiers,
+        grounding.apiPlayer?.name || primaryPlayer || 'player',
+      ) + buildRevisionProposalsBlock(replacedCardChallenges);
+
     const profile = await synthesizePlayerDossier({
       rawMessage: message,
       isHistorical: route.isHistorical,
@@ -271,20 +336,16 @@ export const sendMessageToAI = async (
       lockedDossiersBlock: synthesisLockedBlock,
       savedDossiersBlock,
       peerLedgerBlock: synthesisPeerLedgerBlock,
+      priorTrajectoryBlock,
     });
     perf('calibrated synthesis');
 
-    const stampedProfile: PlayerProfile = {
-      ...profile,
-      createdAt: Date.now(),
-    };
-
-    const baseSlug = toPlayerSlug(stampedProfile.basicInfo.name);
-    const cacheSlug =
-      route.isHistorical && !baseSlug.startsWith('prime-') && !baseSlug.startsWith('peak-')
-        ? `prime-${baseSlug}`
-        : baseSlug;
-    upsertCachedDossier(cacheSlug, stampedProfile);
+    const stampedProfile = stampDossier(profile, Date.now());
+    upsertCachedDossier(
+      toDossierCardSlug(stampedProfile.basicInfo.name, route.isHistorical),
+      stampedProfile,
+      { supersede },
+    );
     return stampedProfile;
   }
 
