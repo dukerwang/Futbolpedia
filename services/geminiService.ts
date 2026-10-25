@@ -59,6 +59,7 @@ import {
   gatherPlayerGrounding,
   gatherSearchFoundation,
   getCareerStatus,
+  groundingShowsRetirement,
 } from './groundingService';
 import { withFreshLatestUpdate } from './latestUpdateRefresh';
 import { classifyTurn, extractCandidateSlug } from './turnRouter';
@@ -342,7 +343,16 @@ export const sendMessageToAI = async (
     perf('hybrid grounding');
 
     // A retired player has no current form to rate, so with no timeframe he gets his prime.
-    if (careerStatus === 'retired') {
+    // When the status check is inconclusive, the grounding itself can still show it.
+    const retired =
+      careerStatus === 'retired' ||
+      (careerStatus === 'unknown' &&
+        !imageData &&
+        !isHistorical &&
+        !season &&
+        !route.wantsCurrentForm &&
+        groundingShowsRetirement(grounding.foundationText, grounding.apiPlayer));
+    if (retired) {
       isHistorical = true;
       perf('retired player: rating his prime');
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);

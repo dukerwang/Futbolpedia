@@ -38,6 +38,7 @@ import {
   seasonMatches,
 } from '../services/dossierStore';
 import { extractCandidatePlayerName } from '../services/turnRouter';
+import { groundingShowsRetirement, parseCareerStatus } from '../services/groundingService';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
 import { getAttributeLabel, normalizePosition, resolveLiberoPosition } from '../constants/ratingTiers';
@@ -533,6 +534,23 @@ async function main() {
     assert.equal(seasonMatches('2005-06', '2005-06'), true);
     assert.equal(extractCandidatePlayerName('Rate Thierry Henry 2006'), 'Thierry Henry');
     assert.equal(extractCandidatePlayerName('Ronaldo 2007/08'), 'Ronaldo');
+  });
+
+  await test('career status: retired players are recognized, active ones are not', () => {
+    assert.equal(parseCareerStatus('RETIRED'), 'retired');
+    assert.equal(parseCareerStatus('He is RETIRED.'), 'retired');
+    assert.equal(parseCareerStatus('active'), 'active');
+    assert.equal(parseCareerStatus(''), 'unknown');
+    assert.equal(parseCareerStatus('UNKNOWN'), 'unknown');
+
+    const retiredText = '- Retired from professional football in 2024 after a spell in the UAE.';
+    assert.equal(groundingShowsRetirement(retiredText, null), true);
+    // International retirement is not retirement.
+    assert.equal(groundingShowsRetirement('- Retired from international football in 2024. Starts every league game.', null), false);
+    // Current-season appearances overrule any mention of retirement.
+    const playing = { name: 'X', seasonStats: { season: 2026, appearances: 9 } } as any;
+    assert.equal(groundingShowsRetirement(retiredText, playing), false);
+    assert.equal(groundingShowsRetirement('- Came out of retirement and retired again? No: came out of retirement in 2025.', null), false);
   });
 
   await test('accented and unaccented names resolve to the same shared card slug', () => {

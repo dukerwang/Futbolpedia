@@ -331,6 +331,31 @@ export type CareerStatus = 'active' | 'retired' | 'unknown';
 
 const careerStatusCache = new Map<string, Promise<CareerStatus>>();
 
+/** Reads the status check's answer; anything without a clear ACTIVE or RETIRED is 'unknown'. */
+export function parseCareerStatus(text: string): CareerStatus {
+  const m = text.toUpperCase().match(/\b(RETIRED|ACTIVE)\b/);
+  return m ? (m[1] === 'RETIRED' ? 'retired' : 'active') : 'unknown';
+}
+
+/**
+ * Backup for an inconclusive status check: the current-player grounding itself reports the
+ * retirement and API-Football has no current-season appearances for him.
+ */
+export function groundingShowsRetirement(
+  foundationText: string,
+  apiPlayer: ApiFootballPlayerFactSheet | null,
+): boolean {
+  const playingNow = (apiPlayer?.seasonStats?.appearances ?? 0) > 0;
+  if (playingNow) return false;
+  // Retiring from international football says nothing about club football.
+  const text = foundationText.replace(
+    /[^.\n]*\b(international|national team|national side)\b[^.\n]*/gi,
+    ' ',
+  );
+  return /\b(retired|retirement|hung up (?:his|her|their) boots)\b/i.test(text) &&
+    !/\bcame out of retirement|un-?retire/i.test(text);
+}
+
 /**
  * Whether a player still plays professionally, from a focused grounded search. A dossier on a
  * retired player with no timeframe rates his prime, since he has no current form to rate.
@@ -348,16 +373,20 @@ export function getCareerStatus(playerName: string): Promise<CareerStatus> {
       contents: `As of ${month} ${year}, is the footballer ${playerName} still playing professionally, or has he retired from playing? Reply with exactly one word: ACTIVE, RETIRED, or UNKNOWN.`,
       config: {
         temperature: 0,
-        maxOutputTokens: 10,
+        // Thinking tokens count against this budget, so leave room beyond the one-word answer.
+        maxOutputTokens: 256,
         tools: [{ googleSearch: {} }],
         thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
       },
     })
     .then((res): CareerStatus => {
-      const word = (res.text ?? '').trim().toUpperCase();
-      return word.startsWith('RETIRED') ? 'retired' : word.startsWith('ACTIVE') ? 'active' : 'unknown';
+      const status = parseCareerStatus(res.text ?? '');
+      if (status === 'unknown') careerStatusCache.delete(key);
+      console.info(`[CareerStatus] ${playerName}: ${status}`);
+      return status;
     })
-    .catch((): CareerStatus => {
+    .catch((e): CareerStatus => {
+      console.warn(`[CareerStatus] Check failed for ${playerName}:`, e);
       careerStatusCache.delete(key);
       return 'unknown';
     });
