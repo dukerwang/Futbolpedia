@@ -21,6 +21,7 @@ import {
   getSharedConversation,
   ensureDossierDated,
   getCardKey,
+  renameDossierCard,
   stampDossier,
 } from './services/geminiService';
 import { sendGaffaMessage } from './services/gaffaChatService';
@@ -834,10 +835,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleRenameDossier = useCallback((cardKey: string, newName: string) => {
-    const rename = (d: PlayerProfile): PlayerProfile => ({
-      ...d,
-      basicInfo: { ...d.basicInfo, name: newName },
-    });
+    const rename = (d: PlayerProfile): PlayerProfile => renameDossierCard(d, newName);
 
     setGlobalDossiers(prev => {
       const updated = prev.map(d => (getCardKey(d) === cardKey ? rename(d) : d));
