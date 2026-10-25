@@ -4,99 +4,147 @@ export interface ManagerVerificationContext {
   currentHeadCoach: string | null;
 }
 
-export const KNOWN_STALE_CLUB_MANAGERS: Record<string, { currentCoach: string; stale: string[] }> = {
+export interface KnownClubManager {
+  currentCoach: string;
+  /** Lowercase names the club goes by in prose; the stale-name scrub only runs when one appears. */
+  aliases: string[];
+  /**
+   * Recent former coaches a model might still cite as current. Full names only — bare surnames
+   * like "Xavi" or "Slot" collide with players and ordinary words.
+   */
+  stale: string[];
+}
+
+/**
+ * Hand-verified coach overrides for clubs where API-Football or model memory lags.
+ * This is a stopgap, not a source of truth: every entry stops applying once the table is older
+ * than KNOWN_CLUB_MANAGERS_MAX_AGE_DAYS, so a forgotten table fails open to live data instead
+ * of injecting wrong names. Re-verify all entries and bump the date together.
+ */
+export const KNOWN_CLUB_MANAGERS_VERIFIED_ON = '2026-10-25';
+const KNOWN_CLUB_MANAGERS_MAX_AGE_DAYS = 120;
+
+export const KNOWN_CLUB_MANAGERS: Record<string, KnownClubManager> = {
   Chelsea: {
     currentCoach: 'Xabi Alonso',
-    stale: [
-      'Enzo Maresca',
-      'Maresca',
-      'Mauricio Pochettino',
-      'Pochettino',
-      'Graham Potter',
-      'Potter',
-      'Frank Lampard',
-      'Lampard',
-      'Thomas Tuchel',
-      'Tuchel',
-    ],
+    aliases: ['chelsea'],
+    stale: ['Liam Rosenior', 'Mauricio Pochettino', 'Graham Potter', 'Frank Lampard'],
+  },
+  'Manchester City': {
+    currentCoach: 'Enzo Maresca',
+    aliases: ['manchester city', 'man city'],
+    stale: [],
   },
   Liverpool: {
-    currentCoach: 'Arne Slot',
-    stale: ['Jürgen Klopp', 'Jurgen Klopp', 'Klopp'],
+    currentCoach: 'Andoni Iraola',
+    aliases: ['liverpool'],
+    stale: ['Arne Slot'],
   },
   'Manchester United': {
-    currentCoach: 'Ruben Amorim',
-    stale: ['Erik ten Hag', 'Ten Hag', 'Ole Gunnar Solskjaer'],
+    currentCoach: 'Michael Carrick',
+    aliases: ['manchester united', 'man utd', 'man united'],
+    stale: ['Ruben Amorim', 'Rúben Amorim', 'Erik ten Hag'],
   },
   'FC Barcelona': {
     currentCoach: 'Hansi Flick',
-    stale: ['Xavi Hernandez', 'Xavi'],
+    aliases: ['barcelona', 'barça', 'barca'],
+    stale: ['Xavi Hernandez', 'Xavi Hernández'],
   },
   'Bayern Munich': {
     currentCoach: 'Vincent Kompany',
+    aliases: ['bayern'],
     stale: ['Thomas Tuchel', 'Julian Nagelsmann'],
   },
   Juventus: {
-    currentCoach: 'Thiago Motta',
-    stale: ['Massimiliano Allegri', 'Allegri'],
+    currentCoach: 'Luciano Spalletti',
+    aliases: ['juventus', 'juve'],
+    stale: ['Igor Tudor', 'Thiago Motta'],
   },
   Napoli: {
-    currentCoach: 'Antonio Conte',
-    stale: ['Walter Mazzarri', 'Rudi Garcia', 'Luciano Spalletti'],
+    currentCoach: 'Massimiliano Allegri',
+    aliases: ['napoli'],
+    stale: ['Antonio Conte'],
   },
   Brighton: {
     currentCoach: 'Fabian Hürzeler',
-    stale: ['Roberto De Zerbi', 'De Zerbi', 'Graham Potter'],
+    aliases: ['brighton'],
+    stale: ['Roberto De Zerbi'],
   },
 };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** False once the hand-verified table is too old to trust; callers then defer to live data. */
+export function isKnownClubManagersTableFresh(now: Date = new Date()): boolean {
+  const verifiedMs = Date.parse(`${KNOWN_CLUB_MANAGERS_VERIFIED_ON}T00:00:00Z`);
+  return now.getTime() - verifiedMs <= KNOWN_CLUB_MANAGERS_MAX_AGE_DAYS * DAY_MS;
+}
+
+/** Never rewrite a name that is some listed club's current coach (e.g. a coach who moved clubs). */
+const CURRENT_COACHES_LOWER = new Set(
+  Object.values(KNOWN_CLUB_MANAGERS).map((m) => m.currentCoach.toLowerCase()),
+);
 
 const normalizeClubKey = (club: string): string =>
   club.toLowerCase().replace(/\bfc\b/g, '').replace(/\s+/g, ' ').trim();
 
+const findKnownClubManager = (club: string): KnownClubManager | undefined => {
+  const key = normalizeClubKey(club);
+  return Object.entries(KNOWN_CLUB_MANAGERS).find(
+    ([name, entry]) => normalizeClubKey(name) === key || entry.aliases.includes(key),
+  )?.[1];
+};
+
 /**
  * Corrects a club's head-coach record (e.g. from API-Football, which lags managerial changes)
- * when the club is listed in KNOWN_STALE_CLUB_MANAGERS and the record is missing or names a
- * known former coach. Coaches of unlisted clubs pass through untouched.
+ * when the club is listed in KNOWN_CLUB_MANAGERS and the record is missing or names a known
+ * former coach. Unlisted clubs, and every club once the table has expired, pass through untouched.
  */
 export function correctStaleCoachRecord(
   club: string | null | undefined,
   coach: string | null | undefined,
+  now: Date = new Date(),
 ): string | null {
-  const clubKey = club ? normalizeClubKey(club) : '';
-  const entry = clubKey
-    ? Object.entries(KNOWN_STALE_CLUB_MANAGERS).find(
-        ([name]) => normalizeClubKey(name) === clubKey,
-      )?.[1]
-    : undefined;
+  const entry = club && isKnownClubManagersTableFresh(now) ? findKnownClubManager(club) : undefined;
   if (!entry) return coach ?? null;
   const coachLower = coach?.toLowerCase() ?? '';
   const isStale = entry.stale.some((name) => coachLower.includes(name.toLowerCase()));
   return !coach || isStale ? entry.currentCoach : coach;
 }
 
-export function scrubKnownStaleManagers(text: string): string {
-  if (!text) return text;
+/** One prompt line listing the verified current coaches, or '' once the table has expired. */
+export function formatKnownClubManagersForPrompt(now: Date = new Date()): string {
+  if (!isKnownClubManagersTableFresh(now)) return '';
+  const pairs = Object.entries(KNOWN_CLUB_MANAGERS)
+    .map(([club, { currentCoach }]) => `${club} — ${currentCoach}`)
+    .join('; ');
+  return `Verified current head coaches (as of ${KNOWN_CLUB_MANAGERS_VERIFIED_ON}): ${pairs}.`;
+}
+
+/**
+ * Rewrites "under [former coach]" / "[former coach]'s system"-style attributions to the club's
+ * current coach. Only runs for clubs the text actually mentions, skips anyone who currently
+ * coaches a listed club, and does nothing once the table has expired.
+ */
+export function scrubKnownStaleManagers(text: string, now: Date = new Date()): string {
+  if (!text || !isKnownClubManagersTableFresh(now)) return text;
+  const lowerText = text.toLowerCase();
   let result = text;
 
-  for (const [, { currentCoach, stale }] of Object.entries(KNOWN_STALE_CLUB_MANAGERS)) {
+  for (const { currentCoach, aliases, stale } of Object.values(KNOWN_CLUB_MANAGERS)) {
+    if (!aliases.some((alias) => lowerText.includes(alias))) continue;
     for (const staleName of stale) {
+      if (CURRENT_COACHES_LOWER.has(staleName.toLowerCase())) continue;
       const escaped = staleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
       // 1. "Under [Stale]" -> "Under [CurrentCoach]"
       result = result.replace(
         new RegExp(`\\b(under)\\s+(?:manager\\s+|head\\s+coach\\s+|coach\\s+)?${escaped}\\b`, 'gi'),
-        (match, prefix: string) => {
-          const isCapital = prefix[0] === prefix[0].toUpperCase();
-          const p = isCapital ? 'Under' : 'under';
-          return `${p} ${currentCoach}`;
-        },
+        (_match, prefix: string) => `${prefix[0] === 'U' ? 'Under' : 'under'} ${currentCoach}`,
       );
 
       // 2. "[Stale]'s" -> "[CurrentCoach]'s"
-      result = result.replace(
-        new RegExp(`\\b${escaped}['’]s\\b`, 'gi'),
-        `${currentCoach}'s`,
-      );
+      result = result.replace(new RegExp(`\\b${escaped}['’]s\\b`, 'gi'), `${currentCoach}'s`);
 
       // 3. "[Stale] deploys / uses / fields" -> "[CurrentCoach] deploys / uses / fields"
       result = result.replace(
@@ -104,13 +152,13 @@ export function scrubKnownStaleManagers(text: string): string {
           `\\b${escaped}\\s+(deploys|uses|fields|plays|favours|favors|prefers|relies on)\\b`,
           'gi',
         ),
-        (match, verb) => `${currentCoach} ${verb}`,
+        (_match, verb) => `${currentCoach} ${verb}`,
       );
 
       // 4. "managed by [Stale]" / "coached by [Stale]" -> "managed by [CurrentCoach]"
       result = result.replace(
         new RegExp(`\\b(managed by|coached by)\\s+${escaped}\\b`, 'gi'),
-        (match, prefix) => `${prefix} ${currentCoach}`,
+        (_match, prefix) => `${prefix} ${currentCoach}`,
       );
     }
   }
@@ -224,8 +272,15 @@ const NON_MANAGER_PHRASES = new Set([
 const LEADING_PREPOSITION_REGEX =
   /^(?:in|at|for|with|from|by|on|under|over|through|during|after|before)\s+/i;
 
+/**
+ * Strips a leading preposition and keeps only the leading capitalized words. The name patterns
+ * are case-insensitive, so "under Mauricio Pochettino at the club" captures "Mauricio Pochettino
+ * at the" — without trimming, that never reads as a person and slips past verification.
+ */
 function cleanCandidateName(candidate: string): string {
-  return candidate.replace(LEADING_PREPOSITION_REGEX, '').trim();
+  const tokens = candidate.replace(LEADING_PREPOSITION_REGEX, '').trim().split(/\s+/);
+  const end = tokens.findIndex((t) => !/^[A-ZÀ-ÖØ-Þ]/.test(t));
+  return tokens.slice(0, end === -1 ? tokens.length : end).join(' ');
 }
 
 function isLikelyPersonName(candidate: string): boolean {
@@ -339,13 +394,15 @@ export function scrubUnverifiedManagerText(
     (fullMatch, prefix: string, name: string) => {
       const cleaned = cleanCandidateName(name);
       if (isAllowed(cleaned)) return fullMatch;
+      // Keep any lowercase words the case-insensitive capture swallowed after the name.
+      const tail = cleaned ? name.slice(name.indexOf(cleaned) + cleaned.length) : '';
       const isCapital = prefix[0] === prefix[0].toUpperCase();
       const isUnder = prefix.toLowerCase() === 'under';
       if (isUnder) {
         const p = isCapital ? 'Under' : 'under';
-        return verifiedCoach ? `${p} ${verifiedCoach}` : (isCapital ? 'In the current tactical setup' : 'in the current tactical setup');
+        return (verifiedCoach ? `${p} ${verifiedCoach}` : (isCapital ? 'In the current tactical setup' : 'in the current tactical setup')) + tail;
       }
-      return verifiedCoach ? `${prefix} ${verifiedCoach}` : 'in the current tactical setup';
+      return (verifiedCoach ? `${prefix} ${verifiedCoach}` : 'in the current tactical setup') + tail;
     },
   );
 

@@ -3,6 +3,8 @@ import { assertValidOutlook, validateOutlook } from '../gates/validateOutlook';
 import {
   correctStaleCoachRecord,
   findUnverifiedManagerMentions,
+  isKnownClubManagersTableFresh,
+  scrubKnownStaleManagers,
   scrubUnverifiedManagerText,
 } from '../gates/managerMentions';
 import { buildOutlookSearchQueries } from '../pipeline/queryGen';
@@ -142,7 +144,7 @@ describe('validateOutlook', () => {
     const scrubbed = scrubUnverifiedManagerText(raw, ctx);
     expect(findUnverifiedManagerMentions(scrubbed, ctx)).toEqual([]);
     expect(scrubbed).toContain("Xabi Alonso's system");
-    expect(scrubbed).toContain('under Xabi Alonso');
+    expect(scrubbed).toContain('under Xabi Alonso at the club.');
   });
 
   it('scrubs capitalized "Under Enzo Maresca" and possessive "In Maresca\'s setup" into Xabi Alonso', () => {
@@ -160,16 +162,48 @@ describe('validateOutlook', () => {
 });
 
 describe('correctStaleCoachRecord', () => {
+  const FRESH = new Date('2026-10-25T12:00:00Z');
+  const EXPIRED = new Date('2027-06-01T00:00:00Z');
+
   it('replaces a missing or stale coach for a listed club', () => {
-    expect(correctStaleCoachRecord('Chelsea', null)).toBe('Xabi Alonso');
-    expect(correctStaleCoachRecord('Chelsea', 'Enzo Maresca')).toBe('Xabi Alonso');
-    expect(correctStaleCoachRecord('Barcelona', 'Xavi Hernandez')).toBe('Hansi Flick');
+    expect(correctStaleCoachRecord('Chelsea', null, FRESH)).toBe('Xabi Alonso');
+    expect(correctStaleCoachRecord('Chelsea', 'Liam Rosenior', FRESH)).toBe('Xabi Alonso');
+    expect(correctStaleCoachRecord('Barcelona', 'Xavi Hernandez', FRESH)).toBe('Hansi Flick');
   });
 
   it('keeps a non-stale coach and leaves unlisted clubs untouched', () => {
-    expect(correctStaleCoachRecord('Chelsea', 'Xabi Alonso')).toBe('Xabi Alonso');
-    expect(correctStaleCoachRecord('Coventry City', 'Frank Lampard')).toBe('Frank Lampard');
-    expect(correctStaleCoachRecord('West Ham', 'Graham Potter')).toBe('Graham Potter');
-    expect(correctStaleCoachRecord(null, null)).toBeNull();
+    expect(correctStaleCoachRecord('Chelsea', 'Xabi Alonso', FRESH)).toBe('Xabi Alonso');
+    expect(correctStaleCoachRecord('Manchester City', 'Enzo Maresca', FRESH)).toBe('Enzo Maresca');
+    expect(correctStaleCoachRecord('Coventry City', 'Frank Lampard', FRESH)).toBe('Frank Lampard');
+    expect(correctStaleCoachRecord(null, null, FRESH)).toBeNull();
+  });
+
+  it('fails open to the live record once the table has expired', () => {
+    expect(isKnownClubManagersTableFresh(EXPIRED)).toBe(false);
+    expect(correctStaleCoachRecord('Chelsea', 'Someone New', EXPIRED)).toBe('Someone New');
+    expect(correctStaleCoachRecord('Chelsea', null, EXPIRED)).toBeNull();
+  });
+});
+
+describe('scrubKnownStaleManagers', () => {
+  const FRESH = new Date('2026-10-25T12:00:00Z');
+
+  it('rewrites a former coach only when the text is about that club', () => {
+    expect(scrubKnownStaleManagers("Chelsea under Liam Rosenior pressed high.", FRESH)).toBe(
+      'Chelsea under Xabi Alonso pressed high.',
+    );
+    expect(scrubKnownStaleManagers("Rosenior's Strasbourg side pressed high.", FRESH)).toBe(
+      "Rosenior's Strasbourg side pressed high.",
+    );
+  });
+
+  it('never rewrites a coach who now manages a listed club', () => {
+    const text = "Chelsea fans remember Enzo Maresca's system; Manchester City now play it.";
+    expect(scrubKnownStaleManagers(text, FRESH)).toBe(text);
+  });
+
+  it('leaves player names that share a former coach surname alone', () => {
+    const text = "Barcelona's Xavi's passing range defined an era.";
+    expect(scrubKnownStaleManagers(text, FRESH)).toBe(text);
   });
 });

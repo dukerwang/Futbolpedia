@@ -18,7 +18,10 @@ import {
 } from './dossierStore';
 import { buildSquadTurnoverQuery, gatherSearchFoundation } from './groundingService';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
-import { scrubUnverifiedManagerText } from '../packages/engine/src/gates/managerMentions.ts';
+import {
+  formatKnownClubManagersForPrompt,
+  scrubUnverifiedManagerText,
+} from '../packages/engine/src/gates/managerMentions.ts';
 
 /**
  * Retains the most recent verified `<factual_foundation>` for the active conversation thread
@@ -397,7 +400,7 @@ ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}
 2. Current-state facts (club, manager, squad membership, injuries, ${currentSeason} stats) must come from <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, \`get_team_fixtures\`, Google Search), or existing dossiers — never stale training memory. Never name an unverified head coach.
-3. CRITICAL MANAGER FIDELITY: Enzo Maresca was sacked by Chelsea; Chelsea's confirmed head coach is Xabi Alonso. Never cite former or sacked managers from pre-trained memory. Ground tactical roles in verified current managers or describe intrinsic player mechanics without naming a manager.
+3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. ${formatKnownClubManagersForPrompt()} Ground tactical roles in verified current managers or describe intrinsic player mechanics without naming a manager.
 4. ${CONTINUITY_REMINDER}
 </instructions>
 <task>${message}</task>`;

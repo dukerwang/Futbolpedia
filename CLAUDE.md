@@ -43,7 +43,7 @@ Separate chat domain from dossier synthesis. When the ChatInput **Gaffa** toggle
 **Club connect:** sign in through `services/gaffaAuth.ts` and pick a club (RLS context loader), paste league + club IDs in the connect strip, or open `#/gaffa/<leagueId>/<clubId>`. Express `GET /api/gaffa/context` proxies to Gaffa `GET /api/integrations/futbolpedia/context`. The live bag fills `GaffaContextBag` (roster, budget, standings, matchup, XI, listings, auctions, FA pool, league settings); `gaffaLineupAudit.ts` derives lineup audits, alerts and bid valuations from it.
 
 ### Manager fidelity
-API-Football and model memory both lag coaching changes. `packages/engine/src/gates/managerMentions.ts` holds `KNOWN_STALE_CLUB_MANAGERS`: `correctStaleCoachRecord` fixes API coach records, and `scrubUnverifiedManagerText` / `scrubKnownStaleManagers` clean prose. Update that table when a listed club changes coach.
+API-Football and model memory both lag coaching changes. `packages/engine/src/gates/managerMentions.ts` holds `KNOWN_CLUB_MANAGERS`, a hand-verified stopgap (not a source of truth) dated by `KNOWN_CLUB_MANAGERS_VERIFIED_ON`. It drives `correctStaleCoachRecord` (API coach records), `scrubKnownStaleManagers` (club-scoped prose rewrites) and `formatKnownClubManagersForPrompt` (scout prompt line). The whole table switches off 120 days after its verified date, so when you touch it, re-verify every entry and bump the date together. Use full names only in `stale`, and never list someone who coaches another listed club. `scrubUnverifiedManagerText` separately replaces any coach name that the turn's grounding didn't verify.
 
 **Critical quirks:**
 - `gemini-3.8-flash` rejects `ThinkingLevel.MINIMAL` (HTTP 400); `aiClient.ts` maps the `minimal` tier to `LOW`.
