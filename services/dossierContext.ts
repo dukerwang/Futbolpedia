@@ -10,7 +10,9 @@ import {
   isConfidentDossier,
   isDossierDated,
   isPlayerProfile,
+  isPrimeCard,
   latestCardPerPlayer,
+  toBasePlayerSlug,
 } from './dossierCards';
 
 /**
@@ -151,6 +153,40 @@ export const findReferencedDossiers = (
   }
 
   return [...matched.values()];
+};
+
+/**
+ * One card per player for a turn, so a player's current and prime cards never both get locked
+ * and the wrong one can't win by list order. A current-form turn prefers the current card and a
+ * historical turn the prime card; a player with only the other edition keeps it (Pelé has no
+ * current card, an active player in a peak comparison has no prime card). Within the preferred
+ * edition the later card wins, so list sources from broadest to most local.
+ */
+export const pickCardPerPlayer = (cards: PlayerProfile[], isHistorical: boolean): PlayerProfile[] => {
+  const wanted = (p: PlayerProfile): boolean => isPrimeCard(p) === isHistorical;
+  const byPlayer = new Map<string, PlayerProfile>();
+  for (const p of cards) {
+    const key = toBasePlayerSlug(p.basicInfo.name);
+    const existing = byPlayer.get(key);
+    if (!existing || wanted(p) || !wanted(existing)) byPlayer.set(key, p);
+  }
+  return [...byPlayer.values()];
+};
+
+/** The candidate card the user was most recently shown in this conversation, if any. */
+export const mostRecentlyShownCard = (
+  history: ChatMessage[],
+  candidates: PlayerProfile[],
+): PlayerProfile | undefined => {
+  const byKey = new Map(candidates.map((p) => [getCardKey(p), p]));
+  for (let i = history.length - 1; i >= 0; i--) {
+    const content = history[i].content;
+    if (history[i].sender === 'ai' && isPlayerProfile(content)) {
+      const hit = byKey.get(getCardKey(content));
+      if (hit) return hit;
+    }
+  }
+  return undefined;
 };
 
 export const buildLockedDossiersBlock = (dossiers: PlayerProfile[]): string => {

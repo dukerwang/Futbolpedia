@@ -11,10 +11,12 @@ import {
   buildLockedDossiersBlock,
   DossierPatch,
   findReferencedDossiers,
+  isPrimeCard,
   mergeAllCalibratedDossiers,
+  mostRecentlyShownCard,
+  pickCardPerPlayer,
   serializeProfileForHistory,
   recordDossierRevision,
-  toPlayerSlug,
 } from './dossierStore';
 import { buildSquadTurnoverQuery, gatherSearchFoundation } from './groundingService';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
@@ -163,13 +165,19 @@ export async function runConversationalScout(
 
   // 1. Live Dossier Challenge / Revision Path
   if (route.intent === 'challenge_or_revise' && conversationDossiers.length > 0 && !imageData) {
+    // A player can have a current and a prime card in the same conversation. Revise the edition
+    // the message names, otherwise the card the user was most recently shown.
     const referenced = findReferencedDossiers(
       message,
       conversationDossiers,
       route.targetPlayers,
     );
+    const candidates = referenced.length > 0 ? referenced : conversationDossiers;
     const targetDossier =
-      referenced[0] || conversationDossiers[conversationDossiers.length - 1];
+      (route.isHistorical ? pickCardPerPlayer(candidates, true).find(isPrimeCard) : undefined) ??
+      mostRecentlyShownCard(history, candidates) ??
+      referenced[0] ??
+      conversationDossiers[conversationDossiers.length - 1];
 
     let groundingNotes = '';
     if (route.needsSearch) {
@@ -238,27 +246,22 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 
   if (!imageData && route.intent !== 'archive_inventory') {
     const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
-    const matchedDossiersBySlug = new Map<string, PlayerProfile>();
+    const matchedCards: PlayerProfile[] = [];
     const unratedPlayers: string[] = [];
 
     for (const targetName of route.targetPlayers) {
       const hits = findReferencedDossiers(targetName, allCalibrated, [targetName]);
-      if (hits.length > 0) {
-        for (const h of hits) {
-          matchedDossiersBySlug.set(toPlayerSlug(h.basicInfo.name), h);
-        }
-      } else {
-        unratedPlayers.push(targetName);
-      }
+      if (hits.length > 0) matchedCards.push(...hits);
+      else unratedPlayers.push(targetName);
     }
 
     // Also include any referenced dossiers found directly in the raw message
-    for (const d of findReferencedDossiers(message, allCalibrated, route.targetPlayers)) {
-      matchedDossiersBySlug.set(toPlayerSlug(d.basicInfo.name), d);
-    }
+    matchedCards.push(...findReferencedDossiers(message, allCalibrated, route.targetPlayers));
 
-    if (matchedDossiersBySlug.size > 0) {
-      effectiveLockedBlock = buildLockedDossiersBlock([...matchedDossiersBySlug.values()]);
+    // One card per player, in the edition this turn is about (current form vs. peak).
+    const lockedCards = pickCardPerPlayer(matchedCards, route.isHistorical);
+    if (lockedCards.length > 0) {
+      effectiveLockedBlock = buildLockedDossiersBlock(lockedCards);
     }
 
     const targetClubs =

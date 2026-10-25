@@ -28,6 +28,8 @@ import {
   buildRevisionRow,
   hasRevisionConsensus,
   type DossierRevisionRow,
+  mostRecentlyShownCard,
+  pickCardPerPlayer,
 } from '../services/dossierStore';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
@@ -456,6 +458,39 @@ async function main() {
     assert.deepEqual(findReferencedDossiers('rate joao pedro', [joao]).map((p) => p.basicInfo.name), ['João Pedro']);
     assert.deepEqual(findReferencedDossiers('how good is Joao?', [joao, neto]).map((p) => p.basicInfo.name), ['João Pedro']);
     assert.deepEqual(findReferencedDossiers('rate odegaard', [card('Martin Ødegaard')]).length, 1);
+  });
+
+  await test('a turn locks one card per player, in the edition it asks about', () => {
+    const terryNow = card('John Terry');
+    const terryPrime = primeCard('John Terry', '2005-05-07');
+    const pele = primeCard('Pelé', '1970-06-21');
+    const vvd = card('Virgil van Dijk');
+    const editions = (cards: PlayerProfile[]) =>
+      cards.map((p) => `${p.basicInfo.name}:${isPrimeCard(p) ? 'prime' : 'current'}`).sort();
+
+    // Current-form turn: the current card wins whichever order they arrive in.
+    assert.deepEqual(editions(pickCardPerPlayer([terryNow, terryPrime], false)), ['John Terry:current']);
+    assert.deepEqual(editions(pickCardPerPlayer([terryPrime, terryNow], false)), ['John Terry:current']);
+    // Peak turn: the prime card wins, and active players keep their current card.
+    assert.deepEqual(editions(pickCardPerPlayer([terryPrime, terryNow, vvd], true)), [
+      'John Terry:prime',
+      'Virgil van Dijk:current',
+    ]);
+    // A legend with only a prime card keeps it on a current-form turn.
+    assert.deepEqual(editions(pickCardPerPlayer([pele, vvd], false)), ['Pelé:prime', 'Virgil van Dijk:current']);
+  });
+
+  await test('a challenge revises the card the user was most recently shown', () => {
+    const terryNow = card('John Terry');
+    const terryPrime = primeCard('John Terry', '2005-05-07');
+    const history = [
+      { id: '1', sender: 'ai' as const, content: terryNow },
+      { id: '2', sender: 'ai' as const, content: terryPrime },
+      { id: '3', sender: 'user' as const, content: 'his passing should be higher' },
+    ];
+    assert.equal(mostRecentlyShownCard(history as any, [terryNow, terryPrime]), terryPrime);
+    assert.equal(mostRecentlyShownCard(history.slice(0, 1) as any, [terryNow, terryPrime]), terryNow);
+    assert.equal(mostRecentlyShownCard([], [terryNow]), undefined);
   });
 
   console.log(`${passes} passed, ${failures} failed`);
