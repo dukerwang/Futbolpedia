@@ -842,7 +842,7 @@ function enforceCalibrationInvariants(
  * Current cards always carry today's date. Historical cards keep the model's verified peak date
  * and are never relabelled "current".
  */
-function applyVersionRules(profile: PlayerProfile, isHistorical: boolean): PlayerProfile {
+export function applyVersionRules(profile: PlayerProfile, isHistorical: boolean): PlayerProfile {
   const v = profile.version;
   if (!v) return profile;
   const { month, year, currentSeason } = getCurrentSeasonInfo();
