@@ -16,6 +16,7 @@ import {
   buildPriorDossierTrajectoryBlock,
   buildRevisionProposalsBlock,
   buildSavedDossiersBlock,
+  cardEdition,
   ensureDossierDated,
   fetchGlobalHubDossiers,
   type GlobalHubDossierItem,
@@ -25,6 +26,7 @@ import {
   fetchSupabaseCalibratedPool,
   findReferencedDossiers,
   getCachedDossier,
+  getCachedSeasonCard,
   getCardKey,
   renameDossierCard,
   getDossierEvaluationDate,
@@ -38,6 +40,7 @@ import {
   mergeConversationDossiers,
   pickCardPerPlayer,
   resolveSavedDossiersForRequest,
+  seasonMatches,
   shareConversation,
   shareDossierCard,
   stampDossier,
@@ -51,7 +54,12 @@ import {
 import { synthesizePlayerDossier } from './dossierSynthesizer';
 import { getClubManager, toClubKey } from './clubManagers';
 import { attachVerifiedManager } from './profileManagerGrounding';
-import { gatherPlayerGrounding, gatherSearchFoundation } from './groundingService';
+import {
+  type CareerStatus,
+  gatherPlayerGrounding,
+  gatherSearchFoundation,
+  getCareerStatus,
+} from './groundingService';
 import { withFreshLatestUpdate } from './latestUpdateRefresh';
 import { classifyTurn, extractCandidateSlug } from './turnRouter';
 
@@ -230,17 +238,28 @@ export const sendMessageToAI = async (
       extractCandidateSlug(message) ||
       '';
 
-    // A player can hold several cards (current plus prime). Shortcuts and locks only consider
-    // cards of the edition this request is asking for.
+    // A dossier rates one version of a player: today's form, his prime, or a named past
+    // season. A retired player asked about with no timeframe gets his prime (see below).
+    let isHistorical = route.isHistorical;
+    const season = route.requestedSeason ?? null;
+    const careerStatusPromise =
+      !isHistorical && !season && !route.wantsCurrentForm && !imageData && primaryPlayer
+        ? getCareerStatus(primaryPlayer)
+        : Promise.resolve<CareerStatus>('unknown');
+
+    // A player can hold several cards (current, prime, past seasons). Shortcuts and locks only
+    // consider cards of the version this request is asking for.
     const matchesRequestedEdition = (p: PlayerProfile): boolean =>
-      isPrimeCard(p) === route.isHistorical;
+      season
+        ? isPrimeCard(p) && seasonMatches(p.version?.seasonOrEra, season)
+        : isPrimeCard(p) === isHistorical && cardEdition(p) !== 'season_snapshot';
     const currentReferenced = referencedDossiers.filter((p) => !isPrimeCard(p));
     const currentSaved = savedResult.dossiers.filter((p) => !isPrimeCard(p));
 
     if (!imageData && !route.wantsRegeneration) {
       // Return locked in-conversation dossier if re-requested without regeneration flag
       if (
-        !route.isHistorical &&
+        !isHistorical &&
         currentReferenced.length === 1 &&
         isFreshlyCalibrated(currentReferenced[0])
       ) {
@@ -249,7 +268,7 @@ export const sendMessageToAI = async (
 
       // Return saved archive dossier if explicitly requested
       if (
-        !route.isHistorical &&
+        !isHistorical &&
         wantsSavedDossierAccess(message) &&
         currentSaved.length === 1 &&
         isFreshlyCalibrated(currentSaved[0])
@@ -258,7 +277,7 @@ export const sendMessageToAI = async (
       }
 
       // Check in-memory calibrated pool first (0ms hit for last-name or full-name matches)
-      if (!route.isHistorical && primaryPlayer) {
+      if (!isHistorical && primaryPlayer) {
         const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers).filter(
           (p) => !isPrimeCard(p),
         );
@@ -278,10 +297,16 @@ export const sendMessageToAI = async (
     // regeneration request gets the published card while it's in its refresh window. The one
     // exception is consensus: enough people independently challenging it the same way.
     let supersede = false;
-    if (!imageData) {
+    if (!imageData && season) {
+      const seasonCard = await getCachedSeasonCard(primaryPlayer, season);
+      if (seasonCard) {
+        perf('supabase season card hit');
+        return seasonCard;
+      }
+    } else if (!imageData) {
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
-        const cached = await getCachedDossier(toDossierCardSlug(rawSlug, route.isHistorical));
+        const cached = await getCachedDossier(toDossierCardSlug(rawSlug, isHistorical));
         if (cached) {
           supersede = hasRevisionConsensus(await fetchRevisionsForCard(cached));
           if (!supersede) {
@@ -294,22 +319,40 @@ export const sendMessageToAI = async (
     }
 
     options?.onStageChange?.(
-      route.isHistorical
-        ? `Researching ${primaryPlayer || 'player'}'s career peak & honours...`
-        : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
+      season
+        ? `Researching ${primaryPlayer || 'player'}'s ${season} season...`
+        : isHistorical
+          ? `Researching ${primaryPlayer || 'player'}'s career peak & honours...`
+          : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
     );
 
-    // Prior authored cards (longitudinal memory) only need the name, so fetch them alongside grounding.
-    const [grounding, priorDossiers, challengeRows] = await Promise.all([
+    // Prior authored cards (longitudinal memory) only need the name, so fetch them alongside
+    // grounding. The career status check runs alongside too, so active players wait for nothing.
+    let [grounding, priorDossiers, challengeRows, careerStatus] = await Promise.all([
       gatherPlayerGrounding({
         playerName: primaryPlayer,
         rawMessage: message,
-        isHistorical: route.isHistorical,
+        isHistorical,
+        season,
       }),
       fetchPriorDossiersForPlayer(primaryPlayer, [...savedDossiers, ...conversationDossiers]),
       fetchRevisionsForPlayer(primaryPlayer),
+      careerStatusPromise,
     ]);
     perf('hybrid grounding');
+
+    // A retired player has no current form to rate, so with no timeframe he gets his prime.
+    if (careerStatus === 'retired') {
+      isHistorical = true;
+      perf('retired player: rating his prime');
+      const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
+      const primeCard = rawSlug ? await getCachedDossier(toDossierCardSlug(rawSlug, true)) : null;
+      if (primeCard && !hasRevisionConsensus(await fetchRevisionsForCard(primeCard))) {
+        return primeCard;
+      }
+      options?.onStageChange?.(`Researching ${primaryPlayer}'s career peak & honours...`);
+      grounding = await gatherPlayerGrounding({ playerName: primaryPlayer, rawMessage: message, isHistorical });
+    }
 
     // The typed name may not match the shared card's ("pedro", a nickname, a fuller name).
     // Grounding has resolved the registered name, so look for this month's shared card under it
@@ -318,10 +361,11 @@ export const sendMessageToAI = async (
     if (
       !imageData &&
       !supersede &&
+      !season &&
       canonicalName &&
       toPlayerSlug(canonicalName) !== toPlayerSlug(primaryPlayer)
     ) {
-      const cached = await getCachedDossier(toDossierCardSlug(canonicalName, route.isHistorical));
+      const cached = await getCachedDossier(toDossierCardSlug(canonicalName, isHistorical));
       if (cached) {
         supersede = hasRevisionConsensus(await fetchRevisionsForCard(cached));
         if (!supersede) {
@@ -362,13 +406,13 @@ export const sendMessageToAI = async (
       ) + buildRevisionProposalsBlock(replacedCardChallenges);
 
     // Look up the club's verified manager while the card is synthesized; prime cards skip it.
-    const managerPromise = route.isHistorical
+    const managerPromise = isHistorical
       ? Promise.resolve(null)
       : getClubManager(grounding.apiPlayer?.currentClub).catch(() => null);
 
     const synthesized = await synthesizePlayerDossier({
       rawMessage: message,
-      isHistorical: route.isHistorical,
+      isHistorical: isHistorical,
       foundationText: grounding.foundationText,
       verifiedFacts: grounding.verifiedFacts,
       verifiedFactsBlock: grounding.verifiedFactsBlock,
@@ -377,11 +421,12 @@ export const sendMessageToAI = async (
       savedDossiersBlock,
       peerLedgerBlock: synthesisPeerLedgerBlock,
       priorTrajectoryBlock,
+      requestedSeason: season,
     });
     perf('calibrated synthesis');
 
     let profile = synthesized;
-    if (!route.isHistorical) {
+    if (!isHistorical) {
       let manager = await managerPromise;
       // The card's club wins when it differs from API-Football's (e.g. a recent transfer).
       if (
@@ -396,7 +441,7 @@ export const sendMessageToAI = async (
 
     const stampedProfile = stampDossier(profile, Date.now());
     upsertCachedDossier(
-      toDossierCardSlug(stampedProfile.basicInfo.name, route.isHistorical),
+      toDossierCardSlug(stampedProfile.basicInfo.name, isHistorical),
       stampedProfile,
       { supersede },
     );

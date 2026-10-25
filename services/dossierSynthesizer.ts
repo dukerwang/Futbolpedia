@@ -31,7 +31,7 @@ import {
   type FutbolpediaVerifiedFacts,
 } from './profileManagerGrounding';
 import type { ApiFootballPlayerFactSheet } from './groundingService';
-import { EDITION_NAME_RE, isValidEvaluationDate, todayIso, toBasePlayerSlug } from './dossierCards';
+import { EDITION_NAME_RE, isValidEvaluationDate, seasonMatches, todayIso, toBasePlayerSlug } from './dossierCards';
 
 const OUTFIELD_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
@@ -73,7 +73,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         label: {
           type: Type.STRING,
           description:
-            "Card title label, e.g. 'Current Form (Oct 2026)' or 'Prime Zenith (2008–09 Season)'.",
+            "Card title label: 'Current Form (<Mon> <Year>)', 'Prime Zenith (<Season>)' or 'Season (<Season>)'.",
         },
         evaluationDate: {
           type: Type.STRING,
@@ -82,7 +82,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         },
         seasonOrEra: {
           type: Type.STRING,
-          description: "Season or era string (e.g. '2026-27', '2019-20', '2008-09').",
+          description: 'Season or era string formatted YYYY-YY.',
         },
         peakContext: {
           type: Type.STRING,
@@ -96,7 +96,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
     calibration: {
       type: Type.OBJECT,
       description:
-        'Mandatory pre-rating calibration and grounding verification step. Anchor the tier band, peer comparison, top spike attributes, true flaws, and verified head coach BEFORE assigning numbers.',
+        'Mandatory pre-rating calibration and grounding verification step. Fix the tier band, peer comparison, top spike attributes, true flaws, and verified head coach BEFORE assigning numbers.',
       properties: {
         tierBand: {
           type: Type.STRING,
@@ -106,7 +106,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         peerBenchmark: {
           type: Type.STRING,
           description:
-            '1-2 real-world positional peers (with their approximate ratings) that anchor where this player sits inside the tier.',
+            '1-2 real-world positional peers (with their approximate ratings) that pin down where this player sits inside the tier.',
         },
         signatureSpikes: {
           type: Type.ARRAY,
@@ -209,7 +209,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         },
         sampleSize: {
           type: Type.STRING,
-          description: 'Explicit competitive senior sample evaluated (e.g. "Over 120 senior appearances across UCL and domestic league").',
+          description: 'The competitive senior sample evaluated, with its size and competitions.',
         },
         dataGaps: {
           type: Type.ARRAY,
@@ -250,7 +250,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         holisticProjection: {
           type: Type.STRING,
           description:
-            'Holistic analysis of the player native physical, athletic, and technical profile as a complete footballer independently of the role currently assigned by their manager (e.g. traits profiling better at alternative positions or higher-ceiling systemic roles).',
+            'Holistic analysis of the player native physical, athletic, and technical profile as a complete footballer independently of the role currently assigned by their manager, including any alternative positions or higher-ceiling roles their traits suit.',
         },
         playstyleTags: {
           type: Type.ARRAY,
@@ -736,7 +736,11 @@ function enforceCalibrationInvariants(
  * Current cards always carry today's date. Historical cards keep the model's verified peak date
  * and are never relabelled "current".
  */
-export function applyVersionRules(profile: PlayerProfile, isHistorical: boolean): PlayerProfile {
+export function applyVersionRules(
+  profile: PlayerProfile,
+  isHistorical: boolean,
+  requestedSeason?: string | null,
+): PlayerProfile {
   const v = profile.version;
   if (!v) return profile;
   const { month, year, currentSeason } = getCurrentSeasonInfo();
@@ -755,6 +759,27 @@ export function applyVersionRules(profile: PlayerProfile, isHistorical: boolean)
         seasonOrEra: currentSeason,
         label: `Current Form (${month} ${year})`,
         peakContext: null,
+      },
+    };
+  }
+
+  if (requestedSeason) {
+    // A named season is a season card, never the player's prime, even when the model picked
+    // a peak edition. An unconfirmed date stays empty so validation asks for it.
+    const season = v.type === 'current' ? '' : v.seasonOrEra || '';
+    const date = v.type === 'current' ? '' : v.evaluationDate || '';
+    const { evaluationDate: _today, ...rest } = profile;
+    return {
+      ...rest,
+      ...(date ? { evaluationDate: date } : {}),
+      version: {
+        ...v,
+        id: `${base}-season_snapshot-${date || 'undated'}`,
+        type: 'season_snapshot',
+        label: season ? `Season (${season})` : 'Season',
+        evaluationDate: date,
+        seasonOrEra: season,
+        peakContext: v.type === 'current' ? null : v.peakContext ?? null,
       },
     };
   }
@@ -790,8 +815,15 @@ function findSynthesisValidationIssues(
   raw: RawSynthesizedProfile,
   profile: PlayerProfile,
   verifiedFacts: FutbolpediaVerifiedFacts | null,
+  requestedSeason?: string | null,
 ): string[] {
   const issues: string[] = [];
+
+  if (requestedSeason && !seasonMatches(profile.version?.seasonOrEra, requestedSeason)) {
+    issues.push(
+      `The user asked for the player in ${requestedSeason}. Rate that season's version of him: set version.seasonOrEra to that season (YYYY-YY) and version.evaluationDate to a real date from it.`,
+    );
+  }
 
   if (verifiedFacts) {
     const managerIssues = findProfileManagerGroundingIssues(profile, verifiedFacts);
@@ -800,7 +832,7 @@ function findSynthesisValidationIssues(
 
   if (profile.version && profile.version.type !== 'current' && !profile.version.evaluationDate) {
     issues.push(
-      'The historical card has no valid peak date. Set version.evaluationDate to the real YYYY-MM-DD date of the player’s career peak and version.seasonOrEra to that season.',
+      'The historical card has no valid date. Set version.evaluationDate to a real YYYY-MM-DD date from the season this card rates and version.seasonOrEra to that season.',
     );
   }
 
@@ -831,6 +863,8 @@ export interface SynthesizeDossierParams {
   savedDossiersBlock: string;
   peerLedgerBlock?: string;
   priorTrajectoryBlock?: string;
+  /** A past season to rate instead of the player's prime ("2005-06" or a bare "2006"). */
+  requestedSeason?: string | null;
 }
 
 export async function synthesizePlayerDossier(
@@ -839,18 +873,25 @@ export async function synthesizePlayerDossier(
   const { year, month, currentSeason } = getCurrentSeasonInfo();
   const currentDateIso = todayIso();
 
-  const temporalRules = params.isHistorical
+  const temporalRules = params.requestedSeason
+    ? `
+    - SEASON DATED CARD EVALUATION (${params.requestedSeason}): Rate the player exactly as he was in the ${params.requestedSeason} season — not his career peak, not his career as a whole, and not who he became later. Wherever he was in his development or decline that season, the card reflects it.
+    - DATING REQUIREMENT: Set \`version.type\` = "season_snapshot", \`version.seasonOrEra\` = that season formatted YYYY-YY (for a bare year, the season the grounding shows he is best remembered for in that year), \`version.evaluationDate\` = a verified date from that season (YYYY-MM-DD), \`version.label\` = "Season (<Season>)", and \`version.peakContext\` = 1–2 sentences on his club, role and output that season.
+    - basicInfo (club, age) describes him in that season. Set \`ratings.potential\` to the ceiling he projected to from that season, which can exceed Overall for a young player.
+    - Disregard his ${year} status (retired, manager, veteran) when rating attributes and Overall.`
+    : params.isHistorical
     ? `
     - HISTORICAL / PEAK DATED CARD EVALUATION: Evaluate the player at their ABSOLUTE CAREER ZENITH on the exact same 1–99 scale as modern players (zero nostalgia inflation, zero conservative underselling).
-    - PEAK DATING REQUIREMENT: You MUST research and pinpoint the exact peak season (e.g. 2008–09 for Gerrard, 2019–20 for Kimmich) and the specific pinnacle date. Set \`version.type\` = "prime", \`version.evaluationDate\` = verified peak date (YYYY-MM-DD), \`version.seasonOrEra\` = peak season (e.g. "2008-09"), \`version.label\` = "Prime Zenith (<Season>)", and \`version.peakContext\` = concise 1–2 sentence note explaining the trophies, role, and dominance that defined this zenith.
-    - If the player at their peak was the #1 player in the world at their position or an all-time league/Champions League benchmark (such as Prime John Terry in 2004–2009 or Steven Gerrard in 2008–09), calibrate them in \`93_95_WC_ELITE\` (94–95) — do not cap historic defenders or midfielders at 91–92.
+    - ONE VERSION, NOT A CAREER: This card rates the best version of the player — the footballer he was in his peak season — not his career, longevity, trophy count or legacy. A long career or a full cabinet earns nothing by itself; honours count only as evidence of how good he was at that peak.
+    - PEAK DATING REQUIREMENT: You MUST research and pinpoint the exact peak season and a specific date within it. Set \`version.type\` = "prime", \`version.evaluationDate\` = verified peak date (YYYY-MM-DD), \`version.seasonOrEra\` = peak season formatted YYYY-YY, \`version.label\` = "Prime Zenith (<Season>)", and \`version.peakContext\` = concise 1–2 sentence note explaining the trophies, role, and dominance that defined this zenith.
+    - If the player at their peak was the #1 player in the world at their position or an all-time benchmark at it, calibrate them in \`93_95_WC_ELITE\` (94–95) — do not cap historic defenders or midfielders at 91–92.
     - Because a Prime/Peak dossier represents the player's realized peak, set \`ratings.potential\` equal to \`ratings.overall\` (unless their career was cut short before their prime).
     - Disregard their ${year} status (retired, manager, veteran) when rating attributes and Overall.`
     : `
-    - CURRENT FORM DATED CARD EVALUATION (${month} ${year}, Season ${currentSeason}, Date: ${currentDateIso}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <deterministic_bio_anchor> and <factual_foundation>.
+    - CURRENT FORM DATED CARD EVALUATION (${month} ${year}, Season ${currentSeason}, Date: ${currentDateIso}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <deterministic_bio_record> and <factual_foundation>.
     - DATING REQUIREMENT: Set \`version.type\` = "current", \`version.evaluationDate\` = "${currentDateIso}", \`version.seasonOrEra\` = "${currentSeason}", \`version.label\` = "Current Form (${month} ${year})", and \`version.peakContext\` = null.
-    - NO REPUTATION LAG: If the player is already performing as a Top 3–5 player in the world at their position for an elite club right now (e.g., Willian Pacho at PSG), rate their current Overall in \`90_92_WORLD_CLASS\` (90–92) — do not undersell them at 87–89 Borderline World-Class and hide their current level in Potential.
-    - APEX CONTINENTAL STARS: If the player is the primary talisman/focal point of a Champions League-winning or Ballon d'Or-caliber campaign (e.g., Ousmane Dembélé at PSG), rate them at 92–94 rather than scraping the 91 floor.
+    - NO REPUTATION LAG: If the player is already performing as a Top 3–5 player in the world at their position for an elite club right now, rate their current Overall in \`90_92_WORLD_CLASS\` (90–92) — do not undersell them at 87–89 Borderline World-Class and hide their current level in Potential.
+    - APEX CONTINENTAL STARS: If the player is the primary talisman/focal point of a Champions League-winning or Ballon d'Or-caliber campaign, rate them at 92–94 rather than scraping the 91 floor.
     - Set \`calibration.verifiedCurrentHeadCoach\` ONLY if <factual_foundation> explicitly confirms the current head coach of the player's current club as of ${month} ${year}. Never name a head coach or manager anywhere in the card's prose; the app attaches the verified manager separately.
     - If grounding shows the player started a recent match, treat them as match fit.
     - Never write a stat-based qualifier in latestUpdate without a specific verified number from the grounding data.`;
@@ -887,7 +928,7 @@ ${temporalRules}
       schema: PLAYER_PROFILE_SYNTHESIS_SCHEMA,
     });
 
-    let profile = applyVersionRules(sanitizeProfileData(raw), params.isHistorical);
+    let profile = applyVersionRules(sanitizeProfileData(raw), params.isHistorical, params.requestedSeason);
     profile.basicInfo.position = resolveLiberoPosition(profile.basicInfo.position, params.isHistorical);
 
     // Deterministically backfill missing bio fields from API-Football on active players
@@ -930,7 +971,7 @@ ${temporalRules}
       }
     }
 
-    lastIssues = findSynthesisValidationIssues(raw, profile, effectiveVerifiedFacts);
+    lastIssues = findSynthesisValidationIssues(raw, profile, effectiveVerifiedFacts, params.requestedSeason);
 
     if (lastIssues.length === 0) {
       return profile;
