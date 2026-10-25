@@ -299,8 +299,9 @@ const App: React.FC = () => {
             }]);
             setActiveProfile(profile);
             const profileWithDate = { ...profile, createdAt: profile.createdAt || Date.now() };
+            const sharedKey = getCardKey(profileWithDate);
             setGlobalDossiers(prev => {
-              const exists = prev.some(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
+              const exists = prev.some(p => getCardKey(p) === sharedKey);
               if (!exists) {
                 const updated = [...prev, profileWithDate];
                 localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
@@ -309,7 +310,7 @@ const App: React.FC = () => {
               return prev;
             });
             setAllProfiles(prev => {
-              const exists = prev.some(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
+              const exists = prev.some(p => getCardKey(p) === sharedKey);
               if (!exists) return [...prev, profileWithDate];
               return prev;
             });
@@ -354,8 +355,9 @@ const App: React.FC = () => {
               setGlobalDossiers(prev => {
                 let updated = [...prev];
                 importedConv.allProfiles.forEach(prof => {
-                  const exists = updated.some(p => p.basicInfo.name.toLowerCase() === prof.basicInfo.name.toLowerCase());
-                  if (!exists) updated.push({ ...prof, createdAt: prof.createdAt || Date.now() });
+                  const withDate = { ...prof, createdAt: prof.createdAt || Date.now() };
+                  const key = getCardKey(withDate);
+                  if (!updated.some(p => getCardKey(p) === key)) updated.push(withDate);
                 });
                 localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
                 return updated;
