@@ -112,6 +112,16 @@ export interface DefiningMoment {
   description: string;
 }
 
+/**
+ * Marks a user's accepted challenge of a shared card. A revision lives only in that user's
+ * library and conversations; the shared card changes only at its next weekly re-rating.
+ */
+export interface DossierRevision {
+  /** Card key of the shared card this revision patches. */
+  baseCardKey: string;
+  revisedAt: number;
+}
+
 export interface PlayerProfile {
   basicInfo: BasicInfo;
   ratings: Ratings;
@@ -123,6 +133,8 @@ export interface PlayerProfile {
   playstyleAndRole: PlaystyleAndRole;
   latestUpdate: string;
   createdAt?: number;
+  /** Set when this is the user's revision of a shared card rather than the shared card itself */
+  revision?: DossierRevision;
   /** Formal card versioning metadata */
   version?: DossierVersion;
   /** ISO date string (YYYY-MM-DD) representing the exact date of this evaluation snapshot */

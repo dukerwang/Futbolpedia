@@ -1,5 +1,6 @@
 import type { Attributes, GoalkeeperAttributes, PlayerProfile } from '../types';
 import { normalizeClub, normalizePosition } from '../constants/ratingTiers';
+import { getCardKey } from './dossierCards';
 
 export interface DossierPatch {
   targetPlayerName: string;
@@ -80,5 +81,30 @@ export function applyDossierPatch(base: PlayerProfile, patch: DossierPatch): Pla
     },
     latestUpdate: patch.latestUpdate || base.latestUpdate,
     createdAt: Date.now(),
+    // A patch is the user's revision; re-revising keeps pointing at the original shared card.
+    revision: {
+      baseCardKey: base.revision?.baseCardKey ?? getCardKey(base),
+      revisedAt: Date.now(),
+    },
   };
+}
+
+/** Numeric changes from one card to another: ratings and every attribute that moved. */
+export function computePatchDeltas(
+  base: PlayerProfile,
+  revised: PlayerProfile,
+): Record<string, number> {
+  const deltas: Record<string, number> = {};
+  const add = (key: string, from: number | undefined, to: number | undefined) => {
+    if (typeof from === 'number' && typeof to === 'number' && from !== to) deltas[key] = to - from;
+  };
+  add('overall', base.ratings.overall, revised.ratings.overall);
+  add('potential', base.ratings.potential, revised.ratings.potential);
+  for (const [k, v] of Object.entries(revised.attributes ?? {})) {
+    add(k, base.attributes?.[k as keyof Attributes], v);
+  }
+  for (const [k, v] of Object.entries(revised.goalkeeperAttributes ?? {})) {
+    add(k, base.goalkeeperAttributes?.[k as keyof GoalkeeperAttributes], v);
+  }
+  return deltas;
 }

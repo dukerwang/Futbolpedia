@@ -76,7 +76,7 @@ export const isPrimeCard = (p: PlayerProfile): boolean => {
 };
 
 /** Edition segment of card keys and archive slugs. */
-const cardEdition = (p: PlayerProfile): string =>
+export const cardEdition = (p: PlayerProfile): string =>
   isPrimeCard(p) ? p.version?.type ?? 'prime' : 'current';
 
 /**

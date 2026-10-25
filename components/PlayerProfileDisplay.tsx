@@ -131,6 +131,15 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
               {versionLabel}
             </span>
 
+            {profile.revision && (
+              <span
+                className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/40"
+                title="Your accepted challenge. The shared card weighs it at its next weekly re-rating."
+              >
+                Your revision
+              </span>
+            )}
+
             {profile.version?.seasonOrEra && (
               <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-cream-100 dark:bg-charcoal text-charcoal/70 dark:text-cream-300 border border-cream-300/60 dark:border-charcoal-border">
                 {profile.version.seasonOrEra}

@@ -73,12 +73,15 @@ export const getCachedDossier = async (
  * Persists a dated card. Writes the mutable "latest" pointer slug and an immutable versioned
  * slug, and archives whatever card previously occupied the pointer so a re-rating never
  * erases history. The `_slug` argument is kept for call-site compatibility; the pointer slug
- * is derived from the card's own edition.
+ * is derived from the card's own edition. A user's revision is never written here, and
+ * `supersede` (consensus from several challengers) lets a re-rating replace this week's card.
  */
 export const upsertCachedDossier = async (
   _slug: string,
   profile: PlayerProfile,
+  options: { supersede?: boolean } = {},
 ): Promise<void> => {
+  if (profile.revision) return; // Personal revisions never replace the shared card
   const stamped = ensureDossierDated(profile, Date.now());
   if (!stamped) return; // Enforce: undated dossiers cannot be used in the shared database
 
@@ -112,6 +115,7 @@ export const upsertCachedDossier = async (
       // One current card per player per week: if another session already published this
       // week's card while this one was being synthesized, that card stays the shared one.
       if (
+        !options.supersede &&
         prev &&
         !isPrimeCard(prev) &&
         !isPrimeCard(stamped) &&
@@ -144,7 +148,12 @@ export const upsertCachedDossier = async (
 export const shareDossierCard = async (profile: PlayerProfile): Promise<string> => {
   if (!supabase) throw new Error('Database not available.');
   const dated = ensureDossierDated(profile, Date.now());
-  const slug = dated ? toVersionedSlug(dated) : null;
+  const versioned = dated ? toVersionedSlug(dated) : null;
+  // A revision gets its own slug so sharing it never overwrites the shared card's archive row.
+  const slug =
+    versioned && profile.revision
+      ? `${versioned}--rev-${profile.revision.revisedAt.toString(36)}`
+      : versioned;
   if (!dated || !slug) {
     throw new Error(
       'This dossier has no verified evaluation date, so it can’t be shared yet. Re-rate the player to generate a dated card.',
@@ -183,7 +192,7 @@ export const fetchSupabaseCalibratedPool = async (): Promise<PlayerProfile[]> =>
         const p = row?.player_data;
         if (p && p.basicInfo?.name && p.ratings?.overall >= 60) {
           const dated = ensureDossierDated(p, rowTimeMs(row.updated_at));
-          if (dated) loaded.push(dated);
+          if (dated && !dated.revision) loaded.push(dated);
         }
       }
       supabaseCalibratedPool = loaded;
@@ -215,7 +224,7 @@ export async function fetchPriorDossiersForPlayer(
 
   const checkAndAdd = (p: PlayerProfile, fallbackMs?: number) => {
     const dated = ensureDossierDated(p, fallbackMs);
-    if (!dated) return;
+    if (!dated || dated.revision) return;
     const base = toBasePlayerSlug(dated.basicInfo.name);
     if (!isSamePlayer(base)) return;
     if (!matchedByPlayer.has(base)) matchedByPlayer.set(base, new Map());
@@ -275,7 +284,9 @@ export async function fetchGlobalHubDossiers(
   const ingest = (raw: unknown, fallbackDateMs?: number) => {
     if (!raw || typeof raw !== 'object') return;
     const dated = ensureDossierDated(raw as PlayerProfile, fallbackDateMs);
-    if (!dated || !dated.basicInfo?.name || (dated.ratings?.overall ?? 0) < 60) return;
+    if (!dated || dated.revision || !dated.basicInfo?.name || (dated.ratings?.overall ?? 0) < 60) {
+      return;
+    }
     mapByCardKey.set(getCardKey(dated), dated);
   };
 

@@ -54,11 +54,16 @@ const LEGACY_ALL_PROFILES_KEY = 'futbolpedia-all-profiles';
 const saveGlobalDossiers = (dossiers: PlayerProfile[]) =>
   localStorage.setItem(GLOBAL_DOSSIERS_KEY, JSON.stringify(dossiers));
 
-/** Replaces the card with the same card key, or appends it. */
+/**
+ * Replaces the card with the same card key, or appends it. The user's revision of a card is
+ * never replaced by the unrevised shared version (opening it from the hub, a cache hit).
+ */
 const upsertCard = (list: PlayerProfile[], card: PlayerProfile): PlayerProfile[] => {
   const key = getCardKey(card);
   const index = list.findIndex(p => getCardKey(p) === key);
-  return index === -1 ? [...list, card] : list.map((p, i) => (i === index ? card : p));
+  if (index === -1) return [...list, card];
+  if (list[index].revision && !card.revision) return list;
+  return list.map((p, i) => (i === index ? card : p));
 };
 
 /** Appends the cards whose card key isn't in the list yet; returns the same list if none are new. */
