@@ -160,6 +160,24 @@ export const getCardKey = (p: PlayerProfile): string =>
     isPrimeCard(p) ? p.version?.type ?? 'prime' : 'current'
   }:${getDossierEvaluationDate(p) ?? p.createdAt ?? 'undated'}`;
 
+/**
+ * Keeps each player's newest current card, so an archived re-rating never sits next to the
+ * live one in locks, peer ledgers or grep results. On equal dates the later entry wins, so list
+ * sources from broadest to most local. Prime cards keep their own key.
+ */
+const latestCardPerPlayer = (cards: PlayerProfile[]): PlayerProfile[] => {
+  const byPlayer = new Map<string, PlayerProfile>();
+  for (const p of cards) {
+    const key = isPrimeCard(p) ? getCardKey(p) : `${toBasePlayerSlug(p.basicInfo.name)}:current`;
+    const existing = byPlayer.get(key);
+    if (existing && (getDossierEvaluationDate(existing) ?? '') > (getDossierEvaluationDate(p) ?? '')) {
+      continue;
+    }
+    byPlayer.set(key, p);
+  }
+  return [...byPlayer.values()];
+};
+
 /** Immutable archive slug for a dated card, e.g. "joshua-kimmich--current--2026-10-25". */
 export const toVersionedSlug = (p: PlayerProfile): string | null => {
   const date = getDossierEvaluationDate(p);
@@ -653,14 +671,10 @@ export const mergeConversationDossiers = (
   history: ChatMessage[],
   conversationProfiles: PlayerProfile[] = [],
 ): PlayerProfile[] => {
-  const bySlug = new Map<string, PlayerProfile>();
-  for (const p of collectDossiersFromHistory(history)) {
-    bySlug.set(getCardKey(p), p);
-  }
-  for (const p of conversationProfiles) {
-    if (isConfidentDossier(p)) bySlug.set(getCardKey(p), p);
-  }
-  return [...bySlug.values()];
+  return latestCardPerPlayer([
+    ...collectDossiersFromHistory(history),
+    ...conversationProfiles.filter(isConfidentDossier),
+  ]);
 };
 
 const dossierSlugsCoveredInHistory = (history: ChatMessage[]): Set<string> => {
@@ -776,7 +790,7 @@ export const resolveSavedDossiersForRequest = (
   conversationDossiers: PlayerProfile[],
   explicitNames: string[] = [],
 ): { dossiers: PlayerProfile[]; inventoryOnly: boolean } => {
-  const confident = savedDossiers.filter(isConfidentDossier);
+  const confident = latestCardPerPlayer(savedDossiers.filter(isConfidentDossier));
   if (confident.length === 0 || !wantsSavedDossierAccess(message)) {
     return { dossiers: [], inventoryOnly: false };
   }
@@ -987,13 +1001,9 @@ export function grepDossiers(
     weaknesses: string[];
   }>;
 } {
-  const bySlug = new Map<string, PlayerProfile>();
-  for (const d of [...supabaseCalibratedPool, ...dossiers]) {
-    if (isConfidentDossier(d)) {
-      bySlug.set(getCardKey(d), d);
-    }
-  }
-  let pool = [...bySlug.values()];
+  let pool = latestCardPerPlayer(
+    [...supabaseCalibratedPool, ...dossiers].filter(isConfidentDossier),
+  );
 
   if (params.position) {
     pool = pool.filter((p) => matchesPositionalFilter(p.basicInfo.position, params.position!));
@@ -1095,14 +1105,12 @@ export function mergeAllCalibratedDossiers(
   savedDossiers: PlayerProfile[],
   conversationDossiers: PlayerProfile[],
 ): PlayerProfile[] {
-  const bySlug = new Map<string, PlayerProfile>();
   // Order from broadest (Supabase pool) to most local (savedDossiers -> conversationDossiers)
-  for (const d of [...supabaseCalibratedPool, ...savedDossiers, ...conversationDossiers]) {
-    if (!isConfidentDossier(d)) continue;
-    if (!d.createdAt || d.createdAt < CALIBRATION_EPOCH_MS) continue;
-    bySlug.set(getCardKey(d), d);
-  }
-  return [...bySlug.values()];
+  return latestCardPerPlayer(
+    [...supabaseCalibratedPool, ...savedDossiers, ...conversationDossiers].filter(
+      (d) => isConfidentDossier(d) && !!d.createdAt && d.createdAt >= CALIBRATION_EPOCH_MS,
+    ),
+  );
 }
 
 export interface PeerLedgerOptions {

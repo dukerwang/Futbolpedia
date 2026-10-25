@@ -10,12 +10,17 @@ import assert from 'node:assert/strict';
 import type { PlayerProfile } from '../types';
 import {
   ensureDossierDated,
+  findReferencedDossiers,
   getCardKey,
   getDossierEvaluationDate,
   isPrimeCard,
+  mergeAllCalibratedDossiers,
+  mergeConversationDossiers,
+  resolveSavedDossiersForRequest,
   toBasePlayerSlug,
   toDossierCardSlug,
   toVersionedSlug,
+  upsertCachedDossier,
 } from '../services/dossierStore';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
@@ -196,6 +201,32 @@ async function main() {
 
   await test('ensureDossierDated rejects nameless input', () => {
     assert.equal(ensureDossierDated({} as PlayerProfile), null);
+  });
+
+  // ── Merging dated cards ──────────────────────────────────────────────────
+
+  await test('calibrated pool keeps only the newest current card per player', async () => {
+    const now = Date.now();
+    const older = currentCard('Joshua Kimmich', '2026-10-21', { createdAt: now, ratings: { overall: 86, potential: 86 } });
+    const newer = currentCard('Joshua Kimmich', TODAY, { createdAt: now, ratings: { overall: 88, potential: 88 } });
+    const prime = primeCard('Joshua Kimmich', '2020-08-23', { createdAt: now, ratings: { overall: 91, potential: 91 } });
+    // Without Supabase this only seeds the in-memory shared pool, which lists before local cards.
+    await upsertCachedDossier('', newer);
+    const merged = mergeAllCalibratedDossiers([older, prime], []);
+    const current = merged.filter((p) => !isPrimeCard(p));
+    assert.equal(current.length, 1);
+    assert.equal(current[0].ratings.overall, 88);
+    assert.equal(merged.filter(isPrimeCard).length, 1);
+    assert.equal(findReferencedDossiers('Kimmich', current, ['Kimmich']).length, 1);
+  });
+
+  await test('conversation and saved-archive lookups keep the newest current card', () => {
+    const older = currentCard('Pedri', '2026-10-01', { ratings: { overall: 87, potential: 90 } });
+    const newer = currentCard('Pedri', TODAY, { ratings: { overall: 89, potential: 91 } });
+    const conv = mergeConversationDossiers([], [newer, older]);
+    assert.deepEqual(conv.map((p) => p.ratings.overall), [89]);
+    const saved = resolveSavedDossiersForRequest('pull up my saved dossier on Pedri', [older, newer], []);
+    assert.deepEqual(saved.dossiers.map((p) => p.ratings.overall), [89]);
   });
 
   // ── Sanitization ─────────────────────────────────────────────────────────
