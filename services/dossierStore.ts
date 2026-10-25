@@ -143,7 +143,8 @@ export const ensureDossierDated = (
   return {
     ...p,
     evaluationDate: dateStr,
-    createdAt: p.createdAt || d.getTime(),
+    // createdAt is when the card was generated. For a prime card that is not its peak date.
+    createdAt: p.createdAt || fallbackMs || d.getTime(),
     version: {
       ...version,
       evaluationDate: dateStr,

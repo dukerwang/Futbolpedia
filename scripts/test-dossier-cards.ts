@@ -201,6 +201,13 @@ async function main() {
     assert.equal(getCardKey(dated!), getCardKey(prime));
   });
 
+  await test('a freshly dated prime card is stamped with its generation time, not its peak', () => {
+    const now = Date.now();
+    const dated = ensureDossierDated(primeCard('Steven Gerrard', '2009-05-24'), now);
+    assert.equal(dated?.createdAt, now);
+    assert.equal(mergeAllCalibratedDossiers([dated!], []).length, 1);
+  });
+
   await test('ensureDossierDated rejects nameless input', () => {
     assert.equal(ensureDossierDated({} as PlayerProfile), null);
   });
