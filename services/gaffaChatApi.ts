@@ -1,22 +1,19 @@
 import axios from 'axios';
 import type { ChatMessage, GaffaClubContextResponse, GaffaTradeScorecard } from '../types';
 import { emptyGaffaContextBag } from '../constants/gaffaRules';
-import { mapResponseToBag } from './gaffaContext';
+import { isUuid, mapResponseToBag } from './gaffaContext';
 import { sendGaffaMessage } from './gaffaChatService';
 import { resetChat } from './geminiService';
-
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const MAX_MESSAGE = 4000;
 const MAX_HISTORY = 20;
 
-export type GaffaChatHistoryTurn = {
+type GaffaChatHistoryTurn = {
   sender: 'user' | 'ai';
   content: string;
 };
 
-export type GaffaChatTurnInput = {
+type GaffaChatTurnInput = {
   message: string;
   history?: GaffaChatHistoryTurn[];
   leagueId?: string;
@@ -24,14 +21,15 @@ export type GaffaChatTurnInput = {
   speed?: 'default' | 'fast';
 };
 
-export type GaffaChatTurnResult = {
+type GaffaChatTurnResult = {
   prose: string;
   scorecard: GaffaTradeScorecard | null;
   club: { league_name?: string; club_name?: string; connected: boolean };
 };
 
-export function isUuid(value: string): boolean {
-  return UUID.test(value);
+/** An Error carrying the HTTP status server.ts should answer with. */
+function httpError(message: string, status: number): Error & { status: number } {
+  return Object.assign(new Error(message), { status });
 }
 
 export function authorizeGaffaReadSecret(header: string | string[] | undefined): boolean {
@@ -48,25 +46,23 @@ async function fetchClubContext(
   const base = (process.env.GAFFA_BASE_URL || '').replace(/\/$/, '');
   const secret = process.env.FUTBOLPEDIA_READ_SECRET;
   if (!base || !secret) {
-    throw Object.assign(new Error('Gaffa connect is not configured'), { status: 503 });
+    throw httpError('Gaffa connect is not configured', 503);
   }
 
   const url = `${base}/api/integrations/futbolpedia/context?leagueId=${encodeURIComponent(leagueId)}&teamId=${encodeURIComponent(clubId)}`;
   const upstream = await axios.get(url, {
     headers: { 'x-futbolpedia-secret': secret },
     validateStatus: () => true,
-        timeout: 30000,
+    timeout: 30000,
   });
   if (upstream.status === 401) {
-    throw Object.assign(new Error('Gaffa rejected the read secret'), { status: 401 });
+    throw httpError('Gaffa rejected the read secret', 401);
   }
   if (upstream.status === 404) {
     return null;
   }
   if (upstream.status >= 400) {
-    throw Object.assign(new Error(upstream.data?.error || `Gaffa error (${upstream.status})`), {
-      status: 502,
-    });
+    throw httpError(upstream.data?.error || `Gaffa error (${upstream.status})`, 502);
   }
   return upstream.data as GaffaClubContextResponse;
 }
@@ -97,21 +93,21 @@ export async function runGaffaChatTurn(input: GaffaChatTurnInput): Promise<Gaffa
     process.env.API_KEY = process.env.GEMINI_API_KEY;
   }
   if (!process.env.API_KEY) {
-    throw Object.assign(new Error('Gemini is not configured'), { status: 503 });
+    throw httpError('Gemini is not configured', 503);
   }
 
   const message = typeof input.message === 'string' ? input.message.trim() : '';
   if (!message) {
-    throw Object.assign(new Error('Missing message'), { status: 400 });
+    throw httpError('Missing message', 400);
   }
   if (message.length > MAX_MESSAGE) {
-    throw Object.assign(new Error('Message is too long'), { status: 400 });
+    throw httpError('Message is too long', 400);
   }
 
   const leagueId = typeof input.leagueId === 'string' ? input.leagueId.trim() : '';
   const clubId = typeof input.clubId === 'string' ? input.clubId.trim() : '';
   if ((leagueId && !isUuid(leagueId)) || (clubId && !isUuid(clubId))) {
-    throw Object.assign(new Error('Invalid leagueId or clubId'), { status: 400 });
+    throw httpError('Invalid leagueId or clubId', 400);
   }
 
   const connectAttempted = Boolean(leagueId && clubId);
