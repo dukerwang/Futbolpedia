@@ -3,7 +3,9 @@ import { assertValidOutlook, validateOutlook } from '../gates/validateOutlook';
 import {
   correctStaleCoachRecord,
   findUnverifiedManagerMentions,
+  daysUntilKnownClubManagersTableExpires,
   isKnownClubManagersTableFresh,
+  pickCurrentCoach,
   scrubKnownStaleManagers,
   scrubUnverifiedManagerText,
 } from '../gates/managerMentions';
@@ -161,27 +163,121 @@ describe('validateOutlook', () => {
   });
 });
 
+describe('pickCurrentCoach', () => {
+  const CHELSEA = 49;
+  // Shaped like API-Football's /coachs?team=49 response: every coach who ever managed the team.
+  const coachsResponse = [
+    {
+      id: 1,
+      name: 'M. Pochettino',
+      firstname: 'Mauricio',
+      lastname: 'Pochettino',
+      career: [
+        { team: { id: 2384, name: 'USA' }, start: '2024-09-01', end: null },
+        { team: { id: CHELSEA, name: 'Chelsea' }, start: '2023-07-01', end: '2024-05-31' },
+      ],
+    },
+    {
+      id: 2,
+      name: 'L. Rosenior',
+      firstname: 'Liam',
+      lastname: 'Rosenior',
+      // Stale open stint API-Football never closed.
+      career: [{ team: { id: CHELSEA, name: 'Chelsea' }, start: '2026-01-06', end: null }],
+    },
+    {
+      id: 3,
+      name: 'X. Alonso',
+      firstname: 'Xabi',
+      lastname: 'Alonso',
+      career: [
+        { team: { id: CHELSEA, name: 'Chelsea' }, start: '2026-07-01', end: null },
+        { team: { id: 168, name: 'Bayer Leverkusen' }, start: '2022-10-05', end: '2025-06-30' },
+      ],
+    },
+  ];
+
+  it('picks the open stint at this team with the latest start', () => {
+    expect(pickCurrentCoach(coachsResponse, CHELSEA)).toEqual({
+      coach: 'Xabi Alonso',
+      coachSince: '2026-07-01',
+    });
+  });
+
+  it('ignores open stints at other teams', () => {
+    expect(pickCurrentCoach(coachsResponse.slice(0, 2), CHELSEA)).toEqual({
+      coach: 'Liam Rosenior',
+      coachSince: '2026-01-06',
+    });
+  });
+
+  it('falls back to the first coach, undated, when no stint is open', () => {
+    expect(pickCurrentCoach([coachsResponse[0]], CHELSEA)).toEqual({
+      coach: 'Mauricio Pochettino',
+      coachSince: null,
+    });
+    expect(pickCurrentCoach([{ name: 'Someone' }], CHELSEA)).toEqual({
+      coach: 'Someone',
+      coachSince: null,
+    });
+  });
+
+  it('handles empty or malformed responses', () => {
+    expect(pickCurrentCoach([], CHELSEA)).toEqual({ coach: null, coachSince: null });
+    expect(pickCurrentCoach(undefined, CHELSEA)).toEqual({ coach: null, coachSince: null });
+  });
+});
+
 describe('correctStaleCoachRecord', () => {
   const FRESH = new Date('2026-10-25T12:00:00Z');
   const EXPIRED = new Date('2027-06-01T00:00:00Z');
 
   it('replaces a missing or stale coach for a listed club', () => {
-    expect(correctStaleCoachRecord('Chelsea', null, FRESH)).toBe('Xabi Alonso');
-    expect(correctStaleCoachRecord('Chelsea', 'Liam Rosenior', FRESH)).toBe('Xabi Alonso');
-    expect(correctStaleCoachRecord('Barcelona', 'Xavi Hernandez', FRESH)).toBe('Hansi Flick');
+    expect(correctStaleCoachRecord('Chelsea', null, null, FRESH)).toBe('Xabi Alonso');
+    expect(correctStaleCoachRecord('Chelsea', 'Liam Rosenior', null, FRESH)).toBe('Xabi Alonso');
+    expect(correctStaleCoachRecord('Barcelona', 'Xavi Hernandez', null, FRESH)).toBe('Hansi Flick');
   });
 
   it('keeps a non-stale coach and leaves unlisted clubs untouched', () => {
-    expect(correctStaleCoachRecord('Chelsea', 'Xabi Alonso', FRESH)).toBe('Xabi Alonso');
-    expect(correctStaleCoachRecord('Manchester City', 'Enzo Maresca', FRESH)).toBe('Enzo Maresca');
-    expect(correctStaleCoachRecord('Coventry City', 'Frank Lampard', FRESH)).toBe('Frank Lampard');
-    expect(correctStaleCoachRecord(null, null, FRESH)).toBeNull();
+    expect(correctStaleCoachRecord('Chelsea', 'Xabi Alonso', null, FRESH)).toBe('Xabi Alonso');
+    expect(correctStaleCoachRecord('Manchester City', 'Enzo Maresca', null, FRESH)).toBe('Enzo Maresca');
+    expect(correctStaleCoachRecord('Coventry City', 'Frank Lampard', null, FRESH)).toBe('Frank Lampard');
+    expect(correctStaleCoachRecord(null, null, null, FRESH)).toBeNull();
+  });
+
+  it('lets a coach appointed after the table was verified win', () => {
+    expect(correctStaleCoachRecord('Chelsea', 'Someone New', '2026-11-02', FRESH)).toBe('Someone New');
+    expect(correctStaleCoachRecord('Chelsea', 'Someone New', '2026-10-25', FRESH)).toBe('Someone New');
+  });
+
+  it('prefers the table over a live coach whose stint predates the verified date', () => {
+    expect(correctStaleCoachRecord('Liverpool', 'Unlisted Interim', '2024-06-01', FRESH)).toBe(
+      'Andoni Iraola',
+    );
+    // Same coach under a different spelling: the table entry agrees, so keep the live name.
+    expect(correctStaleCoachRecord('Chelsea', 'Xabi Alonso Olano', '2026-07-01', FRESH)).toBe(
+      'Xabi Alonso Olano',
+    );
+  });
+
+  it('still overrides a listed former coach even with a recent start date', () => {
+    expect(correctStaleCoachRecord('Liverpool', 'Arne Slot', '2026-11-01', FRESH)).toBe('Andoni Iraola');
+  });
+
+  it('keeps an undated, non-stale live coach', () => {
+    expect(correctStaleCoachRecord('Napoli', 'Someone New', null, FRESH)).toBe('Someone New');
+    expect(correctStaleCoachRecord('Napoli', 'Someone New', 'not a date', FRESH)).toBe('Someone New');
   });
 
   it('fails open to the live record once the table has expired', () => {
     expect(isKnownClubManagersTableFresh(EXPIRED)).toBe(false);
-    expect(correctStaleCoachRecord('Chelsea', 'Someone New', EXPIRED)).toBe('Someone New');
-    expect(correctStaleCoachRecord('Chelsea', null, EXPIRED)).toBeNull();
+    expect(correctStaleCoachRecord('Chelsea', 'Someone New', '2024-01-01', EXPIRED)).toBe('Someone New');
+    expect(correctStaleCoachRecord('Chelsea', null, null, EXPIRED)).toBeNull();
+  });
+
+  it('counts down to expiry', () => {
+    expect(daysUntilKnownClubManagersTableExpires(FRESH)).toBe(119);
+    expect(daysUntilKnownClubManagersTableExpires(EXPIRED)).toBeLessThanOrEqual(0);
   });
 });
 
@@ -200,6 +296,38 @@ describe('scrubKnownStaleManagers', () => {
   it('never rewrites a coach who now manages a listed club', () => {
     const text = "Chelsea fans remember Enzo Maresca's system; Manchester City now play it.";
     expect(scrubKnownStaleManagers(text, FRESH)).toBe(text);
+  });
+
+  it("uses the turn's verified coach for the verified club", () => {
+    expect(
+      scrubKnownStaleManagers('Chelsea under Liam Rosenior pressed high.', FRESH, {
+        club: 'Chelsea FC',
+        coach: 'Someone New',
+      }),
+    ).toBe('Chelsea under Someone New pressed high.');
+    // Other clubs in the same text keep the table's coach.
+    expect(
+      scrubKnownStaleManagers('Liverpool under Arne Slot pressed high.', FRESH, {
+        club: 'Chelsea',
+        coach: 'Someone New',
+      }),
+    ).toBe('Liverpool under Andoni Iraola pressed high.');
+  });
+
+  it('ignores a verified coach the table lists as that club\'s former coach', () => {
+    expect(
+      scrubKnownStaleManagers('Liverpool under Arne Slot pressed high.', FRESH, {
+        club: 'Liverpool',
+        coach: 'Arne Slot',
+      }),
+    ).toBe('Liverpool under Andoni Iraola pressed high.');
+  });
+
+  it('never rewrites a former coach the turn verified at another club', () => {
+    const text = "Chelsea alumni praise Mauricio Pochettino's system with the USA.";
+    expect(
+      scrubKnownStaleManagers(text, FRESH, { club: 'USA', coach: 'Mauricio Pochettino' }),
+    ).toBe(text);
   });
 
   it('leaves player names that share a former coach surname alone', () => {

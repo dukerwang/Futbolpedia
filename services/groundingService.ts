@@ -26,6 +26,8 @@ export interface ApiFootballPlayerFactSheet {
   currentClub: string | null;
   league: string | null;
   coach?: string | null;
+  /** Start date of the coach's current stint, from API-Football. */
+  coachSince?: string | null;
   injured: boolean | null;
   seasonStats: {
     season: number;
@@ -99,7 +101,7 @@ export function formatApiFootballFactSheetBlock(player: ApiFootballPlayerFactShe
     ? `Season ${stats.season} (API-Football): ${stats.appearances ?? 0} apps (${stats.lineups ?? 0} starts, ${stats.minutes ?? 0} mins), ${stats.goals ?? 0} goals, ${stats.assists ?? 0} assists${stats.keyPasses != null ? `, ${stats.keyPasses} key passes` : ''}${stats.tackles != null ? `, ${stats.tackles} tackles` : ''}${stats.interceptions != null ? `, ${stats.interceptions} interceptions` : ''}.`
     : 'Season stats: not available in API-Football.';
 
-  const coach = correctStaleCoachRecord(player.currentClub, player.coach);
+  const coach = correctStaleCoachRecord(player.currentClub, player.coach, player.coachSince);
 
   const fixturesLine =
     Array.isArray(player.recentFixtures) && player.recentFixtures.length > 0
@@ -202,6 +204,7 @@ export interface ApiFootballSquadMember {
 export interface ApiFootballTeamContext {
   team: string;
   coach: string | null;
+  coachSince?: string | null;
   recentFixtures: ApiFootballFixtureItem[];
   upcomingFixtures: ApiFootballFixtureItem[];
   squad?: ApiFootballSquadMember[];
@@ -220,6 +223,7 @@ export async function fetchApiFootballTeamContext(
   return {
     team: data.team || teamName,
     coach: data.coach ?? null,
+    coachSince: data.coachSince ?? null,
     recentFixtures: Array.isArray(data.recentFixtures) ? data.recentFixtures : [],
     upcomingFixtures: Array.isArray(data.upcomingFixtures) ? data.upcomingFixtures : [],
     squad: Array.isArray(data.squad) ? data.squad : [],
@@ -267,7 +271,7 @@ export function formatApiFootballTeamContextBlock(ctx: ApiFootballTeamContext | 
     }
   }
 
-  const coach = correctStaleCoachRecord(ctx.team, ctx.coach);
+  const coach = correctStaleCoachRecord(ctx.team, ctx.coach, ctx.coachSince);
 
   return [
     `[API-FOOTBALL CLUB CONTEXT — ${ctx.team}]`,

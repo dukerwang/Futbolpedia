@@ -3,7 +3,12 @@ import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import path from "path";
 import axios from "axios";
-import { correctStaleCoachRecord } from "./packages/engine/src/gates/managerMentions.ts";
+import {
+  KNOWN_CLUB_MANAGERS_VERIFIED_ON,
+  correctStaleCoachRecord,
+  daysUntilKnownClubManagersTableExpires,
+  pickCurrentCoach,
+} from "./packages/engine/src/gates/managerMentions.ts";
 import { getRealWorldFootballSeason } from "./prompts/scoutCore";
 
 async function startServer() {
@@ -92,6 +97,14 @@ async function startServer() {
   const API_KEY = process.env.API_FOOTBALL_KEY;
   const API_URL = "https://v3.football.api-sports.io";
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  const coachTableDaysLeft = daysUntilKnownClubManagersTableExpires();
+  if (coachTableDaysLeft <= 14) {
+    console.warn(
+      coachTableDaysLeft <= 0
+        ? `[startup] KNOWN_CLUB_MANAGERS (verified ${KNOWN_CLUB_MANAGERS_VERIFIED_ON}) has expired and is ignored; re-verify it and bump the date.`
+        : `[startup] KNOWN_CLUB_MANAGERS (verified ${KNOWN_CLUB_MANAGERS_VERIFIED_ON}) expires in ${coachTableDaysLeft} days; re-verify it and bump the date.`,
+    );
+  }
   console.log(`[startup] GEMINI_API_KEY set: ${!!GEMINI_API_KEY} (${GEMINI_API_KEY ? GEMINI_API_KEY.slice(0, 6) + '...' : 'MISSING'})`);
 
   const apiFootballGet = (endpoint: string, params: Record<string, unknown>, timeout?: number) =>
@@ -109,6 +122,7 @@ async function startServer() {
     {
       expiresAt: number;
       coach: string | null;
+      coachSince: string | null;
       recentFixtures: any[];
       upcomingFixtures: any[];
       squad: Array<{ name: string; position: string | null; age: number | null }>;
@@ -149,24 +163,15 @@ async function startServer() {
         ? (nextFixturesRes.value.data?.response ?? []).map(formatFixture)
         : [];
 
-    let coach: string | null = null;
-    if (coachRes.status === "fulfilled") {
-      const coaches: any[] = coachRes.value.data?.response ?? [];
-      const activeCoach =
-        coaches.find((c) =>
-          Array.isArray(c?.career) &&
-          c.career.some((stint: any) => stint?.team?.id === teamId && stint?.end === null),
-        ) || coaches[0];
-      if (activeCoach?.name) {
-        coach =
-          activeCoach.firstname && activeCoach.lastname
-            ? `${activeCoach.firstname} ${activeCoach.lastname}`
-            : String(activeCoach.name);
-      }
-    }
+    const liveCoach =
+      coachRes.status === "fulfilled"
+        ? pickCurrentCoach(coachRes.value.data?.response, teamId)
+        : { coach: null, coachSince: null };
 
-    // API-Football lags managerial changes; correct known stale records.
-    coach = correctStaleCoachRecord(teamName, coach);
+    // API-Football lags managerial changes; correct known stale records. An overridden coach's
+    // start date belongs to the replaced record, so drop it.
+    const coach = correctStaleCoachRecord(teamName, liveCoach.coach, liveCoach.coachSince);
+    const coachSince = coach === liveCoach.coach ? liveCoach.coachSince : null;
 
     const squad: Array<{ name: string; position: string | null; age: number | null }> =
       squadRes.status === "fulfilled"
@@ -182,6 +187,7 @@ async function startServer() {
     const entry = {
       expiresAt: Date.now() + PLAYER_CACHE_TTL_MS,
       coach,
+      coachSince,
       recentFixtures,
       upcomingFixtures,
       squad,
@@ -266,6 +272,7 @@ async function startServer() {
       let injured: boolean | null = basePlayer?.injured ?? null;
       let seasonStats: any = null;
       let coach: string | null = null;
+      let coachSince: string | null = null;
       let recentFixtures: any[] = [];
 
       if (basePlayer?.id) {
@@ -323,6 +330,7 @@ async function startServer() {
               ]);
               if (teamCtx) {
                 coach = teamCtx.coach;
+                coachSince = teamCtx.coachSince;
                 recentFixtures = teamCtx.recentFixtures;
               } else {
                 void teamCtxPromise
@@ -330,13 +338,16 @@ async function startServer() {
                     const cachedEntry = playerFactCache.get(cacheKey);
                     if (cachedEntry?.payload?.player && resolvedCtx) {
                       cachedEntry.payload.player.coach = resolvedCtx.coach;
+                      cachedEntry.payload.player.coachSince = resolvedCtx.coachSince;
                       cachedEntry.payload.player.recentFixtures = resolvedCtx.recentFixtures;
                     }
                   })
                   .catch(() => {});
               }
             }
-            coach = correctStaleCoachRecord(currentClub, coach);
+            const correctedCoach = correctStaleCoachRecord(currentClub, coach, coachSince);
+            if (correctedCoach !== coach) coachSince = null;
+            coach = correctedCoach;
           }
         } catch (statsErr) {
           // Non-fatal: still return profile bio facts
@@ -358,6 +369,7 @@ async function startServer() {
           currentClub,
           league,
           coach,
+          coachSince,
           injured,
           seasonStats,
           recentFixtures,
@@ -424,6 +436,7 @@ async function startServer() {
         available: true,
         team: resolvedTeamName,
         coach: ctx.coach,
+        coachSince: ctx.coachSince,
         recentFixtures: ctx.recentFixtures,
         upcomingFixtures: ctx.upcomingFixtures,
         squad: ctx.squad,
