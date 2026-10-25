@@ -2,6 +2,7 @@ import type { Conversation, PlayerProfile } from '../types';
 import {
   ensureDossierDated,
   getCardKey,
+  isCardInRefreshWindow,
   isPrimeCard,
   toBasePlayerSlug,
   toDossierCardSlug,
@@ -23,7 +24,6 @@ export const supabase =
 
 export const isSupabaseReady = () => !!supabase;
 
-const CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 // Invalidate cached dossiers created before the v4.1 rating calibration update
 // so previously under-calibrated dossiers regenerate fresh when requested.
 export const CALIBRATION_EPOCH_MS = Date.parse('2026-10-20T21:15:00Z');
@@ -57,18 +57,12 @@ export const getCachedDossier = async (
       .single();
     if (error || !data) return null;
     const updatedAtMs = rowTimeMs(data.updated_at);
-    if (
-      checkTTL &&
-      (Date.now() - updatedAtMs > CACHE_TTL_MS || updatedAtMs < CALIBRATION_EPOCH_MS)
-    ) {
-      return null;
-    }
     const profile = data.player_data as PlayerProfile;
     const dated = ensureDossierDated(profile, updatedAtMs);
-    if (!dated) {
-      // Undated legacy cards stay viewable through a direct share link, but never serve as cache hits.
-      return checkTTL ? null : { ...profile, createdAt: profile.createdAt || updatedAtMs };
-    }
+    // Direct share links show any card, including undated legacy ones.
+    if (!checkTTL) return dated ?? { ...profile, createdAt: profile.createdAt || updatedAtMs };
+    // A cache hit must be dated, post-recalibration, and (for current form) this week's card.
+    if (!dated || updatedAtMs < CALIBRATION_EPOCH_MS || !isCardInRefreshWindow(dated)) return null;
     return dated;
   } catch {
     return null;
@@ -115,6 +109,18 @@ export const upsertCachedDossier = async (
         existing.player_data as PlayerProfile,
         rowTimeMs(existing.updated_at),
       );
+      // One current card per player per week: if another session already published this
+      // week's card while this one was being synthesized, that card stays the shared one.
+      if (
+        prev &&
+        !isPrimeCard(prev) &&
+        !isPrimeCard(stamped) &&
+        getCardKey(prev) !== key &&
+        rowTimeMs(existing.updated_at) >= CALIBRATION_EPOCH_MS &&
+        isCardInRefreshWindow(prev)
+      ) {
+        return;
+      }
       const prevSlug = prev ? toVersionedSlug(prev) : null;
       if (prev && prevSlug && getCardKey(prev) !== key) {
         rows.push({ player_slug: prevSlug, player_data: prev, updated_at: existing.updated_at });

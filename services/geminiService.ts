@@ -25,6 +25,7 @@ import {
   getCardKey,
   getDossierEvaluationDate,
   getSharedConversation,
+  isCardInRefreshWindow,
   isDossierDated,
   isPrimeCard,
   isSupabaseReady,
@@ -242,13 +243,20 @@ export const sendMessageToAI = async (
           (p) => !isPrimeCard(p),
         );
         const poolHits = findReferencedDossiers(primaryPlayer, allCalibrated, [primaryPlayer]);
-        if (poolHits.length === 1 && isFreshlyCalibrated(poolHits[0])) {
+        if (
+          poolHits.length === 1 &&
+          isFreshlyCalibrated(poolHits[0]) &&
+          isCardInRefreshWindow(poolHits[0])
+        ) {
           perf('in-memory calibrated pool hit');
           return poolHits[0];
         }
       }
+    }
 
-      // Check Supabase 14-day TTL cache (for both active and historical prime-<slug> cards)
+    // Shared cards: one current card per player per week, and prime cards are frozen, so even a
+    // regeneration request gets the published card while it's in its refresh window.
+    if (!imageData) {
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
         const cached = await getCachedDossier(toDossierCardSlug(rawSlug, route.isHistorical));

@@ -14,6 +14,7 @@ import {
   findReferencedDossiers,
   getCardKey,
   getDossierEvaluationDate,
+  isCardInRefreshWindow,
   isPrimeCard,
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
@@ -210,6 +211,15 @@ async function main() {
 
   await test('ensureDossierDated rejects nameless input', () => {
     assert.equal(ensureDossierDated({} as PlayerProfile), null);
+  });
+
+  await test('current cards stay shared for a week; prime cards are frozen', () => {
+    const now = Date.parse('2026-10-25T10:00:00Z');
+    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-10-25'), now), true);
+    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-10-19'), now), true);
+    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-10-18'), now), false);
+    assert.equal(isCardInRefreshWindow(card('Pedri'), now), false);
+    assert.equal(isCardInRefreshWindow(primeCard('Pedri', '2021-05-01'), now), true);
   });
 
   // ── Merging dated cards ──────────────────────────────────────────────────
