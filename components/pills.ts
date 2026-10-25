@@ -1,5 +1,5 @@
 import type { PlayerProfile } from '../types';
-import { cardEdition, getDossierEvaluationDate } from '../services/dossierStore';
+import { cardEdition, getDossierEvaluationDate, getLatestUpdateDate } from '../services/dossierStore';
 
 /**
  * The one pill style used across dossier cards, the side panel and the Global Dossier Hub:
@@ -70,4 +70,17 @@ export function describeCardEdition(profile: PlayerProfile): {
   const when = era ? formatSeason(era) : date ? date.slice(0, 4) : '';
   const name = EDITION_NAMES[edition] ?? EDITION_NAMES.prime;
   return { tone: 'amber', icon: 'workspace_premium', label: when ? `${name} · ${when}` : name };
+}
+
+/** "As of Oct 25" for a current card's Latest Update, which refreshes weekly; null on prime cards. */
+export function latestUpdateLabel(profile: PlayerProfile): string | null {
+  if (cardEdition(profile) !== 'current') return null;
+  const date = getLatestUpdateDate(profile);
+  if (!date) return null;
+  const day = new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+  return `As of ${day}`;
 }

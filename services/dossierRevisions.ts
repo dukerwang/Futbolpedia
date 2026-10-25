@@ -11,7 +11,7 @@ import { computePatchDeltas } from './dossierPatch';
 
 /**
  * Challenge proposals for shared cards. An accepted challenge stays the challenger's personal
- * revision; it is also logged here so the next weekly re-rating can weigh it, and so agreement
+ * revision; it is also logged here so the next monthly re-rating can weigh it, and so agreement
  * from several people can bring that re-rating forward.
  */
 

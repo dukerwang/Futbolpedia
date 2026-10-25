@@ -174,7 +174,7 @@ const GREP_SAVED_DOSSIERS_DECLARATION = {
       position: {
         type: Type.STRING,
         description:
-          'Optional positional filter (e.g. "Centre-Back", "CB", "Midfielder", "Winger", "Striker", "Full-Back", "Goalkeeper").',
+          'Optional positional filter (e.g. "Centre-Back", "CB", "Midfielder", "Winger", "Centre Forward", "Full-Back", "Goalkeeper").',
       },
       club: {
         type: Type.STRING,

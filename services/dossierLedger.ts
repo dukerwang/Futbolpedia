@@ -27,9 +27,10 @@ const matchesPositionalFilter = (playerPos: string, filterPos: string): boolean 
   const f = filterPos.toLowerCase().trim();
   if (!f) return true;
   if (p.includes(f)) return true;
-  if ((f === 'cb' || f.includes('center back') || f.includes('centre back')) && p.includes('centre-back')) return true;
+  if ((f === 'cb' || f.includes('center back') || f.includes('centre back')) && (p.includes('centre-back') || p.includes('libero'))) return true;
+  if ((f.includes('libero') || f.includes('sweeper')) && (p.includes('libero') || p.includes('centre-back'))) return true;
   if ((f === 'lb' || f === 'rb' || f.includes('fullback') || f.includes('full-back')) && p.includes('back') && !p.includes('centre-back')) return true;
-  if (f.includes('defend') && (p.includes('back') || p.includes('defensive midfielder'))) return true;
+  if (f.includes('defend') && (p.includes('back') || p.includes('libero') || p.includes('defensive midfielder'))) return true;
   if (f.includes('midfield') && p.includes('midfielder')) return true;
   if (f.includes('wing') && (p.includes('winger') || p.includes('wide'))) return true;
   if ((f === 'st' || f === 'cf' || f.includes('striker') || f.includes('forward') || f.includes('attack')) && (p.includes('striker') || p.includes('forward') || p.includes('winger'))) return true;
@@ -191,7 +192,7 @@ const inferPositionalFilterFromText = (text: string): string | null => {
   if (/\b(midfielders?|\bcms?\b|#8|number 8)\b/.test(lower)) return 'Midfielder';
   if (/\b(wingers?|\brws?\b|\blws?\b|wide forwards?)\b/.test(lower)) return 'Winger';
   if (/\b(strikers?|centre[- ]?forwards?|center[- ]?forwards?|\bsts?\b|\bcfs?\b|#9|number 9|forwards?)\b/.test(lower))
-    return 'Striker';
+    return 'Centre Forward';
   if (/\b(goalkeepers?|keepers?|\bgks?\b)\b/.test(lower)) return 'Goalkeeper';
   return null;
 };

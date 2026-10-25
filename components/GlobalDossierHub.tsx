@@ -33,7 +33,7 @@ const EDITION_OPTIONS: Array<{ id: EditionFilter; label: string; activeClass: st
 const POSITION_FILTER_KEYWORDS: Record<Exclude<PositionFilter, 'all'>, string[]> = {
   forward: ['striker', 'forward', 'winger', 'st', 'cf'],
   midfield: ['midfielder', 'cm', 'cdm', 'cam'],
-  defender: ['back', 'cb', 'lb', 'rb'],
+  defender: ['back', 'cb', 'lb', 'rb', 'libero'],
   goalkeeper: ['goalkeeper', 'gk'],
 };
 

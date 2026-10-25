@@ -15,6 +15,7 @@ import {
   getCardKey,
   getDossierEvaluationDate,
   isCardInRefreshWindow,
+  needsLatestUpdateRefresh,
   isPrimeCard,
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
@@ -36,7 +37,7 @@ import {
 } from '../services/dossierStore';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
-import { getAttributeLabel } from '../constants/ratingTiers';
+import { getAttributeLabel, normalizePosition, resolveLiberoPosition } from '../constants/ratingTiers';
 
 const TODAY = new Date().toISOString().split('T')[0];
 const MAY_2020_MS = Date.parse('2020-05-23T15:00:00Z');
@@ -223,13 +224,45 @@ async function main() {
     assert.equal(ensureDossierDated({} as PlayerProfile), null);
   });
 
-  await test('current cards stay shared for a week; prime cards are frozen', () => {
+  await test('current cards stay shared for a month; prime cards are frozen', () => {
     const now = Date.parse('2026-10-25T10:00:00Z');
     assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-10-25'), now), true);
-    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-10-19'), now), true);
-    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-10-18'), now), false);
+    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-09-26'), now), true);
+    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-09-25'), now), false);
     assert.equal(isCardInRefreshWindow(card('Pedri'), now), false);
     assert.equal(isCardInRefreshWindow(primeCard('Pedri', '2021-05-01'), now), true);
+  });
+
+  await test('the Latest Update refreshes weekly inside the rating window', () => {
+    const now = Date.parse('2026-10-25T10:00:00Z');
+    assert.equal(needsLatestUpdateRefresh(currentCard('Pedri', '2026-10-19'), now), false);
+    assert.equal(needsLatestUpdateRefresh(currentCard('Pedri', '2026-10-18'), now), true);
+    // A refreshed card counts from its refresh stamp, not its rating date.
+    assert.equal(
+      needsLatestUpdateRefresh(currentCard('Pedri', '2026-10-01', { latestUpdateAsOf: '2026-10-20' }), now),
+      false,
+    );
+    assert.equal(
+      needsLatestUpdateRefresh(currentCard('Pedri', '2026-10-01', { latestUpdateAsOf: '2026-10-17' }), now),
+      true,
+    );
+    // Out of the rating window the whole card is re-rated instead.
+    assert.equal(needsLatestUpdateRefresh(currentCard('Pedri', '2026-09-20'), now), false);
+    assert.equal(needsLatestUpdateRefresh(primeCard('Pedri', '2021-05-01'), now), false);
+    const revision = { baseCardKey: 'pedri:current:2026-10-10', revisedAt: now };
+    assert.equal(needsLatestUpdateRefresh(currentCard('Pedri', '2026-10-10', { revision }), now), false);
+  });
+
+  await test('positions: strikers file as Centre Forward; Libero only on sweeper-era cards', () => {
+    assert.equal(normalizePosition('ST'), 'Centre Forward');
+    assert.equal(normalizePosition('Striker/Second Striker'), 'Centre Forward/Second Striker');
+    assert.equal(normalizePosition('Sweeper'), 'Libero');
+    assert.equal(resolveLiberoPosition('Libero', true), 'Libero/Centre-Back');
+    assert.equal(resolveLiberoPosition('Libero/Defensive Midfielder', true), 'Libero/Defensive Midfielder');
+    assert.equal(resolveLiberoPosition('Defensive Midfielder/Libero', true), 'Libero/Defensive Midfielder');
+    assert.equal(resolveLiberoPosition('Libero', false), 'Centre-Back');
+    assert.equal(resolveLiberoPosition('Libero/Centre-Back', false), 'Centre-Back');
+    assert.equal(resolveLiberoPosition('Centre-Back', true), 'Centre-Back');
   });
 
   // ── Merging dated cards ──────────────────────────────────────────────────

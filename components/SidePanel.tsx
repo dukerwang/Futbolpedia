@@ -3,7 +3,7 @@ import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { marked } from 'marked';
-import { describeCardEdition, pillClass, PILL_ICON_CLASS } from './pills';
+import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS } from './pills';
 import DOMPurify from 'dompurify';
 import {
   getCardKey,
@@ -47,7 +47,8 @@ const POSITION_ABBREVIATIONS: Record<string, string> = {
     'attacking midfielder': 'CAM',
     'left winger': 'LW', 'left midfielder': 'LM',
     'right winger': 'RW', 'right midfielder': 'RM',
-    'striker': 'ST', 'centre forward': 'CF', 'center forward': 'CF',
+    'libero': 'LIB',
+    'striker': 'CF', 'centre forward': 'CF', 'center forward': 'CF',
     'second striker': 'SS', 'forward': 'FW',
 };
 
@@ -695,7 +696,9 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
                 {/* 6. Latest Update */}
                 <div className="bg-cream-50 dark:bg-charcoal-surface p-5 border-l-4 border-charcoal dark:border-cream-400 shadow-sm">
-                    <h3 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-2">Latest Intelligence</h3>
+                    <h3 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-2">
+                        Latest Intelligence{latestUpdateLabel(profile) && <span className="font-normal"> · {latestUpdateLabel(profile)}</span>}
+                    </h3>
                     <div className="text-xs text-charcoal dark:text-cream-200 leading-relaxed font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.latestUpdate)} />
                 </div>
 

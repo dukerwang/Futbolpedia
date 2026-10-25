@@ -191,7 +191,13 @@ export const ensureDossierDated = (
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** How long a player's current card stays the one shared card before a fresh rating is allowed. */
-export const CARD_REFRESH_DAYS = 7;
+export const CARD_REFRESH_DAYS = 30;
+
+/**
+ * How often a shared current card's Latest Update is rewritten from fresh facts. Ratings hold
+ * for CARD_REFRESH_DAYS; the news line shouldn't be a month old.
+ */
+export const LATEST_UPDATE_REFRESH_DAYS = 7;
 
 /**
  * True while a card should be served instead of re-rated: always for prime cards (a peak
@@ -201,6 +207,20 @@ export const isCardInRefreshWindow = (p: PlayerProfile, nowMs: number = Date.now
   if (isPrimeCard(p)) return true;
   const date = getDossierEvaluationDate(p);
   return !!date && nowMs - Date.parse(`${date}T00:00:00Z`) < CARD_REFRESH_DAYS * DAY_MS;
+};
+
+/** YYYY-MM-DD the card's Latest Update describes: its own refresh stamp, else the card's date. */
+export const getLatestUpdateDate = (p: PlayerProfile): string | null =>
+  p.latestUpdateAsOf ?? getDossierEvaluationDate(p);
+
+/**
+ * True when a shared current card is still inside its rating window but its Latest Update is
+ * LATEST_UPDATE_REFRESH_DAYS old. Prime cards and personal revisions never refresh.
+ */
+export const needsLatestUpdateRefresh = (p: PlayerProfile, nowMs: number = Date.now()): boolean => {
+  if (isPrimeCard(p) || p.revision || !isCardInRefreshWindow(p, nowMs)) return false;
+  const date = getLatestUpdateDate(p);
+  return !!date && nowMs - Date.parse(`${date}T00:00:00Z`) >= LATEST_UPDATE_REFRESH_DAYS * DAY_MS;
 };
 
 /** Dated copy of a card, or the card with a createdAt stamp when it can't be dated. */

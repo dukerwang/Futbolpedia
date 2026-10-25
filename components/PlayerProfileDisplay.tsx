@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import type { EvidenceGrade, PlayerProfile } from '../types';
 import { AttributeTable } from './AttributeTable';
-import { getTierForRating } from '../constants/ratingTiers';
+import { getTierForRating, normalizePosition } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { isPrimeCard } from '../services/geminiService';
-import { describeCardEdition, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
+import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
 
 interface PlayerProfileDisplayProps {
   profile: PlayerProfile;
@@ -102,7 +102,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
             {profile.revision && (
               <span
                 className={pillClass('indigo')}
-                title="Your accepted challenge. The shared card weighs it at its next weekly re-rating."
+                title="Your accepted challenge. The shared card weighs it at its next monthly re-rating."
               >
                 Your revision
               </span>
@@ -182,7 +182,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
 
         {/* Metadata Pill Row */}
         <div className="flex flex-wrap justify-center gap-2 mb-6">
-          <span className={`${pillClass('emerald')} font-semibold`}>{basicInfo.position}</span>
+          <span className={`${pillClass('emerald')} font-semibold`}>{normalizePosition(basicInfo.position)}</span>
           <span className={META_PILL_CLASS}>
             {basicInfo.club}
           </span>
@@ -505,6 +505,11 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
 
       {/* Latest Competitive Update */}
       <ProfileSection title="Latest Competitive Status" icon="🔄">
+        {latestUpdateLabel(profile) && (
+          <p className="mb-1.5 text-[10px] font-sans uppercase tracking-widest text-charcoal/50 dark:text-cream-400">
+            {latestUpdateLabel(profile)}
+          </p>
+        )}
         <div
           className="markdown-content text-xs sm:text-sm text-charcoal/90 dark:text-cream-200 leading-relaxed"
           dangerouslySetInnerHTML={renderMarkdown(latestUpdate)}
