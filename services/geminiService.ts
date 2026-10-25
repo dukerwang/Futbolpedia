@@ -35,6 +35,7 @@ import {
   isSupabaseReady,
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
+  pickCardPerPlayer,
   resolveSavedDossiersForRequest,
   shareConversation,
   shareDossierCard,
@@ -201,7 +202,16 @@ export const sendMessageToAI = async (
       }
     }
   }
-  const lockedDossiersBlock = buildLockedDossiersBlock(referencedDossiers);
+  // Saved cards first so a card already in this conversation wins over its archived copy.
+  const lockedDossiersBlock = buildLockedDossiersBlock(
+    pickCardPerPlayer(
+      [
+        ...referencedDossiers.filter((p) => !conversationDossiers.includes(p)),
+        ...referencedDossiers.filter((p) => conversationDossiers.includes(p)),
+      ],
+      route.isHistorical,
+    ),
+  );
   const peerLedgerBlock = buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers, {
     targetPlayers: route.targetPlayers,
     message,
