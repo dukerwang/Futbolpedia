@@ -1,10 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
-import { getShortTierLabel } from '../constants/ratingTiers';
+import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { getCardKey, isPrimeCard, shareDossierCard } from '../services/geminiService';
+import {
+  getCardKey,
+  getDossierEvaluationDate,
+  isPrimeCard,
+  shareDossierCard,
+} from '../services/geminiService';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -13,7 +18,7 @@ interface SidePanelProps {
   allProfiles: PlayerProfile[];
   onSelectProfile: (profile: PlayerProfile | null) => void;
   onBackToHome: () => void;
-  onRenameDossier?: (oldName: string, newName: string) => void;
+  onRenameDossier?: (cardKey: string, newName: string) => void;
   onDeleteDossier?: (cardKey: string) => void;
 }
 
@@ -22,6 +27,37 @@ const getTierColorClass = (rating: number) => {
     if (rating >= 80) return 'bg-emerald-400'; // 80-89 Sage/Light Green
     if (rating >= 70) return 'bg-charcoal/50 dark:bg-gray-400'; // 70-79 Charcoal Light
     return 'bg-gray-200 dark:bg-gray-700'; // <70 Faint Grey
+};
+
+const renderMarkdown = (text: string) => {
+    if (!text) return { __html: '' };
+    return { __html: DOMPurify.sanitize(marked.parse(text) as string) };
+};
+
+/** Short codes for canonical position names, keyed by lowercase name. */
+const POSITION_ABBREVIATIONS: Record<string, string> = {
+    'goalkeeper': 'GK',
+    'center back': 'CB', 'centre back': 'CB', 'centre-back': 'CB',
+    'left back': 'LB', 'left-back': 'LB',
+    'right back': 'RB', 'right-back': 'RB',
+    'left wing back': 'LWB', 'left wing-back': 'LWB',
+    'right wing back': 'RWB', 'right wing-back': 'RWB',
+    'defensive midfielder': 'CDM',
+    'central midfielder': 'CM',
+    'attacking midfielder': 'CAM',
+    'left winger': 'LW', 'left midfielder': 'LM',
+    'right winger': 'RW', 'right midfielder': 'RM',
+    'striker': 'ST', 'centre forward': 'CF', 'center forward': 'CF',
+    'second striker': 'SS', 'forward': 'FW',
+};
+
+const formatPosition = (position: string) => {
+    if (!position) return '';
+    return position.split(/[\/,]/).map(p => {
+        const trimmed = p.trim();
+        const key = trimmed.toLowerCase();
+        return Object.hasOwn(POSITION_ABBREVIATIONS, key) ? POSITION_ABBREVIATIONS[key] : trimmed;
+    }).join('/');
 };
 
 const AttributeLine: React.FC<{ label: string; rating: number }> = ({ label: attrLabel, rating }) => {
@@ -57,15 +93,14 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const [isVisible, setIsVisible] = useState(false);
   
   // Dossier list editing states
-  const [editingName, setEditingName] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editNameText, setEditNameText] = useState('');
-  const [confirmDeleteName, setConfirmDeleteName] = useState<string | null>(null);
-  const [sharingName, setSharingName] = useState<string | null>(null);
-  const [sharedName, setSharedName] = useState<string | null>(null);
+  const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
+  const [sharingKey, setSharingKey] = useState<string | null>(null);
+  const [sharedKey, setSharedKey] = useState<string | null>(null);
 
-  const currentIndex = profile && allProfiles
-    ? allProfiles.findIndex(p => getCardKey(p) === getCardKey(profile))
-    : -1;
+  const profileKey = profile ? getCardKey(profile) : null;
+  const currentIndex = profileKey ? allProfiles.findIndex(p => getCardKey(p) === profileKey) : -1;
   
   // Mobile Gesture State
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -89,14 +124,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     }
   }, [isOpen]);
 
-  const getTierText = (rating: number) => getShortTierLabel(rating);
-
-  const renderMarkdown = (text: string) => {
-      if (!text) return { __html: '' };
-      const safeText = DOMPurify.sanitize(marked.parse(text) as string);
-      return { __html: safeText };
-  };
-
   const handleShare = async () => {
     if (!profile) return;
     setShareStatus('saving');
@@ -110,31 +137,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({
         console.error(err);
         setShareStatus('idle');
     }
-  };
-
-  const formatPosition = (position: string) => {
-      if (!position) return '';
-      const mappings: Record<string, string> = {
-          'Goalkeeper': 'GK',
-          'Center Back': 'CB', 'Centre Back': 'CB', 'Centre-Back': 'CB',
-          'Left Back': 'LB', 'Left-Back': 'LB',
-          'Right Back': 'RB', 'Right-Back': 'RB',
-          'Left Wing Back': 'LWB', 'Left Wing-Back': 'LWB',
-          'Right Wing Back': 'RWB', 'Right Wing-Back': 'RWB',
-          'Defensive Midfielder': 'CDM',
-          'Central Midfielder': 'CM',
-          'Attacking Midfielder': 'CAM',
-          'Left Winger': 'LW', 'Left Midfielder': 'LM',
-          'Right Winger': 'RW', 'Right Midfielder': 'RM',
-          'Striker': 'ST', 'Centre Forward': 'CF', 'Center Forward': 'CF',
-          'Second Striker': 'SS', 'Forward': 'FW'
-      };
-      
-      return position.split(/[\/,]/).map(p => {
-          const trimmed = p.trim();
-          const key = Object.keys(mappings).find(k => k.toLowerCase() === trimmed.toLowerCase());
-          return key ? mappings[key] : trimmed;
-      }).join('/');
   };
 
   // --- NATIVE SWIPE LOGIC ---
@@ -199,7 +201,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
   const handleStartRename = (cardKey: string, name: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setEditingName(cardKey);
+    setEditingKey(cardKey);
     setEditNameText(name);
   };
 
@@ -208,25 +210,25 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     if (editNameText.trim() && onRenameDossier) {
       onRenameDossier(targetCardKey, editNameText.trim());
     }
-    setEditingName(null);
+    setEditingKey(null);
   };
 
   const handleCancelRename = () => {
-    setEditingName(null);
+    setEditingKey(null);
   };
 
   const handleDeleteClick = (cardKey: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirmDeleteName === cardKey) {
+    if (confirmDeleteKey === cardKey) {
       if (onDeleteDossier) {
         onDeleteDossier(cardKey);
       }
-      setConfirmDeleteName(null);
+      setConfirmDeleteKey(null);
     } else {
-      setConfirmDeleteName(cardKey);
+      setConfirmDeleteKey(cardKey);
       // Automatically reset confirmation after 3 seconds
       setTimeout(() => {
-        setConfirmDeleteName(prev => prev === cardKey ? null : prev);
+        setConfirmDeleteKey(prev => prev === cardKey ? null : prev);
       }, 3000);
     }
   };
@@ -234,17 +236,17 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const handleShareDossierItem = async (p: PlayerProfile, e: React.MouseEvent) => {
     e.stopPropagation();
     const cardKey = getCardKey(p);
-    if (sharingName) return;
-    setSharingName(cardKey);
+    if (sharingKey) return;
+    setSharingKey(cardKey);
     try {
       const slug = await shareDossierCard(p);
       await navigator.clipboard.writeText(`${window.location.origin}/#/p/${slug}`);
-      setSharedName(cardKey);
-      setTimeout(() => setSharedName(null), 2000);
+      setSharedKey(cardKey);
+      setTimeout(() => setSharedKey(null), 2000);
     } catch (err) {
       console.error('Failed to share dossier:', err);
     } finally {
-      setSharingName(null);
+      setSharingKey(null);
     }
   };
 
@@ -299,8 +301,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 ) : (
                     allProfiles.map((p) => {
                         const cardKey = getCardKey(p);
-                        const isEditing = editingName === cardKey;
-                        const isDeleting = confirmDeleteName === cardKey;
+                        const isEditing = editingKey === cardKey;
+                        const isDeleting = confirmDeleteKey === cardKey;
                         const formattedDate = new Date(p.createdAt || Date.now()).toLocaleDateString(undefined, {
                             month: 'short',
                             day: 'numeric',
@@ -331,7 +333,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                             onBlur={() => {
                                                 // Wait for form actions to proceed
                                                 setTimeout(() => {
-                                                    setEditingName(null);
+                                                    setEditingKey(null);
                                                 }, 200);
                                             }}
                                             className="flex-1 px-3 py-1.5 text-xs font-serif bg-cream-100 dark:bg-charcoal border border-emerald-500/50 rounded focus:outline-none focus:ring-1 focus:ring-emerald-500 text-charcoal dark:text-cream-50"
@@ -389,16 +391,16 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                     <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity bg-gradient-to-l from-white dark:from-charcoal-surface via-white dark:via-charcoal-surface to-transparent pl-4 py-1.5 rounded-r-xl">
                                         <button
                                             onClick={(e) => handleShareDossierItem(p, e)}
-                                            disabled={sharingName === cardKey}
+                                            disabled={sharingKey === cardKey}
                                             className={`p-1 rounded transition-all ${
-                                                sharedName === cardKey
+                                                sharedKey === cardKey
                                                     ? 'text-emerald-600 dark:text-emerald-400'
                                                     : 'text-charcoal/50 dark:text-cream-400/60 hover:text-blue-500 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40'
                                             }`}
                                             title="Share Dossier"
                                         >
                                             <span className="material-symbols-outlined text-[14px] block">
-                                                {sharingName === cardKey ? 'hourglass_empty' : sharedName === cardKey ? 'check' : 'link'}
+                                                {sharingKey === cardKey ? 'hourglass_empty' : sharedKey === cardKey ? 'check' : 'link'}
                                             </span>
                                         </button>
                                         <button
@@ -435,6 +437,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     );
   }
 
+  const isPrime = isPrimeCard(profile);
   const categories = profile.goalkeeperAttributes ? GK_ATTRIBUTE_CATEGORIES : ATTRIBUTE_CATEGORIES;
   const attrSource = profile.goalkeeperAttributes ? profile.goalkeeperAttributes : profile.attributes;
 
@@ -492,7 +495,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     </div>
                     
                     <div className="flex flex-col items-end text-right shrink-0">
-                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getTierText(profile.ratings.overall)}</span>
+                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getShortTierLabel(profile.ratings.overall)}</span>
                         
                         <div className="flex gap-4">
                             <div className="flex flex-col items-center">
@@ -580,14 +583,14 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase border flex items-center gap-1 ${
-                                isPrimeCard(profile)
+                                isPrime
                                     ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
                                     : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
                             }`}>
                                 <span className="material-symbols-outlined text-[13px]">
-                                    {isPrimeCard(profile) ? 'workspace_premium' : 'bolt'}
+                                    {isPrime ? 'workspace_premium' : 'bolt'}
                                 </span>
-                                {profile.version?.label || (isPrimeCard(profile) ? 'Prime Zenith' : 'Current Form')}
+                                {profile.version?.label || (isPrime ? 'Prime Zenith' : 'Current Form')}
                             </span>
                             {profile.version?.seasonOrEra && (
                                 <span className="text-[10px] font-mono text-charcoal/60 dark:text-cream-400 font-semibold">
@@ -599,7 +602,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                         <div className="flex items-center gap-1 text-[11px] font-mono font-semibold text-charcoal/60 dark:text-cream-400">
                             <span className="material-symbols-outlined text-[14px]">calendar_today</span>
                             <span>
-                                {profile.evaluationDate || (profile.createdAt ? new Date(profile.createdAt).toISOString().split('T')[0] : 'Undated')}
+                                {getDossierEvaluationDate(profile) ?? 'Undated'}
                             </span>
                         </div>
                     </div>
@@ -619,7 +622,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                     <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Spikes:</span>
                                     {profile.signatureSpikes.map(spike => (
                                         <span key={spike} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-500/20">
-                                            {spike}
+                                            {getAttributeLabel(spike)}
                                         </span>
                                     ))}
                                 </div>
@@ -629,7 +632,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                     <span className="text-[9px] font-bold uppercase tracking-wider text-red-600 dark:text-red-400">Flaws:</span>
                                     {profile.genuineFlaws.map(flaw => (
                                         <span key={flaw} className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-700 dark:text-red-300 font-mono text-[10px] font-semibold border border-red-500/20">
-                                            {flaw}
+                                            {getAttributeLabel(flaw)}
                                         </span>
                                     ))}
                                 </div>
