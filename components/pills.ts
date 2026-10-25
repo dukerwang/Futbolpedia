@@ -1,4 +1,4 @@
-import type { PlayerProfile } from '../types';
+import type { EvidenceGrade, PlayerProfile } from '../types';
 import { cardEdition, getDossierEvaluationDate, getLatestUpdateDate } from '../services/dossierStore';
 
 /**
@@ -56,9 +56,20 @@ export function describeCardEdition(profile: PlayerProfile): {
   tone: PillTone;
   icon: string;
   label: string;
+  title?: string;
 } {
   const edition = cardEdition(profile);
   const date = getDossierEvaluationDate(profile);
+  // Cards from before editions existed don't say whether they rated current form or a peak,
+  // so don't claim either.
+  if (!profile.version && edition === 'current') {
+    return {
+      tone: 'neutral',
+      icon: 'history',
+      label: date ? `Older card · ${formatMonth(date)}` : 'Older card',
+      title: 'Rated before cards recorded their edition, so it may be a current or a prime rating. Ask for the player again for a fresh card.',
+    };
+  }
   if (edition === 'current') {
     return {
       tone: 'emerald',
@@ -84,3 +95,15 @@ export function latestUpdateLabel(profile: PlayerProfile): string | null {
   });
   return `As of ${day}`;
 }
+
+/**
+ * The evidence grade in words. It rates how much evidence sits behind the rating (sample size
+ * and data coverage), not how good the player is.
+ */
+const CONFIDENCE: Record<EvidenceGrade, { tone: PillTone; label: string; hint: string }> = {
+  A: { tone: 'emerald', label: 'High confidence', hint: 'Large senior sample (80+ starts) with stable, well-covered data.' },
+  B: { tone: 'blue', label: 'Medium confidence', hint: 'Moderate sample (20–80 senior starts) or a recent move or role change.' },
+  C: { tone: 'amber', label: 'Low confidence', hint: 'Small senior sample (under 20 starts), a young prospect, or a long injury.' },
+};
+
+export const describeConfidence = (grade: EvidenceGrade) => CONFIDENCE[grade] ?? CONFIDENCE.C;

@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import type { EvidenceGrade, PlayerProfile } from '../types';
+import type { PlayerProfile } from '../types';
 import { AttributeTable } from './AttributeTable';
 import { getTierForRating, normalizePosition } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { isPrimeCard } from '../services/geminiService';
-import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
+import { describeCardEdition, describeConfidence, latestUpdateLabel, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
 
 interface PlayerProfileDisplayProps {
   profile: PlayerProfile;
@@ -43,7 +43,6 @@ const renderMarkdown = (text: string | undefined) => {
   }
 };
 
-const GRADE_TONE: Record<EvidenceGrade, PillTone> = { A: 'emerald', B: 'blue', C: 'amber' };
 
 const META_PILL_CLASS = pillClass('neutral');
 
@@ -70,7 +69,8 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
 
   const isPrime = isPrimeCard(profile);
   const edition = describeCardEdition(profile);
-  const gradeTone = confidence ? GRADE_TONE[confidence.grade] ?? 'amber' : 'neutral';
+  const confidenceInfo = confidence ? describeConfidence(confidence.grade) : null;
+  const gradeTone: PillTone = confidenceInfo?.tone ?? 'neutral';
 
   return (
     <div className="space-y-8 animate-fade-in w-full max-w-5xl mx-auto pb-12">
@@ -94,7 +94,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
         {/* Card Header & Version Stamp */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-6 border-b border-cream-200 dark:border-charcoal-border text-left">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={pillClass(edition.tone)}>
+            <span className={pillClass(edition.tone)} title={edition.title}>
               <span className={PILL_ICON_CLASS}>{edition.icon}</span>
               {edition.label}
             </span>
@@ -124,10 +124,10 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
                   type="button"
                   onClick={() => setShowEvidenceModal((prev) => !prev)}
                   className={`group ${pillClass(gradeTone)} cursor-pointer transition-opacity hover:opacity-80`}
-                  title="Click to view scouting evidence report and data confidence"
+                  title="How much evidence sits behind this rating. Click for the evidence report."
                 >
                   <span className={PILL_ICON_CLASS}>verified</span>
-                  <span>Evidence grade {confidence.grade}</span>
+                  <span>{confidenceInfo?.label}</span>
                 </button>
 
                 {/* Evidence Tooltip Popover */}
@@ -142,8 +142,11 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
                         <span className="font-bold uppercase tracking-wider text-[10px] text-charcoal/60 dark:text-cream-400">
                           Scouting Evidence Report
                         </span>
-                        <span className={pillClass(gradeTone, 'xs')}>Grade {confidence.grade}</span>
+                        <span className={pillClass(gradeTone, 'xs')}>{confidenceInfo?.label}</span>
                       </div>
+                      <p className="text-[11px] text-charcoal/60 dark:text-cream-400 mb-2">
+                        Confidence rates the evidence behind the rating, not the player. {confidenceInfo?.hint}
+                      </p>
                       <p className="font-semibold text-charcoal dark:text-cream-50 mb-2">
                         {confidence.verdict}
                       </p>
