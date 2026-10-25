@@ -18,7 +18,6 @@ import {
   findReferencedDossiers,
   getCachedDossier,
   getSharedConversation,
-  grepDossiers,
   isSupabaseReady,
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
@@ -43,6 +42,13 @@ export {
   getSharedConversation,
   gatherSearchFoundation,
 };
+
+/** Historical (peak) cards are cached under a `prime-` slug so they never shadow the current card. */
+const toDossierCacheSlug = (slug: string, isHistorical: boolean): string =>
+  isHistorical && !slug.startsWith('prime-') && !slug.startsWith('peak-') ? `prime-${slug}` : slug;
+
+const isFreshlyCalibrated = (p?: PlayerProfile): boolean =>
+  Boolean(p?.createdAt && p.createdAt >= CALIBRATION_EPOCH_MS);
 
 /**
  * Retained for backward compatibility with App.tsx conversation switching.
@@ -184,9 +190,6 @@ export const sendMessageToAI = async (
       extractCandidateSlug(message) ||
       '';
 
-    const isFreshlyCalibrated = (p?: PlayerProfile): boolean =>
-      Boolean(p?.createdAt && p.createdAt >= CALIBRATION_EPOCH_MS);
-
     if (!imageData && !route.wantsRegeneration) {
       // Return locked in-conversation dossier if re-requested without regeneration flag
       if (
@@ -220,11 +223,7 @@ export const sendMessageToAI = async (
       // Check Supabase 14-day TTL cache (for both active and historical prime-<slug> cards)
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
-        const lookupSlug =
-          route.isHistorical && !rawSlug.startsWith('prime-') && !rawSlug.startsWith('peak-')
-            ? `prime-${rawSlug}`
-            : rawSlug;
-        const cached = await getCachedDossier(lookupSlug);
+        const cached = await getCachedDossier(toDossierCacheSlug(rawSlug, route.isHistorical));
         if (cached) {
           perf('supabase cache hit');
           return cached;
@@ -279,12 +278,10 @@ export const sendMessageToAI = async (
       createdAt: Date.now(),
     };
 
-    const baseSlug = toPlayerSlug(stampedProfile.basicInfo.name);
-    const cacheSlug =
-      route.isHistorical && !baseSlug.startsWith('prime-') && !baseSlug.startsWith('peak-')
-        ? `prime-${baseSlug}`
-        : baseSlug;
-    upsertCachedDossier(cacheSlug, stampedProfile);
+    upsertCachedDossier(
+      toDossierCacheSlug(toPlayerSlug(stampedProfile.basicInfo.name), route.isHistorical),
+      stampedProfile,
+    );
     return stampedProfile;
   }
 
