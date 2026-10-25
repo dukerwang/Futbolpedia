@@ -156,6 +156,7 @@ export function formatRatingScaleForPrompt(): string {
 
 export const CANONICAL_POSITIONS = [
   'Goalkeeper',
+  'Libero',
   'Centre-Back',
   'Left Back',
   'Right Back',
@@ -168,7 +169,6 @@ export const CANONICAL_POSITIONS = [
   'Right Midfielder',
   'Left Winger',
   'Right Winger',
-  'Striker',
   'Centre Forward',
   'Second Striker',
 ] as const;
@@ -183,6 +183,8 @@ export const POSITION_CANON: Record<string, CanonicalPosition> = {
   rightback: 'Right Back',
   lb: 'Left Back',
   leftback: 'Left Back',
+  libero: 'Libero',
+  sweeper: 'Libero',
   cb: 'Centre-Back',
   centreback: 'Centre-Back',
   centerback: 'Centre-Back',
@@ -214,8 +216,8 @@ export const POSITION_CANON: Record<string, CanonicalPosition> = {
   cf: 'Centre Forward',
   centreforward: 'Centre Forward',
   centerforward: 'Centre Forward',
-  st: 'Striker',
-  striker: 'Striker',
+  st: 'Centre Forward',
+  striker: 'Centre Forward',
   ss: 'Second Striker',
   secondstriker: 'Second Striker',
   attacker: 'Centre Forward',
@@ -291,6 +293,21 @@ export function normalizePosition(raw: string): string {
     })
     .slice(0, 2);
   return unique.join('/') || raw;
+}
+
+/**
+ * The libero is a sweeper-era position. A card of that era keeps it, paired with the modern
+ * position the player would hold today ("Libero/Centre-Back" when the model gave none). A
+ * current card files the role under Centre-Back, so roles stay out of the position list.
+ */
+export function resolveLiberoPosition(position: string, isHistorical: boolean): string {
+  const parts = position.split('/').map((p) => p.trim()).filter(Boolean);
+  if (!parts.includes('Libero')) return position;
+  if (!isHistorical) {
+    return [...new Set(parts.map((p) => (p === 'Libero' ? 'Centre-Back' : p)))].join('/');
+  }
+  const modern = parts.find((p) => p !== 'Libero') ?? 'Centre-Back';
+  return `Libero/${modern}`;
 }
 
 export function normalizeClub(raw: string): string {

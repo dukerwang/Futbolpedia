@@ -52,6 +52,7 @@ import { synthesizePlayerDossier } from './dossierSynthesizer';
 import { getClubManager, toClubKey } from './clubManagers';
 import { attachVerifiedManager } from './profileManagerGrounding';
 import { gatherPlayerGrounding, gatherSearchFoundation } from './groundingService';
+import { withFreshLatestUpdate } from './latestUpdateRefresh';
 import { classifyTurn, extractCandidateSlug } from './turnRouter';
 
 export {
@@ -268,12 +269,12 @@ export const sendMessageToAI = async (
           isCardInRefreshWindow(poolHits[0])
         ) {
           perf('in-memory calibrated pool hit');
-          return poolHits[0];
+          return withFreshLatestUpdate(poolHits[0], options?.onStageChange);
         }
       }
     }
 
-    // Shared cards: one current card per player per week, and prime cards are frozen, so even a
+    // Shared cards: one current card per player per month, and prime cards are frozen, so even a
     // regeneration request gets the published card while it's in its refresh window. The one
     // exception is consensus: enough people independently challenging it the same way.
     let supersede = false;
@@ -285,7 +286,7 @@ export const sendMessageToAI = async (
           supersede = hasRevisionConsensus(await fetchRevisionsForCard(cached));
           if (!supersede) {
             perf('supabase cache hit');
-            return cached;
+            return withFreshLatestUpdate(cached, options?.onStageChange);
           }
           perf('challenge consensus: re-rating early');
         }
@@ -311,7 +312,7 @@ export const sendMessageToAI = async (
     perf('hybrid grounding');
 
     // The typed name may not match the shared card's ("pedro", a nickname, a fuller name).
-    // Grounding has resolved the registered name, so look for this week's shared card under it
+    // Grounding has resolved the registered name, so look for this month's shared card under it
     // before synthesizing a duplicate.
     const canonicalName = grounding.apiPlayer?.name;
     if (
@@ -325,7 +326,7 @@ export const sendMessageToAI = async (
         supersede = hasRevisionConsensus(await fetchRevisionsForCard(cached));
         if (!supersede) {
           perf('supabase cache hit (registered name)');
-          return cached;
+          return withFreshLatestUpdate(cached, options?.onStageChange);
         }
       }
     }

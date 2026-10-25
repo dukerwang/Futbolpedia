@@ -18,6 +18,7 @@ import {
   GK_ATTRIBUTE_LABELS,
   normalizeClub,
   normalizePosition,
+  resolveLiberoPosition,
   TIER_BAND_IDS,
   TIER_BAND_MAP,
   TierBandId,
@@ -887,6 +888,7 @@ ${temporalRules}
     });
 
     let profile = applyVersionRules(sanitizeProfileData(raw), params.isHistorical);
+    profile.basicInfo.position = resolveLiberoPosition(profile.basicInfo.position, params.isHistorical);
 
     // Deterministically backfill missing bio fields from API-Football on active players
     if (!params.isHistorical && params.apiPlayer) {

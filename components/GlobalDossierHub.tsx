@@ -8,6 +8,9 @@ import {
   shareDossierCard,
 } from '../services/geminiService';
 import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
+import { describeCardEdition, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
+
+const GRADE_TONE: Record<string, PillTone> = { A: 'emerald', B: 'blue', C: 'amber' };
 
 interface GlobalDossierHubProps {
   isOpen: boolean;
@@ -30,7 +33,7 @@ const EDITION_OPTIONS: Array<{ id: EditionFilter; label: string; activeClass: st
 const POSITION_FILTER_KEYWORDS: Record<Exclude<PositionFilter, 'all'>, string[]> = {
   forward: ['striker', 'forward', 'winger', 'st', 'cf'],
   midfield: ['midfielder', 'cm', 'cdm', 'cam'],
-  defender: ['back', 'cb', 'lb', 'rb'],
+  defender: ['back', 'cb', 'lb', 'rb', 'libero'],
   goalkeeper: ['goalkeeper', 'gk'],
 };
 
@@ -219,9 +222,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                 <h2 className="text-xl font-serif font-bold tracking-tight text-charcoal dark:text-cream-50">
                   Global Dossier Hub
                 </h2>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono text-[10px] font-bold uppercase tracking-wider border border-emerald-500/30">
-                  Public Registry
-                </span>
+                <span className={pillClass('emerald', 'sm')}>Public registry</span>
               </div>
               <p className="text-xs text-charcoal/60 dark:text-cream-400 font-sans mt-0.5">
                 All authoritative player cards, dated versions, and historical trajectory benchmarks
@@ -413,6 +414,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                 const isPrime = isPrimeCard(profile);
                 const tierLabel = getShortTierLabel(profile.ratings.overall);
                 const isCopied = copiedSlug === cardKey;
+                const edition = describeCardEdition(profile);
 
                 return (
                   <div
@@ -426,48 +428,16 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                     {/* Top Stamp Bar */}
                     <div>
                       <div className="flex items-center justify-between gap-2 mb-3">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {isCurrentRating ? (
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-white font-mono text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 shadow-xs">
-                              <span className="size-1.5 rounded-full bg-white animate-pulse" />
-                              Official Current
-                            </span>
-                          ) : isPrime ? (
-                            <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 font-mono text-[9px] font-bold uppercase tracking-wider flex items-center gap-1">
-                              <span className="material-symbols-outlined text-[12px]">workspace_premium</span>
-                              Prime Zenith
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded-full bg-cream-200 dark:bg-charcoal-light text-charcoal/70 dark:text-cream-300 font-mono text-[9px] font-bold uppercase tracking-wider border border-cream-300 dark:border-charcoal-border">
-                              Historical Snapshot
-                            </span>
-                          )}
+                        <span className={pillClass(isCurrentRating || isPrime ? edition.tone : 'neutral', 'sm')}>
+                          <span className={PILL_ICON_CLASS}>{isCurrentRating || isPrime ? edition.icon : 'history'}</span>
+                          {isCurrentRating || isPrime ? edition.label : edition.label.replace('Current form', 'Earlier rating')}
+                        </span>
 
-                          {profile.version?.seasonOrEra && (
-                            <span className="text-[10px] font-mono text-charcoal/50 dark:text-cream-400 font-semibold">
-                              {profile.version.seasonOrEra}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Date Seal & Evidence Grade */}
-                        <div className="flex items-center gap-1.5 text-[10px] font-mono font-semibold text-charcoal/50 dark:text-cream-400">
-                          {profile.confidence?.grade && (
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold ${
-                                profile.confidence.grade === 'A'
-                                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25'
-                                  : 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/25'
-                              }`}
-                            >
-                              Gr.{profile.confidence.grade}
-                            </span>
-                          )}
-                          <div className="flex items-center gap-0.5">
-                            <span className="material-symbols-outlined text-[13px]">event</span>
-                            <span>{profile.evaluationDate}</span>
-                          </div>
-                        </div>
+                        {profile.confidence?.grade && (
+                          <span className={pillClass(GRADE_TONE[profile.confidence.grade] ?? 'amber', 'xs')} title="Evidence grade">
+                            Grade {profile.confidence.grade}
+                          </span>
+                        )}
                       </div>
 
                       {/* Player Headline */}
@@ -522,26 +492,18 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
 
                       {/* Peak Context Note */}
                       {profile.version?.peakContext && (
-                        <div className="p-2.5 rounded-lg bg-amber-500/5 dark:bg-amber-950/20 border border-amber-500/20 mb-3">
-                          <p className="text-[11px] font-serif italic text-charcoal/80 dark:text-amber-200 leading-snug line-clamp-2">
-                            "{profile.version.peakContext}"
-                          </p>
-                        </div>
+                        <p className="mb-3 text-xs font-serif italic text-charcoal/70 dark:text-cream-300 leading-snug line-clamp-2">
+                          {profile.version.peakContext}
+                        </p>
                       )}
 
                       {/* Trajectory progression badge */}
                       {typeof trajectoryDiff === 'number' && trajectoryDiff !== 0 && (
-                        <div className="flex items-center gap-1 text-[11px] font-mono font-bold mb-3">
-                          <span
-                            className={`px-1.5 py-0.5 rounded ${
-                              trajectoryDiff > 0
-                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                                : 'bg-red-500/15 text-red-600 dark:text-red-400'
-                            }`}
-                          >
+                        <div className="flex items-center gap-1.5 text-[11px] font-sans mb-3">
+                          <span className={pillClass(trajectoryDiff > 0 ? 'emerald' : 'red', 'xs')}>
                             {trajectoryDiff > 0 ? `+${trajectoryDiff}` : trajectoryDiff} OVR
                           </span>
-                          <span className="text-charcoal/40 dark:text-cream-400 font-normal">
+                          <span className="text-charcoal/40 dark:text-cream-400">
                             vs {previousRatingDate} evaluation
                           </span>
                         </div>
@@ -551,10 +513,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                       {profile.signatureSpikes && profile.signatureSpikes.length > 0 && (
                         <div className="flex flex-wrap items-center gap-1.5 mt-2">
                           {profile.signatureSpikes.slice(0, 3).map((spike) => (
-                            <span
-                              key={spike}
-                              className="px-2 py-0.5 rounded-md bg-emerald-500/5 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-500/20"
-                            >
+                            <span key={spike} className={pillClass('neutral', 'xs')}>
                               {getAttributeLabel(spike)}
                             </span>
                           ))}

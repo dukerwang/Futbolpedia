@@ -10,7 +10,7 @@ import {
 } from './dossierCards';
 
 /**
- * Supabase-backed storage: the 14-day dossier cache with its versioned archive, the shared
+ * Supabase-backed storage: the shared dossier cache with its versioned archive, the shared
  * calibrated pool, card and conversation sharing, and the Global Dossier Hub feed.
  */
 
@@ -72,7 +72,7 @@ export const getCachedDossier = async (
     const dated = ensureDossierDated(profile, updatedAtMs);
     // Direct share links show any card, including undated legacy ones.
     if (!checkTTL) return dated ?? { ...profile, createdAt: profile.createdAt || updatedAtMs };
-    // A cache hit must be dated, post-recalibration, and (for current form) this week's card.
+    // A cache hit must be dated, post-recalibration, and (for current form) this month's card.
     if (!dated || updatedAtMs < CALIBRATION_EPOCH_MS || !isCardInRefreshWindow(dated)) return null;
     return dated;
   } catch {
@@ -85,7 +85,7 @@ export const getCachedDossier = async (
  * slug, and archives whatever card previously occupied the pointer so a re-rating never
  * erases history. The `_slug` argument is kept for call-site compatibility; the pointer slug
  * is derived from the card's own edition. A user's revision is never written here, and
- * `supersede` (consensus from several challengers) lets a re-rating replace this week's card.
+ * `supersede` (consensus from several challengers) lets a re-rating replace this month's card.
  */
 export const upsertCachedDossier = async (
   _slug: string,
@@ -123,8 +123,8 @@ export const upsertCachedDossier = async (
         existing.player_data as PlayerProfile,
         rowTimeMs(existing.updated_at),
       );
-      // One current card per player per week: if another session already published this
-      // week's card while this one was being synthesized, that card stays the shared one.
+      // One current card per player per month: if another session already published this
+      // month's card while this one was being synthesized, that card stays the shared one.
       if (
         !options.supersede &&
         prev &&
@@ -149,6 +149,39 @@ export const upsertCachedDossier = async (
     await supabase.from('player_profiles').upsert(rows, { onConflict: 'player_slug' });
   } catch (e) {
     console.warn('[Cache] Upsert failed:', e);
+  }
+};
+
+/**
+ * Writes a refreshed Latest Update onto the shared current card. Only the "latest" pointer row
+ * changes (archive rows are immutable), and only while it still holds the same dated card, so a
+ * re-rating published in the meantime is never overwritten. The refresh window trigger allows
+ * this write because the evaluation date doesn't change.
+ */
+export const publishLatestUpdate = async (profile: PlayerProfile): Promise<void> => {
+  if (profile.revision || isPrimeCard(profile)) return;
+  const key = getCardKey(profile);
+  const idx = supabaseCalibratedPool.findIndex((p) => getCardKey(p) === key);
+  if (idx >= 0) supabaseCalibratedPool[idx] = profile;
+
+  if (!supabase) return;
+  try {
+    const alias = toDossierCardSlug(profile.basicInfo.name);
+    const { data: existing } = await supabase
+      .from('player_profiles')
+      .select('player_data, updated_at')
+      .eq('player_slug', alias)
+      .maybeSingle();
+    const current = existing?.player_data
+      ? ensureDossierDated(existing.player_data as PlayerProfile, rowTimeMs(existing.updated_at))
+      : null;
+    if (!current || getCardKey(current) !== key) return;
+    await supabase
+      .from('player_profiles')
+      .update({ player_data: profile, updated_at: new Date().toISOString() })
+      .eq('player_slug', alias);
+  } catch (e) {
+    console.warn('[Cache] Latest Update write failed:', e);
   }
 };
 
