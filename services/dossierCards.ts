@@ -76,7 +76,7 @@ export const isPrimeCard = (p: PlayerProfile): boolean => {
 };
 
 /** Edition segment of card keys and archive slugs. */
-const cardEdition = (p: PlayerProfile): string =>
+export const cardEdition = (p: PlayerProfile): string =>
   isPrimeCard(p) ? p.version?.type ?? 'prime' : 'current';
 
 /**
@@ -141,6 +141,21 @@ export const ensureDossierDated = (
       evaluationDate: dateStr,
     },
   };
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How long a player's current card stays the one shared card before a fresh rating is allowed. */
+export const CARD_REFRESH_DAYS = 7;
+
+/**
+ * True while a card should be served instead of re-rated: always for prime cards (a peak
+ * doesn't change), and for CARD_REFRESH_DAYS after a current card's evaluation date.
+ */
+export const isCardInRefreshWindow = (p: PlayerProfile, nowMs: number = Date.now()): boolean => {
+  if (isPrimeCard(p)) return true;
+  const date = getDossierEvaluationDate(p);
+  return !!date && nowMs - Date.parse(`${date}T00:00:00Z`) < CARD_REFRESH_DAYS * DAY_MS;
 };
 
 /** Dated copy of a card, or the card with a createdAt stamp when it can't be dated. */

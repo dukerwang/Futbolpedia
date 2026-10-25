@@ -14,17 +14,22 @@ import {
   buildLockedDossiersBlock,
   buildPositionalPeerLedgerBlock,
   buildPriorDossierTrajectoryBlock,
+  buildRevisionProposalsBlock,
   buildSavedDossiersBlock,
   ensureDossierDated,
   fetchGlobalHubDossiers,
   type GlobalHubDossierItem,
   fetchPriorDossiersForPlayer,
+  fetchRevisionsForCard,
+  fetchRevisionsForPlayer,
   fetchSupabaseCalibratedPool,
   findReferencedDossiers,
   getCachedDossier,
   getCardKey,
   getDossierEvaluationDate,
   getSharedConversation,
+  hasRevisionConsensus,
+  isCardInRefreshWindow,
   isDossierDated,
   isPrimeCard,
   isSupabaseReady,
@@ -37,6 +42,7 @@ import {
   supabase,
   toDossierCardSlug,
   toPlayerSlug,
+  toVersionedSlug,
   upsertCachedDossier,
   wantsSavedDossierAccess,
 } from './dossierStore';
@@ -242,19 +248,32 @@ export const sendMessageToAI = async (
           (p) => !isPrimeCard(p),
         );
         const poolHits = findReferencedDossiers(primaryPlayer, allCalibrated, [primaryPlayer]);
-        if (poolHits.length === 1 && isFreshlyCalibrated(poolHits[0])) {
+        if (
+          poolHits.length === 1 &&
+          isFreshlyCalibrated(poolHits[0]) &&
+          isCardInRefreshWindow(poolHits[0])
+        ) {
           perf('in-memory calibrated pool hit');
           return poolHits[0];
         }
       }
+    }
 
-      // Check Supabase 14-day TTL cache (for both active and historical prime-<slug> cards)
+    // Shared cards: one current card per player per week, and prime cards are frozen, so even a
+    // regeneration request gets the published card while it's in its refresh window. The one
+    // exception is consensus: enough people independently challenging it the same way.
+    let supersede = false;
+    if (!imageData) {
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
         const cached = await getCachedDossier(toDossierCardSlug(rawSlug, route.isHistorical));
         if (cached) {
-          perf('supabase cache hit');
-          return cached;
+          supersede = hasRevisionConsensus(await fetchRevisionsForCard(cached));
+          if (!supersede) {
+            perf('supabase cache hit');
+            return cached;
+          }
+          perf('challenge consensus: re-rating early');
         }
       }
     }
@@ -265,11 +284,16 @@ export const sendMessageToAI = async (
         : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
     );
 
-    const grounding = await gatherPlayerGrounding({
-      playerName: primaryPlayer,
-      rawMessage: message,
-      isHistorical: route.isHistorical,
-    });
+    // Prior authored cards (longitudinal memory) only need the name, so fetch them alongside grounding.
+    const [grounding, priorDossiers, challengeRows] = await Promise.all([
+      gatherPlayerGrounding({
+        playerName: primaryPlayer,
+        rawMessage: message,
+        isHistorical: route.isHistorical,
+      }),
+      fetchPriorDossiersForPlayer(primaryPlayer, [...savedDossiers, ...conversationDossiers]),
+      fetchRevisionsForPlayer(primaryPlayer),
+    ]);
     perf('hybrid grounding');
 
     options?.onStageChange?.(
@@ -290,15 +314,17 @@ export const sendMessageToAI = async (
         })
       : peerLedgerBlock;
 
-    // Retrieve prior authored dossiers for longitudinal memory and trajectory weighing
-    const priorDossiers = await fetchPriorDossiersForPlayer(primaryPlayer, [
-      ...savedDossiers,
-      ...conversationDossiers,
-    ]);
-    const priorTrajectoryBlock = buildPriorDossierTrajectoryBlock(
-      priorDossiers,
-      grounding.apiPlayer?.name || primaryPlayer || 'player',
-    );
+    // Challenges count only against the shared card this rating replaces: the newest prior card
+    // of the requested edition (priorDossiers is oldest first).
+    const replacedCard = priorDossiers.filter(matchesRequestedEdition).at(-1);
+    const replacedSlug = replacedCard ? toVersionedSlug(replacedCard) : null;
+    const replacedCardChallenges = challengeRows.filter((r) => r.card_slug === replacedSlug);
+
+    const priorTrajectoryBlock =
+      buildPriorDossierTrajectoryBlock(
+        priorDossiers,
+        grounding.apiPlayer?.name || primaryPlayer || 'player',
+      ) + buildRevisionProposalsBlock(replacedCardChallenges);
 
     const profile = await synthesizePlayerDossier({
       rawMessage: message,
@@ -318,6 +344,7 @@ export const sendMessageToAI = async (
     upsertCachedDossier(
       toDossierCardSlug(stampedProfile.basicInfo.name, route.isHistorical),
       stampedProfile,
+      { supersede },
     );
     return stampedProfile;
   }

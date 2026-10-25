@@ -50,6 +50,7 @@ API-Football and model memory both lag coaching changes. Live data comes first: 
 - `SIMULATION_YEAR` / `SIMULATION_SEASON` (`prompts/scoutCore.ts`) are computed once at module load from the real date via `getRealWorldFootballSeason`, so the system instruction stays byte-stable within a process for Gemini's implicit prompt caching. Per-turn prompts read the date through `getCurrentSeasonInfo()`.
 - The EAFC playstyle directory is only injected when the query matches an EAFC pattern — `buildConversationalScoutInstruction(includeEAFC)` controls this.
 - `CALIBRATION_EPOCH_MS` in `dossierCache.ts` invalidates cached dossiers from before the last rating recalibration; bump it when the rating scale changes.
+- Shared cards: a current card is the one shared card for `CARD_REFRESH_DAYS` (7) from its evaluation date, prime cards are frozen, and accepted challenges stay personal revisions logged to `dossier_revisions` (3 agreeing people re-rate early). The `enforce_dossier_refresh_window` trigger (`supabase/migrations/`) mirrors `CARD_REFRESH_DAYS`, `CALIBRATION_EPOCH_MS` and `REVISION_CONSENSUS_USERS`, so change them in both places.
 
 ### Frontend State
 `App.tsx` manages all state via React hooks. Two persistence layers:

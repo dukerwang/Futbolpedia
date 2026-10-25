@@ -14,6 +14,7 @@ import {
   findReferencedDossiers,
   getCardKey,
   getDossierEvaluationDate,
+  isCardInRefreshWindow,
   isPrimeCard,
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
@@ -22,6 +23,11 @@ import {
   toDossierCardSlug,
   toVersionedSlug,
   upsertCachedDossier,
+  applyDossierPatch,
+  buildRevisionProposalsBlock,
+  buildRevisionRow,
+  hasRevisionConsensus,
+  type DossierRevisionRow,
 } from '../services/dossierStore';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
@@ -212,6 +218,15 @@ async function main() {
     assert.equal(ensureDossierDated({} as PlayerProfile), null);
   });
 
+  await test('current cards stay shared for a week; prime cards are frozen', () => {
+    const now = Date.parse('2026-10-25T10:00:00Z');
+    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-10-25'), now), true);
+    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-10-19'), now), true);
+    assert.equal(isCardInRefreshWindow(currentCard('Pedri', '2026-10-18'), now), false);
+    assert.equal(isCardInRefreshWindow(card('Pedri'), now), false);
+    assert.equal(isCardInRefreshWindow(primeCard('Pedri', '2021-05-01'), now), true);
+  });
+
   // ── Merging dated cards ──────────────────────────────────────────────────
 
   await test('calibrated pool keeps only the newest current card per player', async () => {
@@ -250,6 +265,44 @@ async function main() {
     assert.deepEqual(await fetchPriorDossiersForPlayer('Silva', pool), []);
     const exact = await fetchPriorDossiersForPlayer('Bernardo Silva', pool);
     assert.deepEqual(exact.map((p) => p.basicInfo.name), ['Bernardo Silva']);
+  });
+
+  // ── Challenges and revisions ─────────────────────────────────────────────
+
+  await test('an accepted challenge becomes a personal revision of the shared card', async () => {
+    const shared = currentCard('Florian Wirtz', '2026-10-24', { createdAt: Date.now() });
+    const revised = applyDossierPatch(shared, { targetPlayerName: 'Wirtz', overall: 91, attributes: { vision: 95 } });
+    assert.equal(revised.revision?.baseCardKey, getCardKey(shared));
+    assert.equal(getCardKey(revised), getCardKey(shared));
+    const again = applyDossierPatch(revised, { targetPlayerName: 'Wirtz', attributes: { flair: 90 } });
+    assert.equal(again.revision?.baseCardKey, getCardKey(shared));
+
+    // Never written to the shared store: the in-memory shared pool stays without Wirtz.
+    await upsertCachedDossier('', revised);
+    assert.equal(mergeAllCalibratedDossiers([], []).some((p) => p.basicInfo.name === 'Florian Wirtz'), false);
+  });
+
+  await test('a revision row records what moved against the shared card', () => {
+    const shared = currentCard('Florian Wirtz', '2026-10-24');
+    const revised = applyDossierPatch(shared, { targetPlayerName: 'Wirtz', overall: 91, attributes: { vision: 95, finishing: 0 } });
+    const row = buildRevisionRow(shared, revised, 'He runs the game', 'xA 0.4', 'client-a');
+    assert.equal(row?.card_slug, 'florian-wirtz--current--2026-10-24');
+    assert.deepEqual(row?.deltas, { overall: 91 - shared.ratings.overall, vision: 95 - shared.attributes.vision });
+    assert.equal(buildRevisionRow(shared, shared, 'no change', '', 'client-a'), null);
+    assert.equal(buildRevisionRow(card('Florian Wirtz (Prime)'), revised, 'undated', '', 'client-a'), null);
+  });
+
+  await test('consensus needs distinct people pushing the same way', () => {
+    const row = (client: string, deltas: Record<string, number>): DossierRevisionRow => ({
+      card_slug: 'x--current--2026-10-24', player_base: 'x', edition: 'current', card_date: '2026-10-24',
+      deltas, rationale: null, evidence: null, client_id: client,
+    });
+    assert.equal(hasRevisionConsensus([row('a', { vision: 2 }), row('b', { vision: 1 }), row('c', { vision: 3 })]), true);
+    assert.equal(hasRevisionConsensus([row('a', { vision: 2 }), row('a', { vision: 1 }), row('a', { vision: 3 })]), false);
+    assert.equal(hasRevisionConsensus([row('a', { vision: 2 }), row('b', { vision: -1 }), row('c', { vision: 3 })]), false);
+    const block = buildRevisionProposalsBlock([row('a', { vision: 2, overall: -1 })]);
+    assert.match(block, /Vision \+2, Overall -1/);
+    assert.equal(buildRevisionProposalsBlock([]), '');
   });
 
   // ── Sanitization ─────────────────────────────────────────────────────────

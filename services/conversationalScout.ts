@@ -13,8 +13,8 @@ import {
   findReferencedDossiers,
   mergeAllCalibratedDossiers,
   serializeProfileForHistory,
+  recordDossierRevision,
   toPlayerSlug,
-  upsertCachedDossier,
 } from './dossierStore';
 import { buildSquadTurnoverQuery, gatherSearchFoundation } from './groundingService';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
@@ -219,7 +219,8 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 
       if (result.revisedDossier && result.dossierPatch) {
         const updatedProfile = applyDossierPatch(targetDossier, result.dossierPatch);
-        upsertCachedDossier(toPlayerSlug(updatedProfile.basicInfo.name), updatedProfile);
+        // The challenger keeps this as their revision; the shared card weighs it at its next re-rating.
+        void recordDossierRevision(targetDossier, updatedProfile, result.replyProse, groundingNotes);
         onDossierUpdated?.(updatedProfile);
       }
 

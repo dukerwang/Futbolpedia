@@ -60,6 +60,9 @@ const serializeCard = (p: PlayerProfile, header: string): string => {
     p.version
       ? `Edition: ${p.version.label} | Evaluated: ${getDossierEvaluationDate(p) ?? 'undated'}`
       : '',
+    p.revision
+      ? `Revision: this user's accepted challenge of the shared card. Stay consistent with it in this conversation; the shared card is unchanged.`
+      : '',
     `Overall: ${p.ratings?.overall} | Potential: ${p.ratings?.potential}`,
     `Archetype: ${p.playstyleAndRole?.playstyle?.archetype} | Best Roles: ${roles}`,
     `${p.goalkeeperAttributes ? 'Goalkeeper Attributes' : 'Attributes'} (0-99): ${attrs}`,

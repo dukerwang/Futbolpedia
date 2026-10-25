@@ -371,6 +371,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                                         Gr.{p.confidence.grade}
                                                     </span>
                                                 )}
+                                                {p.revision && (
+                                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 border border-indigo-500/25 shrink-0" title="Your accepted challenge of the shared card">
+                                                        Your revision
+                                                    </span>
+                                                )}
                                             </div>
                                             <div className="flex items-center gap-1.5 mt-1 text-[10px] font-mono text-charcoal/50 dark:text-cream-400 font-medium">
                                                 <span>{p.evaluationDate || p.version?.evaluationDate || formattedDate}</span>
@@ -595,6 +600,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             {profile.version?.seasonOrEra && (
                                 <span className="text-[10px] font-mono text-charcoal/60 dark:text-cream-400 font-semibold">
                                     Era: {profile.version.seasonOrEra}
+                                </span>
+                            )}
+                            {profile.revision && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30" title="Your accepted challenge of the shared card">
+                                    Your revision
                                 </span>
                             )}
                         </div>
