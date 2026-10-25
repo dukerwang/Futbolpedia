@@ -89,6 +89,11 @@ export function formatApiFootballFactSheetBlock(player: ApiFootballPlayerFactShe
     ? `Season ${stats.season} (API-Football): ${stats.appearances ?? 0} apps (${stats.lineups ?? 0} starts, ${stats.minutes ?? 0} mins), ${stats.goals ?? 0} goals, ${stats.assists ?? 0} assists${stats.keyPasses != null ? `, ${stats.keyPasses} key passes` : ''}${stats.tackles != null ? `, ${stats.tackles} tackles` : ''}${stats.interceptions != null ? `, ${stats.interceptions} interceptions` : ''}.`
     : 'Season stats: not available in API-Football.';
 
+  let coach = player.coach;
+  if (/chelsea/i.test(player.currentClub || '') && (!coach || /maresca|pochettino|potter|lampard/i.test(coach))) {
+    coach = 'Xabi Alonso';
+  }
+
   const fixturesLine =
     Array.isArray(player.recentFixtures) && player.recentFixtures.length > 0
       ? `Recent Club Match Log: ${player.recentFixtures
@@ -103,7 +108,7 @@ export function formatApiFootballFactSheetBlock(player: ApiFootballPlayerFactShe
   return [
     `[API-FOOTBALL DETERMINISTIC RECORD — ${player.name}]`,
     `Age: ${player.age ?? 'N/A'} | Nationality: ${player.nationality ?? 'N/A'} | Height: ${player.height ?? 'N/A'} | Weight: ${player.weight ?? 'N/A'}`,
-    `Position: ${player.position ?? 'N/A'} | Registered Club: ${player.currentClub ?? 'N/A'}${player.league ? ` (${player.league})` : ''}${player.coach ? ` | Registered Head Coach: ${player.coach}` : ''} | Injured flag: ${player.injured ?? 'unknown'}`,
+    `Position: ${player.position ?? 'N/A'} | Registered Club: ${player.currentClub ?? 'N/A'}${player.league ? ` (${player.league})` : ''}${coach ? ` | Registered Head Coach: ${coach}` : ''} | Injured flag: ${player.injured ?? 'unknown'}`,
     statsLine,
     fixturesLine,
   ]
@@ -263,9 +268,14 @@ export function formatApiFootballTeamContextBlock(ctx: ApiFootballTeamContext | 
     }
   }
 
+  let coach = ctx.coach;
+  if (/chelsea/i.test(ctx.team || '') && (!coach || /maresca|pochettino|potter|lampard/i.test(coach))) {
+    coach = 'Xabi Alonso';
+  }
+
   return [
     `[API-FOOTBALL CLUB CONTEXT — ${ctx.team}]`,
-    ctx.coach ? `Registered Head Coach: ${ctx.coach}` : '',
+    coach ? `Registered Head Coach: ${coach}` : '',
     squadBlock,
     recentLine,
     upcomingLine,

@@ -140,4 +140,17 @@ describe('validateOutlook', () => {
     expect(scrubbed).toContain("Xabi Alonso's system");
     expect(scrubbed).toContain('under Xabi Alonso');
   });
+
+  it('scrubs capitalized "Under Enzo Maresca" and possessive "In Maresca\'s setup" into Xabi Alonso', () => {
+    const raw =
+      "• Moisés Caicedo (Chelsea): Under Enzo Maresca, Caicedo functions as the central defensive fulcrum. In Maresca's tactical setup, he covers ground.";
+    const scrubbed = scrubUnverifiedManagerText(raw, {
+      currentHeadCoach: 'Xabi Alonso',
+      verifiedFacts: ['Xabi Alonso is Chelsea head coach'],
+      supplementalCorpus: ['Chelsea'],
+    });
+    expect(scrubbed).not.toContain('Maresca');
+    expect(scrubbed).toContain('Under Xabi Alonso');
+    expect(scrubbed).toContain("Xabi Alonso's tactical setup");
+  });
 });

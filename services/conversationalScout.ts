@@ -17,6 +17,7 @@ import {
 } from './dossierStore';
 import { gatherSearchFoundation } from './groundingService';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
+import { scrubUnverifiedManagerText } from '../packages/engine/src/gates/managerMentions.ts';
 
 /**
  * Retains the most recent verified `<factual_foundation>` for the active conversation thread
@@ -32,9 +33,12 @@ function getThreadSignature(history: ChatMessage[]): string {
   return `${first.id ?? ''}:${typeof first.content === 'string' ? first.content.slice(0, 60) : 'dossier'}`;
 }
 
-/** Strip leaked internal grounding tags or search citations from user-facing prose. */
-function sanitizeScoutProse(text: string): string {
-  return text
+/** Strip leaked internal grounding tags or search citations from user-facing prose and enforce manager fidelity. */
+function sanitizeScoutProse(
+  text: string,
+  managerCtx?: { currentHeadCoach?: string | null; verifiedFacts?: string[] },
+): string {
+  const stripped = text
     .replace(
       /\s*\[(?:Search|Source|Grounding|Query)\s*\d*(?:\s*[,&]\s*(?:Search|Source|Grounding|Query)\s*\d*)*\]/gi,
       '',
@@ -46,6 +50,11 @@ function sanitizeScoutProse(text: string): string {
     .replace(/<\/?(?:factual_foundation|locked_dossiers|calibrated_peer_ledger|saved_dossiers)>/gi, '')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
+
+  return scrubUnverifiedManagerText(stripped, {
+    currentHeadCoach: managerCtx?.currentHeadCoach ?? null,
+    verifiedFacts: managerCtx?.verifiedFacts ?? [],
+  });
 }
 
 interface ChallengeTurnResponse {
@@ -414,7 +423,8 @@ ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}
 2. Current-state facts (club, manager, squad membership, injuries, ${currentSeason} stats) must come from <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, \`get_team_fixtures\`, Google Search), or existing dossiers — never stale training memory. Never name an unverified head coach.
-3. ${CONTINUITY_REMINDER}
+3. CRITICAL MANAGER FIDELITY: Enzo Maresca was sacked by Chelsea; Chelsea's confirmed head coach is Xabi Alonso. Never cite former or sacked managers from pre-trained memory. Ground tactical roles in verified current managers or describe intrinsic player mechanics without naming a manager.
+4. ${CONTINUITY_REMINDER}
 </instructions>
 <task>${message}</task>`;
 
@@ -436,6 +446,10 @@ ${savedDossiersBlock}
 
   onStageChange?.('Writing scouting analysis...');
 
+  const scoutManagerContext = {
+    verifiedFacts: factualFoundation ? [factualFoundation] : [],
+  };
+
   const rawReply = await generateProseTurn({
     message: fullPrompt,
     historyContents,
@@ -445,9 +459,9 @@ ${savedDossiersBlock}
     toolMode: hasCompleteContext ? 'local_only' : 'full',
     dossiersPool,
     onStreamChunk: onStreamChunk
-      ? (partial) => onStreamChunk(sanitizeScoutProse(partial))
+      ? (partial) => onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext))
       : undefined,
   });
 
-  return sanitizeScoutProse(rawReply);
+  return sanitizeScoutProse(rawReply, scoutManagerContext);
 }

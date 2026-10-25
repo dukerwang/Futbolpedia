@@ -172,6 +172,11 @@ async function startServer() {
       }
     }
 
+    // Override known stale / lagged API-Football managerial records
+    if (teamId === 49 || (coach && /maresca|pochettino|potter|lampard/i.test(coach))) {
+      coach = "Xabi Alonso";
+    }
+
     const squad: Array<{ name: string; position: string | null; age: number | null }> =
       squadRes.status === "fulfilled"
         ? (squadRes.value.data?.response?.[0]?.players ?? [])
@@ -348,6 +353,9 @@ async function startServer() {
                   })
                   .catch(() => {});
               }
+            }
+            if (primaryClubId === 49 || /chelsea/i.test(currentClub || '')) {
+              coach = "Xabi Alonso";
             }
           }
         } catch (statsErr) {

@@ -4,13 +4,119 @@ export interface ManagerVerificationContext {
   currentHeadCoach: string | null;
 }
 
+export const KNOWN_STALE_CLUB_MANAGERS: Record<string, { currentCoach: string; stale: string[] }> = {
+  Chelsea: {
+    currentCoach: 'Xabi Alonso',
+    stale: [
+      'Enzo Maresca',
+      'Maresca',
+      'Mauricio Pochettino',
+      'Pochettino',
+      'Graham Potter',
+      'Potter',
+      'Frank Lampard',
+      'Lampard',
+      'Thomas Tuchel',
+      'Tuchel',
+    ],
+  },
+  Liverpool: {
+    currentCoach: 'Arne Slot',
+    stale: ['Jürgen Klopp', 'Jurgen Klopp', 'Klopp'],
+  },
+  'Manchester United': {
+    currentCoach: 'Ruben Amorim',
+    stale: ['Erik ten Hag', 'Ten Hag', 'Ole Gunnar Solskjaer'],
+  },
+  'FC Barcelona': {
+    currentCoach: 'Hansi Flick',
+    stale: ['Xavi Hernandez', 'Xavi'],
+  },
+  'Bayern Munich': {
+    currentCoach: 'Vincent Kompany',
+    stale: ['Thomas Tuchel', 'Julian Nagelsmann'],
+  },
+  Juventus: {
+    currentCoach: 'Thiago Motta',
+    stale: ['Massimiliano Allegri', 'Allegri'],
+  },
+  Napoli: {
+    currentCoach: 'Antonio Conte',
+    stale: ['Walter Mazzarri', 'Rudi Garcia', 'Luciano Spalletti'],
+  },
+  Brighton: {
+    currentCoach: 'Fabian Hürzeler',
+    stale: ['Roberto De Zerbi', 'De Zerbi', 'Graham Potter'],
+  },
+};
+
+export function scrubKnownStaleManagers(text: string): string {
+  if (!text) return text;
+  let result = text;
+
+  for (const [, { currentCoach, stale }] of Object.entries(KNOWN_STALE_CLUB_MANAGERS)) {
+    for (const staleName of stale) {
+      const escaped = staleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      // 1. "Under [Stale]" -> "Under [CurrentCoach]"
+      result = result.replace(
+        new RegExp(`\\b(under)\\s+(?:manager\\s+|head\\s+coach\\s+|coach\\s+)?${escaped}\\b`, 'gi'),
+        (match, prefix: string) => {
+          const isCapital = prefix[0] === prefix[0].toUpperCase();
+          const p = isCapital ? 'Under' : 'under';
+          return `${p} ${currentCoach}`;
+        },
+      );
+
+      // 2. "[Stale]'s" -> "[CurrentCoach]'s"
+      result = result.replace(
+        new RegExp(`\\b${escaped}['’]s\\b`, 'gi'),
+        `${currentCoach}'s`,
+      );
+
+      // 3. "[Stale] deploys / uses / fields" -> "[CurrentCoach] deploys / uses / fields"
+      result = result.replace(
+        new RegExp(
+          `\\b${escaped}\\s+(deploys|uses|fields|plays|favours|favors|prefers|relies on)\\b`,
+          'gi',
+        ),
+        (match, verb) => `${currentCoach} ${verb}`,
+      );
+
+      // 4. "managed by [Stale]" / "coached by [Stale]" -> "managed by [CurrentCoach]"
+      result = result.replace(
+        new RegExp(`\\b(managed by|coached by)\\s+${escaped}\\b`, 'gi'),
+        (match, prefix) => `${prefix} ${currentCoach}`,
+      );
+    }
+  }
+
+  return result;
+}
+
 const UNDER_MANAGER_PATTERN =
-  /\bunder\s+(?:manager\s+|head\s+coach\s+|coach\s+)?([A-Z][a-zA-ZÀ-ÿ'’-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ'’-]+){0,2})/g;
+  /\b(under|managed by|coached by)\s+(?:manager\s+|head\s+coach\s+|coach\s+)?([A-Z][a-zA-ZÀ-ÿ'’-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ'’-]+){0,2})/gi;
 
 const POSSESSIVE_MANAGER_PATTERN =
-  /\b([A-Z][a-zA-ZÀ-ÿ'’-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ'’-]+)?)'s\s+(?:(?:attacking|defensive|tactical|high-pressing|positional)\s+)?(?:rotation|system|setup|approach|tactics|side|structure|philosophy|regime)\b/g;
+  /\b([A-Z][a-zA-ZÀ-ÿ'’-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ'’-]+)?)['’]s\s+(?:(?:attacking|defensive|tactical|high-pressing|positional)\s+)?(?:rotation|system|setup|approach|tactics|side|structure|philosophy|regime)\b/gi;
 
 const NON_MANAGER_PHRASES = new Set([
+  'in',
+  'at',
+  'for',
+  'with',
+  'from',
+  'by',
+  'on',
+  'into',
+  'during',
+  'after',
+  'before',
+  'through',
+  'pressure',
+  'scrutiny',
+  'champions',
+  'league',
   'champions league',
   'premier league',
   'la liga',
@@ -91,11 +197,21 @@ const NON_MANAGER_PHRASES = new Set([
   'ajax',
 ]);
 
+const LEADING_PREPOSITION_REGEX =
+  /^(?:in|at|for|with|from|by|on|under|over|through|during|after|before)\s+/i;
+
+function cleanCandidateName(candidate: string): string {
+  return candidate.replace(LEADING_PREPOSITION_REGEX, '').trim();
+}
+
 function isLikelyPersonName(candidate: string): boolean {
-  const cleaned = candidate.trim();
+  const cleaned = cleanCandidateName(candidate);
   if (!cleaned || cleaned.length < 3) return false;
   const lower = cleaned.toLowerCase();
   if (NON_MANAGER_PHRASES.has(lower)) return false;
+  for (const phrase of NON_MANAGER_PHRASES) {
+    if (phrase.includes(' ') && lower.includes(phrase)) return false;
+  }
   // Must start with an uppercase letter
   if (!/^[A-ZÀ-ÖØ-Þ]/.test(cleaned)) return false;
   const tokens = cleaned.split(/\s+/);
@@ -106,13 +222,15 @@ function isLikelyPersonName(candidate: string): boolean {
 function collectManagerMentions(text: string): string[] {
   const mentions: string[] = [];
   for (const match of text.matchAll(UNDER_MANAGER_PATTERN)) {
-    if (match[1] && isLikelyPersonName(match[1])) {
-      mentions.push(match[1].trim());
+    const rawName = match[2];
+    if (rawName && isLikelyPersonName(rawName)) {
+      mentions.push(cleanCandidateName(rawName));
     }
   }
   for (const match of text.matchAll(POSSESSIVE_MANAGER_PATTERN)) {
-    if (match[1] && isLikelyPersonName(match[1])) {
-      mentions.push(match[1].trim());
+    const rawName = match[1];
+    if (rawName && isLikelyPersonName(rawName)) {
+      mentions.push(cleanCandidateName(rawName));
     }
   }
   return mentions;
@@ -172,33 +290,46 @@ export function scrubUnverifiedManagerText(
   ctx: ManagerVerificationContext,
 ): string {
   if (!text) return text;
+
+  // 1. First, scrub any known stale / sacked managers across major clubs
+  let out = scrubKnownStaleManagers(text);
+
   const corpus = verificationCorpus(ctx);
   const verifiedCoach = ctx.currentHeadCoach?.trim() ?? null;
 
   const isAllowed = (mentioned: string): boolean => {
-    if (!isLikelyPersonName(mentioned)) return true;
+    const cleaned = cleanCandidateName(mentioned);
+    if (!isLikelyPersonName(cleaned)) return true;
     if (verifiedCoach) {
       const verifiedLower = verifiedCoach.toLowerCase();
-      const mentionedLower = mentioned.toLowerCase();
+      const mentionedLower = cleaned.toLowerCase();
       if (mentionedLower === verifiedLower || verifiedLower.includes(mentionedLower)) {
         return true;
       }
     }
-    return isNameVerified(mentioned, corpus);
+    return isNameVerified(cleaned, corpus);
   };
 
-  let out = text.replace(
-    /\bunder\s+(?:manager\s+|head\s+coach\s+|coach\s+)?([A-Z][a-zA-ZÀ-ÿ'’-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ'’-]+){0,2})/g,
-    (fullMatch, name: string) => {
-      if (isAllowed(name.trim())) return fullMatch;
-      return verifiedCoach ? `under ${verifiedCoach}` : 'in the current tactical setup';
+  out = out.replace(
+    /\b(under|managed by|coached by)\s+(?:manager\s+|head\s+coach\s+|coach\s+)?([A-Z][a-zA-ZÀ-ÿ'’-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ'’-]+){0,2})/gi,
+    (fullMatch, prefix: string, name: string) => {
+      const cleaned = cleanCandidateName(name);
+      if (isAllowed(cleaned)) return fullMatch;
+      const isCapital = prefix[0] === prefix[0].toUpperCase();
+      const isUnder = prefix.toLowerCase() === 'under';
+      if (isUnder) {
+        const p = isCapital ? 'Under' : 'under';
+        return verifiedCoach ? `${p} ${verifiedCoach}` : (isCapital ? 'In the current tactical setup' : 'in the current tactical setup');
+      }
+      return verifiedCoach ? `${prefix} ${verifiedCoach}` : 'in the current tactical setup';
     },
   );
 
   out = out.replace(
-    /\b([A-Z][a-zA-ZÀ-ÿ'’-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ'’-]+)?)'s\s+((?:(?:attacking|defensive|tactical|high-pressing|positional)\s+)?(?:rotation|system|setup|approach|tactics|side|structure|philosophy|regime))\b/g,
+    /\b([A-Z][a-zA-ZÀ-ÿ'’-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ'’-]+)?)['’]s\s+((?:(?:attacking|defensive|tactical|high-pressing|positional)\s+)?(?:rotation|system|setup|approach|tactics|side|structure|philosophy|regime))\b/gi,
     (fullMatch, name: string, rest: string) => {
-      if (isAllowed(name.trim())) return fullMatch;
+      const cleaned = cleanCandidateName(name);
+      if (isAllowed(cleaned)) return fullMatch;
       return verifiedCoach ? `${verifiedCoach}'s ${rest}` : `the team's ${rest}`;
     },
   );
