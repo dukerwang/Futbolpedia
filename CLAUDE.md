@@ -18,7 +18,7 @@ TypeScript type-check: `npx tsc --noEmit` (the only errors on a fresh clone are 
 - `API_FOOTBALL_KEY` — API-Football key (used by `server.ts`)
 - `GAFFA_BASE_URL`, `FUTBOLPEDIA_READ_SECRET` — server-only Gaffa integration (see `.env.example`)
 
-Supabase publishable keys are hardcoded (safe for client exposure): Futbolpedia's in `services/dossierStore.ts`, Gaffa's in `services/gaffaAuth.ts`. The Supabase JS client is loaded via a `<script>` tag in `index.html` and accessed at `window.supabase`, not via an npm package.
+Supabase publishable keys are hardcoded (safe for client exposure): Futbolpedia's in `services/dossierCache.ts`, Gaffa's in `services/gaffaAuth.ts`. The Supabase JS client is loaded via a `<script>` tag in `index.html` and accessed at `window.supabase`, not via an npm package.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ A single Express server handles everything:
 ### AI pipeline (`services/`)
 `geminiService.ts` is the entry point (`sendMessageToAI`) and a re-export barrel for older imports. Each turn:
 1. **Route** — `turnRouter.ts` `classifyTurn` tries 0ms regex fast paths (archive, single dossier, compare, challenge, ranking, club tactics), then falls back to a schema-enforced Flash classifier. The result is a `TurnRoute` (`intent`, `analyticalMode`, target players/clubs, search queries).
-2. **Single dossier** — checks the in-conversation dossier, the saved archive, the in-memory calibrated pool, and the Supabase 14-day cache (`dossierStore.ts`), in that order. On a miss, `groundingService.ts` runs API-Football and Google Search grounding in parallel and `dossierSynthesizer.ts` generates the card with `responseSchema`. It then enforces calibration invariants deterministically and scrubs unverified manager mentions.
+2. **Single dossier** — checks the in-conversation dossier, the saved archive, the in-memory calibrated pool, and the Supabase 14-day cache (`dossierCache.ts`), in that order. `dossierStore.ts` is a barrel over the dossier modules: `dossierCards` (card keys, slugs, evaluation dates), `dossierCache` (Supabase cache, versioned archive, sharing, Global Dossier Hub), `dossierContext` (history serialization, references, locked/saved/prior-rating blocks), `dossierLedger` (grep tool, peer ledger) and `dossierPatch`. On a miss, `groundingService.ts` runs API-Football and Google Search grounding in parallel and `dossierSynthesizer.ts` generates the card with `responseSchema`. It then enforces calibration invariants deterministically and scrubs unverified manager mentions.
 3. **Everything else** — `conversationalScout.ts` handles live dossier challenges (structured patch → `applyDossierPatch`) and prose turns (comparisons, debates, rankings, tactics), pre-grounding with search when needed.
 
 `aiClient.ts` wraps `@google/genai`: `generateStructured` (schema JSON), `runGroundedSearch`, and `generateProseTurn` (streaming chat with local tools `grep_saved_dossiers` / `grep_gaffa_market` and network tools backed by the API-Football routes). Per-task model, thinking level and temperature come from `constants/modelProfiles.ts`.
@@ -49,7 +49,7 @@ API-Football and model memory both lag coaching changes. `packages/engine/src/ga
 - `gemini-3.8-flash` rejects `ThinkingLevel.MINIMAL` (HTTP 400); `aiClient.ts` maps the `minimal` tier to `LOW`.
 - `SIMULATION_YEAR` / `SIMULATION_SEASON` (`prompts/scoutCore.ts`) are computed once at module load from the real date via `getRealWorldFootballSeason`, so the system instruction stays byte-stable within a process for Gemini's implicit prompt caching. Per-turn prompts read the date through `getCurrentSeasonInfo()`.
 - The EAFC playstyle directory is only injected when the query matches an EAFC pattern — `buildConversationalScoutInstruction(includeEAFC)` controls this.
-- `CALIBRATION_EPOCH_MS` in `dossierStore.ts` invalidates cached dossiers from before the last rating recalibration; bump it when the rating scale changes.
+- `CALIBRATION_EPOCH_MS` in `dossierCache.ts` invalidates cached dossiers from before the last rating recalibration; bump it when the rating scale changes.
 
 ### Frontend State
 `App.tsx` manages all state via React hooks. Two persistence layers:
