@@ -1,7 +1,21 @@
 import { Type } from '@google/genai';
-import type { Attributes, GoalkeeperAttributes, PlayerProfile } from '../types';
+import type {
+  AgeCurveOutlook,
+  AgeCurvePhase,
+  ArchetypeAnalysis,
+  Attributes,
+  DefiningMoment,
+  DossierConfidence,
+  DossierVersion,
+  DossierVersionType,
+  GoalkeeperAttributes,
+  PlayerProfile,
+  ScoutingDebate,
+} from '../types';
 import {
+  ATTRIBUTE_KEYS,
   CANONICAL_POSITIONS,
+  GK_ATTRIBUTE_LABELS,
   normalizeClub,
   normalizePosition,
   TIER_BAND_IDS,
@@ -16,78 +30,31 @@ import {
   type FutbolpediaVerifiedFacts,
 } from './profileManagerGrounding';
 import type { ApiFootballPlayerFactSheet } from './groundingService';
-import { toBasePlayerSlug } from './dossierStore';
+import { EDITION_NAME_RE, isValidEvaluationDate, todayIso, toBasePlayerSlug } from './dossierCards';
 
 const OUTFIELD_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
-  properties: {
-    finishing: { type: Type.NUMBER },
-    firstTouch: { type: Type.NUMBER },
-    dribbling: { type: Type.NUMBER },
-    vision: { type: Type.NUMBER },
-    retention: { type: Type.NUMBER },
-    combinationPlay: { type: Type.NUMBER },
-    delivery: { type: Type.NUMBER },
-    progressivePassing: { type: Type.NUMBER },
-    footballIQ: { type: Type.NUMBER },
-    offensivePositioning: { type: Type.NUMBER },
-    defensivePositioning: { type: Type.NUMBER },
-    tackling: { type: Type.NUMBER },
-    interceptions: { type: Type.NUMBER },
-    pressingIntensity: { type: Type.NUMBER },
-    speed: { type: Type.NUMBER },
-    acceleration: { type: Type.NUMBER },
-    agility: { type: Type.NUMBER },
-    strength: { type: Type.NUMBER },
-    aerialProwess: { type: Type.NUMBER },
-    stamina: { type: Type.NUMBER },
-    composure: { type: Type.NUMBER },
-    clutch: { type: Type.NUMBER },
-    leadership: { type: Type.NUMBER },
-    consistency: { type: Type.NUMBER },
-    flair: { type: Type.NUMBER },
-  },
-  required: [
-    'finishing',
-    'firstTouch',
-    'dribbling',
-    'vision',
-    'retention',
-    'combinationPlay',
-    'delivery',
-    'progressivePassing',
-    'footballIQ',
-    'offensivePositioning',
-    'defensivePositioning',
-    'tackling',
-    'interceptions',
-    'pressingIntensity',
-    'speed',
-    'acceleration',
-    'agility',
-    'strength',
-    'aerialProwess',
-    'stamina',
-    'composure',
-    'clutch',
-    'leadership',
-    'consistency',
-    'flair',
-  ],
+  properties: Object.fromEntries(ATTRIBUTE_KEYS.map((key) => [key, { type: Type.NUMBER }])),
+  required: [...ATTRIBUTE_KEYS],
 };
 
 const GK_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
-  properties: {
-    reflexes: { type: Type.NUMBER },
-    handling: { type: Type.NUMBER },
-    distribution: { type: Type.NUMBER },
-    commandOfArea: { type: Type.NUMBER },
-    GKpositioning: { type: Type.NUMBER },
-    sweeping: { type: Type.NUMBER },
-    ballPlaying: { type: Type.NUMBER },
-  },
+  properties: Object.fromEntries(
+    Object.keys(GK_ATTRIBUTE_LABELS).map((key) => [key, { type: Type.NUMBER }]),
+  ),
 };
+
+const DOSSIER_VERSION_TYPES: DossierVersionType[] = ['current', 'prime', 'season_snapshot', 'retro'];
+
+/** Career phases in age order, with the oldest age each one covers when the model's is unusable. */
+const AGE_CURVE_PHASES: Array<[AgeCurvePhase, number]> = [
+  ['Emergent Runway', 21],
+  ['Prime Ascent', 25],
+  ['Apex Window', 30],
+  ['Post-Peak Adaptation', 34],
+  ['Late Career Mastery', Infinity],
+];
 
 export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
   type: Type.OBJECT,
@@ -99,7 +66,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
       properties: {
         type: {
           type: Type.STRING,
-          enum: ['current', 'prime', 'season_snapshot', 'retro'],
+          enum: DOSSIER_VERSION_TYPES,
           description: 'Card edition type.',
         },
         label: {
@@ -311,13 +278,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
       properties: {
         phase: {
           type: Type.STRING,
-          enum: [
-            'Emergent Runway',
-            'Prime Ascent',
-            'Apex Window',
-            'Post-Peak Adaptation',
-            'Late Career Mastery',
-          ],
+          enum: AGE_CURVE_PHASES.map(([phase]) => phase),
           description: 'Current phase on the career trajectory arc.',
         },
         trajectoryNote: {
@@ -362,13 +323,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
 };
 
 interface RawSynthesizedProfile {
-  version?: {
-    type?: 'current' | 'prime' | 'season_snapshot' | 'retro';
-    label?: string;
-    evaluationDate?: string;
-    seasonOrEra?: string;
-    peakContext?: string | null;
-  };
+  version?: Partial<Omit<DossierVersion, 'id'>>;
   calibration?: {
     tierBand: TierBandId;
     peerBenchmark: string;
@@ -399,62 +354,17 @@ interface RawSynthesizedProfile {
     bestRoles?: string[];
   };
   latestUpdate?: string;
-  confidence?: {
-    grade?: 'A' | 'B' | 'C';
-    sampleSize?: string;
-    dataGaps?: string[];
-    verdict?: string;
-  };
-  scoutingDebate?: {
-    caseForHigher?: string;
-    caseForLower?: string;
-  };
-  archetypeAnalysis?: {
-    playsLikeBlend?: string;
-    holisticProjection?: string;
-    playstyleTags?: string[];
-    tacticalSynergy?: string;
-    tacticalKryptonite?: string;
-  };
-  ageCurve?: {
-    phase?: 'Emergent Runway' | 'Prime Ascent' | 'Apex Window' | 'Post-Peak Adaptation' | 'Late Career Mastery';
-    trajectoryNote?: string;
-  };
-  definingMoments?: Array<{
-    year?: string;
-    title?: string;
-    description?: string;
-  }>;
+  confidence?: Partial<DossierConfidence>;
+  scoutingDebate?: Partial<ScoutingDebate>;
+  archetypeAnalysis?: Partial<ArchetypeAnalysis>;
+  ageCurve?: Partial<AgeCurveOutlook>;
+  definingMoments?: Array<Partial<DefiningMoment>>;
 }
 
 export const createDefaultProfile = (): PlayerProfile => {
-  const defaultAttributes: Attributes = {
-    finishing: 0,
-    firstTouch: 0,
-    dribbling: 0,
-    vision: 0,
-    retention: 0,
-    combinationPlay: 0,
-    delivery: 0,
-    progressivePassing: 0,
-    footballIQ: 0,
-    offensivePositioning: 0,
-    defensivePositioning: 0,
-    tackling: 0,
-    interceptions: 0,
-    pressingIntensity: 0,
-    speed: 0,
-    acceleration: 0,
-    agility: 0,
-    strength: 0,
-    aerialProwess: 0,
-    stamina: 0,
-    composure: 0,
-    clutch: 0,
-    leadership: 0,
-    consistency: 0,
-    flair: 0,
-  };
+  const defaultAttributes = Object.fromEntries(
+    ATTRIBUTE_KEYS.map((key) => [key, 0]),
+  ) as Record<keyof Attributes, number>;
   return {
     basicInfo: {
       name: 'N/A',
@@ -483,8 +393,9 @@ export const sanitizeProfileData = (
 ): PlayerProfile => {
   const defaults = createDefaultProfile();
   if (!raw) return defaults;
+  const r = raw as RawSynthesizedProfile;
 
-  const rawBasic = (raw as RawSynthesizedProfile).basicInfo ?? {};
+  const rawBasic = r.basicInfo ?? {};
   const primaryPos = rawBasic.primaryPosition;
   const secondaryPos = rawBasic.secondaryPosition;
   const combinedPosition =
@@ -578,15 +489,16 @@ export const sanitizeProfileData = (
   // Card versioning & temporal dating. Dates are never invented here: a historical card
   // without a valid peak date stays undated and is excluded from the shared database.
   const { year, month, currentSeason } = getCurrentSeasonInfo();
-  const todayIso = new Date().toISOString().split('T')[0];
 
-  const rawVersion = (raw as RawSynthesizedProfile).version;
+  const rawVersion = r.version;
   const inferredType =
-    rawVersion?.type ||
-    (/\b(prime|peak)\b/i.test(sanitized.basicInfo.name) ? 'prime' : 'current');
+    rawVersion?.type || (EDITION_NAME_RE.test(sanitized.basicInfo.name) ? 'prime' : 'current');
   const rawDate = rawVersion?.evaluationDate;
-  const validRawDate = typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && rawDate <= todayIso;
-  const evaluationDate = validRawDate ? (rawDate as string) : inferredType === 'current' ? todayIso : '';
+  const evaluationDate = isValidEvaluationDate(rawDate)
+    ? rawDate
+    : inferredType === 'current'
+      ? todayIso()
+      : '';
 
   const seasonOrEra = rawVersion?.seasonOrEra?.trim() || (inferredType === 'current' ? currentSeason : '');
   const versionLabel =
@@ -608,7 +520,7 @@ export const sanitizeProfileData = (
   };
   if (evaluationDate) sanitized.evaluationDate = evaluationDate;
 
-  const rawCalib = (raw as RawSynthesizedProfile).calibration;
+  const rawCalib = r.calibration;
   if (Array.isArray(rawCalib?.signatureSpikes) && rawCalib.signatureSpikes.length > 0) {
     sanitized.signatureSpikes = rawCalib.signatureSpikes.map(clean);
   }
@@ -620,13 +532,10 @@ export const sanitizeProfileData = (
   }
 
   // Enhanced dossier fields: Confidence & Evidence Grade
-  const rawConf = (raw as RawSynthesizedProfile).confidence;
+  const rawConf = r.confidence;
   if (rawConf) {
-    const rawGrade = rawConf.grade as string;
-    const grade: 'A' | 'B' | 'C' =
-      rawGrade === 'A' || rawGrade === 'B' || rawGrade === 'C' ? rawGrade : 'B';
     sanitized.confidence = {
-      grade,
+      grade: rawConf.grade === 'A' || rawConf.grade === 'C' ? rawConf.grade : 'B',
       sampleSize: clean(rawConf.sampleSize || 'Top-flight competitive sample'),
       dataGaps: Array.isArray(rawConf.dataGaps) ? rawConf.dataGaps.map(clean) : [],
       verdict: clean(rawConf.verdict || 'Evaluation calibrated against position peer baselines.'),
@@ -634,7 +543,7 @@ export const sanitizeProfileData = (
   }
 
   // Scouting Debate (+2 / -2 OVR)
-  const rawDebate = (raw as RawSynthesizedProfile).scoutingDebate;
+  const rawDebate = r.scoutingDebate;
   if (rawDebate && (rawDebate.caseForHigher || rawDebate.caseForLower)) {
     sanitized.scoutingDebate = {
       caseForHigher: clean(
@@ -649,7 +558,7 @@ export const sanitizeProfileData = (
   }
 
   // Archetype Analysis & Holistic Projection
-  const rawArch = (raw as RawSynthesizedProfile).archetypeAnalysis;
+  const rawArch = r.archetypeAnalysis;
   if (rawArch) {
     sanitized.archetypeAnalysis = {
       playsLikeBlend: clean(rawArch.playsLikeBlend || ''),
@@ -663,36 +572,19 @@ export const sanitizeProfileData = (
   }
 
   // Career Curve
-  const rawAge = (raw as RawSynthesizedProfile).ageCurve;
+  const rawAge = r.ageCurve;
   if (rawAge) {
-    const phases = [
-      'Emergent Runway',
-      'Prime Ascent',
-      'Apex Window',
-      'Post-Peak Adaptation',
-      'Late Career Mastery',
-    ];
-    const inferredPhase =
-      sanitized.basicInfo.age <= 21
-        ? 'Emergent Runway'
-        : sanitized.basicInfo.age <= 25
-          ? 'Prime Ascent'
-          : sanitized.basicInfo.age <= 30
-            ? 'Apex Window'
-            : sanitized.basicInfo.age <= 34
-              ? 'Post-Peak Adaptation'
-              : 'Late Career Mastery';
-    const phase = phases.includes(rawAge.phase as string)
-      ? (rawAge.phase as any)
-      : inferredPhase;
+    const byAge =
+      AGE_CURVE_PHASES.find(([, maxAge]) => sanitized.basicInfo.age <= maxAge) ??
+      AGE_CURVE_PHASES[AGE_CURVE_PHASES.length - 1];
     sanitized.ageCurve = {
-      phase,
+      phase: AGE_CURVE_PHASES.find(([phase]) => phase === rawAge.phase)?.[0] ?? byAge[0],
       trajectoryNote: clean(rawAge.trajectoryNote || ''),
     };
   }
 
   // Defining Moments
-  const rawMoments = (raw as RawSynthesizedProfile).definingMoments;
+  const rawMoments = r.definingMoments;
   if (Array.isArray(rawMoments) && rawMoments.length > 0) {
     sanitized.definingMoments = rawMoments
       .filter((m) => m && (m.title || m.year))
@@ -849,7 +741,7 @@ export function applyVersionRules(profile: PlayerProfile, isHistorical: boolean)
   const base = toBasePlayerSlug(profile.basicInfo.name);
 
   if (!isHistorical) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayIso();
     return {
       ...profile,
       evaluationDate: today,
@@ -943,7 +835,7 @@ export async function synthesizePlayerDossier(
   params: SynthesizeDossierParams,
 ): Promise<PlayerProfile> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
-  const currentDateIso = new Date().toISOString().split('T')[0];
+  const currentDateIso = todayIso();
 
   const temporalRules = params.isHistorical
     ? `
