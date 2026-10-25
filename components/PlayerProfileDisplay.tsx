@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import type { PlayerProfile } from '../types';
 import { AttributeTable } from './AttributeTable';
-import { getTierForRating } from '../constants/ratingTiers';
+import { getAttributeLabel, getTierForRating } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -310,7 +310,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
                     key={spike}
                     className="px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-mono text-[11px] font-semibold border border-emerald-200 dark:border-emerald-800/60"
                   >
-                    {spike}
+                    {getAttributeLabel(spike)}
                   </span>
                 ))}
               </div>
@@ -325,7 +325,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
                     key={flaw}
                     className="px-2.5 py-0.5 rounded-full bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 font-mono text-[11px] font-semibold border border-red-200 dark:border-red-800/60"
                   >
-                    {flaw}
+                    {getAttributeLabel(flaw)}
                   </span>
                 ))}
               </div>

@@ -25,6 +25,7 @@ import {
 } from '../services/dossierStore';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
+import { getAttributeLabel } from '../constants/ratingTiers';
 
 const TODAY = new Date().toISOString().split('T')[0];
 const MAY_2020_MS = Date.parse('2020-05-23T15:00:00Z');
@@ -319,6 +320,12 @@ async function main() {
       assert.equal(p.evaluationDate, undefined, String(evaluationDate));
       assert.equal(p.version?.label, 'Prime Zenith');
     }
+  });
+
+  await test('spike and flaw keys have display labels', () => {
+    assert.equal(getAttributeLabel('progressivePassing'), 'Progressive Passing');
+    assert.equal(getAttributeLabel('GKpositioning'), 'GK Positioning');
+    assert.equal(getAttributeLabel('Elite vision'), 'Elite vision');
   });
 
   // ── Version enforcement ──────────────────────────────────────────────────

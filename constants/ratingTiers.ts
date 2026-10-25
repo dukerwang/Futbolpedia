@@ -340,6 +340,12 @@ export const GK_ATTRIBUTE_LABELS: Record<keyof GoalkeeperAttributes, string> = {
   ballPlaying: 'Ball Playing',
 };
 
+/** Display label for an attribute key ("progressivePassing" → "Progressive Passing"). */
+export const getAttributeLabel = (key: string): string =>
+  ATTRIBUTE_LABELS[key as keyof Attributes] ??
+  GK_ATTRIBUTE_LABELS[key as keyof GoalkeeperAttributes] ??
+  key;
+
 export const ATTRIBUTE_CATEGORIES: Record<string, Array<{ key: string; label: string }>> = {
   Technical: [
     { key: 'finishing', label: 'Finishing' },

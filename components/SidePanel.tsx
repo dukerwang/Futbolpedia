@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
-import { getShortTierLabel } from '../constants/ratingTiers';
+import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { getCardKey, isPrimeCard, shareDossierCard } from '../services/geminiService';
@@ -619,7 +619,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                     <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Spikes:</span>
                                     {profile.signatureSpikes.map(spike => (
                                         <span key={spike} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-500/20">
-                                            {spike}
+                                            {getAttributeLabel(spike)}
                                         </span>
                                     ))}
                                 </div>
@@ -629,7 +629,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                     <span className="text-[9px] font-bold uppercase tracking-wider text-red-600 dark:text-red-400">Flaws:</span>
                                     {profile.genuineFlaws.map(flaw => (
                                         <span key={flaw} className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-700 dark:text-red-300 font-mono text-[10px] font-semibold border border-red-500/20">
-                                            {flaw}
+                                            {getAttributeLabel(flaw)}
                                         </span>
                                     ))}
                                 </div>

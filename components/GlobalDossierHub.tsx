@@ -7,7 +7,7 @@ import {
   isPrimeCard,
   shareDossierCard,
 } from '../services/geminiService';
-import { getTierForRating, getShortTierLabel } from '../constants/ratingTiers';
+import { getAttributeLabel, getTierForRating, getShortTierLabel } from '../constants/ratingTiers';
 
 interface GlobalDossierHubProps {
   isOpen: boolean;
@@ -571,7 +571,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                               key={spike}
                               className="px-2 py-0.5 rounded-md bg-emerald-500/5 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-500/20"
                             >
-                              {spike}
+                              {getAttributeLabel(spike)}
                             </span>
                           ))}
                         </div>
