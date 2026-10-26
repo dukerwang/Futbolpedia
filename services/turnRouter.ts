@@ -5,6 +5,7 @@ import { generateStructured, getCurrentSeasonInfo } from './aiClient';
 import {
   findReferencedDossiers,
   isPlayerProfile,
+  isPrimeCard,
   parseRequestedSeason,
   seasonStartYear,
   toPlayerSlug,
@@ -50,6 +51,8 @@ export interface TurnRoute {
   wantsCurrentForm?: boolean;
   wantsRegeneration: boolean;
   needsSearch: boolean;
+  /** An explicit "rerate": a prime card is regenerated from scratch instead of served. */
+  rerate?: boolean;
 }
 
 /** Fills the defaults shared by the local fast-path routes. */
@@ -304,6 +307,8 @@ const hasRegenCue = (msg: string): boolean =>
     msg,
   );
 
+const RERATE_RE = /\bre-?rate\b/i;
+
 const hasHistoricalWordCue = (msg: string): boolean =>
   /\b(prime|peak|all[- ]time|historical)\b/i.test(msg);
 
@@ -446,6 +451,28 @@ async function classifyTurnBase(params: {
   }
 
   const isHistorical = hasHistoricalCue(trimmed);
+
+  // "Rerate <player>" (or "rerate him") regenerates the card from scratch. Only a bare command
+  // takes this path; anything longer goes through the usual routing.
+  if (!hasImage && RERATE_RE.test(trimmed) && !hasCompareCue(trimmed)) {
+    const named = extractCandidatePlayerName(trimmed.replace(RERATE_RE, ' '));
+    const last = conversationDossiers.at(-1);
+    const pronoun = Boolean(named && /^(?:he|him|his)$/i.test(named));
+    const name = pronoun ? last?.basicInfo.name : named;
+    if (name && !/\b(?:he|him|his|they|them|their|it|this|that)\b/i.test(name)) {
+      return buildRoute({
+        intent: 'single_dossier',
+        analyticalMode: 'dossier',
+        targetPlayers: [name],
+        targetClubs: extractReferencedClubs(trimmed),
+        // "Rerate him" re-rates the card he was just shown in.
+        isHistorical: isHistorical || Boolean(pronoun && last && isPrimeCard(last)),
+        wantsRegeneration: true,
+        rerate: true,
+      });
+    }
+  }
+
   const wantsRegeneration = hasRegenCue(trimmed);
   const hasChallenge = hasChallengeOrQuestionCue(trimmed);
   const hasCompare = hasCompareCue(trimmed);

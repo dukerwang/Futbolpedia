@@ -256,6 +256,32 @@ async function main() {
     assert.deepEqual(card.version?.primeWindow, { startSeason: '2009-10', endSeason: '2011-12' });
   });
 
+  await test('"rerate prime" regenerates from scratch; "rate prime" keeps the old card in view', async () => {
+    const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
+    const { CALIBRATION_EPOCH_MS } = await import('../services/dossierStore');
+    const oldPrime: PlayerProfile = {
+      ...sanitizeProfileData({
+        basicInfo: { name: 'Andrés Iniesta', age: 28, nationality: 'Spain', club: 'FC Barcelona', position: 'Central Midfielder' },
+        ratings: { overall: 95, potential: 95 },
+      }),
+      evaluationDate: '2013-06-01',
+      createdAt: CALIBRATION_EPOCH_MS + 1,
+      version: { id: 'andres-iniesta-prime-2013-06-01', type: 'prime', label: 'Prime Zenith (2012-13)', evaluationDate: '2013-06-01', seasonOrEra: '2012-13' },
+    };
+    scenario = { status: 'RETIRED', search: () => '- Summary of the player.' };
+
+    await rate('rate prime Andrés Iniesta', [oldPrime]);
+    assert.match(synthesisPrompt(), /prior_authored_dossiers/);
+
+    calls = [];
+    const card = await rate('rerate prime Andrés Iniesta', [oldPrime]);
+    assert.match(synthesisPrompt(), /HISTORICAL \/ PRIME/);
+    assert.doesNotMatch(synthesisPrompt(), /prior_authored_dossiers/);
+    assert.doesNotMatch(synthesisPrompt(), /Andrés Iniesta \[Prime/);
+    assert.equal(card.version?.type, 'prime');
+    assert.ok(typeof card.rerateAt === 'number' && card.rerateAt > CALIBRATION_EPOCH_MS);
+  });
+
   await test("a prime card's Overall agrees with its peer placement", async () => {
     const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
     const { CALIBRATION_EPOCH_MS } = await import('../services/dossierStore');

@@ -143,6 +143,8 @@ export interface PlayerProfile {
   /** YYYY-MM-DD of the last Latest Update refresh; absent means it dates from the card itself. */
   latestUpdateAsOf?: string;
   createdAt?: number;
+  /** When a prime card was re-rated from scratch (ms); the newest re-rating replaces the shared card. */
+  rerateAt?: number;
   /** Set when this is the user's revision of a shared card rather than the shared card itself */
   revision?: DossierRevision;
   /** Formal card versioning metadata */

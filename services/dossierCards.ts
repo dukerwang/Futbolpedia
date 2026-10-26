@@ -316,16 +316,25 @@ export const getCardKey = (p: PlayerProfile): string =>
   }`;
 
 /**
- * Keeps each player's newest current card, so an archived re-rating never sits next to the
- * live one in locks, peer ledgers or grep results. On equal dates the later entry wins, so list
- * sources from broadest to most local. Prime cards keep their own key.
+ * Keeps each player's newest current card and newest prime card, so an archived re-rating never
+ * sits next to the live one in locks, peer ledgers or grep results. Current cards go by
+ * evaluation date (on equal dates the later entry wins, so list sources from broadest to most
+ * local); prime cards by the latest re-rating, then the latest generated. Season cards keep
+ * their own key, one per season.
  */
 export const latestCardPerPlayer = (cards: PlayerProfile[]): PlayerProfile[] => {
   const byPlayer = new Map<string, PlayerProfile>();
+  const primeRank = (p: PlayerProfile): [number, number] => [p.rerateAt ?? 0, p.createdAt ?? 0];
   for (const p of cards) {
-    const key = isPrimeCard(p) ? getCardKey(p) : `${toBasePlayerSlug(p.basicInfo.name)}:current`;
+    const edition = cardEdition(p);
+    const base = toBasePlayerSlug(p.basicInfo.name);
+    const key =
+      edition === 'current' ? `${base}:current` : edition === 'prime' ? `${base}:prime` : getCardKey(p);
     const existing = byPlayer.get(key);
-    if (existing && (getDossierEvaluationDate(existing) ?? '') > (getDossierEvaluationDate(p) ?? '')) {
+    if (existing && edition === 'prime') {
+      const [a, b] = [primeRank(existing), primeRank(p)];
+      if (a[0] > b[0] || (a[0] === b[0] && a[1] > b[1])) continue;
+    } else if (existing && (getDossierEvaluationDate(existing) ?? '') > (getDossierEvaluationDate(p) ?? '')) {
       continue;
     }
     byPlayer.set(key, p);
