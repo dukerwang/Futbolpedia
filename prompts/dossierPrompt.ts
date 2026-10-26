@@ -23,18 +23,18 @@ You are generating a structured scouting dossier JSON object representing an off
      - Set \`version.peakContext\` to a concise 1–2 sentence analytical note defining what specific trophies, statistical output, and tactical dominance made this the player's career zenith.
 
 1. **Step 1 — Scout Calibration (\`calibration\`):**
-   - Select \`tierBand\` from the Section III scale based on the player's intrinsic footballing quality and global positional standing:
-     - **93–95 (\`93_95_WC_ELITE\`):** #1–2 in the world at their position at their peak, an all-time benchmark at the position, or an apex continental superstar/talisman.
-     - **90–92 (\`90_92_WORLD_CLASS\`):** Undisputed World-Class player and Top 3–5 in the world at their position right now; elite continental focal points sit toward the top of the band. Never drop a genuine top-3 to top-5 positional player into \`87_89_BORDERLINE_WC\` out of reputation lag.
+   - Select \`tierBand\` from the Section III scale by how good a footballer this version of the player is, on one absolute standard across eras and positions. Positional rank, honours and team success are evidence for that judgment, never the criterion: no band is reserved for, or capped at, the best player at a position.
      - **Historical & Modern Parity:** Grade historical peaks and current players on the exact same scale with zero nostalgia bias and zero conservative cap on defenders, defensive midfielders, or goalkeepers.
+     - Never drop a player already performing at world-class level into \`87_89_BORDERLINE_WC\` out of reputation lag.
    - Write \`peerBenchmark\`: name 1–2 real-world same-position peers (preferring calibrated peers from \`<calibrated_peer_ledger>\` when applicable, or indisputable global positional peers in the same tier) with their ratings to lock the exact integer within that tier band.
+   - Fill \`peerPlacement\` from \`<calibrated_peer_ledger>\` (other players only, names exactly as listed, empty arrays when there is no ledger): \`betterThan\` lists the peers this version was a better footballer than, \`levelWith\` those he was as good as, \`notAsGoodAs\` those who were better. Judge who was the better footballer, the same question Overall answers, not who had the better season, more trophies or more dominance over his era. Place every ledger peer at or near his level, not only the easy calls. Your Overall must agree with this placement: above every \`betterThan\` peer, equal to every \`levelWith\` peer, below every \`notAsGoodAs\` peer.
    - List 3–4 \`signatureSpikes\`: the exact attribute keys that define this player's ceiling and best on-pitch qualities.
    - List 2–3 \`genuineFlaws\`: the exact attribute keys that represent genuine limitations or non-strengths in their game.
    - Set \`verifiedCurrentHeadCoach\` ONLY if \`<factual_foundation>\` explicitly confirms the current head coach of the player's current club. Set to \`null\` if unconfirmed, historical, or if sources conflict.
    - **No manager names in card prose:** never name a head coach or manager in \`shortBio\`, \`playstyle.description\`, \`latestUpdate\`, or \`archetypeAnalysis\`. The app attaches the verified manager to the card separately. Describe the tactical setup and the player's role in it instead.
 
 2. **Step 2 — Ratings & Spiky Sub-Archetype Attributes (\`ratings\`, \`attributes\`):**
-   - \`ratings.overall\` MUST sit inside the integer range of your chosen \`calibration.tierBand\` and represent a **position- and archetype-weighted synthesis** of the player's key role attributes (never an unweighted average of all 25 attributes).
+   - \`ratings.overall\` MUST sit inside the integer range of your chosen \`calibration.tierBand\` and agree with \`calibration.peerPlacement\`. It is your holistic judgment of how good a footballer he is in the role he played, never an average of the 25 attributes: attributes his role never asked of him barely bear on it.
    - Rate all 25 outfield attributes (and \`goalkeeperAttributes\` if and only if \`primaryPosition\` is \`Goalkeeper\`) independently on their own merit using the Section IV Attribute Disambiguation Matrix:
      - Your \`signatureSpikes\` must spike visibly high.
      - Your \`genuineFlaws\` and non-role attributes must stay honestly low (Protocol R: never flatten attributes into a narrow band around the Overall; a high Overall never drags weak attributes up).

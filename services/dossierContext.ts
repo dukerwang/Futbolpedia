@@ -70,6 +70,15 @@ const serializeCard = (p: PlayerProfile, header: string): string => {
       ? `Revision: this user's accepted challenge of the shared card. Stay consistent with it in this conversation; the shared card is unchanged.`
       : '',
     `Overall: ${p.ratings?.overall} | Potential: ${p.ratings?.potential}`,
+    p.peerPlacement
+      ? [
+          p.peerPlacement.betterThan.length ? `Rated above: ${p.peerPlacement.betterThan.join(', ')}` : '',
+          p.peerPlacement.levelWith.length ? `Level with: ${p.peerPlacement.levelWith.join(', ')}` : '',
+          p.peerPlacement.notAsGoodAs.length ? `Rated below: ${p.peerPlacement.notAsGoodAs.join(', ')}` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ')
+      : '',
     `Archetype: ${p.playstyleAndRole?.playstyle?.archetype} | Best Roles: ${roles}`,
     `${p.goalkeeperAttributes ? 'Goalkeeper Attributes' : 'Attributes'} (0-99): ${attrs}`,
     p.strengths?.length ? `Strengths: ${p.strengths.join(' ')}` : '',
