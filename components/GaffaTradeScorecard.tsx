@@ -9,6 +9,39 @@ const VERDICT_LABEL: Record<GaffaTradeVerdict, string> = {
   take: 'Take',
 };
 
+const VERDICT_ORDER: GaffaTradeVerdict[] = ['hold', 'lean_hold', 'toss_up', 'lean_take', 'take'];
+
+const VERDICT_TONE: Record<GaffaTradeVerdict, string> = {
+  hold: 'bg-amber-500',
+  lean_hold: 'bg-amber-400',
+  toss_up: 'bg-charcoal/60 dark:bg-cream-300',
+  lean_take: 'bg-emerald-400',
+  take: 'bg-emerald-500',
+};
+
+/** Five-step hold → take strip so the call reads at a glance, before the reader parses the scores. */
+function VerdictScale({ verdict }: { verdict: GaffaTradeVerdict }) {
+  const active = VERDICT_ORDER.indexOf(verdict);
+  return (
+    <div className="mt-3" aria-label={`Verdict: ${VERDICT_LABEL[verdict]}`}>
+      <div className="grid grid-cols-5 gap-1">
+        {VERDICT_ORDER.map((v, i) => (
+          <span
+            key={v}
+            className={`h-1.5 transition-colors ${
+              i === active ? VERDICT_TONE[v] : 'bg-charcoal/10 dark:bg-cream-400/15'
+            }`}
+          />
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between text-[9px] font-sans font-bold uppercase tracking-widest text-charcoal/40 dark:text-cream-400/45">
+        <span>Hold</span>
+        <span>Take</span>
+      </div>
+    </div>
+  );
+}
+
 function ScoreTicks({ value }: { value: number }) {
   const n = Math.max(1, Math.min(5, Math.round(value)));
   return (
@@ -90,7 +123,7 @@ export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = 
   ].filter((n) => n.text);
 
   return (
-    <div className="border border-cream-300 dark:border-charcoal-border bg-cream-50/60 dark:bg-charcoal-surface/60 px-4 py-3">
+    <div className="border border-cream-300 dark:border-charcoal-border bg-cream-50/60 dark:bg-charcoal-surface/60 px-3.5 py-3 sm:px-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/50">
@@ -110,14 +143,16 @@ export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = 
         </span>
       </div>
 
-      <p className="mt-1.5 text-sm font-serif text-charcoal dark:text-cream-100">
+      <VerdictScale verdict={card.verdict} />
+
+      <p className="mt-3 text-sm font-serif text-charcoal dark:text-cream-100 break-words">
         {card.outgoing}
         <span className="text-charcoal/45 dark:text-cream-400/45"> ({card.outgoing_club})</span>
-        {outCash}
+        {outCash && <span className="whitespace-nowrap">{outCash}</span>}
         <span className="text-charcoal/35 dark:text-cream-400/35"> → </span>
         {card.incoming}
         <span className="text-charcoal/45 dark:text-cream-400/45"> ({card.incoming_club})</span>
-        {cash}
+        {cash && <span className="whitespace-nowrap">{cash}</span>}
       </p>
 
       {card.roster_capacity_note && (
@@ -126,7 +161,7 @@ export const GaffaTradeScorecardView: React.FC<{ card: GaffaTradeScorecard }> = 
         </p>
       )}
 
-      <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-3">
         <ScoreCell label="Replacement" hint="Higher → take" value={card.replacement} />
         <ScoreCell label="Coverage" hint="Higher → take" value={card.coverage} />
         <ScoreCell label="Cash" hint="Higher → take" value={card.cash_deployable} />
