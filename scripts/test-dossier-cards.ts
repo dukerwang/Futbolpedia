@@ -19,6 +19,7 @@ import {
   isPrimeCard,
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
+  latestCardPerPlayer,
   resolveSavedDossiersForRequest,
   toBasePlayerSlug,
   toDossierCardSlug,
@@ -39,7 +40,10 @@ import {
   seasonSpan,
   formatPrimeWindow,
 } from '../services/dossierStore';
-import { extractCandidatePlayerName } from '../services/turnRouter';
+import { classifyTurn, extractCandidatePlayerName } from '../services/turnRouter';
+import { SCOUT_CORE_INSTRUCTION } from '../prompts/scoutCore';
+import { CONVERSATIONAL_SCOUT_MANDATE } from '../prompts/chatPrompt';
+import { DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION } from '../prompts/dossierPrompt';
 import { groundingShowsRetirement, parseCareerStatus } from '../services/groundingService';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
@@ -763,6 +767,57 @@ async function main() {
     assert.equal(applyVersionRules(prime, true, '2005-06').version?.primeWindow, undefined);
     assert.equal(applyVersionRules(prime, false).version?.primeWindow, undefined);
     assert.deepEqual(applyVersionRules(prime, true).version?.primeWindow, prime.version?.primeWindow);
+  });
+
+  // ── Prime rerate ────────────────────────────────────────────────────────
+
+  const route = (message: string, conversationDossiers: PlayerProfile[] = []) =>
+    classifyTurn({ message, history: [], conversationDossiers, hasImage: false });
+
+  await test('"rerate prime <player>" regenerates the prime card', async () => {
+    const r = await route('rerate prime Ronaldinho');
+    assert.equal(r.intent, 'single_dossier');
+    assert.equal(r.rerate, true);
+    assert.equal(r.isHistorical, true);
+    assert.equal(r.wantsRegeneration, true);
+    assert.match(r.targetPlayers[0], /Ronaldinho/);
+    assert.equal((await route('Re-rate prime Thierry Henry')).rerate, true);
+  });
+
+  await test('"rate prime <player>" is an ordinary request', async () => {
+    const r = await route('rate prime Ronaldinho');
+    assert.equal(r.intent, 'single_dossier');
+    assert.ok(!r.rerate);
+    assert.equal(r.wantsRegeneration, false);
+  });
+
+  await test('"rerate him" re-rates the card just shown, in its edition', async () => {
+    const shown = primeCard('Ronaldinho', '2006-05-17');
+    const r = await route('rerate him', [shown]);
+    assert.equal(r.rerate, true);
+    assert.deepEqual(r.targetPlayers, ['Ronaldinho']);
+    assert.equal(r.isHistorical, true);
+  });
+
+  await test('a re-rated prime card replaces the old one in pools', () => {
+    const old = primeCard('Ronaldinho', '2006-05-17', { createdAt: 2_000 });
+    const rerated = primeCard('Ronaldinho', '2005-05-29', { createdAt: 1_000, rerateAt: 5_000 });
+    const season = card('Ronaldinho', {
+      evaluationDate: '2002-06-30',
+      version: { id: 'r-s', type: 'season_snapshot', label: 'Season (2001-02)', evaluationDate: '2002-06-30', seasonOrEra: '2001-02' },
+    });
+    const kept = latestCardPerPlayer([rerated, old, season]);
+    assert.equal(kept.length, 2);
+    assert.ok(kept.includes(rerated));
+    assert.ok(kept.includes(season));
+    // Without re-ratings, the later generated prime card wins.
+    assert.deepEqual(latestCardPerPlayer([old, primeCard('Ronaldinho', '2005-05-29', { createdAt: 1_000 })]), [old]);
+  });
+
+  await test('no scouting prompt mentions re-rating', () => {
+    for (const prompt of [SCOUT_CORE_INSTRUCTION, CONVERSATIONAL_SCOUT_MANDATE, DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION]) {
+      assert.doesNotMatch(prompt, /\bre-?rate\b/i);
+    }
   });
 
   console.log(`${passes} passed, ${failures} failed`);
