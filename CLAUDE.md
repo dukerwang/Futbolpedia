@@ -12,7 +12,7 @@ npm start        # Run production server (serves /dist statically)
 
 ```bash
 npm run typecheck   # tsc --noEmit (run `npm ci` in packages/engine first for its vitest types)
-npm test            # offline app checks: scripts/test-dossier-cards.ts, test-gaffa-name-matching.ts, test-club-managers.ts
+npm test            # offline app checks: scripts/test-dossier-cards.ts, test-dossier-pipeline.ts (end-to-end with Gemini faked at fetch), test-gaffa-name-matching.ts, test-club-managers.ts
 cd packages/engine && npm ci && npm test   # outlook engine + manager-fidelity vitest suite
 ```
 
