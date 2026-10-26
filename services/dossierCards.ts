@@ -118,11 +118,57 @@ export const seasonStartYear = (season: string): number | null => {
 };
 
 /**
+ * The first and last season a card covers, as season start years: "2005-06" -> [2005, 2005],
+ * a prime window "2003-06" (2003-04 through 2005-06) -> [2003, 2005], a calendar year "1962" ->
+ * [1962, 1962]. Null when unreadable.
+ */
+export const seasonSpan = (seasonOrEra: string | null | undefined): [number, number] | null => {
+  const m = seasonOrEra?.trim().match(/^((?:19|20)\d{2})(?:\s*[-/–]\s*(\d{2}|\d{4}))?$/);
+  if (!m) return null;
+  const start = Number(m[1]);
+  if (!m[2]) return [start, start];
+  let end = Number(m[2].length === 2 ? `${m[1].slice(0, 2)}${m[2]}` : m[2]);
+  if (end < start) end += 100;
+  if (end === start) return [start, start];
+  return end === start + 1 ? [start, start] : [start, end - 1];
+};
+
+/**
+ * A prime window from its first and last season ("2003-04", "2005-06" -> "2003-06"; one season
+ * stays as it is). Calendar-year seasons ("1958", "1962") give "1958-1962". Null when either end
+ * is unreadable or the window runs backwards.
+ */
+export const formatPrimeWindow = (
+  startSeason: string | null | undefined,
+  endSeason: string | null | undefined,
+): { seasonOrEra: string; seasons: number } | null => {
+  const isSeason = (s: string) => {
+    const span = seasonSpan(s);
+    return /^\d{4}-\d{2}$/.test(s) && span !== null && span[0] === span[1];
+  };
+  const isYear = (s: string) => /^(?:19|20)\d{2}$/.test(s);
+  const a = startSeason?.trim().replace(/[/–]/g, '-') ?? '';
+  const b = endSeason?.trim().replace(/[/–]/g, '-') ?? '';
+  if (!(isSeason(a) || isYear(a)) || !(isSeason(b) || isYear(b))) return null;
+  const from = seasonStartYear(a)!;
+  const to = seasonStartYear(b)!;
+  if (to < from) return null;
+  if (a === b) return { seasonOrEra: a, seasons: 1 };
+  const seasons = to - from + 1;
+  const seasonOrEra =
+    isYear(a) && isYear(b) ? `${from}-${to}` : `${from}-${String(to + 1).slice(2)}`;
+  return { seasonOrEra, seasons };
+};
+
+/**
  * Whether a card's season describes the requested one. A range must match exactly; a bare
- * year matches either season it touches ("2006" matches 2005-06 and 2006-07).
+ * year matches either season it touches ("2006" matches 2005-06 and 2006-07). A prime window
+ * spanning several seasons is its own version and never stands in for one of them.
  */
 export const seasonMatches = (seasonOrEra: string | null | undefined, requested: string): boolean => {
   if (!seasonOrEra) return false;
+  const span = seasonSpan(seasonOrEra);
+  if (span && span[1] > span[0]) return false;
   const cardStart = seasonStartYear(seasonOrEra);
   const reqStart = seasonStartYear(requested);
   if (cardStart == null || reqStart == null) return false;

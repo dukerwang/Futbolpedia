@@ -18,6 +18,8 @@ interface Scenario {
   status: string;
   /** Digest text returned by grounded searches. */
   search: (query: string) => string;
+  /** The prime window the model returns, given the synthesis prompt. */
+  window?: (prompt: string) => { startSeason: string; endSeason: string };
   /** The model's peer placement on the synthesized card. */
   placement?: { betterThan: string[]; levelWith: string[]; notAsGoodAs: string[] };
 }
@@ -39,8 +41,15 @@ function fakeProfile(prompt: string) {
   const today = new Date().toISOString().slice(0, 10);
   const version = prompt.includes('SEASON DATED CARD')
     ? { type: 'season_snapshot', label: 'Season (2005-06)', evaluationDate: '2006-05-17', seasonOrEra: '2005-06', peakContext: 'Season note.' }
-    : prompt.includes('HISTORICAL / PEAK')
-      ? { type: 'prime', label: 'Prime Zenith (2011-12)', evaluationDate: '2012-05-25', seasonOrEra: '2011-12', peakContext: 'Peak note.' }
+    : prompt.includes('HISTORICAL / PRIME')
+      ? {
+          type: 'prime',
+          label: 'Prime Zenith (2011-12)',
+          evaluationDate: '2012-05-25',
+          seasonOrEra: '2011-12',
+          peakContext: 'Peak note.',
+          ...(scenario.window ? { primeWindow: scenario.window(prompt) } : {}),
+        }
       : { type: 'current', label: 'Current Form', evaluationDate: today, seasonOrEra: '2026-27', peakContext: null };
   return {
     calibration: {
@@ -157,7 +166,7 @@ async function main() {
     const card = await rate('Rate Andrés Iniesta');
     assert.equal(statusCalls().length, 1);
     assert.ok((statusCalls()[0].maxOutputTokens ?? 0) >= 100, 'status check leaves room for thinking tokens');
-    assert.match(synthesisPrompt(), /HISTORICAL \/ PEAK/);
+    assert.match(synthesisPrompt(), /HISTORICAL \/ PRIME/);
     assert.doesNotMatch(synthesisPrompt(), /CURRENT FORM DATED CARD/);
     assert.equal(card.version?.type, 'prime');
     assert.equal(card.clubManager, undefined);
@@ -173,7 +182,7 @@ async function main() {
           : '- Summary of the player.',
     };
     const card = await rate('Rate Xavi Hernández');
-    assert.match(synthesisPrompt(), /HISTORICAL \/ PEAK/);
+    assert.match(synthesisPrompt(), /HISTORICAL \/ PRIME/);
     assert.equal(card.version?.type, 'prime');
     assert.equal(card.clubManager, undefined);
   });
@@ -225,6 +234,26 @@ async function main() {
     const fresh = await rate('Rate Pedri', [{ ...saved, latestUpdateAsOf: daysAgo(2) }]);
     assert.equal(fresh.latestUpdate, 'Old news line.');
     assert.equal(calls.length, 0);
+  });
+
+  await test('a prime is a window of seasons, and a career-length window is narrowed', async () => {
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      window: (prompt) =>
+        prompt.includes('validation_retry')
+          ? { startSeason: '2009-10', endSeason: '2011-12' }
+          : { startSeason: '2006-07', endSeason: '2011-12' },
+    };
+    const card = await rate('Rate prime Andrés Iniesta');
+    const syntheses = calls.filter((c) => c.structured && c.prompt.includes('synthesis_instructions'));
+    assert.match(synthesisPrompt(), /THE PRIME IS A WINDOW/);
+    assert.equal(syntheses.length, 2);
+    assert.match(syntheses[1].prompt, /covers 6 seasons/);
+    assert.equal(card.version?.type, 'prime');
+    assert.equal(card.version?.seasonOrEra, '2009-12');
+    assert.equal(card.version?.label, 'Prime Zenith (2009-12)');
+    assert.deepEqual(card.version?.primeWindow, { startSeason: '2009-10', endSeason: '2011-12' });
   });
 
   await test("a prime card's Overall agrees with its peer placement", async () => {

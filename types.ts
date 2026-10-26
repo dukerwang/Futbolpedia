@@ -68,8 +68,10 @@ export interface DossierVersion {
   type: DossierVersionType;
   label: string;
   evaluationDate: string; // ISO YYYY-MM-DD (e.g. "2026-10-25" or peak snapshot date)
-  seasonOrEra: string; // e.g. "2026-27" or "2008-09"
+  seasonOrEra: string; // e.g. "2026-27", "2008-09", or a prime window "2003-06"
   peakContext?: string | null;
+  /** A prime card's window: the first and last season of the player's best stretch (YYYY-YY). */
+  primeWindow?: { startSeason: string; endSeason: string } | null;
 }
 
 export type EvidenceGrade = 'A' | 'B' | 'C';

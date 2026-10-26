@@ -32,7 +32,14 @@ import {
   type FutbolpediaVerifiedFacts,
 } from './profileManagerGrounding';
 import type { ApiFootballPlayerFactSheet } from './groundingService';
-import { EDITION_NAME_RE, isValidEvaluationDate, seasonMatches, todayIso, toBasePlayerSlug } from './dossierCards';
+import {
+  EDITION_NAME_RE,
+  formatPrimeWindow,
+  isValidEvaluationDate,
+  seasonMatches,
+  todayIso,
+  toBasePlayerSlug,
+} from './dossierCards';
 import { applyPeerPlacement } from './ratingPlacement';
 
 const OUTFIELD_ATTRIBUTES_SCHEMA = {
@@ -75,22 +82,34 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         label: {
           type: Type.STRING,
           description:
-            "Card title label: 'Current Form (<Mon> <Year>)', 'Prime Zenith (<Season>)' or 'Season (<Season>)'.",
+            "Card title label: 'Current Form (<Mon> <Year>)', 'Prime Zenith (<Window>)' or 'Season (<Season>)'.",
         },
         evaluationDate: {
           type: Type.STRING,
           description:
-            'Exact ISO date (YYYY-MM-DD) of this evaluation snapshot (current system date for active players, or verified career peak date for prime players).',
+            'Exact ISO date (YYYY-MM-DD) of this evaluation snapshot (current system date for active players, or a verified date from the last season of the prime window for prime players).',
         },
         seasonOrEra: {
           type: Type.STRING,
-          description: 'Season or era string formatted YYYY-YY.',
+          description:
+            'Season formatted YYYY-YY. For a prime card, the window from its first season to its last (YYYY-YY for one season).',
+        },
+        primeWindow: {
+          type: Type.OBJECT,
+          nullable: true,
+          description:
+            'Prime cards only: the first and last season of the stretch when the player was at his best, each formatted YYYY-YY (YYYY for calendar-year leagues), the same season twice for a one-season prime. Null for current and season cards.',
+          properties: {
+            startSeason: { type: Type.STRING },
+            endSeason: { type: Type.STRING },
+          },
+          required: ['startSeason', 'endSeason'],
         },
         peakContext: {
           type: Type.STRING,
           nullable: true,
           description:
-            'For prime/peak dossiers: concise analytical explanation of why this was their career zenith (honors, trophies, role). Null for current players.',
+            'For prime dossiers: concise analytical explanation of why this stretch was the player at his best (his level, role and the evidence for it). Null for current players.',
         },
       },
       required: ['type', 'label', 'evaluationDate', 'seasonOrEra'],
@@ -518,14 +537,22 @@ export const sanitizeProfileData = (
       ? todayIso()
       : '';
 
-  const seasonOrEra = rawVersion?.seasonOrEra?.trim() || (inferredType === 'current' ? currentSeason : '');
+  // A prime card's window comes from its first and last season; one season is a window too.
+  const rawSeason = rawVersion?.seasonOrEra?.trim() ?? '';
+  const window =
+    inferredType === 'prime'
+      ? formatPrimeWindow(rawVersion?.primeWindow?.startSeason, rawVersion?.primeWindow?.endSeason) ??
+        formatPrimeWindow(rawSeason, rawSeason)
+      : null;
+  const seasonOrEra =
+    window?.seasonOrEra || rawSeason || (inferredType === 'current' ? currentSeason : '');
   const versionLabel =
-    rawVersion?.label?.trim() ||
-    (inferredType === 'current'
-      ? `Current Form (${month} ${year})`
-      : seasonOrEra
+    inferredType === 'prime'
+      ? seasonOrEra
         ? `Prime Zenith (${seasonOrEra})`
-        : 'Prime Zenith');
+        : 'Prime Zenith'
+      : rawVersion?.label?.trim() ||
+        (inferredType === 'current' ? `Current Form (${month} ${year})` : 'Prime Zenith');
   const peakContext = rawVersion?.peakContext?.trim() || null;
 
   sanitized.version = {
@@ -535,6 +562,14 @@ export const sanitizeProfileData = (
     evaluationDate,
     seasonOrEra: clean(seasonOrEra),
     peakContext: peakContext ? clean(peakContext) : null,
+    ...(window
+      ? {
+          primeWindow: {
+            startSeason: rawVersion?.primeWindow?.startSeason?.trim() || rawSeason,
+            endSeason: rawVersion?.primeWindow?.endSeason?.trim() || rawSeason,
+          },
+        }
+      : {}),
   };
   if (evaluationDate) sanitized.evaluationDate = evaluationDate;
 
@@ -768,6 +803,7 @@ export function applyVersionRules(
       evaluationDate: today,
       version: {
         ...v,
+        primeWindow: undefined,
         id: `${base}-current-${today}`,
         type: 'current',
         evaluationDate: today,
@@ -789,6 +825,7 @@ export function applyVersionRules(
       ...(date ? { evaluationDate: date } : {}),
       version: {
         ...v,
+        primeWindow: undefined,
         id: `${base}-season_snapshot-${date || 'undated'}`,
         type: 'season_snapshot',
         label: season ? `Season (${season})` : 'Season',
@@ -813,6 +850,7 @@ export function applyVersionRules(
         label: 'Prime Zenith',
         evaluationDate: '',
         seasonOrEra: '',
+        primeWindow: undefined,
       },
     };
   }
@@ -825,6 +863,9 @@ export function applyVersionRules(
     },
   };
 }
+
+/** A prime window longer than this is a career, not a version. */
+const MAX_PRIME_WINDOW_SEASONS = 3;
 
 function findSynthesisValidationIssues(
   raw: RawSynthesizedProfile,
@@ -843,6 +884,21 @@ function findSynthesisValidationIssues(
   if (verifiedFacts) {
     const managerIssues = findProfileManagerGroundingIssues(profile, verifiedFacts);
     issues.push(...managerIssues);
+  }
+
+  const primeWindow =
+    profile.version?.type === 'prime'
+      ? formatPrimeWindow(profile.version.primeWindow?.startSeason, profile.version.primeWindow?.endSeason)
+      : null;
+  if (profile.version?.type === 'prime' && !primeWindow) {
+    issues.push(
+      'The prime card has no valid window. Set version.primeWindow to the first and last season (YYYY-YY each) of the stretch when the player was at his best.',
+    );
+  }
+  if (primeWindow && primeWindow.seasons > MAX_PRIME_WINDOW_SEASONS) {
+    issues.push(
+      `A prime is the player's best stretch, not his career: the window ${primeWindow.seasonOrEra} covers ${primeWindow.seasons} seasons. Narrow version.primeWindow to the seasons (at most ${MAX_PRIME_WINDOW_SEASONS}) when he played at his very highest level, and rate that level.`,
+    );
   }
 
   if (profile.version && profile.version.type !== 'current' && !profile.version.evaluationDate) {
@@ -898,11 +954,12 @@ export async function synthesizePlayerDossier(
     - Disregard his ${year} status (retired, manager, veteran) when rating attributes and Overall.`
     : params.isHistorical
     ? `
-    - HISTORICAL / PEAK DATED CARD EVALUATION: Evaluate the player at their ABSOLUTE CAREER ZENITH on the exact same 1–99 scale as modern players (zero nostalgia inflation, zero conservative underselling).
-    - ONE VERSION, NOT A CAREER: This card rates the best version of the player — the footballer he was in his peak season — not his career, longevity, trophy count or legacy. A long career or a full cabinet earns nothing by itself; honours count only as evidence of how good he was at that peak.
-    - PEAK DATING REQUIREMENT: You MUST research and pinpoint the exact peak season and a specific date within it. Set \`version.type\` = "prime", \`version.evaluationDate\` = verified peak date (YYYY-MM-DD), \`version.seasonOrEra\` = peak season formatted YYYY-YY, \`version.label\` = "Prime Zenith (<Season>)", and \`version.peakContext\` = concise 1–2 sentence note explaining the trophies, role, and dominance that defined this zenith.
+    - HISTORICAL / PRIME DATED CARD EVALUATION: Evaluate the player in his prime on the exact same 1–99 scale as modern players (zero nostalgia inflation, zero conservative underselling).
+    - THE PRIME IS A WINDOW: His prime is the stretch of consecutive seasons when he played at his highest level, usually one to three seasons, and a single season only when his best level genuinely lasted one season. Choose it by when he was the best footballer he ever was, not by when his goals, assists, trophies or awards peaked. Rate the level he sustained across that window: his standard as a footballer in those seasons, not one season's spike and not his career, longevity, trophy count or legacy. Honours count only as evidence of how good he was then. The attributes describe him across the window (Consistency is how reliably he played at that level through it).
+    - PRIME DATING REQUIREMENT: Set \`version.type\` = "prime", \`version.primeWindow\` = { startSeason, endSeason } (YYYY-YY each, YYYY for calendar-year leagues; the same season twice for a one-season prime), \`version.seasonOrEra\` = the window from its first season to its last (YYYY-YY for one season), \`version.evaluationDate\` = a verified date from the window's last season (YYYY-MM-DD), \`version.label\` = "Prime Zenith (<Window>)", and \`version.peakContext\` = 1–2 sentences on why this stretch was the player at his best: his level, role and the evidence for it.
+    - basicInfo (club, age) describes him in the window's middle season; name the club he played for through most of it.
     - Rate the peak at the level of footballer he was, using the whole scale: 96–98 when he was among the greatest footballers the game has produced, whatever his position. Being the best at his position that season does not by itself fix a band, and it never caps him at 95; place him against the calibrated peers instead. Do not cap historic defenders or midfielders below attackers of the same ability.
-    - Because a Prime/Peak dossier represents the player's realized peak, set \`ratings.potential\` equal to \`ratings.overall\` (unless their career was cut short before their prime).
+    - Because a prime dossier represents the player's realized peak level, set \`ratings.potential\` equal to \`ratings.overall\` (unless their career was cut short before their prime).
     - Disregard their ${year} status (retired, manager, veteran) when rating attributes and Overall.`
     : `
     - CURRENT FORM DATED CARD EVALUATION (${month} ${year}, Season ${currentSeason}, Date: ${currentDateIso}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <deterministic_bio_record> and <factual_foundation>.
