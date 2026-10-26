@@ -115,6 +115,28 @@ const historyCards = (history: ChatMessage[]): PlayerProfile[] => {
   return out;
 };
 
+const ANNOUNCED_DOSSIER_RE = /^Dossier generated for \*\*(.+?)\*\*/;
+
+/**
+ * The card an AI message announced. The chat shows a one-line stub for a new dossier while the
+ * card lives in the conversation's profiles; the stub carries the card key (older stubs only the
+ * name, which resolves to that player's newest card).
+ */
+export const announcedCard = (
+  msg: ChatMessage,
+  cards: PlayerProfile[],
+): PlayerProfile | undefined => {
+  if (msg.sender !== 'ai' || typeof msg.content !== 'string') return undefined;
+  if (msg.dossierKey) {
+    const hit = cards.find((p) => getCardKey(p) === msg.dossierKey);
+    if (hit) return hit;
+  }
+  const name = msg.content.match(ANNOUNCED_DOSSIER_RE)?.[1];
+  if (!name) return undefined;
+  const folded = foldPlayerName(name);
+  return cards.filter((p) => foldPlayerName(p.basicInfo.name) === folded).at(-1);
+};
+
 export const collectDossiersFromHistory = (history: ChatMessage[]): PlayerProfile[] =>
   historyCards(history).filter(isConfidentDossier);
 
@@ -188,6 +210,8 @@ export const mostRecentlyShownCard = (
       const hit = byKey.get(getCardKey(content));
       if (hit) return hit;
     }
+    const announced = announcedCard(history[i], candidates);
+    if (announced) return announced;
   }
   return undefined;
 };
@@ -279,11 +303,18 @@ export const buildHistoryContents = (
   conversationProfiles: PlayerProfile[] = [],
 ): Content[] => {
   const geminiHistory: Content[] = [];
+  const covered = new Set(historyCards(history).map(getCardKey));
   for (const msg of history.slice(-MAX_HISTORY_TURNS)) {
     const isUser = msg.sender === 'user';
     const parts: Part[] = [];
+    // A dossier stub is replaced by the card it announced, so the model sees the card where
+    // the user saw it.
+    const announced = announcedCard(msg, conversationProfiles.filter(isConfidentDossier));
 
-    if (typeof msg.content === 'string') {
+    if (announced) {
+      parts.push({ text: serializeProfileForHistory(announced) });
+      covered.add(getCardKey(announced));
+    } else if (typeof msg.content === 'string') {
       parts.push({ text: msg.content });
     } else if (isPlayerProfile(msg.content) && !isUser) {
       parts.push({ text: serializeProfileForHistory(msg.content) });
@@ -297,7 +328,6 @@ export const buildHistoryContents = (
   }
 
   // Cards the conversation holds but never posted (e.g. opened from the library) ride along too.
-  const covered = new Set(historyCards(history).map(getCardKey));
   for (const p of conversationProfiles) {
     if (!isConfidentDossier(p) || covered.has(getCardKey(p))) continue;
     geminiHistory.push({ role: 'model', parts: [{ text: serializeProfileForHistory(p) }] });

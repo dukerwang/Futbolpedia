@@ -7,10 +7,12 @@ function unwrapStoredUserText(text: string): string {
   return text.trim();
 }
 
+/** Keeps the opening and the end of a long reply, where its verdict usually sits. */
 function truncate(text: string, max: number): string {
   const t = text.trim();
   if (t.length <= max) return t;
-  return `${t.slice(0, max).trimEnd()}…`;
+  const head = Math.ceil(max * 0.4);
+  return `${t.slice(0, head).trimEnd()} … ${t.slice(t.length - (max - head)).trimStart()}`;
 }
 
 /**

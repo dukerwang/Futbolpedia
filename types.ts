@@ -203,6 +203,8 @@ export interface ChatMessage {
   content: string | PlayerProfile | ReactNode;
   image?: string; // base64 encoded image string
   timestamp?: number;
+  /** Card key of the dossier this AI message announced, so history can carry the card itself. */
+  dossierKey?: string;
   /** Present on Gaffa asset-trade replies after the scorecard path runs. */
   gaffaScorecard?: GaffaTradeScorecard;
 }

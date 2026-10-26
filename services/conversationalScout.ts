@@ -25,6 +25,8 @@ import {
   type VerifiedClubManager,
 } from '../packages/engine/src/gates/managerMentions.ts';
 import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubManagers';
+import { reconcileDossierNumbers } from './dossierNumberGate';
+import { toBasePlayerSlug } from './dossierCards';
 
 /**
  * Retains the most recent verified `<factual_foundation>` for the active conversation thread
@@ -40,10 +42,29 @@ function getThreadSignature(history: ChatMessage[]): string {
   return `${first.id ?? ''}:${typeof first.content === 'string' ? first.content.slice(0, 60) : 'dossier'}`;
 }
 
-/** Strip leaked internal grounding tags or search citations from user-facing prose and enforce manager fidelity. */
+/** Recent string turns of the thread, for finding which players and edition it is about. */
+const recentThreadText = (history: ChatMessage[], count = 6): string =>
+  history
+    .slice(-count)
+    .map((m) => (typeof m.content === 'string' ? m.content : ''))
+    .join('\n');
+
+/**
+ * Whether the thread is about players' primes. A follow-up such as "he wasn't better than him"
+ * names no timeframe, but continues a prime-versus-prime debate.
+ */
+const threadIsHistorical = (route: TurnRoute, history: ChatMessage[]): boolean =>
+  route.isHistorical ||
+  (!route.wantsCurrentForm && /\b(prime|peak|all[- ]time)\b/i.test(recentThreadText(history)));
+
+/**
+ * Strip leaked internal grounding tags or search citations from user-facing prose, enforce
+ * manager fidelity, and put any misquoted attribute of a card in play back to its stored value.
+ */
 function sanitizeScoutProse(
   text: string,
   managerCtx?: { verifiedFacts?: string[]; clubManagers?: VerifiedClubManager[] },
+  cardsInPlay: PlayerProfile[] = [],
 ): string {
   const stripped = text
     .replace(
@@ -58,11 +79,12 @@ function sanitizeScoutProse(
     .replace(/[ \t]+\n/g, '\n')
     .trim();
 
-  return scrubUnverifiedManagerText(stripped, {
+  const scrubbed = scrubUnverifiedManagerText(stripped, {
     currentHeadCoach: null,
     verifiedFacts: managerCtx?.verifiedFacts ?? [],
     clubManagers: managerCtx?.clubManagers ?? [],
   });
+  return reconcileDossierNumbers(scrubbed, cardsInPlay).text;
 }
 
 interface ChallengeTurnResponse {
@@ -181,6 +203,19 @@ export async function runConversationalScout(
       referenced[0] ??
       conversationDossiers[conversationDossiers.length - 1];
 
+    // Every other player the thread is about gets his full card too, in the target's edition,
+    // so a comparison inside a challenge quotes stored numbers instead of regenerating them.
+    const targetSlug = toBasePlayerSlug(targetDossier.basicInfo.name);
+    const otherCards = pickCardPerPlayer(
+      findReferencedDossiers(
+        `${recentThreadText(history)}\n${message}`,
+        mergeAllCalibratedDossiers(savedDossiers, conversationDossiers),
+        route.targetPlayers,
+      ),
+      isPrimeCard(targetDossier),
+    ).filter((p) => toBasePlayerSlug(p.basicInfo.name) !== targetSlug);
+    const challengeThread = buildOngoingThreadBlock(history, { maxAiChars: 2400 });
+
     const challengeManagersPromise = getVerifiedClubManagers([targetDossier.basicInfo.club]);
     let groundingNotes = '';
     if (route.needsSearch) {
@@ -206,19 +241,21 @@ export async function runConversationalScout(
     try {
       const challengeManagers = await challengeManagersPromise;
       const challengePrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
-${ongoingThread}
+${challengeThread}
 ${formatVerifiedManagersBlock(challengeManagers)}
 ${peerLedgerBlock ?? ''}
 <active_dossier>
 ${serializeProfileForHistory(targetDossier)}
 </active_dossier>
+${buildLockedDossiersBlock(otherCards)}
 ${groundingNotes ? `<grounding_verification>\n${groundingNotes}\n</grounding_verification>` : ''}
 <instructions>
 The user is challenging, questioning, or requesting an adjustment to the dossier above.
-1. Evaluate their point honestly against the Scout's Code, the recalibrated Section III Rating Tier Scale (where World-Class starts strictly at 90), and any grounding verification or peer benchmarks above.
-2. If the current dossier rating/attribute is justified, set \`revisedDossier: false\` and defend the rating directly with concrete tactical/statistical reasoning in \`replyProse\`.
-3. If the user makes a valid evidence-backed point (or explicitly asks to adjust a rating/attribute), set \`revisedDossier: true\`, populate \`dossierPatch\` with the exact updated values so the UI card updates live, and explain the revision clearly in \`replyProse\`.
-4. Ensure every number you mention in \`replyProse\` matches either the existing dossier or your \`dossierPatch\`.
+1. Evaluate their point honestly against the Scout's Code, the recalibrated Section III Rating Tier Scale (where World-Class starts strictly at 90), and any grounding verification or peer benchmarks above. Start from what the user actually argued and answer it with evidence; never attribute their view to bias or sentiment.
+2. Check your own earlier replies in <ongoing_thread>. If they ranked these players differently from what the dossiers' Overall ratings show, say so in your opening paragraph before anything else.
+3. If the current dossier rating/attribute is justified, set \`revisedDossier: false\` and explain why with concrete tactical/statistical reasoning in \`replyProse\`, addressing the user's specific argument.
+4. If the user makes a valid evidence-backed point (or explicitly asks to adjust a rating/attribute), set \`revisedDossier: true\`, populate \`dossierPatch\` with the exact updated values so the UI card updates live, and explain the revision clearly in \`replyProse\`.
+5. Ensure every number you mention in \`replyProse\` matches the dossiers above (the active one and any in <locked_dossiers>) or your \`dossierPatch\`. Quote another player's attributes only from his dossier.
 </instructions>
 <user_message>${message}</user_message>`;
 
@@ -230,17 +267,24 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         thinkingLevelOverride: 'low',
       });
 
-      if (result.revisedDossier && result.dossierPatch) {
-        const updatedProfile = applyDossierPatch(targetDossier, result.dossierPatch);
+      const revisedTarget =
+        result.revisedDossier && result.dossierPatch
+          ? applyDossierPatch(targetDossier, result.dossierPatch)
+          : targetDossier;
+      if (revisedTarget !== targetDossier) {
         // The challenger keeps this as their revision; the shared card weighs it at its next re-rating.
-        void recordDossierRevision(targetDossier, updatedProfile, result.replyProse, groundingNotes);
-        onDossierUpdated?.(updatedProfile);
+        void recordDossierRevision(targetDossier, revisedTarget, result.replyProse, groundingNotes);
+        onDossierUpdated?.(revisedTarget);
       }
 
-      const cleanedReply = sanitizeScoutProse(result.replyProse, {
-        verifiedFacts: groundingNotes ? [groundingNotes] : [],
-        clubManagers: challengeManagers,
-      });
+      const cleanedReply = sanitizeScoutProse(
+        result.replyProse,
+        {
+          verifiedFacts: groundingNotes ? [groundingNotes] : [],
+          clubManagers: challengeManagers,
+        },
+        [revisedTarget, ...otherCards],
+      );
       onStreamChunk?.(cleanedReply);
       return cleanedReply;
     } catch (e) {
@@ -252,6 +296,8 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   let factualFoundation = '';
   let effectiveLockedBlock = lockedDossiersBlock;
   let verifiedManagers: VerifiedClubManager[] = [];
+  let cardsInPlay: PlayerProfile[] = [];
+  const isHistoricalThread = threadIsHistorical(route, history);
 
   if (!imageData && route.intent !== 'archive_inventory') {
     const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
@@ -268,10 +314,11 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     matchedCards.push(...findReferencedDossiers(message, allCalibrated, route.targetPlayers));
 
     // One card per player, in the edition this turn is about (current form vs. peak).
-    const lockedCards = pickCardPerPlayer(matchedCards, route.isHistorical);
+    const lockedCards = pickCardPerPlayer(matchedCards, isHistoricalThread);
     if (lockedCards.length > 0) {
       effectiveLockedBlock = buildLockedDossiersBlock(lockedCards);
     }
+    cardsInPlay = lockedCards;
 
     const targetClubs =
       route.targetClubs && route.targetClubs.length > 0
@@ -449,6 +496,12 @@ ${savedDossiersBlock}
     verifiedFacts: factualFoundation ? [factualFoundation] : [],
     clubManagers: verifiedManagers,
   };
+  if (cardsInPlay.length === 0) {
+    cardsInPlay = pickCardPerPlayer(
+      findReferencedDossiers(message, conversationDossiers, route.targetPlayers),
+      isHistoricalThread,
+    );
+  }
 
   const rawReply = await generateProseTurn({
     message: fullPrompt,
@@ -459,9 +512,9 @@ ${savedDossiersBlock}
     toolMode: hasCompleteContext ? 'local_only' : 'full',
     dossiersPool,
     onStreamChunk: onStreamChunk
-      ? (partial) => onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext))
+      ? (partial) => onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay))
       : undefined,
   });
 
-  return sanitizeScoutProse(rawReply, scoutManagerContext);
+  return sanitizeScoutProse(rawReply, scoutManagerContext, cardsInPlay);
 }
