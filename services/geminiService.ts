@@ -13,6 +13,7 @@ import {
   buildHistoryContents,
   buildLockedDossiersBlock,
   buildPositionalPeerLedgerBlock,
+  selectPositionalPeerLedger,
   buildPriorDossierTrajectoryBlock,
   buildRevisionProposalsBlock,
   buildSavedDossiersBlock,
@@ -226,10 +227,14 @@ export const sendMessageToAI = async (
       route.isHistorical,
     ),
   );
-  const peerLedgerBlock = buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers, {
-    targetPlayers: route.targetPlayers,
-    message,
-  });
+  const peerLedgerOptions = { targetPlayers: route.targetPlayers, message };
+  const peerLedger = selectPositionalPeerLedger(savedDossiers, conversationDossiers, peerLedgerOptions);
+  const peerLedgerBlock = buildPositionalPeerLedgerBlock(
+    savedDossiers,
+    conversationDossiers,
+    peerLedgerOptions,
+    peerLedger,
+  );
 
   // 3. Single-Player Dossier Pipeline
   if (route.intent === 'single_dossier') {
@@ -395,12 +400,17 @@ export const sendMessageToAI = async (
     const synthesisLockedBlock = route.wantsRegeneration
       ? ''
       : buildLockedDossiersBlock(freshReferencedDossiers);
+    const synthesisPeerLedgerOptions = { ...peerLedgerOptions, positionHint: grounding.apiPlayer?.position };
+    const synthesisPeerLedger = grounding.apiPlayer?.position
+      ? selectPositionalPeerLedger(savedDossiers, conversationDossiers, synthesisPeerLedgerOptions)
+      : peerLedger;
     const synthesisPeerLedgerBlock = grounding.apiPlayer?.position
-      ? buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers, {
-          targetPlayers: route.targetPlayers,
-          positionHint: grounding.apiPlayer.position,
-          message,
-        })
+      ? buildPositionalPeerLedgerBlock(
+          savedDossiers,
+          conversationDossiers,
+          synthesisPeerLedgerOptions,
+          synthesisPeerLedger,
+        )
       : peerLedgerBlock;
 
     // Challenges count only against the shared card this rating replaces: the newest prior card
@@ -430,6 +440,7 @@ export const sendMessageToAI = async (
       lockedDossiersBlock: synthesisLockedBlock,
       savedDossiersBlock,
       peerLedgerBlock: synthesisPeerLedgerBlock,
+      peerLedgerCards: synthesisPeerLedger,
       priorTrajectoryBlock,
       requestedSeason: season,
     });

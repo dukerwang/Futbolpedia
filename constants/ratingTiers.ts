@@ -25,8 +25,10 @@ export interface RatingTierDefinition {
  * Single source of truth for Futbolpedia's Rating Tier Scale (1-99).
  *
  * Key principles:
- * - Every tier measures intrinsic footballing quality on an absolute historical standard,
- *   never who happens to rank #1 in a single calendar year ("Best in World" is not a tier).
+ * - Every tier measures how good a footballer the player is (or was, for a past version) on one
+ *   absolute, all-era standard. Positional rank, honours and dominance of an era are evidence of
+ *   that level, never the definition of a tier: being the best at a position in a given season
+ *   does not by itself place a player in any band.
  * - The "World-Class" label begins strictly at 90.
  * - Starters below 90 range from Borderline World-Class (87-89) and High-End Starter (84-86)
  *   to Quality Top-Flight Starter (80-83) and Rotational / Average Top-Flight (75-79).
@@ -38,7 +40,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     max: 99,
     label: 'GOAT Status',
     shortLabel: 'GOAT',
-    description: 'Once-in-history footballing peak that defines the sport itself.',
+    description: 'A footballer with no equal in the history of the game: the most complete and decisive player the sport has produced.',
   },
   {
     id: '96_98_ICON',
@@ -47,7 +49,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'Generational Icon',
     shortLabel: 'Generational Icon',
     description:
-      'Historic, era-defining peak that redefines the position across decades. Requires a defined Generational Weapon.',
+      'One of the greatest footballers the game has produced: a level of ability only a handful of players in history have reached, in any position. Higher in the band means a more complete and more decisive footballer.',
   },
   {
     id: '93_95_WC_ELITE',
@@ -56,7 +58,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'World-Class Elite',
     shortLabel: 'World-Class Elite',
     description:
-      'The absolute apex of a position in a given era or an all-time league/continental benchmark: the #1 player in the world at their position at their peak, an all-time standard-bearer at the position, or a Ballon d\'Or-caliber superstar dominating European football. Applies equally to defenders, midfielders, goalkeepers, and attackers.',
+      'Elite footballers of exceptional, all-time-relevant ability: among the very best players of their generation. Applies equally to defenders, midfielders, goalkeepers, and attackers. Not a ceiling for the best player of an era: a footballer better than the players rated 95 belongs above them.',
   },
   {
     id: '90_92_WORLD_CLASS',
@@ -65,7 +67,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'World-Class',
     shortLabel: 'World-Class',
     description:
-      'Undisputed World-Class players at their position globally (typically Top 3–5 in the world in their role). Any player who is already performing as a top-3 to top-5 player in the world at their position for an elite club belongs here at 90–92, never down in Borderline World-Class.',
+      'Undisputed World-Class footballers: at any one time only a small group of players in the world are this good. A player already performing at this level for an elite club belongs here, never down in Borderline World-Class.',
   },
   {
     id: '87_89_BORDERLINE_WC',
@@ -74,7 +76,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'Borderline World-Class',
     shortLabel: 'Borderline World-Class',
     description:
-      'Standout Champions League stars who sit just outside the top 5 at their position globally, or high-level starters who have not yet established top-of-the-position dominance.',
+      'Standout Champions League stars just short of world-class ability, or high-level starters who have not yet reached it.',
   },
   {
     id: '84_86_HIGH_END_STARTER',

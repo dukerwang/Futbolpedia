@@ -122,6 +122,12 @@ export interface DossierRevision {
   revisedAt: number;
 }
 
+export interface PeerPlacement {
+  betterThan: string[];
+  levelWith: string[];
+  notAsGoodAs: string[];
+}
+
 export interface PlayerProfile {
   basicInfo: BasicInfo;
   ratings: Ratings;
@@ -147,6 +153,8 @@ export interface PlayerProfile {
   genuineFlaws?: string[];
   /** Real-world positional peer benchmarks recorded at calibration */
   peerBenchmark?: string;
+  /** Calibrated peers this version was judged better than, level with, or below */
+  peerPlacement?: PeerPlacement;
   /** Evidence grade and sample size evaluation */
   confidence?: DossierConfidence;
   /** Dialectical arguments for higher or lower rating */

@@ -42,6 +42,7 @@ import { groundingShowsRetirement, parseCareerStatus } from '../services/groundi
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
 import { getAttributeLabel, normalizePosition, resolveLiberoPosition } from '../constants/ratingTiers';
+import { applyPeerPlacement, placementRange, resolvePlacement } from '../services/ratingPlacement';
 
 const TODAY = new Date().toISOString().split('T')[0];
 const MAY_2020_MS = Date.parse('2020-05-23T15:00:00Z');
@@ -620,6 +621,74 @@ async function main() {
     // A versioned card keeps its version untouched.
     const prime = primeCard('John Terry', '2005-05-07');
     assert.deepEqual(renameDossierCard(prime, 'JT').version, prime.version);
+  });
+
+  // ── Peer placement ──────────────────────────────────────────────────────
+
+  const rated = (base: PlayerProfile, overall: number): PlayerProfile => ({
+    ...base,
+    ratings: { overall, potential: overall },
+  });
+  const henry = rated(primeCard('Thierry Henry', '2004-05-15'), 95);
+  const neymar = rated(primeCard('Neymar Jr', '2015-06-06'), 95);
+  const neymarNow = rated(currentCard('Neymar Jr', TODAY), 84);
+  const gullit = rated(primeCard('Ruud Gullit', '1988-05-24'), 96);
+  const cruyff = rated(primeCard('Johan Cruyff', '1972-05-31'), 97);
+  const salah = rated(primeCard('Mohamed Salah', '2018-05-26'), 95);
+  const ledger = [cruyff, gullit, henry, neymar, neymarNow, salah];
+
+  await test('better than peers rated 95 lifts a prime card above them', () => {
+    const subject = rated(primeCard('Ronaldinho', '2006-05-17'), 95);
+    const placed = applyPeerPlacement(
+      subject,
+      { betterThan: ['Thierry Henry [Prime 2003-04]', 'Neymar Jr', 'Mohamed Salah'], levelWith: [], notAsGoodAs: ['Johan Cruyff'] },
+      ledger,
+      true,
+    );
+    assert.equal(placed.ratings.overall, 96);
+    assert.equal(placed.ratings.potential, 96);
+    assert.deepEqual(placed.peerPlacement?.betterThan, ['Thierry Henry (2019-20)', 'Neymar Jr (2019-20)', 'Mohamed Salah (2019-20)']);
+    assert.deepEqual(placed.peerPlacement?.notAsGoodAs, ['Johan Cruyff (2019-20)']);
+  });
+
+  await test('a placement that agrees with the Overall changes nothing but is recorded', () => {
+    const subject = rated(primeCard('Kaká', '2007-05-23'), 94);
+    const placed = applyPeerPlacement(subject, { betterThan: [], levelWith: [], notAsGoodAs: ['Thierry Henry'] }, ledger, true);
+    assert.equal(placed.ratings.overall, 94);
+    assert.deepEqual(placed.peerPlacement?.notAsGoodAs, ['Thierry Henry (2019-20)']);
+  });
+
+  await test('level with a peer means the same Overall', () => {
+    const subject = rated(primeCard('Rivaldo', '1999-05-16'), 94);
+    assert.equal(applyPeerPlacement(subject, { betterThan: [], levelWith: ['Henry'], notAsGoodAs: [] }, ledger, true).ratings.overall, 95);
+  });
+
+  await test('no room between two integer ratings allows a tie', () => {
+    const range = placementRange({ betterThan: [henry], levelWith: [], notAsGoodAs: [gullit] });
+    assert.deepEqual(range, { min: 95, max: 96 });
+  });
+
+  await test('a self-contradictory placement leaves the card as rated', () => {
+    const subject = rated(primeCard('Kaká', '2007-05-23'), 94);
+    const placed = applyPeerPlacement(subject, { betterThan: ['Johan Cruyff'], levelWith: [], notAsGoodAs: ['Thierry Henry'] }, ledger, true);
+    assert.equal(placed, subject);
+  });
+
+  await test('placement names resolve to the edition being rated, never to the player himself', () => {
+    const currentSubject = rated(currentCard('Kylian Mbappé', TODAY), 90);
+    assert.deepEqual(resolvePlacement({ betterThan: ['Neymar Jr'], levelWith: [], notAsGoodAs: [] }, ledger, currentSubject).betterThan, [neymarNow]);
+    const primeSubject = rated(primeCard('Kaká', '2007-05-23'), 94);
+    assert.deepEqual(resolvePlacement({ betterThan: ['Neymar Jr'], levelWith: [], notAsGoodAs: [] }, ledger, primeSubject).betterThan, [neymar]);
+    const self = resolvePlacement({ betterThan: ['Mohamed Salah'], levelWith: [], notAsGoodAs: [] }, ledger, rated(currentCard('Mohamed Salah', TODAY), 88));
+    assert.deepEqual(self.betterThan, []);
+  });
+
+  await test('unknown and ambiguous placement names are ignored', () => {
+    const ronaldos = [rated(primeCard('Cristiano Ronaldo', '2014-05-24'), 98), rated(primeCard('Ronaldo Nazário', '1997-05-14'), 97)];
+    const subject = rated(primeCard('Kaká', '2007-05-23'), 94);
+    const resolved = resolvePlacement({ betterThan: ['Ronaldo', 'Somebody Unrated'], levelWith: [], notAsGoodAs: [] }, ronaldos, subject);
+    assert.deepEqual(resolved.betterThan, []);
+    assert.equal(applyPeerPlacement(subject, { betterThan: ['Ronaldo'], levelWith: [], notAsGoodAs: [] }, ronaldos, true), subject);
   });
 
   console.log(`${passes} passed, ${failures} failed`);

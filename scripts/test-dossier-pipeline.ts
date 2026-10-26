@@ -18,6 +18,8 @@ interface Scenario {
   status: string;
   /** Digest text returned by grounded searches. */
   search: (query: string) => string;
+  /** The model's peer placement on the synthesized card. */
+  placement?: { betterThan: string[]; levelWith: string[]; notAsGoodAs: string[] };
 }
 
 interface GeminiCall {
@@ -48,6 +50,7 @@ function fakeProfile(prompt: string) {
       genuineFlaws: ['aerialProwess', 'strength'],
       verifiedCurrentHeadCoach: null,
       conflictingManagerReports: [],
+      peerPlacement: scenario.placement ?? { betterThan: [], levelWith: [], notAsGoodAs: [] },
     },
     basicInfo: {
       name: 'Test Player',
@@ -222,6 +225,32 @@ async function main() {
     const fresh = await rate('Rate Pedri', [{ ...saved, latestUpdateAsOf: daysAgo(2) }]);
     assert.equal(fresh.latestUpdate, 'Old news line.');
     assert.equal(calls.length, 0);
+  });
+
+  await test("a prime card's Overall agrees with its peer placement", async () => {
+    const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
+    const { CALIBRATION_EPOCH_MS } = await import('../services/dossierStore');
+    const peer: PlayerProfile = {
+      ...sanitizeProfileData({
+        basicInfo: { name: 'Peer Maestro', age: 27, nationality: 'Spain', club: 'FC Barcelona', position: 'Central Midfielder' },
+        ratings: { overall: 91, potential: 91 },
+      }),
+      evaluationDate: '2009-05-27',
+      createdAt: CALIBRATION_EPOCH_MS + 1,
+      version: { id: 'peer-maestro-prime-2009-05-27', type: 'prime', label: 'Prime Zenith (2008-09)', evaluationDate: '2009-05-27', seasonOrEra: '2008-09' },
+    };
+    // The fake rates every card 91; the model says this one was the better footballer.
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      placement: { betterThan: ['Peer Maestro [Prime 2008-09]'], levelWith: [], notAsGoodAs: [] },
+    };
+    const card = await rate('Rate Andrés Iniesta', [peer]);
+    assert.match(synthesisPrompt(), /calibrated_peer_ledger[\s\S]*Peer Maestro \[Prime 2008-09\][^\n]*91 OVR/);
+    assert.match(synthesisPrompt(), /peerPlacement/);
+    assert.equal(card.ratings.overall, 92);
+    assert.equal(card.ratings.potential, 92);
+    assert.deepEqual(card.peerPlacement?.betterThan, ['Peer Maestro (2008-09)']);
   });
 
   console.log(`${passes} passed, ${failures} failed`);

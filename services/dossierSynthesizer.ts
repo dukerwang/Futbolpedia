@@ -9,6 +9,7 @@ import type {
   DossierVersion,
   DossierVersionType,
   GoalkeeperAttributes,
+  PeerPlacement,
   PlayerProfile,
   ScoutingDebate,
 } from '../types';
@@ -32,6 +33,7 @@ import {
 } from './profileManagerGrounding';
 import type { ApiFootballPlayerFactSheet } from './groundingService';
 import { EDITION_NAME_RE, isValidEvaluationDate, seasonMatches, todayIso, toBasePlayerSlug } from './dossierCards';
+import { applyPeerPlacement } from './ratingPlacement';
 
 const OUTFIELD_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
@@ -108,6 +110,17 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
           description:
             '1-2 real-world positional peers (with their approximate ratings) that pin down where this player sits inside the tier.',
         },
+        peerPlacement: {
+          type: Type.OBJECT,
+          description:
+            'Who was the better footballer, judged against other players in <calibrated_peer_ledger> (names exactly as listed). Overall must sit above every betterThan peer, equal to every levelWith peer and below every notAsGoodAs peer. Empty arrays when there is no ledger.',
+          properties: {
+            betterThan: { type: Type.ARRAY, items: { type: Type.STRING } },
+            levelWith: { type: Type.ARRAY, items: { type: Type.STRING } },
+            notAsGoodAs: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ['betterThan', 'levelWith', 'notAsGoodAs'],
+        },
         signatureSpikes: {
           type: Type.ARRAY,
           items: { type: Type.STRING },
@@ -133,6 +146,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
       required: [
         'tierBand',
         'peerBenchmark',
+        'peerPlacement',
         'signatureSpikes',
         'genuineFlaws',
         'verifiedCurrentHeadCoach',
@@ -330,6 +344,7 @@ interface RawSynthesizedProfile {
   calibration?: {
     tierBand: TierBandId;
     peerBenchmark: string;
+    peerPlacement?: PeerPlacement;
     signatureSpikes: string[];
     genuineFlaws: string[];
     verifiedCurrentHeadCoach?: string | null;
@@ -862,6 +877,8 @@ export interface SynthesizeDossierParams {
   lockedDossiersBlock: string;
   savedDossiersBlock: string;
   peerLedgerBlock?: string;
+  /** The cards behind peerLedgerBlock, which the model's peer placement is checked against. */
+  peerLedgerCards?: PlayerProfile[];
   priorTrajectoryBlock?: string;
   /** A past season to rate instead of the player's prime ("2005-06" or a bare "2006"). */
   requestedSeason?: string | null;
@@ -884,14 +901,14 @@ export async function synthesizePlayerDossier(
     - HISTORICAL / PEAK DATED CARD EVALUATION: Evaluate the player at their ABSOLUTE CAREER ZENITH on the exact same 1–99 scale as modern players (zero nostalgia inflation, zero conservative underselling).
     - ONE VERSION, NOT A CAREER: This card rates the best version of the player — the footballer he was in his peak season — not his career, longevity, trophy count or legacy. A long career or a full cabinet earns nothing by itself; honours count only as evidence of how good he was at that peak.
     - PEAK DATING REQUIREMENT: You MUST research and pinpoint the exact peak season and a specific date within it. Set \`version.type\` = "prime", \`version.evaluationDate\` = verified peak date (YYYY-MM-DD), \`version.seasonOrEra\` = peak season formatted YYYY-YY, \`version.label\` = "Prime Zenith (<Season>)", and \`version.peakContext\` = concise 1–2 sentence note explaining the trophies, role, and dominance that defined this zenith.
-    - If the player at their peak was the #1 player in the world at their position or an all-time benchmark at it, calibrate them in \`93_95_WC_ELITE\` (94–95) — do not cap historic defenders or midfielders at 91–92.
+    - Rate the peak at the level of footballer he was, using the whole scale: 96–98 when he was among the greatest footballers the game has produced, whatever his position. Being the best at his position that season does not by itself fix a band, and it never caps him at 95; place him against the calibrated peers instead. Do not cap historic defenders or midfielders below attackers of the same ability.
     - Because a Prime/Peak dossier represents the player's realized peak, set \`ratings.potential\` equal to \`ratings.overall\` (unless their career was cut short before their prime).
     - Disregard their ${year} status (retired, manager, veteran) when rating attributes and Overall.`
     : `
     - CURRENT FORM DATED CARD EVALUATION (${month} ${year}, Season ${currentSeason}, Date: ${currentDateIso}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <deterministic_bio_record> and <factual_foundation>.
     - DATING REQUIREMENT: Set \`version.type\` = "current", \`version.evaluationDate\` = "${currentDateIso}", \`version.seasonOrEra\` = "${currentSeason}", \`version.label\` = "Current Form (${month} ${year})", and \`version.peakContext\` = null.
-    - NO REPUTATION LAG: If the player is already performing as a Top 3–5 player in the world at their position for an elite club right now, rate their current Overall in \`90_92_WORLD_CLASS\` (90–92) — do not undersell them at 87–89 Borderline World-Class and hide their current level in Potential.
-    - APEX CONTINENTAL STARS: If the player is the primary talisman/focal point of a Champions League-winning or Ballon d'Or-caliber campaign, rate them at 92–94 rather than scraping the 91 floor.
+    - NO REPUTATION LAG: If the player is already performing at world-class level for an elite club right now, rate that level in his current Overall — do not undersell him at 87–89 Borderline World-Class and hide his current level in Potential.
+    - Leading a Champions League-winning or Ballon d'Or-caliber campaign is strong evidence of his level; it confirms how good he is rather than setting a fixed band.
     - Set \`calibration.verifiedCurrentHeadCoach\` ONLY if <factual_foundation> explicitly confirms the current head coach of the player's current club as of ${month} ${year}. Never name a head coach or manager anywhere in the card's prose; the app attaches the verified manager separately.
     - If grounding shows the player started a recent match, treat them as match fit.
     - Never write a stat-based qualifier in latestUpdate without a specific verified number from the grounding data.`;
@@ -907,8 +924,8 @@ ${params.lockedDossiersBlock}
 ${params.savedDossiersBlock}
 <synthesis_instructions>
 ${temporalRules}
-- Complete the \`calibration\` block first: choose the exact \`tierBand\` from Section III based on where the player ranks globally at their position (Top 1–2 / historic positional benchmark = 93–95 World-Class Elite; Top 3–5 at their position = 90–92 World-Class), name 1-2 positional peers in \`peerBenchmark\`, and identify \`signatureSpikes\` and \`genuineFlaws\`.
-- Ensure \`ratings.overall\` sits inside the integer range of your chosen \`calibration.tierBand\`.
+- Complete the \`calibration\` block first: choose the exact \`tierBand\` from Section III by how good a footballer this version of the player is (positional rank and honours are evidence, not the criterion), name 1-2 positional peers in \`peerBenchmark\`, fill \`peerPlacement\` against <calibrated_peer_ledger>, and identify \`signatureSpikes\` and \`genuineFlaws\`.
+- Ensure \`ratings.overall\` sits inside the integer range of your chosen \`calibration.tierBand\` and agrees with \`calibration.peerPlacement\`.
 - Make the 25 attributes reflect a realistic, spiky scouting profile where \`signatureSpikes\` are high and \`genuineFlaws\` stay low.
 </synthesis_instructions>
 <task>${params.rawMessage}</task>`;
@@ -953,6 +970,13 @@ ${temporalRules}
 
     // Enforce calibration invariants deterministically in 0ms
     profile = enforceCalibrationInvariants(raw, profile, params.isHistorical);
+    // The Overall agrees with the model's own judgment of who was the better footballer.
+    profile = applyPeerPlacement(
+      profile,
+      raw.calibration?.peerPlacement,
+      params.peerLedgerCards ?? [],
+      params.isHistorical,
+    );
 
     const effectiveVerifiedFacts = resolveEffectiveVerifiedFacts(
       raw,

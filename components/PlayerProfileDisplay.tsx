@@ -258,6 +258,20 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
           </div>
         )}
 
+        {/* Where this version sits among calibrated peers */}
+        {profile.peerPlacement &&
+          ([
+            ['Rated above', profile.peerPlacement.betterThan],
+            ['Level with', profile.peerPlacement.levelWith],
+            ['Rated below', profile.peerPlacement.notAsGoodAs],
+          ] as const)
+            .filter(([, names]) => names.length > 0)
+            .map(([label, names]) => (
+              <div key={label} className="mt-1 text-xs font-serif text-charcoal/70 dark:text-cream-300 italic">
+                {label}: <span className="not-italic font-sans font-semibold">{names.join(', ')}</span>
+              </div>
+            ))}
+
       </header>
 
       {/* Archetype & System Blueprint (New High-Detail Section) */}
