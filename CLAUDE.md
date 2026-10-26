@@ -12,7 +12,7 @@ npm start        # Run production server (serves /dist statically)
 
 ```bash
 npm run typecheck   # tsc --noEmit (run `npm ci` in packages/engine first for its vitest types)
-npm test            # offline app checks: scripts/test-dossier-cards.ts, test-dossier-pipeline.ts (end-to-end with Gemini faked at fetch), test-gaffa-name-matching.ts, test-club-managers.ts
+npm test            # offline app checks: scripts/test-dossier-cards.ts, test-dossier-pipeline.ts (end-to-end with Gemini faked at fetch), test-chat-consistency.ts (chat vs stored cards), test-gaffa-name-matching.ts, test-club-managers.ts
 cd packages/engine && npm ci && npm test   # outlook engine + manager-fidelity vitest suite
 ```
 
@@ -40,6 +40,8 @@ A single Express server handles everything:
 1. **Route** — `turnRouter.ts` `classifyTurn` tries 0ms regex fast paths (archive, single dossier, compare, challenge, ranking, club tactics), then falls back to a schema-enforced Flash classifier. The result is a `TurnRoute` (`intent`, `analyticalMode`, target players/clubs, search queries).
 2. **Single dossier** — checks the in-conversation dossier, the saved archive, the in-memory calibrated pool, and the shared Supabase cache (`dossierCache.ts`), in that order. `dossierStore.ts` is a barrel over the dossier modules: `dossierCards` (card keys, slugs, evaluation dates), `dossierCache` (Supabase cache, versioned archive, sharing, Global Dossier Hub), `dossierContext` (history serialization, references, locked/saved/prior-rating blocks), `dossierLedger` (grep tool, peer ledger) and `dossierPatch`. On a miss, `groundingService.ts` runs API-Football and Google Search grounding in parallel and `dossierSynthesizer.ts` generates the card with `responseSchema`. It then enforces calibration invariants deterministically and scrubs unverified manager mentions.
 3. **Everything else** — `conversationalScout.ts` handles live dossier challenges (structured patch → `applyDossierPatch`) and prose turns (comparisons, debates, rankings, tactics), pre-grounding with search when needed.
+
+**Chat stays on the stored cards.** A new dossier shows in chat as a one-line stub carrying `dossierKey`; `buildHistoryContents` swaps each stub for the full card, so the model sees cards where the user saw them. Challenge turns get the challenged card plus the full card of every other player in the thread (in the same edition), and the thread's earlier replies keep their closing verdicts. A follow-up with no timeframe in a prime debate stays on prime cards. After generation, `dossierNumberGate.ts` puts any misquoted attribute of a card in play back to its stored value; it never touches Overall/Potential, which debate prose may propose on purpose.
 
 `aiClient.ts` wraps `@google/genai`: `generateStructured` (schema JSON), `runGroundedSearch`, and `generateProseTurn` (streaming chat with local tools `grep_saved_dossiers` / `grep_gaffa_market` and network tools backed by the API-Football routes). Per-task model, thinking level and temperature come from `constants/modelProfiles.ts`.
 
