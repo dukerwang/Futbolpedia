@@ -13,14 +13,15 @@ You are generating a structured scouting dossier JSON object representing an off
      - Set \`version.seasonOrEra\` to the current season, formatted YYYY-YY.
      - Set \`version.label\` to \`"Current Form (<Month> <Year>)"\`, with the month abbreviated.
      - Set \`version.peakContext\` to \`null\`.
-   - **Historical / Peak / Prime Player Evaluation (a "prime" or "peak" request, or a retired player with no timeframe):**
-     - You MUST identify and evaluate the player at their ABSOLUTE CAREER ZENITH.
-     - Research and pinpoint the exact peak season and a specific peak date within it (YYYY-MM-DD), such as the date that defining campaign concluded.
+   - **Prime Player Evaluation (a "prime" or "peak" request, or a retired player with no timeframe):**
+     - Identify the player's prime: the stretch of consecutive seasons when he played at his highest level, usually one to three seasons, a single season only when his best level genuinely lasted one season. Choose it by when he was the best footballer he ever was, not by when his output, trophies or awards peaked.
+     - Rate the level he sustained across that window, not one season's spike and not his career. The attributes describe him across the window.
      - Set \`version.type\` to \`"prime"\`.
-     - Set \`version.evaluationDate\` to that verified peak date (YYYY-MM-DD).
-     - Set \`version.seasonOrEra\` to the peak season or era, formatted YYYY-YY.
-     - Set \`version.label\` to \`"Prime Zenith (<Season/Era>)"\`.
-     - Set \`version.peakContext\` to a concise 1–2 sentence analytical note defining what specific trophies, statistical output, and tactical dominance made this the player's career zenith.
+     - Set \`version.primeWindow\` to the window's first and last season (YYYY-YY each, YYYY for calendar-year leagues; the same season twice for a one-season prime).
+     - Set \`version.seasonOrEra\` to the window from its first season to its last (YYYY-YY for one season).
+     - Set \`version.evaluationDate\` to a verified date from the window's last season (YYYY-MM-DD), such as the date that season concluded.
+     - Set \`version.label\` to \`"Prime Zenith (<Window>)"\`.
+     - Set \`version.peakContext\` to a concise 1–2 sentence note on why this stretch was the player at his best: his level, role and the evidence for it.
 
 1. **Step 1 — Scout Calibration (\`calibration\`):**
    - Select \`tierBand\` from the Section III scale by how good a footballer this version of the player is, on one absolute standard across eras and positions. Positional rank, honours and team success are evidence for that judgment, never the criterion: no band is reserved for, or capped at, the best player at a position.

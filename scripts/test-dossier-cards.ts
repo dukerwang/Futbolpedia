@@ -36,6 +36,8 @@ import {
   renameDossierCard,
   parseRequestedSeason,
   seasonMatches,
+  seasonSpan,
+  formatPrimeWindow,
 } from '../services/dossierStore';
 import { extractCandidatePlayerName } from '../services/turnRouter';
 import { groundingShowsRetirement, parseCareerStatus } from '../services/groundingService';
@@ -689,6 +691,78 @@ async function main() {
     const resolved = resolvePlacement({ betterThan: ['Ronaldo', 'Somebody Unrated'], levelWith: [], notAsGoodAs: [] }, ronaldos, subject);
     assert.deepEqual(resolved.betterThan, []);
     assert.equal(applyPeerPlacement(subject, { betterThan: ['Ronaldo'], levelWith: [], notAsGoodAs: [] }, ronaldos, true), subject);
+  });
+
+  // ── Prime windows ───────────────────────────────────────────────────────
+
+  await test('season spans read single seasons, windows and calendar years', () => {
+    assert.deepEqual(seasonSpan('2005-06'), [2005, 2005]);
+    assert.deepEqual(seasonSpan('2003-06'), [2003, 2005]);
+    assert.deepEqual(seasonSpan('1999-02'), [1999, 2001]);
+    assert.deepEqual(seasonSpan('1962'), [1962, 1962]);
+    assert.equal(seasonSpan('2011–12 Season'), null);
+  });
+
+  await test('a prime window is written from its first and last season', () => {
+    assert.deepEqual(formatPrimeWindow('2003-04', '2005-06'), { seasonOrEra: '2003-06', seasons: 3 });
+    assert.deepEqual(formatPrimeWindow('2005-06', '2005-06'), { seasonOrEra: '2005-06', seasons: 1 });
+    assert.deepEqual(formatPrimeWindow('2004/05', '2005–06'), { seasonOrEra: '2004-06', seasons: 2 });
+    assert.deepEqual(formatPrimeWindow('1958', '1962'), { seasonOrEra: '1958-1962', seasons: 5 });
+    assert.equal(formatPrimeWindow('2005-06', '2003-04'), null);
+    assert.equal(formatPrimeWindow('2003-05', '2005-06'), null);
+    assert.equal(formatPrimeWindow(undefined, '2005-06'), null);
+  });
+
+  await test('a multi-season prime window never stands in for one of its seasons', () => {
+    assert.equal(seasonMatches('2003-06', '2005-06'), false);
+    assert.equal(seasonMatches('2003-06', '2004'), false);
+    // A one-season prime still is that season's card.
+    assert.equal(seasonMatches('2005-06', '2005-06'), true);
+    assert.equal(seasonMatches('2005-06', '2006'), true);
+  });
+
+  await test('a prime card takes its season and label from its window', () => {
+    const p = sanitizeProfileData({
+      basicInfo: { name: 'Ronaldinho', age: 25, nationality: 'Brazil', club: 'FC Barcelona', position: 'Left Winger' },
+      ratings: { overall: 96, potential: 96 },
+      version: {
+        type: 'prime',
+        label: 'Prime Zenith (2004–06 Era)',
+        evaluationDate: '2006-05-17',
+        seasonOrEra: '2004-06',
+        primeWindow: { startSeason: '2003-04', endSeason: '2005-06' },
+      },
+    } as any);
+    assert.equal(p.version?.seasonOrEra, '2003-06');
+    assert.equal(p.version?.label, 'Prime Zenith (2003-06)');
+    assert.deepEqual(p.version?.primeWindow, { startSeason: '2003-04', endSeason: '2005-06' });
+  });
+
+  await test('a prime card with only a season gets a one-season window', () => {
+    const p = sanitizeProfileData({
+      basicInfo: { name: 'Thierry Henry', age: 26, nationality: 'France', club: 'Arsenal', position: 'Centre Forward' },
+      ratings: { overall: 95, potential: 95 },
+      version: { type: 'prime', label: 'Prime Zenith (2003–04 Season)', evaluationDate: '2004-05-15', seasonOrEra: '2003-04' },
+    } as any);
+    assert.equal(p.version?.label, 'Prime Zenith (2003-04)');
+    assert.deepEqual(p.version?.primeWindow, { startSeason: '2003-04', endSeason: '2003-04' });
+  });
+
+  await test('a season card and a current card carry no prime window', () => {
+    const prime = sanitizeProfileData({
+      basicInfo: { name: 'Ronaldinho', age: 25, nationality: 'Brazil', club: 'FC Barcelona', position: 'Left Winger' },
+      ratings: { overall: 96, potential: 96 },
+      version: {
+        type: 'prime',
+        label: 'x',
+        evaluationDate: '2006-05-17',
+        seasonOrEra: '2003-06',
+        primeWindow: { startSeason: '2003-04', endSeason: '2005-06' },
+      },
+    } as any);
+    assert.equal(applyVersionRules(prime, true, '2005-06').version?.primeWindow, undefined);
+    assert.equal(applyVersionRules(prime, false).version?.primeWindow, undefined);
+    assert.deepEqual(applyVersionRules(prime, true).version?.primeWindow, prime.version?.primeWindow);
   });
 
   console.log(`${passes} passed, ${failures} failed`);

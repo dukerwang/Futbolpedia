@@ -49,8 +49,8 @@ const formatMonth = (isoDate: string): string =>
 
 /**
  * The card's edition and when it describes, for the header pill: "Current form · Oct 2026" or
- * "Prime · 2013–14". Current cards show their month; historical cards show their season, since
- * a peak is a season rather than a day.
+ * "Prime · 2003–06". Current cards show their month; historical cards show their season, since
+ * a peak is a season or a window of seasons rather than a day.
  */
 export function describeCardEdition(profile: PlayerProfile): {
   tone: PillTone;
