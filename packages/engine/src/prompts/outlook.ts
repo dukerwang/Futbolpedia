@@ -71,6 +71,7 @@ VOICE
 - Sharp, professional, specific. Futbolpedia individuality — two outlooks must not read like the same template.
 - Vary rhythm and opening: role change, usage pattern, career phase, or a concrete fact — never the same stock lead.
 - Banned words: "Languid", "Biomechanically", "Mercurial".
+- Don't lean on "operate" (operates, operated, operating) for where or how a player plays; name the role.
 - Banned phrases: "silenced skeptics", "defied skeptics", "silenced doubters".
 
 COVERAGE BRIEF (invisible — satisfy in flowing prose, any order)
