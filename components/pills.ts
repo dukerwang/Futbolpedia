@@ -114,6 +114,27 @@ export function shortEditionLabel(profile: PlayerProfile): string {
   return EDITION_NAMES[edition] ?? EDITION_NAMES.prime;
 }
 
+/**
+ * How a chat message names this exact card: "Pedri (current form)", "Prime Xavi (2008-11)",
+ * "Neymar Jr, Paris Saint-Germain era (2017-20)" or "Pedri in 2015-16". The edition words and
+ * plain-hyphen seasons are what the turn router reads, so the reply stays on this card.
+ */
+export function cardReference(profile: PlayerProfile): string {
+  const name = profile.basicInfo.name;
+  const edition = cardEdition(profile);
+  if (edition === 'current') return profile.version ? `${name} (current form)` : name;
+  const window = profile.version?.seasonOrEra?.trim().replace(/\s*[–/]\s*/, '-') ?? '';
+  if (edition === 'season_snapshot') return window ? `${name} in ${window}` : name;
+  if (edition === 'era') {
+    const qualifier = profile.version?.qualifier?.trim();
+    const era = qualifier ? `, ${formatEraQualifier(qualifier)} era` : '';
+    return `${name}${era}${window ? ` (${window})` : ''}`;
+  }
+  // Legacy prime cards carry the edition in their name ("Prime Kaká").
+  const prime = edition === 'prime' && !/\b(prime|peak)\b/i.test(name) ? `Prime ${name}` : name;
+  return window ? `${prime} (${window})` : prime;
+}
+
 /** "As of Oct 25" for a current card's Latest Update, which refreshes weekly; null on prime cards. */
 export function latestUpdateLabel(profile: PlayerProfile): string | null {
   if (cardEdition(profile) !== 'current') return null;

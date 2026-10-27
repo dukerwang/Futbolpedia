@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import type { ChatDomain } from '../types';
 
 interface ChatInputProps {
@@ -14,6 +14,8 @@ interface ChatInputProps {
   gaffaNudge?: string | null;
   onAcceptGaffaNudge?: () => void;
   onDismissGaffaNudge?: () => void;
+  /** Text to put in the box, ready for the user to finish (a new `id` applies it again). */
+  draft?: { id: number; text: string } | null;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -25,10 +27,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   gaffaNudge,
   onAcceptGaffaNudge,
   onDismissGaffaNudge,
+  draft,
 }) => {
   const [message, setMessage] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!draft) return;
+    setMessage(draft.text);
+    // Wait a frame so the chat is no longer inert, then put the cursor after the draft.
+    const frame = requestAnimationFrame(() => {
+      const box = textareaRef.current;
+      if (!box) return;
+      box.focus();
+      box.setSelectionRange(draft.text.length, draft.text.length);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [draft?.id]);
   const gaffaOn = domain === 'gaffa';
 
   const handleFile = useCallback((file: File) => {
@@ -97,6 +114,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         )}
 
         <textarea
+          ref={textareaRef}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
