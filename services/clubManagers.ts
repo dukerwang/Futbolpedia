@@ -36,6 +36,24 @@ const FAILED_RETRY_MS = 10 * 60 * 1000;
 
 export const toClubKey = (club: string): string => toPlayerSlug(normalizeClub(club.trim()));
 
+const clubTokens = (club: string): string[] =>
+  toClubKey(club)
+    .split('-')
+    .filter((t) => t && !/^(?:fc|cf|afc)$/.test(t));
+
+/**
+ * Whether two names refer to the same club, allowing for how sources spell it ("Al Hilal",
+ * "Al-Hilal Saudi FC"): the shorter name's words appear, in order, in the longer one's.
+ */
+export const isSameClub = (a: string, b: string): boolean => {
+  const [x, y] = [clubTokens(a), clubTokens(b)].sort((p, q) => p.length - q.length);
+  if (x.length === 0) return false;
+  for (let i = 0; i + x.length <= y.length; i++) {
+    if (x.every((t, j) => y[i + j] === t)) return true;
+  }
+  return false;
+};
+
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const asDate = (v: string | undefined): string | null => (v && ISO_DATE.test(v) ? v : null);
 const asName = (v: string | undefined): string | null => {

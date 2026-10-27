@@ -1,5 +1,10 @@
 import type { EvidenceGrade, PlayerProfile } from '../types';
-import { cardEdition, getDossierEvaluationDate, getLatestUpdateDate } from '../services/dossierStore';
+import {
+  cardEdition,
+  formatEraQualifier,
+  getDossierEvaluationDate,
+  getLatestUpdateDate,
+} from '../services/dossierStore';
 
 /**
  * The one pill style used across dossier cards, the side panel and the Global Dossier Hub:
@@ -34,6 +39,7 @@ const EDITION_NAMES: Record<string, string> = {
   current: 'Current form',
   prime: 'Prime',
   season_snapshot: 'Season',
+  era: 'Era',
   retro: 'Retro',
 };
 
@@ -48,8 +54,8 @@ const formatMonth = (isoDate: string): string =>
   });
 
 /**
- * The card's edition and when it describes, for the header pill: "Current form · Oct 2026" or
- * "Prime · 2003–06". Current cards show their month; historical cards show their season, since
+ * The card's edition and when it describes, for the header pill: "Current form · Oct 2026",
+ * "Prime · 2003–06" or "Paris Saint-Germain era · 2017–20". Current cards show their month; historical cards show their season, since
  * a peak is a season or a window of seasons rather than a day.
  */
 export function describeCardEdition(profile: PlayerProfile): {
@@ -79,7 +85,10 @@ export function describeCardEdition(profile: PlayerProfile): {
   }
   const era = profile.version?.seasonOrEra?.trim();
   const when = era ? formatSeason(era) : date ? date.slice(0, 4) : '';
-  const name = EDITION_NAMES[edition] ?? EDITION_NAMES.prime;
+  const qualifier = edition === 'era' ? profile.version?.qualifier?.trim() : '';
+  const name = qualifier
+    ? `${formatEraQualifier(qualifier)} era`
+    : EDITION_NAMES[edition] ?? EDITION_NAMES.prime;
   return { tone: 'amber', icon: 'workspace_premium', label: when ? `${name} · ${when}` : name };
 }
 

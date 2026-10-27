@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import {
   isClubManagerFresh,
+  isSameClub,
   parseManagerLookup,
   reconcileManagerSources,
   toClubKey,
@@ -93,6 +94,17 @@ test('club keys ignore casing, accents and common aliases', () => {
   assert.equal(toClubKey('Chelsea'), toClubKey('chelsea '));
   assert.equal(toClubKey('Barca'), toClubKey('FC Barcelona'));
   assert.equal(toClubKey('Atlético Madrid'), 'atletico-madrid');
+});
+
+test('the same club matches however a source spells it; different clubs never do', () => {
+  assert.ok(isSameClub('Paris Saint Germain', 'PSG'));
+  assert.ok(isSameClub('Barcelona', 'FC Barcelona'));
+  assert.ok(isSameClub('Al Hilal', 'Al-Hilal Saudi FC'));
+  assert.ok(isSameClub('Santos', 'santos'));
+  assert.ok(!isSameClub('AC Milan', 'Inter Milan'));
+  assert.ok(!isSameClub('Manchester United', 'Manchester City'));
+  assert.ok(!isSameClub('Santos', 'Paris Saint-Germain'));
+  assert.ok(!isSameClub('young', 'Inter Miami'));
 });
 
 test('a card names only the verified manager, and carries it', () => {

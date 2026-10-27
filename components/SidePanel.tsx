@@ -247,14 +247,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 <span className="font-semibold text-charcoal dark:text-cream-200">{formatPosition(profile.basicInfo.position)}</span>
                                 <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
                                 <span className="line-clamp-1">{profile.basicInfo.club}</span>
-                                {profile.clubManager && (
-                                    <span
-                                        className="line-clamp-1"
-                                        title={`Manager verified by live search on ${profile.clubManager.verifiedOn}`}
-                                    >
-                                        · {profile.clubManager.name}
-                                    </span>
-                                )}
                                 {profile.basicInfo.age != null && (
                                     <>
                                         <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
@@ -268,6 +260,14 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                     </>
                                 )}
                         </div>
+                        {profile.clubManager && !isPrimeCard(profile) && (
+                            <p
+                                className="mt-1 text-xs text-charcoal/60 dark:text-cream-400 font-sans line-clamp-1"
+                                title={`Verified by live search on ${profile.clubManager.verifiedOn}`}
+                            >
+                                Manager: {profile.clubManager.name}
+                            </p>
+                        )}
                     </div>
                     
                     <div className="flex flex-col items-end text-right shrink-0">

@@ -1,4 +1,5 @@
 import type { PlayerProfile } from '../types';
+import { CLUB_CANON } from '../constants/ratingTiers';
 
 /**
  * Card identity and dating. Pure functions: a card is one edition (current or historical) of
@@ -181,6 +182,59 @@ export const seasonMatches = (seasonOrEra: string | null | undefined, requested:
 export const cardEdition = (p: PlayerProfile): string =>
   isPrimeCard(p) ? p.version?.type ?? 'prime' : 'current';
 
+/** True when two seasons or windows cover the same seasons ("2017-20" and "2017-2020"). */
+export const isSameWindow = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const x = seasonSpan(a);
+  const y = seasonSpan(b);
+  return !!x && !!y && x[0] === y[0] && x[1] === y[1];
+};
+
+const clubCanonOf = (qualifier: string): string | undefined =>
+  CLUB_CANON[qualifier.toLowerCase().replace(/[^a-z]/g, '')];
+
+/**
+ * Comparable form of an era's name, so "PSG", "Paris Saint-Germain" and "psg" name the same era.
+ * Clubs go through the club aliases; anything else is compared as typed, without case or accents.
+ */
+export const toEraKey = (qualifier: string | null | undefined): string => {
+  const q = qualifier?.trim() ?? '';
+  if (!q) return '';
+  return toPlayerSlug(clubCanonOf(q) ?? q);
+};
+
+/** An era's name for display: a club's full name, otherwise the words as typed in title case. */
+export const formatEraQualifier = (qualifier: string): string => {
+  const q = qualifier.trim().replace(/\s+/g, ' ');
+  return (
+    clubCanonOf(q) ??
+    q.replace(/(^|[\s-])(\p{L})/gu, (_m, sep: string, ch: string) => sep + ch.toUpperCase())
+  );
+};
+
+/**
+ * The card that already rates a requested era. An era is defined by its years, so a card covering
+ * the same seasons answers it whatever it was called: another era card, the prime card, or (for a
+ * one-season era) the season card. Before rating, only the era's name is known, so an era card of
+ * the same name answers it too. The first card in `cards` wins, so list them oldest first.
+ */
+export const findEraCard = (
+  cards: PlayerProfile[],
+  criteria: { qualifier?: string | null; window?: string | null },
+): PlayerProfile | null => {
+  const key = toEraKey(criteria.qualifier);
+  return (
+    cards.find((p) => {
+      const edition = cardEdition(p);
+      if (key && edition === 'era' && toEraKey(p.version?.qualifier) === key) return true;
+      if (!criteria.window) return false;
+      if (edition === 'era' || edition === 'prime') {
+        return isSameWindow(p.version?.seasonOrEra, criteria.window);
+      }
+      return edition === 'season_snapshot' && isSameWindow(p.version?.seasonOrEra, criteria.window);
+    }) ?? null
+  );
+};
+
 /**
  * Returns the verified evaluation date of a dossier, or null if it can't be dated.
  * A current card may fall back to the day it was created, because that is the day it was
@@ -307,20 +361,27 @@ export const stampDossier = (p: PlayerProfile, nowMs: number): PlayerProfile =>
   ensureDossierDated(p, nowMs) ?? { ...p, createdAt: p.createdAt || nowMs };
 
 /**
+ * What tells a player's cards of one edition apart: the evaluation date, or for an era card its
+ * window, since an era is defined by its years.
+ */
+const cardMoment = (p: PlayerProfile): string | null => {
+  const window = cardEdition(p) === 'era' ? p.version?.seasonOrEra?.trim() : '';
+  return window && seasonSpan(window) ? window : getDossierEvaluationDate(p);
+};
+
+/**
  * Stable identity for one card version of one player. Two cards of the same player share a
- * key only when edition and evaluation date both match.
+ * key only when edition and evaluation date (an era card's window) both match.
  */
 export const getCardKey = (p: PlayerProfile): string =>
-  `${toBasePlayerSlug(p.basicInfo.name)}:${cardEdition(p)}:${
-    getDossierEvaluationDate(p) ?? p.createdAt ?? 'undated'
-  }`;
+  `${toBasePlayerSlug(p.basicInfo.name)}:${cardEdition(p)}:${cardMoment(p) ?? p.createdAt ?? 'undated'}`;
 
 /**
  * Keeps each player's newest current card and newest prime card, so an archived re-rating never
  * sits next to the live one in locks, peer ledgers or grep results. Current cards go by
  * evaluation date (on equal dates the later entry wins, so list sources from broadest to most
- * local); prime cards by the latest re-rating, then the latest generated. Season cards keep
- * their own key, one per season.
+ * local); prime cards by the latest re-rating, then the latest generated. Season and era cards
+ * keep their own key, one per season or window.
  */
 export const latestCardPerPlayer = (cards: PlayerProfile[]): PlayerProfile[] => {
   const byPlayer = new Map<string, PlayerProfile>();
@@ -361,11 +422,13 @@ export const dropSupersededPrimes = (cards: PlayerProfile[]): PlayerProfile[] =>
   );
 };
 
-/** Immutable archive slug for a dated card, e.g. "joshua-kimmich--current--2026-10-25". */
+/**
+ * Immutable archive slug for a dated card, e.g. "joshua-kimmich--current--2026-10-25". An era
+ * card is filed under its window ("neymar-jr--era--2017-20"), so one era has one card.
+ */
 export const toVersionedSlug = (p: PlayerProfile): string | null => {
-  const date = getDossierEvaluationDate(p);
-  if (!date) return null;
-  return `${toBasePlayerSlug(p.basicInfo.name)}--${cardEdition(p)}--${date}`;
+  if (!getDossierEvaluationDate(p)) return null;
+  return `${toBasePlayerSlug(p.basicInfo.name)}--${cardEdition(p)}--${cardMoment(p)}`;
 };
 
 /** Mutable "latest card" pointer slug. Share links and cache lookups use this one. */

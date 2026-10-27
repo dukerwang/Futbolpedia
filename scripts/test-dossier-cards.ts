@@ -40,7 +40,10 @@ import {
   seasonMatches,
   seasonSpan,
   formatPrimeWindow,
+  findEraCard,
+  toEraKey,
 } from '../services/dossierStore';
+import { describeCardEdition } from '../components/pills';
 import { classifyTurn, extractCandidatePlayerName } from '../services/turnRouter';
 import { SCOUT_CORE_INSTRUCTION } from '../prompts/scoutCore';
 import { CONVERSATIONAL_SCOUT_MANDATE } from '../prompts/chatPrompt';
@@ -829,6 +832,111 @@ async function main() {
     assert.deepEqual(kept, [rerated, season, other]);
     // Without a re-rating, nothing is dropped.
     assert.deepEqual(dropSupersededPrimes([old, other]), [old, other]);
+  });
+
+  // ── Era cards ───────────────────────────────────────────────────────────
+
+  const eraCard = (name: string, qualifier: string, window: string, date: string) =>
+    card(name, {
+      evaluationDate: date,
+      version: {
+        id: `${toBasePlayerSlug(name)}-era-${window}`,
+        type: 'era',
+        qualifier,
+        label: `${qualifier} era (${window})`,
+        evaluationDate: date,
+        seasonOrEra: window,
+      },
+    });
+
+  await test('a named version of a player routes to an era card', async () => {
+    for (const [message, era] of [
+      ['rate the psg version of neymar', 'psg'],
+      ["rate neymar's psg era", 'psg'],
+      ['rate barca neymar', 'barca'],
+      ['rate neymar at psg', 'psg'],
+      ['rate neymar from his barcelona days', 'barcelona'],
+      ['rate young messi', 'young'],
+      ['rate the santos version of neymar', 'santos'],
+    ]) {
+      const r = await route(message);
+      assert.equal(r.intent, 'single_dossier', message);
+      assert.equal(r.requestedEra, era, message);
+      assert.equal(r.isHistorical, true, message);
+      assert.match(r.targetPlayers[0], /^(neymar|messi)$/i, message);
+    }
+  });
+
+  await test('seasons, primes, current form and club possessives are not eras', async () => {
+    for (const message of [
+      'Rate Cole Palmer',
+      "Rate Chelsea's Cole Palmer",
+      'Rate Ashley Young',
+      'Rate Thierry Henry 2006',
+      'rate prime neymar',
+      'rate young messi right now',
+    ]) {
+      assert.equal((await route(message)).requestedEra ?? null, null, message);
+    }
+    assert.equal((await route('Rate Thierry Henry 2006')).requestedSeason, '2006');
+  });
+
+  await test('an era card is identified by its window, not its date', () => {
+    const a = eraCard('Neymar Jr', 'psg', '2017-20', '2020-05-30');
+    const b = eraCard('Neymar Jr', 'Paris Saint-Germain', '2017-20', '2020-08-23');
+    assert.equal(getCardKey(a), 'neymar-jr:era:2017-20');
+    assert.equal(getCardKey(a), getCardKey(b));
+    assert.equal(toVersionedSlug(a), 'neymar-jr--era--2017-20');
+    assert.equal(latestCardPerPlayer([a, b]).length, 1);
+    assert.ok(isPrimeCard(a), 'an era card is historical');
+    assert.ok(isCardInRefreshWindow(a), 'and frozen');
+  });
+
+  await test('an era is answered by a card of the same name or the same years', () => {
+    const psg = eraCard('Neymar Jr', 'psg', '2017-20', '2020-05-30');
+    const prime = primeCard('Neymar Jr', '2017-05-27', {
+      version: { id: 'neymar-jr-prime-2017-05-27', type: 'prime', label: 'Prime Zenith (2014-17)', evaluationDate: '2017-05-27', seasonOrEra: '2014-17' },
+    });
+    const season = card('Neymar Jr', {
+      evaluationDate: '2013-05-26',
+      version: { id: 'neymar-jr-season_snapshot-2013-05-26', type: 'season_snapshot', label: 'Season (2012-13)', evaluationDate: '2013-05-26', seasonOrEra: '2012-13' },
+    });
+    const cards = [psg, prime, season];
+    assert.equal(toEraKey('PSG'), toEraKey('Paris Saint-Germain'));
+    assert.equal(findEraCard(cards, { qualifier: 'Paris Saint-Germain' }), psg);
+    assert.equal(findEraCard(cards, { qualifier: 'young' }), null);
+    assert.equal(findEraCard(cards, { qualifier: 'post-barcelona', window: '2017-20' }), psg);
+    assert.equal(findEraCard(cards, { window: '2014-2017' }), prime);
+    assert.equal(findEraCard(cards, { window: '2012-13' }), season);
+    assert.equal(findEraCard(cards, { window: '2015-17' }), null);
+  });
+
+  await test('a named era becomes an era card, whatever edition the model picked', () => {
+    const asPrime = card('Neymar Jr', {
+      evaluationDate: '2020-08-23',
+      version: {
+        id: 'x',
+        type: 'prime',
+        label: 'Prime Zenith (2017-20)',
+        evaluationDate: '2020-08-23',
+        seasonOrEra: '2017-20',
+        primeWindow: { startSeason: '2017-18', endSeason: '2019-20' },
+        peakContext: 'Era note.',
+      },
+    });
+    const p = applyVersionRules(asPrime, true, null, 'psg');
+    assert.equal(p.version?.type, 'era');
+    assert.equal(p.version?.qualifier, 'psg');
+    assert.equal(p.version?.label, 'Paris Saint-Germain era (2017-20)');
+    assert.equal(p.version?.seasonOrEra, '2017-20');
+    assert.equal(p.version?.evaluationDate, '2020-08-23');
+    assert.equal(describeCardEdition(p).label, 'Paris Saint-Germain era · 2017–20');
+
+    const asCurrent = currentCard('Lionel Messi', TODAY);
+    const q = applyVersionRules(asCurrent, true, null, 'young');
+    assert.equal(q.version?.type, 'era');
+    assert.equal(q.version?.label, 'Young era');
+    assert.equal(getDossierEvaluationDate(q), null, 'no window or date yet: validation asks for them');
   });
 
   await test('no scouting prompt mentions re-rating', () => {

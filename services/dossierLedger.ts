@@ -1,6 +1,6 @@
 import type { Attributes, PlayerProfile } from '../types';
 import { ATTRIBUTE_LABELS } from '../constants/ratingTiers';
-import { getCardKey, isConfidentDossier, isPrimeCard, latestCardPerPlayer } from './dossierCards';
+import { cardEdition, getCardKey, isConfidentDossier, isPrimeCard, latestCardPerPlayer } from './dossierCards';
 import { CALIBRATION_EPOCH_MS, getSupabaseCalibratedPool } from './dossierCache';
 import { findReferencedDossiers, formatTopAttributes } from './dossierContext';
 
@@ -289,6 +289,13 @@ export function selectPositionalPeerLedger(
  * The peer ledger as a prompt block, so every new synthesis and debate anchors against
  * same-position peers first. Pass `ledger` when the caller already selected it.
  */
+/** How the ledger tags a historical card, so the model can tell a prime from a season or an era. */
+const HISTORICAL_EDITION_TAGS: Record<string, string> = {
+  prime: 'Prime',
+  season_snapshot: 'Season',
+  era: 'Era',
+};
+
 export function buildPositionalPeerLedgerBlock(
   savedDossiers: PlayerProfile[],
   conversationDossiers: PlayerProfile[],
@@ -312,7 +319,9 @@ export function buildPositionalPeerLedgerBlock(
             .filter(Boolean)
             .join(', ')
         : '';
-    const editionTag = isPrimeCard(p) ? ` [Prime ${p.version?.seasonOrEra ?? ''}]`.replace(' ]', ']') : '';
+    const editionTag = isPrimeCard(p)
+      ? ` [${HISTORICAL_EDITION_TAGS[cardEdition(p)] ?? 'Prime'} ${p.version?.seasonOrEra ?? ''}]`.replace(' ]', ']')
+      : '';
     return `- ${p.basicInfo.name}${editionTag} (${p.basicInfo.position}, ${p.basicInfo.club}): ${p.ratings.overall} OVR / ${p.ratings.potential} POT${topSpikes ? ` [Spikes: ${topSpikes}]` : ''}${queriedSlice ? ` [Queried: ${queriedSlice}]` : ''}`;
   });
 
