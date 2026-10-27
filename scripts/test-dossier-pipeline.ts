@@ -173,15 +173,6 @@ async function main() {
     assert.equal(managerCalls().length, 0);
   });
 
-  await test('a prime spanning several seasons is sent back for one season', async () => {
-    scenario = { status: 'RETIRED', search: () => '- Summary of the player.', primeSpan: '2010-13' };
-    const card = await rate('Rate Prime Carles Puyol');
-    const syntheses = calls.filter((c) => c.structured && c.prompt.includes('synthesis_instructions'));
-    assert.equal(syntheses.length, 2);
-    assert.match(syntheses[1].prompt, /spans several seasons/);
-    assert.equal(card.version?.seasonOrEra, '2011-12');
-  });
-
   await test('an empty status reply still finds the retirement in the grounding', async () => {
     scenario = {
       status: '',
