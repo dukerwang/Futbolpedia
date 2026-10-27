@@ -7,7 +7,6 @@ import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS } fr
 import DOMPurify from 'dompurify';
 import {
   getCardKey,
-  isPrimeCard,
   shareDossierCard,
 } from '../services/geminiService';
 
@@ -16,10 +15,9 @@ interface SidePanelProps {
   onClose: () => void;
   profile: PlayerProfile | null;
   allProfiles: PlayerProfile[];
-  onSelectProfile: (profile: PlayerProfile | null) => void;
-  onBackToHome: () => void;
-  onRenameDossier?: (cardKey: string, newName: string) => void;
-  onDeleteDossier?: (cardKey: string) => void;
+  onSelectProfile: (profile: PlayerProfile) => void;
+  /** Shows the dossier hub; omitted while the hub is already the main view. */
+  onOpenHub?: () => void;
 }
 
 const getTierColorClass = (rating: number) => {
@@ -85,20 +83,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   profile,
   allProfiles = [],
   onSelectProfile,
-  onBackToHome,
-  onRenameDossier,
-  onDeleteDossier
+  onOpenHub,
 }) => {
   const [shareStatus, setShareStatus] = useState<'idle' | 'saving' | 'copied'>('idle');
   const [isDesktop, setIsDesktop] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
-  
-  // Dossier list editing states
-  const [editingKey, setEditingKey] = useState<string | null>(null);
-  const [editNameText, setEditNameText] = useState('');
-  const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
-  const [sharingKey, setSharingKey] = useState<string | null>(null);
-  const [sharedKey, setSharedKey] = useState<string | null>(null);
 
   const profileKey = profile ? getCardKey(profile) : null;
   const currentIndex = profileKey ? allProfiles.findIndex(p => getCardKey(p) === profileKey) : -1;
@@ -201,242 +190,9 @@ export const SidePanel: React.FC<SidePanelProps> = ({
       }
   };
 
-  const handleStartRename = (cardKey: string, name: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingKey(cardKey);
-    setEditNameText(name);
-  };
-
-  const handleSaveRename = (targetCardKey: string, e: React.FormEvent) => {
-    e.preventDefault();
-    if (editNameText.trim() && onRenameDossier) {
-      onRenameDossier(targetCardKey, editNameText.trim());
-    }
-    setEditingKey(null);
-  };
-
-  const handleCancelRename = () => {
-    setEditingKey(null);
-  };
-
-  const handleDeleteClick = (cardKey: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirmDeleteKey === cardKey) {
-      if (onDeleteDossier) {
-        onDeleteDossier(cardKey);
-      }
-      setConfirmDeleteKey(null);
-    } else {
-      setConfirmDeleteKey(cardKey);
-      // Automatically reset confirmation after 3 seconds
-      setTimeout(() => {
-        setConfirmDeleteKey(prev => prev === cardKey ? null : prev);
-      }, 3000);
-    }
-  };
-
-  const handleShareDossierItem = async (p: PlayerProfile, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const cardKey = getCardKey(p);
-    if (sharingKey) return;
-    setSharingKey(cardKey);
-    try {
-      const slug = await shareDossierCard(p);
-      await navigator.clipboard.writeText(`${window.location.origin}/#/p/${slug}`);
-      setSharedKey(cardKey);
-      setTimeout(() => setSharedKey(null), 2000);
-    } catch (err) {
-      console.error('Failed to share dossier:', err);
-      if (err instanceof Error) window.alert(err.message);
-    } finally {
-      setSharingKey(null);
-    }
-  };
-
-  // Prevent render if not open and not visible
-  if (!isOpen && !isVisible) return null;
-
-  // Render Dossier Library Home if active profile is null
-  if (!profile) {
-    return (
-      <>
-        {!isDesktop && isOpen && (
-            <div 
-                className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 md:hidden animate-fade-in"
-                onClick={onClose}
-            />
-        )}
-
-        <div 
-            style={getPanelStyle()}
-            className={`fixed z-[60] bg-cream-100 dark:bg-charcoal border-r border-cream-300/80 dark:border-charcoal-border/80 shadow-right-depth dark:shadow-dark-float flex flex-col
-                inset-x-0 bottom-0 h-[92vh] rounded-t-2xl transition-transform duration-500 ease-ios-ease will-change-transform
-                md:inset-y-0 md:left-0 md:h-full md:w-[450px] md:rounded-none
-            `}
-        >
-            {/* Header Area */}
-            <div className="flex justify-between items-center px-8 py-6 border-b border-cream-300 dark:border-charcoal-border bg-cream-50 dark:bg-charcoal-surface rounded-t-2xl md:rounded-none sticky top-0 z-50">
-                <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[22px] text-emerald-600 dark:text-emerald-400">folder_shared</span>
-                    <h3 className="text-sm font-serif font-bold text-charcoal dark:text-white uppercase tracking-widest">
-                        Dossier Library
-                    </h3>
-                </div>
-                <button
-                    onClick={onClose}
-                    className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-red-500 hover:bg-cream-200 dark:hover:bg-charcoal-light rounded-full transition-colors"
-                    title="Close Panel"
-                >
-                    <span className="material-symbols-outlined text-[18px] block">close</span>
-                </button>
-            </div>
-
-            {/* Scrollable Dossiers List */}
-            <div className="flex-1 overflow-y-auto px-6 py-6 space-y-3 bg-cream-100 dark:bg-charcoal">
-                {allProfiles.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-64 opacity-40 text-center px-4 select-none">
-                        <span className="material-symbols-outlined text-[40px] mb-2">folder_open</span>
-                        <p className="text-sm font-serif italic">No dossiers generated yet</p>
-                        <p className="text-xs font-sans mt-2 max-w-[280px] leading-relaxed mx-auto text-charcoal/60 dark:text-cream-400">
-                            Ask Futbolpedia to rate or scout a player to compile a scouting dossier here.
-                        </p>
-                    </div>
-                ) : (
-                    allProfiles.map((p) => {
-                        const cardKey = getCardKey(p);
-                        const isEditing = editingKey === cardKey;
-                        const isDeleting = confirmDeleteKey === cardKey;
-                        const formattedDate = new Date(p.createdAt || Date.now()).toLocaleDateString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric'
-                        });
-
-                        return (
-                            <div
-                                key={cardKey}
-                                onClick={() => {
-                                    if (!isEditing) {
-                                        onSelectProfile(p);
-                                    }
-                                }}
-                                className="group relative flex flex-col p-4 rounded-xl border transition-all duration-300 cursor-pointer bg-white dark:bg-charcoal-surface/30 border-cream-300/60 dark:border-charcoal-border hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 shadow-sm"
-                            >
-                                {isEditing ? (
-                                    <form
-                                        onSubmit={(e) => handleSaveRename(cardKey, e)}
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="flex items-center gap-1.5 w-full"
-                                    >
-                                        <input
-                                            type="text"
-                                            value={editNameText}
-                                            onChange={(e) => setEditNameText(e.target.value)}
-                                            autoFocus
-                                            onBlur={() => {
-                                                // Wait for form actions to proceed
-                                                setTimeout(() => {
-                                                    setEditingKey(null);
-                                                }, 200);
-                                            }}
-                                            className="flex-1 px-3 py-1.5 text-xs font-serif bg-cream-100 dark:bg-charcoal border border-emerald-500/50 rounded focus:outline-none focus:ring-1 focus:ring-emerald-500 text-charcoal dark:text-cream-50"
-                                        />
-                                        <button
-                                            type="submit"
-                                            className="p-1 text-emerald-600 hover:text-emerald-500 active:scale-95 transition-transform"
-                                            title="Save name"
-                                        >
-                                            <span className="material-symbols-outlined text-[18px] block font-bold">check</span>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={handleCancelRename}
-                                            className="p-1 text-red-500 hover:text-red-400 active:scale-95 transition-transform"
-                                            title="Cancel"
-                                        >
-                                            <span className="material-symbols-outlined text-[18px] block">close</span>
-                                        </button>
-                                    </form>
-                                ) : (
-                                    <div className="flex justify-between items-center pr-12">
-                                        <div className="flex flex-col">
-                                            <div className="flex items-center gap-2">
-                                                <h4 className="font-serif font-bold text-sm tracking-tight text-charcoal dark:text-cream-50 line-clamp-1">
-                                                    {p.basicInfo.name}
-                                                </h4>
-                                                {isPrimeCard(p) && (
-                                                    <span className={`${pillClass('amber', 'xs')} shrink-0`}>Prime</span>
-                                                )}
-                                                {p.revision && (
-                                                    <span className={`${pillClass('indigo', 'xs')} shrink-0`} title="Your accepted challenge of the shared card">
-                                                        Your revision
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <div className="flex items-center gap-1.5 mt-1 text-[10px] font-mono text-charcoal/50 dark:text-cream-400 font-medium">
-                                                <span>{p.evaluationDate || p.version?.evaluationDate || formattedDate}</span>
-                                                <span className="size-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                                <span>{formatPosition(p.basicInfo.position)}</span>
-                                                <span className="size-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                                <span className="line-clamp-1 max-w-[120px]">{p.basicInfo.club}</span>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-1 bg-cream-200/50 dark:bg-charcoal-light/40 px-2.5 py-1 rounded-lg border border-cream-300/40 dark:border-charcoal-border shrink-0 ml-2">
-                                            <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">{p.ratings.overall}</span>
-                                            <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider">OVR</span>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {!isEditing && (
-                                    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity bg-gradient-to-l from-white dark:from-charcoal-surface via-white dark:via-charcoal-surface to-transparent pl-4 py-1.5 rounded-r-xl">
-                                        <button
-                                            onClick={(e) => handleShareDossierItem(p, e)}
-                                            disabled={sharingKey === cardKey}
-                                            className={`p-1 rounded transition-all ${
-                                                sharedKey === cardKey
-                                                    ? 'text-emerald-600 dark:text-emerald-400'
-                                                    : 'text-charcoal/50 dark:text-cream-400/60 hover:text-blue-500 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40'
-                                            }`}
-                                            title="Share Dossier"
-                                        >
-                                            <span className="material-symbols-outlined text-[14px] block">
-                                                {sharingKey === cardKey ? 'hourglass_empty' : sharedKey === cardKey ? 'check' : 'link'}
-                                            </span>
-                                        </button>
-                                        <button
-                                            onClick={(e) => handleStartRename(cardKey, p.basicInfo.name, e)}
-                                            className="p-1 text-charcoal/50 dark:text-cream-400/60 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40 rounded transition-all"
-                                            title="Rename Dossier"
-                                        >
-                                            <span className="material-symbols-outlined text-[14px] block">edit</span>
-                                        </button>
-                                        <button
-                                            onClick={(e) => handleDeleteClick(cardKey, e)}
-                                            className={`p-1 rounded transition-all ${
-                                                isDeleting
-                                                    ? 'bg-red-500/10 text-red-600 border border-red-500/30 hover:bg-red-500 hover:text-white px-2'
-                                                    : 'text-charcoal/50 dark:text-cream-400/60 hover:text-red-500 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40'
-                                            }`}
-                                            title={isDeleting ? "Click again to confirm delete" : "Delete Dossier"}
-                                        >
-                                            {isDeleting ? (
-                                                <span className="text-[9px] font-sans font-bold uppercase tracking-wider">Confirm</span>
-                                            ) : (
-                                                <span className="material-symbols-outlined text-[14px] block">delete</span>
-                                            )}
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })
-                )}
-            </div>
-        </div>
-      </>
-    );
-  }
+  // Prevent render if not open and not visible. The dossier list lives in the hub, so the
+  // panel only ever shows one dossier.
+  if ((!isOpen && !isVisible) || !profile) return null;
 
   const edition = describeCardEdition(profile);
   const categories = profile.goalkeeperAttributes ? GK_ATTRIBUTE_CATEGORIES : ATTRIBUTE_CATEGORIES;
@@ -557,22 +313,23 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     </div>
                 </div>
 
-                {/* Toolbar / Inline Back, Share and Close */}
+                {/* Toolbar / All dossiers, Share and Close */}
                 <div className="flex justify-between items-center px-8 pb-5">
                     <div className="flex items-center">
                         <span className="text-[10px] uppercase tracking-widest text-charcoal/40 dark:text-cream-400/40 font-bold">Confidential Dossier</span>
                     </div>
                     
                     <div className="flex items-center gap-2">
-                        {/* Inline Back to Dossier Home Button */}
-                        <button 
-                            onClick={onBackToHome}
-                            className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center gap-1 rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 px-2 py-1"
-                            title="Back to Dossier Home"
-                        >
-                            <span className="material-symbols-outlined text-[18px] block">arrow_back</span>
-                            <span className="text-[10px] font-sans font-bold uppercase tracking-wider">Back</span>
-                        </button>
+                        {onOpenHub && (
+                            <button 
+                                onClick={onOpenHub}
+                                className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center gap-1 rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 px-2 py-1"
+                                title="Browse all dossiers"
+                            >
+                                <span className="material-symbols-outlined text-[18px] block">grid_view</span>
+                                <span className="text-[10px] font-sans font-bold uppercase tracking-wider">All dossiers</span>
+                            </button>
+                        )}
 
                         <button 
                             onClick={handleShare} 

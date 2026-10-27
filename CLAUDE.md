@@ -69,7 +69,9 @@ API-Football and model memory both lag coaching changes, so neither decides who 
 - Positions: `CANONICAL_POSITIONS` has no separate Striker (it maps to Centre Forward). `Libero` is for sweeper-era cards only: `resolveLiberoPosition` pairs it with a modern position (`Libero/Centre-Back` by default) and files it under Centre-Back on current cards.
 
 ### Frontend State
-`App.tsx` manages all state via React hooks. Two persistence layers:
+`App.tsx` manages all state via React hooks. The header switches the main view between **Chat** and **Dossiers** (`view`). `DossierHub.tsx` is the one dossier browser: a "Your dossiers" tab (the local `futbolpedia-global-dossiers` list, with rename/remove/share) and a "Global hub" tab (`fetchGlobalHubDossiers`), sharing one card grid and filter bar. It is layered over the chat so both keep their scroll and state. `SidePanel.tsx` only reads one dossier; it has no list of its own. Opening a global card adds it to your dossiers.
+
+Two persistence layers:
 - **`localStorage`** — Conversations (`futbolpedia-conversations`), active dossiers (`futbolpedia-global-dossiers`), theme, active conversation ID
 - **Supabase** — `player_profiles` (dossier cache, `player_data` JSONB) and `shared_conversations` (share codes)
 
