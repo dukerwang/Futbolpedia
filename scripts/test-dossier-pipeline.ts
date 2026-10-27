@@ -18,8 +18,10 @@ interface Scenario {
   status: string;
   /** Digest text returned by grounded searches. */
   search: (query: string) => string;
-  /** Prime season the fake model answers with before being corrected (a multi-season span). */
-  primeSpan?: string;
+  /** The prime window the model returns, given the synthesis prompt. */
+  window?: (prompt: string) => { startSeason: string; endSeason: string };
+  /** The model's peer placement on the synthesized card. */
+  placement?: { betterThan: string[]; levelWith: string[]; notAsGoodAs: string[] };
 }
 
 interface GeminiCall {
@@ -39,10 +41,15 @@ function fakeProfile(prompt: string) {
   const today = new Date().toISOString().slice(0, 10);
   const version = prompt.includes('SEASON DATED CARD')
     ? { type: 'season_snapshot', label: 'Season (2005-06)', evaluationDate: '2006-05-17', seasonOrEra: '2005-06', peakContext: 'Season note.' }
-    : prompt.includes('HISTORICAL / PEAK')
-      ? scenario.primeSpan && !prompt.includes('spans several seasons')
-        ? { type: 'prime', label: `Prime Zenith (${scenario.primeSpan})`, evaluationDate: '2013-06-01', seasonOrEra: scenario.primeSpan, peakContext: 'Peak note.' }
-        : { type: 'prime', label: 'Prime Zenith (2011-12)', evaluationDate: '2012-05-25', seasonOrEra: '2011-12', peakContext: 'Peak note.' }
+    : prompt.includes('HISTORICAL / PRIME')
+      ? {
+          type: 'prime',
+          label: 'Prime Zenith (2011-12)',
+          evaluationDate: '2012-05-25',
+          seasonOrEra: '2011-12',
+          peakContext: 'Peak note.',
+          ...(scenario.window ? { primeWindow: scenario.window(prompt) } : {}),
+        }
       : { type: 'current', label: 'Current Form', evaluationDate: today, seasonOrEra: '2026-27', peakContext: null };
   return {
     calibration: {
@@ -52,6 +59,7 @@ function fakeProfile(prompt: string) {
       genuineFlaws: ['aerialProwess', 'strength'],
       verifiedCurrentHeadCoach: null,
       conflictingManagerReports: [],
+      peerPlacement: scenario.placement ?? { betterThan: [], levelWith: [], notAsGoodAs: [] },
     },
     basicInfo: {
       name: 'Test Player',
@@ -158,7 +166,7 @@ async function main() {
     const card = await rate('Rate Andrés Iniesta');
     assert.equal(statusCalls().length, 1);
     assert.ok((statusCalls()[0].maxOutputTokens ?? 0) >= 100, 'status check leaves room for thinking tokens');
-    assert.match(synthesisPrompt(), /HISTORICAL \/ PEAK/);
+    assert.match(synthesisPrompt(), /HISTORICAL \/ PRIME/);
     assert.doesNotMatch(synthesisPrompt(), /CURRENT FORM DATED CARD/);
     assert.equal(card.version?.type, 'prime');
     assert.equal(card.clubManager, undefined);
@@ -183,7 +191,7 @@ async function main() {
           : '- Summary of the player.',
     };
     const card = await rate('Rate Xavi Hernández');
-    assert.match(synthesisPrompt(), /HISTORICAL \/ PEAK/);
+    assert.match(synthesisPrompt(), /HISTORICAL \/ PRIME/);
     assert.equal(card.version?.type, 'prime');
     assert.equal(card.clubManager, undefined);
   });
@@ -235,6 +243,78 @@ async function main() {
     const fresh = await rate('Rate Pedri', [{ ...saved, latestUpdateAsOf: daysAgo(2) }]);
     assert.equal(fresh.latestUpdate, 'Old news line.');
     assert.equal(calls.length, 0);
+  });
+
+  await test('a prime is a window of seasons, and a career-length window is narrowed', async () => {
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      window: (prompt) =>
+        prompt.includes('validation_retry')
+          ? { startSeason: '2009-10', endSeason: '2011-12' }
+          : { startSeason: '2006-07', endSeason: '2011-12' },
+    };
+    const card = await rate('Rate prime Andrés Iniesta');
+    const syntheses = calls.filter((c) => c.structured && c.prompt.includes('synthesis_instructions'));
+    assert.match(synthesisPrompt(), /THE PRIME IS A WINDOW/);
+    assert.equal(syntheses.length, 2);
+    assert.match(syntheses[1].prompt, /covers 6 seasons/);
+    assert.equal(card.version?.type, 'prime');
+    assert.equal(card.version?.seasonOrEra, '2009-12');
+    assert.equal(card.version?.label, 'Prime Zenith (2009-12)');
+    assert.deepEqual(card.version?.primeWindow, { startSeason: '2009-10', endSeason: '2011-12' });
+  });
+
+  await test('"rerate prime" regenerates from scratch; "rate prime" keeps the old card in view', async () => {
+    const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
+    const { CALIBRATION_EPOCH_MS } = await import('../services/dossierStore');
+    const oldPrime: PlayerProfile = {
+      ...sanitizeProfileData({
+        basicInfo: { name: 'Andrés Iniesta', age: 28, nationality: 'Spain', club: 'FC Barcelona', position: 'Central Midfielder' },
+        ratings: { overall: 95, potential: 95 },
+      }),
+      evaluationDate: '2013-06-01',
+      createdAt: CALIBRATION_EPOCH_MS + 1,
+      version: { id: 'andres-iniesta-prime-2013-06-01', type: 'prime', label: 'Prime Zenith (2012-13)', evaluationDate: '2013-06-01', seasonOrEra: '2012-13' },
+    };
+    scenario = { status: 'RETIRED', search: () => '- Summary of the player.' };
+
+    await rate('rate prime Andrés Iniesta', [oldPrime]);
+    assert.match(synthesisPrompt(), /prior_authored_dossiers/);
+
+    calls = [];
+    const card = await rate('rerate prime Andrés Iniesta', [oldPrime]);
+    assert.match(synthesisPrompt(), /HISTORICAL \/ PRIME/);
+    assert.doesNotMatch(synthesisPrompt(), /prior_authored_dossiers/);
+    assert.doesNotMatch(synthesisPrompt(), /Andrés Iniesta \[Prime/);
+    assert.equal(card.version?.type, 'prime');
+    assert.ok(typeof card.rerateAt === 'number' && card.rerateAt > CALIBRATION_EPOCH_MS);
+  });
+
+  await test("a prime card's Overall agrees with its peer placement", async () => {
+    const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
+    const { CALIBRATION_EPOCH_MS } = await import('../services/dossierStore');
+    const peer: PlayerProfile = {
+      ...sanitizeProfileData({
+        basicInfo: { name: 'Peer Maestro', age: 27, nationality: 'Spain', club: 'FC Barcelona', position: 'Central Midfielder' },
+        ratings: { overall: 91, potential: 91 },
+      }),
+      evaluationDate: '2009-05-27',
+      createdAt: CALIBRATION_EPOCH_MS + 1,
+      version: { id: 'peer-maestro-prime-2009-05-27', type: 'prime', label: 'Prime Zenith (2008-09)', evaluationDate: '2009-05-27', seasonOrEra: '2008-09' },
+    };
+    // The fake rates every card 91; the model says this one was the better footballer.
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      placement: { betterThan: ['Peer Maestro [Prime 2008-09]'], levelWith: [], notAsGoodAs: [] },
+    };
+    const card = await rate('Rate Andrés Iniesta', [peer]);
+    assert.match(synthesisPrompt(), /calibrated_peer_ledger[\s\S]*Peer Maestro \[Prime 2008-09\][^\n]*91 OVR/);
+    assert.match(synthesisPrompt(), /peerPlacement/);
+    assert.equal(card.ratings.overall, 92);
+    assert.equal(card.ratings.potential, 92);
+    assert.deepEqual(card.peerPlacement?.betterThan, ['Peer Maestro (2008-09)']);
   });
 
   console.log(`${passes} passed, ${failures} failed`);

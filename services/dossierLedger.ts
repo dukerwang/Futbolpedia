@@ -235,17 +235,17 @@ const inferQueriedAttributesFromText = (text: string): Array<keyof Attributes> =
 };
 
 /**
- * Builds a compact, position-aware peer calibration ledger from the user's freshly calibrated dossiers
- * (across Supabase global pool, local saved archive, and active conversation)
- * so every new synthesis and debate automatically anchors against same-position peers first.
+ * Picks a compact, position-aware peer calibration ledger from the user's freshly calibrated dossiers
+ * (across Supabase global pool, local saved archive, and active conversation): the target's own
+ * cards, up to 10 same-position peers, then the top-rated anchors, 18 cards in all.
  */
-export function buildPositionalPeerLedgerBlock(
+export function selectPositionalPeerLedger(
   savedDossiers: PlayerProfile[],
   conversationDossiers: PlayerProfile[],
   options?: PeerLedgerOptions,
-): string {
+): PlayerProfile[] {
   const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
-  if (allCalibrated.length === 0) return '';
+  if (allCalibrated.length === 0) return [];
 
   const matchedTargets = findReferencedDossiers(
     options?.message ?? '',
@@ -257,8 +257,6 @@ export function buildPositionalPeerLedgerBlock(
     options?.positionHint ||
     matchedTargets[0]?.basicInfo.position.split('/')[0] ||
     (options?.message ? inferPositionalFilterFromText(options.message) : null);
-
-  const queriedAttrs = options?.message ? inferQueriedAttributesFromText(options.message) : [];
 
   const sortedAll = [...allCalibrated].sort((a, b) => b.ratings.overall - a.ratings.overall);
   const selectedBySlug = new Map<string, PlayerProfile>();
@@ -284,11 +282,23 @@ export function buildPositionalPeerLedgerBlock(
     selectedBySlug.set(getCardKey(p), p);
   }
 
-  const finalList = [...selectedBySlug.values()].sort(
-    (a, b) => b.ratings.overall - a.ratings.overall,
-  );
+  return [...selectedBySlug.values()].sort((a, b) => b.ratings.overall - a.ratings.overall);
+}
 
-  const lines = finalList.map((p) => {
+/**
+ * The peer ledger as a prompt block, so every new synthesis and debate anchors against
+ * same-position peers first. Pass `ledger` when the caller already selected it.
+ */
+export function buildPositionalPeerLedgerBlock(
+  savedDossiers: PlayerProfile[],
+  conversationDossiers: PlayerProfile[],
+  options?: PeerLedgerOptions,
+  ledger: PlayerProfile[] = selectPositionalPeerLedger(savedDossiers, conversationDossiers, options),
+): string {
+  if (ledger.length === 0) return '';
+  const queriedAttrs = options?.message ? inferQueriedAttributesFromText(options.message) : [];
+
+  const lines = ledger.map((p) => {
     const topSpikes = formatTopAttributes(p.attributes, 3);
     const queriedSlice =
       queriedAttrs.length > 0

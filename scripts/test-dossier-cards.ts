@@ -19,6 +19,8 @@ import {
   isPrimeCard,
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
+  latestCardPerPlayer,
+  dropSupersededPrimes,
   resolveSavedDossiersForRequest,
   toBasePlayerSlug,
   toDossierCardSlug,
@@ -36,14 +38,18 @@ import {
   renameDossierCard,
   parseRequestedSeason,
   seasonMatches,
-  isSingleSeason,
-  fetchGlobalHubDossiers,
+  seasonSpan,
+  formatPrimeWindow,
 } from '../services/dossierStore';
-import { extractCandidatePlayerName } from '../services/turnRouter';
+import { classifyTurn, extractCandidatePlayerName } from '../services/turnRouter';
+import { SCOUT_CORE_INSTRUCTION } from '../prompts/scoutCore';
+import { CONVERSATIONAL_SCOUT_MANDATE } from '../prompts/chatPrompt';
+import { DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION } from '../prompts/dossierPrompt';
 import { groundingShowsRetirement, parseCareerStatus } from '../services/groundingService';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
 import { getAttributeLabel, normalizePosition, resolveLiberoPosition } from '../constants/ratingTiers';
+import { applyPeerPlacement, placementRange, resolvePlacement } from '../services/ratingPlacement';
 
 const TODAY = new Date().toISOString().split('T')[0];
 const MAY_2020_MS = Date.parse('2020-05-23T15:00:00Z');
@@ -646,6 +652,213 @@ async function main() {
     // A versioned card keeps its version untouched.
     const prime = primeCard('John Terry', '2005-05-07');
     assert.deepEqual(renameDossierCard(prime, 'JT').version, prime.version);
+  });
+
+  // ── Peer placement ──────────────────────────────────────────────────────
+
+  const rated = (base: PlayerProfile, overall: number): PlayerProfile => ({
+    ...base,
+    ratings: { overall, potential: overall },
+  });
+  const henry = rated(primeCard('Thierry Henry', '2004-05-15'), 95);
+  const neymar = rated(primeCard('Neymar Jr', '2015-06-06'), 95);
+  const neymarNow = rated(currentCard('Neymar Jr', TODAY), 84);
+  const gullit = rated(primeCard('Ruud Gullit', '1988-05-24'), 96);
+  const cruyff = rated(primeCard('Johan Cruyff', '1972-05-31'), 97);
+  const salah = rated(primeCard('Mohamed Salah', '2018-05-26'), 95);
+  const ledger = [cruyff, gullit, henry, neymar, neymarNow, salah];
+
+  await test('better than peers rated 95 lifts a prime card above them', () => {
+    const subject = rated(primeCard('Ronaldinho', '2006-05-17'), 95);
+    const placed = applyPeerPlacement(
+      subject,
+      { betterThan: ['Thierry Henry [Prime 2003-04]', 'Neymar Jr', 'Mohamed Salah'], levelWith: [], notAsGoodAs: ['Johan Cruyff'] },
+      ledger,
+      true,
+    );
+    assert.equal(placed.ratings.overall, 96);
+    assert.equal(placed.ratings.potential, 96);
+    assert.deepEqual(placed.peerPlacement?.betterThan, ['Thierry Henry (2019-20)', 'Neymar Jr (2019-20)', 'Mohamed Salah (2019-20)']);
+    assert.deepEqual(placed.peerPlacement?.notAsGoodAs, ['Johan Cruyff (2019-20)']);
+  });
+
+  await test('a placement that agrees with the Overall changes nothing but is recorded', () => {
+    const subject = rated(primeCard('Kaká', '2007-05-23'), 94);
+    const placed = applyPeerPlacement(subject, { betterThan: [], levelWith: [], notAsGoodAs: ['Thierry Henry'] }, ledger, true);
+    assert.equal(placed.ratings.overall, 94);
+    assert.deepEqual(placed.peerPlacement?.notAsGoodAs, ['Thierry Henry (2019-20)']);
+  });
+
+  await test('level with a peer means the same Overall', () => {
+    const subject = rated(primeCard('Rivaldo', '1999-05-16'), 94);
+    assert.equal(applyPeerPlacement(subject, { betterThan: [], levelWith: ['Henry'], notAsGoodAs: [] }, ledger, true).ratings.overall, 95);
+  });
+
+  await test('no room between two integer ratings allows a tie', () => {
+    const range = placementRange({ betterThan: [henry], levelWith: [], notAsGoodAs: [gullit] });
+    assert.deepEqual(range, { min: 95, max: 96 });
+  });
+
+  await test('a self-contradictory placement leaves the card as rated', () => {
+    const subject = rated(primeCard('Kaká', '2007-05-23'), 94);
+    const placed = applyPeerPlacement(subject, { betterThan: ['Johan Cruyff'], levelWith: [], notAsGoodAs: ['Thierry Henry'] }, ledger, true);
+    assert.equal(placed, subject);
+  });
+
+  await test('placement names resolve to the edition being rated, never to the player himself', () => {
+    const currentSubject = rated(currentCard('Kylian Mbappé', TODAY), 90);
+    assert.deepEqual(resolvePlacement({ betterThan: ['Neymar Jr'], levelWith: [], notAsGoodAs: [] }, ledger, currentSubject).betterThan, [neymarNow]);
+    const primeSubject = rated(primeCard('Kaká', '2007-05-23'), 94);
+    assert.deepEqual(resolvePlacement({ betterThan: ['Neymar Jr'], levelWith: [], notAsGoodAs: [] }, ledger, primeSubject).betterThan, [neymar]);
+    const self = resolvePlacement({ betterThan: ['Mohamed Salah'], levelWith: [], notAsGoodAs: [] }, ledger, rated(currentCard('Mohamed Salah', TODAY), 88));
+    assert.deepEqual(self.betterThan, []);
+  });
+
+  await test('unknown and ambiguous placement names are ignored', () => {
+    const ronaldos = [rated(primeCard('Cristiano Ronaldo', '2014-05-24'), 98), rated(primeCard('Ronaldo Nazário', '1997-05-14'), 97)];
+    const subject = rated(primeCard('Kaká', '2007-05-23'), 94);
+    const resolved = resolvePlacement({ betterThan: ['Ronaldo', 'Somebody Unrated'], levelWith: [], notAsGoodAs: [] }, ronaldos, subject);
+    assert.deepEqual(resolved.betterThan, []);
+    assert.equal(applyPeerPlacement(subject, { betterThan: ['Ronaldo'], levelWith: [], notAsGoodAs: [] }, ronaldos, true), subject);
+  });
+
+  // ── Prime windows ───────────────────────────────────────────────────────
+
+  await test('season spans read single seasons, windows and calendar years', () => {
+    assert.deepEqual(seasonSpan('2005-06'), [2005, 2005]);
+    assert.deepEqual(seasonSpan('2003-06'), [2003, 2005]);
+    assert.deepEqual(seasonSpan('1999-02'), [1999, 2001]);
+    assert.deepEqual(seasonSpan('1962'), [1962, 1962]);
+    assert.equal(seasonSpan('2011–12 Season'), null);
+  });
+
+  await test('a prime window is written from its first and last season', () => {
+    assert.deepEqual(formatPrimeWindow('2003-04', '2005-06'), { seasonOrEra: '2003-06', seasons: 3 });
+    assert.deepEqual(formatPrimeWindow('2005-06', '2005-06'), { seasonOrEra: '2005-06', seasons: 1 });
+    assert.deepEqual(formatPrimeWindow('2004/05', '2005–06'), { seasonOrEra: '2004-06', seasons: 2 });
+    assert.deepEqual(formatPrimeWindow('1958', '1962'), { seasonOrEra: '1958-1962', seasons: 5 });
+    assert.equal(formatPrimeWindow('2005-06', '2003-04'), null);
+    assert.equal(formatPrimeWindow('2003-05', '2005-06'), null);
+    assert.equal(formatPrimeWindow(undefined, '2005-06'), null);
+  });
+
+  await test('a multi-season prime window never stands in for one of its seasons', () => {
+    assert.equal(seasonMatches('2003-06', '2005-06'), false);
+    assert.equal(seasonMatches('2003-06', '2004'), false);
+    // A one-season prime still is that season's card.
+    assert.equal(seasonMatches('2005-06', '2005-06'), true);
+    assert.equal(seasonMatches('2005-06', '2006'), true);
+  });
+
+  await test('a prime card takes its season and label from its window', () => {
+    const p = sanitizeProfileData({
+      basicInfo: { name: 'Ronaldinho', age: 25, nationality: 'Brazil', club: 'FC Barcelona', position: 'Left Winger' },
+      ratings: { overall: 96, potential: 96 },
+      version: {
+        type: 'prime',
+        label: 'Prime Zenith (2004–06 Era)',
+        evaluationDate: '2006-05-17',
+        seasonOrEra: '2004-06',
+        primeWindow: { startSeason: '2003-04', endSeason: '2005-06' },
+      },
+    } as any);
+    assert.equal(p.version?.seasonOrEra, '2003-06');
+    assert.equal(p.version?.label, 'Prime Zenith (2003-06)');
+    assert.deepEqual(p.version?.primeWindow, { startSeason: '2003-04', endSeason: '2005-06' });
+  });
+
+  await test('a prime card with only a season gets a one-season window', () => {
+    const p = sanitizeProfileData({
+      basicInfo: { name: 'Thierry Henry', age: 26, nationality: 'France', club: 'Arsenal', position: 'Centre Forward' },
+      ratings: { overall: 95, potential: 95 },
+      version: { type: 'prime', label: 'Prime Zenith (2003–04 Season)', evaluationDate: '2004-05-15', seasonOrEra: '2003-04' },
+    } as any);
+    assert.equal(p.version?.label, 'Prime Zenith (2003-04)');
+    assert.deepEqual(p.version?.primeWindow, { startSeason: '2003-04', endSeason: '2003-04' });
+  });
+
+  await test('a season card and a current card carry no prime window', () => {
+    const prime = sanitizeProfileData({
+      basicInfo: { name: 'Ronaldinho', age: 25, nationality: 'Brazil', club: 'FC Barcelona', position: 'Left Winger' },
+      ratings: { overall: 96, potential: 96 },
+      version: {
+        type: 'prime',
+        label: 'x',
+        evaluationDate: '2006-05-17',
+        seasonOrEra: '2003-06',
+        primeWindow: { startSeason: '2003-04', endSeason: '2005-06' },
+      },
+    } as any);
+    assert.equal(applyVersionRules(prime, true, '2005-06').version?.primeWindow, undefined);
+    assert.equal(applyVersionRules(prime, false).version?.primeWindow, undefined);
+    assert.deepEqual(applyVersionRules(prime, true).version?.primeWindow, prime.version?.primeWindow);
+  });
+
+  // ── Prime rerate ────────────────────────────────────────────────────────
+
+  const route = (message: string, conversationDossiers: PlayerProfile[] = []) =>
+    classifyTurn({ message, history: [], conversationDossiers, hasImage: false });
+
+  await test('"rerate prime <player>" regenerates the prime card', async () => {
+    const r = await route('rerate prime Ronaldinho');
+    assert.equal(r.intent, 'single_dossier');
+    assert.equal(r.rerate, true);
+    assert.equal(r.isHistorical, true);
+    assert.equal(r.wantsRegeneration, true);
+    assert.match(r.targetPlayers[0], /Ronaldinho/);
+    assert.equal((await route('Re-rate prime Thierry Henry')).rerate, true);
+  });
+
+  await test('"rate prime <player>" is an ordinary request', async () => {
+    const r = await route('rate prime Ronaldinho');
+    assert.equal(r.intent, 'single_dossier');
+    assert.ok(!r.rerate);
+    assert.equal(r.wantsRegeneration, false);
+  });
+
+  await test('"rerate him" re-rates the card just shown, in its edition', async () => {
+    const shown = primeCard('Ronaldinho', '2006-05-17');
+    const r = await route('rerate him', [shown]);
+    assert.equal(r.rerate, true);
+    assert.deepEqual(r.targetPlayers, ['Ronaldinho']);
+    assert.equal(r.isHistorical, true);
+  });
+
+  await test('a re-rated prime card replaces the old one in pools', () => {
+    const old = primeCard('Ronaldinho', '2006-05-17', { createdAt: 2_000 });
+    const rerated = primeCard('Ronaldinho', '2005-05-29', { createdAt: 1_000, rerateAt: 5_000 });
+    const season = card('Ronaldinho', {
+      evaluationDate: '2002-06-30',
+      version: { id: 'r-s', type: 'season_snapshot', label: 'Season (2001-02)', evaluationDate: '2002-06-30', seasonOrEra: '2001-02' },
+    });
+    const kept = latestCardPerPlayer([rerated, old, season]);
+    assert.equal(kept.length, 2);
+    assert.ok(kept.includes(rerated));
+    assert.ok(kept.includes(season));
+    // Without re-ratings, the later generated prime card wins.
+    assert.deepEqual(latestCardPerPlayer([old, primeCard('Ronaldinho', '2005-05-29', { createdAt: 1_000 })]), [old]);
+  });
+
+  await test('a re-rated prime with a new window supersedes the old prime card everywhere', () => {
+    // The re-rating moved the window, so the old card keeps its own archive row and card key.
+    const old = primeCard('Pelé', '1962-10-11', { createdAt: 2_000 });
+    const rerated = primeCard('Pelé', '1963-11-16', { createdAt: 5_000, rerateAt: 5_000 });
+    const season = card('Pelé', {
+      evaluationDate: '1958-06-29',
+      version: { id: 'p-s', type: 'season_snapshot', label: 'Season (1958)', evaluationDate: '1958-06-29', seasonOrEra: '1958' },
+    });
+    const other = primeCard('Garrincha', '1962-06-17', { createdAt: 1_000 });
+    assert.notEqual(getCardKey(old), getCardKey(rerated));
+    const kept = dropSupersededPrimes([old, rerated, season, other]);
+    assert.deepEqual(kept, [rerated, season, other]);
+    // Without a re-rating, nothing is dropped.
+    assert.deepEqual(dropSupersededPrimes([old, other]), [old, other]);
+  });
+
+  await test('no scouting prompt mentions re-rating', () => {
+    for (const prompt of [SCOUT_CORE_INSTRUCTION, CONVERSATIONAL_SCOUT_MANDATE, DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION]) {
+      assert.doesNotMatch(prompt, /\bre-?rate\b/i);
+    }
   });
 
   console.log(`${passes} passed, ${failures} failed`);

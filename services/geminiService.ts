@@ -13,6 +13,7 @@ import {
   buildHistoryContents,
   buildLockedDossiersBlock,
   buildPositionalPeerLedgerBlock,
+  selectPositionalPeerLedger,
   buildPriorDossierTrajectoryBlock,
   buildRevisionProposalsBlock,
   buildSavedDossiersBlock,
@@ -45,6 +46,7 @@ import {
   shareDossierCard,
   stampDossier,
   supabase,
+  toBasePlayerSlug,
   toDossierCardSlug,
   toPlayerSlug,
   toVersionedSlug,
@@ -226,10 +228,14 @@ export const sendMessageToAI = async (
       route.isHistorical,
     ),
   );
-  const peerLedgerBlock = buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers, {
-    targetPlayers: route.targetPlayers,
-    message,
-  });
+  const peerLedgerOptions = { targetPlayers: route.targetPlayers, message };
+  const peerLedger = selectPositionalPeerLedger(savedDossiers, conversationDossiers, peerLedgerOptions);
+  const peerLedgerBlock = buildPositionalPeerLedgerBlock(
+    savedDossiers,
+    conversationDossiers,
+    peerLedgerOptions,
+    peerLedger,
+  );
 
   // 3. Single-Player Dossier Pipeline
   if (route.intent === 'single_dossier') {
@@ -243,6 +249,9 @@ export const sendMessageToAI = async (
     // season. A retired player asked about with no timeframe gets his prime (see below).
     let isHistorical = route.isHistorical;
     const season = route.requestedSeason ?? null;
+    // An explicit "rerate" of a prime card regenerates it from scratch and replaces the frozen
+    // shared card. Read after the retirement check too, since that can turn a request historical.
+    const reratingPrime = (): boolean => Boolean(route.rerate) && isHistorical && !season;
     const careerStatusPromise =
       !isHistorical && !season && !route.wantsCurrentForm && !imageData && primaryPlayer
         ? getCareerStatus(primaryPlayer)
@@ -304,7 +313,7 @@ export const sendMessageToAI = async (
         perf('supabase season card hit');
         return seasonCard;
       }
-    } else if (!imageData) {
+    } else if (!imageData && !reratingPrime()) {
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
         const cached = await getCachedDossier(toDossierCardSlug(rawSlug, isHistorical));
@@ -357,7 +366,7 @@ export const sendMessageToAI = async (
       perf('retired player: rating his prime');
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       const primeCard = rawSlug ? await getCachedDossier(toDossierCardSlug(rawSlug, true)) : null;
-      if (primeCard && !hasRevisionConsensus(await fetchRevisionsForCard(primeCard))) {
+      if (primeCard && !reratingPrime() && !hasRevisionConsensus(await fetchRevisionsForCard(primeCard))) {
         return primeCard;
       }
       options?.onStageChange?.(`Researching ${primaryPlayer}'s career peak & honours...`);
@@ -372,6 +381,7 @@ export const sendMessageToAI = async (
       !imageData &&
       !supersede &&
       !season &&
+      !reratingPrime() &&
       canonicalName &&
       toPlayerSlug(canonicalName) !== toPlayerSlug(primaryPlayer)
     ) {
@@ -395,13 +405,23 @@ export const sendMessageToAI = async (
     const synthesisLockedBlock = route.wantsRegeneration
       ? ''
       : buildLockedDossiersBlock(freshReferencedDossiers);
-    const synthesisPeerLedgerBlock = grounding.apiPlayer?.position
-      ? buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers, {
-          targetPlayers: route.targetPlayers,
-          positionHint: grounding.apiPlayer.position,
-          message,
-        })
-      : peerLedgerBlock;
+    const synthesisPeerLedgerOptions = { ...peerLedgerOptions, positionHint: grounding.apiPlayer?.position };
+    // A re-rating starts from scratch: the player's own earlier cards never anchor it.
+    const ownSlugs = new Set([toBasePlayerSlug(primaryPlayer), toBasePlayerSlug(canonicalName ?? '')]);
+    const synthesisPeerLedger = (
+      grounding.apiPlayer?.position
+        ? selectPositionalPeerLedger(savedDossiers, conversationDossiers, synthesisPeerLedgerOptions)
+        : peerLedger
+    ).filter((p) => !reratingPrime() || !ownSlugs.has(toBasePlayerSlug(p.basicInfo.name)));
+    const synthesisPeerLedgerBlock =
+      grounding.apiPlayer?.position || reratingPrime()
+        ? buildPositionalPeerLedgerBlock(
+            savedDossiers,
+            conversationDossiers,
+            synthesisPeerLedgerOptions,
+            synthesisPeerLedger,
+          )
+        : peerLedgerBlock;
 
     // Challenges count only against the shared card this rating replaces: the newest prior card
     // of the requested edition (priorDossiers is oldest first).
@@ -409,11 +429,12 @@ export const sendMessageToAI = async (
     const replacedSlug = replacedCard ? toVersionedSlug(replacedCard) : null;
     const replacedCardChallenges = challengeRows.filter((r) => r.card_slug === replacedSlug);
 
-    const priorTrajectoryBlock =
-      buildPriorDossierTrajectoryBlock(
-        priorDossiers,
-        grounding.apiPlayer?.name || primaryPlayer || 'player',
-      ) + buildRevisionProposalsBlock(replacedCardChallenges);
+    const priorTrajectoryBlock = reratingPrime()
+      ? ''
+      : buildPriorDossierTrajectoryBlock(
+          priorDossiers,
+          grounding.apiPlayer?.name || primaryPlayer || 'player',
+        ) + buildRevisionProposalsBlock(replacedCardChallenges);
 
     // Look up the club's verified manager while the card is synthesized; prime cards skip it.
     const managerPromise = isHistorical
@@ -430,6 +451,7 @@ export const sendMessageToAI = async (
       lockedDossiersBlock: synthesisLockedBlock,
       savedDossiersBlock,
       peerLedgerBlock: synthesisPeerLedgerBlock,
+      peerLedgerCards: synthesisPeerLedger,
       priorTrajectoryBlock,
       requestedSeason: season,
     });
@@ -449,11 +471,12 @@ export const sendMessageToAI = async (
       perf('verified manager');
     }
 
-    const stampedProfile = stampDossier(profile, Date.now());
+    const now = Date.now();
+    const stampedProfile = stampDossier(reratingPrime() ? { ...profile, rerateAt: now } : profile, now);
     upsertCachedDossier(
       toDossierCardSlug(stampedProfile.basicInfo.name, isHistorical),
       stampedProfile,
-      { supersede },
+      { supersede: supersede || reratingPrime() },
     );
     return stampedProfile;
   }

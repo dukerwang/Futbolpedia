@@ -68,8 +68,10 @@ export interface DossierVersion {
   type: DossierVersionType;
   label: string;
   evaluationDate: string; // ISO YYYY-MM-DD (e.g. "2026-10-25" or peak snapshot date)
-  seasonOrEra: string; // e.g. "2026-27" or "2008-09"
+  seasonOrEra: string; // e.g. "2026-27", "2008-09", or a prime window "2003-06"
   peakContext?: string | null;
+  /** A prime card's window: the first and last season of the player's best stretch (YYYY-YY). */
+  primeWindow?: { startSeason: string; endSeason: string } | null;
 }
 
 export type EvidenceGrade = 'A' | 'B' | 'C';
@@ -122,6 +124,12 @@ export interface DossierRevision {
   revisedAt: number;
 }
 
+export interface PeerPlacement {
+  betterThan: string[];
+  levelWith: string[];
+  notAsGoodAs: string[];
+}
+
 export interface PlayerProfile {
   basicInfo: BasicInfo;
   ratings: Ratings;
@@ -135,6 +143,8 @@ export interface PlayerProfile {
   /** YYYY-MM-DD of the last Latest Update refresh; absent means it dates from the card itself. */
   latestUpdateAsOf?: string;
   createdAt?: number;
+  /** When a prime card was re-rated from scratch (ms); the newest re-rating replaces the shared card. */
+  rerateAt?: number;
   /** Set when this is the user's revision of a shared card rather than the shared card itself */
   revision?: DossierRevision;
   /** Formal card versioning metadata */
@@ -147,6 +157,8 @@ export interface PlayerProfile {
   genuineFlaws?: string[];
   /** Real-world positional peer benchmarks recorded at calibration */
   peerBenchmark?: string;
+  /** Calibrated peers this version was judged better than, level with, or below */
+  peerPlacement?: PeerPlacement;
   /** Evidence grade and sample size evaluation */
   confidence?: DossierConfidence;
   /** Dialectical arguments for higher or lower rating */
@@ -203,6 +215,8 @@ export interface ChatMessage {
   content: string | PlayerProfile | ReactNode;
   image?: string; // base64 encoded image string
   timestamp?: number;
+  /** Card key of the dossier this AI message announced, so history can carry the card itself. */
+  dossierKey?: string;
   /** Present on Gaffa asset-trade replies after the scorecard path runs. */
   gaffaScorecard?: GaffaTradeScorecard;
 }

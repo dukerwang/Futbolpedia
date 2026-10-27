@@ -129,11 +129,57 @@ export const seasonStartYear = (season: string): number | null => {
 };
 
 /**
+ * The first and last season a card covers, as season start years: "2005-06" -> [2005, 2005],
+ * a prime window "2003-06" (2003-04 through 2005-06) -> [2003, 2005], a calendar year "1962" ->
+ * [1962, 1962]. Null when unreadable.
+ */
+export const seasonSpan = (seasonOrEra: string | null | undefined): [number, number] | null => {
+  const m = seasonOrEra?.trim().match(/^((?:19|20)\d{2})(?:\s*[-/–]\s*(\d{2}|\d{4}))?$/);
+  if (!m) return null;
+  const start = Number(m[1]);
+  if (!m[2]) return [start, start];
+  let end = Number(m[2].length === 2 ? `${m[1].slice(0, 2)}${m[2]}` : m[2]);
+  if (end < start) end += 100;
+  if (end === start) return [start, start];
+  return end === start + 1 ? [start, start] : [start, end - 1];
+};
+
+/**
+ * A prime window from its first and last season ("2003-04", "2005-06" -> "2003-06"; one season
+ * stays as it is). Calendar-year seasons ("1958", "1962") give "1958-1962". Null when either end
+ * is unreadable or the window runs backwards.
+ */
+export const formatPrimeWindow = (
+  startSeason: string | null | undefined,
+  endSeason: string | null | undefined,
+): { seasonOrEra: string; seasons: number } | null => {
+  const isSeason = (s: string) => {
+    const span = seasonSpan(s);
+    return /^\d{4}-\d{2}$/.test(s) && span !== null && span[0] === span[1];
+  };
+  const isYear = (s: string) => /^(?:19|20)\d{2}$/.test(s);
+  const a = startSeason?.trim().replace(/[/–]/g, '-') ?? '';
+  const b = endSeason?.trim().replace(/[/–]/g, '-') ?? '';
+  if (!(isSeason(a) || isYear(a)) || !(isSeason(b) || isYear(b))) return null;
+  const from = seasonStartYear(a)!;
+  const to = seasonStartYear(b)!;
+  if (to < from) return null;
+  if (a === b) return { seasonOrEra: a, seasons: 1 };
+  const seasons = to - from + 1;
+  const seasonOrEra =
+    isYear(a) && isYear(b) ? `${from}-${to}` : `${from}-${String(to + 1).slice(2)}`;
+  return { seasonOrEra, seasons };
+};
+
+/**
  * Whether a card's season describes the requested one. A range must match exactly; a bare
- * year matches either season it touches ("2006" matches 2005-06 and 2006-07).
+ * year matches either season it touches ("2006" matches 2005-06 and 2006-07). A prime window
+ * spanning several seasons is its own version and never stands in for one of them.
  */
 export const seasonMatches = (seasonOrEra: string | null | undefined, requested: string): boolean => {
   if (!seasonOrEra) return false;
+  const span = seasonSpan(seasonOrEra);
+  if (span && span[1] > span[0]) return false;
   const cardStart = seasonStartYear(seasonOrEra);
   const reqStart = seasonStartYear(requested);
   if (cardStart == null || reqStart == null) return false;
@@ -281,21 +327,49 @@ export const getCardKey = (p: PlayerProfile): string =>
   }`;
 
 /**
- * Keeps each player's newest current card, so an archived re-rating never sits next to the
- * live one in locks, peer ledgers or grep results. On equal dates the later entry wins, so list
- * sources from broadest to most local. Prime cards keep their own key.
+ * Keeps each player's newest current card and newest prime card, so an archived re-rating never
+ * sits next to the live one in locks, peer ledgers or grep results. Current cards go by
+ * evaluation date (on equal dates the later entry wins, so list sources from broadest to most
+ * local); prime cards by the latest re-rating, then the latest generated. Season cards keep
+ * their own key, one per season.
  */
 export const latestCardPerPlayer = (cards: PlayerProfile[]): PlayerProfile[] => {
   const byPlayer = new Map<string, PlayerProfile>();
+  const primeRank = (p: PlayerProfile): [number, number] => [p.rerateAt ?? 0, p.createdAt ?? 0];
   for (const p of cards) {
-    const key = isPrimeCard(p) ? getCardKey(p) : `${toBasePlayerSlug(p.basicInfo.name)}:current`;
+    const edition = cardEdition(p);
+    const base = toBasePlayerSlug(p.basicInfo.name);
+    const key =
+      edition === 'current' ? `${base}:current` : edition === 'prime' ? `${base}:prime` : getCardKey(p);
     const existing = byPlayer.get(key);
-    if (existing && (getDossierEvaluationDate(existing) ?? '') > (getDossierEvaluationDate(p) ?? '')) {
+    if (existing && edition === 'prime') {
+      const [a, b] = [primeRank(existing), primeRank(p)];
+      if (a[0] > b[0] || (a[0] === b[0] && a[1] > b[1])) continue;
+    } else if (existing && (getDossierEvaluationDate(existing) ?? '') > (getDossierEvaluationDate(p) ?? '')) {
       continue;
     }
     byPlayer.set(key, p);
   }
   return [...byPlayer.values()];
+};
+
+/**
+ * Drops prime cards a re-rating has replaced. A re-rating can move the prime's window and with it
+ * the evaluation date, so the old card keeps its own archive row and card key; any prime card of
+ * the same player re-rated later supersedes it.
+ */
+export const dropSupersededPrimes = (cards: PlayerProfile[]): PlayerProfile[] => {
+  const latestRerate = new Map<string, number>();
+  for (const p of cards) {
+    if (cardEdition(p) !== 'prime' || !p.rerateAt) continue;
+    const base = toBasePlayerSlug(p.basicInfo.name);
+    latestRerate.set(base, Math.max(latestRerate.get(base) ?? 0, p.rerateAt));
+  }
+  return cards.filter(
+    (p) =>
+      cardEdition(p) !== 'prime' ||
+      (p.rerateAt ?? 0) >= (latestRerate.get(toBasePlayerSlug(p.basicInfo.name)) ?? 0),
+  );
 };
 
 /** Immutable archive slug for a dated card, e.g. "joshua-kimmich--current--2026-10-25". */

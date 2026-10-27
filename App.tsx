@@ -795,6 +795,7 @@ const App: React.FC = () => {
           sender: 'ai',
           content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
           timestamp: Date.now(),
+          dossierKey: getCardKey(profile),
         };
       } else {
         newAiMessage = {
