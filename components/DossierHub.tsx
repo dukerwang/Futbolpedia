@@ -174,7 +174,7 @@ const DossierCard: React.FC<DossierCardProps> = ({
           onOpen();
         }
       }}
-      className={`group relative flex flex-col justify-between p-5 rounded-2xl bg-white dark:bg-charcoal-surface border shadow-sm hover:shadow-md transition-all duration-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+      className={`group relative flex flex-col justify-between p-5 rounded-2xl bg-white dark:bg-charcoal-surface border shadow-sm hover:shadow-md transition-[border-color,box-shadow] duration-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
         isSelected
           ? 'border-emerald-500 ring-1 ring-emerald-500/40'
           : 'border-cream-300/80 dark:border-charcoal-border hover:border-emerald-500/50'
