@@ -55,8 +55,9 @@ const formatMonth = (isoDate: string): string =>
 
 /**
  * The card's edition and when it describes, for the header pill: "Current form · Oct 2026",
- * "Prime · 2003–06" or "Paris Saint-Germain era · 2017–20". Current cards show their month; historical cards show their season, since
- * a peak is a season or a window of seasons rather than a day.
+ * "Prime · 2003–06" or "Paris Saint-Germain era · 2017–20". Current cards show their month;
+ * historical cards show their season, since a peak is a season or a window of seasons rather
+ * than a day.
  */
 export function describeCardEdition(profile: PlayerProfile): {
   tone: PillTone;
@@ -89,7 +90,28 @@ export function describeCardEdition(profile: PlayerProfile): {
   const name = qualifier
     ? `${formatEraQualifier(qualifier)} era`
     : EDITION_NAMES[edition] ?? EDITION_NAMES.prime;
-  return { tone: 'amber', icon: 'workspace_premium', label: when ? `${name} · ${when}` : name };
+  const label = when ? `${name} · ${when}` : name;
+  // An era is a chapter of a career the user named, not the player at his best, so it doesn't
+  // wear the prime's colours.
+  if (edition === 'era') return { tone: 'blue', icon: 'auto_stories', label };
+  return { tone: 'amber', icon: 'workspace_premium', label };
+}
+
+/**
+ * A few words naming the card among the player's other versions: "Current", "Prime",
+ * "PSG era" or "2015–16".
+ */
+export function shortEditionLabel(profile: PlayerProfile): string {
+  const edition = cardEdition(profile);
+  if (edition === 'current') return profile.version ? 'Current' : 'Older card';
+  const window = profile.version?.seasonOrEra?.trim();
+  const when = window ? formatSeason(window) : '';
+  if (edition === 'era') {
+    const qualifier = profile.version?.qualifier?.trim();
+    return qualifier ? `${formatEraQualifier(qualifier)} era` : when ? `Era ${when}` : 'Era';
+  }
+  if (edition === 'season_snapshot') return when || EDITION_NAMES.season_snapshot;
+  return EDITION_NAMES[edition] ?? EDITION_NAMES.prime;
 }
 
 /** "As of Oct 25" for a current card's Latest Update, which refreshes weekly; null on prime cards. */

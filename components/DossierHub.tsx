@@ -7,8 +7,9 @@ import {
   isPrimeCard,
   shareDossierCard,
 } from '../services/geminiService';
+import { cardEdition, formatEraQualifier } from '../services/dossierStore';
 import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
-import { describeCardEdition, pillClass, PILL_ICON_CLASS } from './pills';
+import { describeCardEdition, pillClass, PILL_ICON_CLASS, shortEditionLabel } from './pills';
 
 /** "mine" is the user's own dossiers (localStorage); "global" is every shared card in Supabase. */
 export type HubTab = 'mine' | 'global';
@@ -27,7 +28,7 @@ interface DossierHubProps {
   onStartChat: () => void;
 }
 
-type EditionFilter = 'all' | 'current' | 'prime';
+type EditionFilter = 'all' | 'current' | 'prime' | 'era' | 'season';
 type PositionFilter = 'all' | 'forward' | 'midfield' | 'defender' | 'goalkeeper';
 type SortOption = 'overall_desc' | 'recent' | 'name_asc' | 'trajectory_desc';
 
@@ -38,7 +39,28 @@ const EDITION_OPTIONS: Array<{ id: EditionFilter; label: string; activeClass: st
   { id: 'all', label: 'All', activeClass: 'bg-white dark:bg-charcoal text-charcoal dark:text-cream-50 shadow-xs' },
   { id: 'current', label: 'Current', activeClass: 'bg-emerald-600 text-white shadow-xs' },
   { id: 'prime', label: 'Prime', activeClass: 'bg-amber-600 text-white shadow-xs' },
+  { id: 'era', label: 'Eras', activeClass: 'bg-blue-600 text-white shadow-xs' },
+  { id: 'season', label: 'Seasons', activeClass: 'bg-amber-600 text-white shadow-xs' },
 ];
+
+/** The card editions each edition filter keeps. Current needs a recorded edition, so pre-edition cards stay under All. */
+const matchesEdition = (p: PlayerProfile, filter: EditionFilter): boolean => {
+  if (filter === 'all') return true;
+  if (filter === 'current') return p.version?.type === 'current';
+  const edition = cardEdition(p);
+  if (filter === 'era') return edition === 'era';
+  if (filter === 'season') return edition === 'season_snapshot';
+  return edition === 'prime';
+};
+
+/** How a player's versions line up: current form, prime, eras, then single seasons. */
+const EDITION_ORDER: Record<string, number> = { current: 0, prime: 1, era: 2, season_snapshot: 3 };
+const compareVersions = (a: PlayerProfile, b: PlayerProfile): number =>
+  (EDITION_ORDER[cardEdition(a)] ?? 4) - (EDITION_ORDER[cardEdition(b)] ?? 4) ||
+  (a.version?.seasonOrEra || '').localeCompare(b.version?.seasonOrEra || '');
+
+/** At most this many of a player's other versions show as chips on a card. */
+const MAX_VERSION_CHIPS = 3;
 
 const SORT_OPTIONS: Array<{ id: SortOption; label: string; globalOnly?: boolean }> = [
   { id: 'recent', label: 'Most recent' },
@@ -78,12 +100,27 @@ interface DossierCardProps {
   tab: HubTab;
   isSelected: boolean;
   isSaved: boolean;
+  /** The player's other cards in this tab (current form, prime, eras, seasons), in version order. */
+  otherVersions: PlayerProfile[];
   onOpen: () => void;
+  onOpenVersion: (profile: PlayerProfile) => void;
+  onShowAllVersions: () => void;
   onRename?: (newName: string) => void;
   onDelete?: () => void;
 }
 
-const DossierCard: React.FC<DossierCardProps> = ({ item, tab, isSelected, isSaved, onOpen, onRename, onDelete }) => {
+const DossierCard: React.FC<DossierCardProps> = ({
+  item,
+  tab,
+  isSelected,
+  isSaved,
+  otherVersions,
+  onOpen,
+  onOpenVersion,
+  onShowAllVersions,
+  onRename,
+  onDelete,
+}) => {
   const { profile, isCurrentRating, trajectoryDiff, previousRatingDate } = item;
   const [shareState, setShareState] = useState<'idle' | 'saving' | 'copied'>('idle');
   const [isEditing, setIsEditing] = useState(false);
@@ -241,6 +278,42 @@ const DossierCard: React.FC<DossierCardProps> = ({ item, tab, isSelected, isSave
             ))}
           </div>
         )}
+
+        {otherVersions.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-sans font-semibold uppercase tracking-wider text-charcoal/40 dark:text-cream-400/60 mr-0.5">
+              Also
+            </span>
+            {otherVersions.slice(0, MAX_VERSION_CHIPS).map((version) => {
+              const versionEdition = describeCardEdition(version);
+              return (
+                <button
+                  key={getCardKey(version)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenVersion(version);
+                  }}
+                  className={`${pillClass(versionEdition.tone, 'xs')} hover:brightness-95 dark:hover:brightness-125 transition`}
+                  title={`Open ${versionEdition.label}`}
+                >
+                  <span className="max-w-[9rem] truncate">{shortEditionLabel(version)}</span>
+                  <span className="font-mono font-bold">{version.ratings.overall}</span>
+                </button>
+              );
+            })}
+            {otherVersions.length > MAX_VERSION_CHIPS && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onShowAllVersions();
+                }}
+                className="text-[10px] font-sans font-semibold text-emerald-600 dark:text-emerald-400 hover:underline"
+              >
+                +{otherVersions.length - MAX_VERSION_CHIPS} more
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="pt-3 mt-4 border-t border-cream-200 dark:border-charcoal-border flex items-center justify-between text-xs">
@@ -359,6 +432,19 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   const savedKeys = useMemo(() => new Set(savedProfiles.map(getCardKey)), [savedProfiles]);
 
   const items = tab === 'mine' ? mineItems : globalItems;
+
+  // Each player's versions in this tab, so a card can link to his other eras. In the global hub an
+  // older current rating isn't a version of its own, just an earlier reading of current form.
+  const versionsByPlayer = useMemo(() => {
+    const map = new Map<string, PlayerProfile[]>();
+    for (const { profile, isCurrentRating } of items) {
+      if (tab === 'global' && !isCurrentRating && !isPrimeCard(profile)) continue;
+      const key = playerKey(profile);
+      map.set(key, [...(map.get(key) ?? []), profile]);
+    }
+    for (const versions of map.values()) versions.sort(compareVersions);
+    return map;
+  }, [items, tab]);
   const isLoading = tab === 'global' && globalStatus !== 'ready';
 
   const summary = useMemo(() => {
@@ -372,10 +458,12 @@ export const DossierHub: React.FC<DossierHubProps> = ({
       ];
     }
     const worldClass = items.filter((i) => i.profile.ratings.overall >= 90).length;
+    const eras = items.filter((i) => cardEdition(i.profile) === 'era').length;
     const latest = items.map((i) => i.profile.evaluationDate).filter(Boolean).sort().reverse()[0];
     return [
       `${items.length} cards`,
       `${players} players`,
+      ...(eras ? [`${eras} ${eras === 1 ? 'era' : 'eras'}`] : []),
       `${worldClass} rated 90+`,
       ...(latest ? [`latest ${latest}`] : []),
     ];
@@ -406,6 +494,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
           p.playstyleAndRole?.playstyle?.archetype || '',
           p.version?.label || '',
           p.version?.seasonOrEra || '',
+          p.version?.qualifier ? `${p.version.qualifier} ${formatEraQualifier(p.version.qualifier)} era` : '',
         ]
           .join(' ')
           .toLowerCase()
@@ -413,10 +502,8 @@ export const DossierHub: React.FC<DossierHubProps> = ({
       });
     }
 
-    if (editionFilter === 'current') {
-      result = result.filter((i) => i.profile.version?.type === 'current');
-    } else if (editionFilter === 'prime') {
-      result = result.filter((i) => isPrimeCard(i.profile));
+    if (editionFilter !== 'all') {
+      result = result.filter((i) => matchesEdition(i.profile, editionFilter));
     }
 
     if (positionFilter !== 'all') {
@@ -440,7 +527,9 @@ export const DossierHub: React.FC<DossierHubProps> = ({
         return recencyKey(b.profile, tab).localeCompare(recencyKey(a.profile, tab));
       }
       if (sortOption === 'name_asc') {
-        return a.profile.basicInfo.name.localeCompare(b.profile.basicInfo.name);
+        return (
+          playerKey(a.profile).localeCompare(playerKey(b.profile)) || compareVersions(a.profile, b.profile)
+        );
       }
       if (sortOption === 'trajectory_desc') {
         return (b.trajectoryDiff ?? -999) - (a.trajectoryDiff ?? -999);
@@ -684,7 +773,15 @@ export const DossierHub: React.FC<DossierHubProps> = ({
                   tab={tab}
                   isSelected={cardKey === activeCardKey}
                   isSaved={savedKeys.has(cardKey)}
+                  otherVersions={(versionsByPlayer.get(playerKey(item.profile)) ?? []).filter(
+                    (v) => getCardKey(v) !== cardKey,
+                  )}
                   onOpen={() => onSelectDossier(item.profile, tab)}
+                  onOpenVersion={(version) => onSelectDossier(version, tab)}
+                  onShowAllVersions={() => {
+                    setEditionFilter('all');
+                    setSearchQuery(item.profile.basicInfo.name);
+                  }}
                   onRename={tab === 'mine' ? (name) => onRenameDossier(cardKey, name) : undefined}
                   onDelete={tab === 'mine' ? () => onDeleteDossier(cardKey) : undefined}
                 />

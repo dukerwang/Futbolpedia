@@ -7,6 +7,7 @@ import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS } fr
 import DOMPurify from 'dompurify';
 import {
   getCardKey,
+  isPrimeCard,
   shareDossierCard,
 } from '../services/geminiService';
 
