@@ -18,6 +18,8 @@ interface Scenario {
   status: string;
   /** Digest text returned by grounded searches. */
   search: (query: string) => string;
+  /** Prime season the fake model answers with before being corrected (a multi-season span). */
+  primeSpan?: string;
 }
 
 interface GeminiCall {
@@ -38,7 +40,9 @@ function fakeProfile(prompt: string) {
   const version = prompt.includes('SEASON DATED CARD')
     ? { type: 'season_snapshot', label: 'Season (2005-06)', evaluationDate: '2006-05-17', seasonOrEra: '2005-06', peakContext: 'Season note.' }
     : prompt.includes('HISTORICAL / PEAK')
-      ? { type: 'prime', label: 'Prime Zenith (2011-12)', evaluationDate: '2012-05-25', seasonOrEra: '2011-12', peakContext: 'Peak note.' }
+      ? scenario.primeSpan && !prompt.includes('spans several seasons')
+        ? { type: 'prime', label: `Prime Zenith (${scenario.primeSpan})`, evaluationDate: '2013-06-01', seasonOrEra: scenario.primeSpan, peakContext: 'Peak note.' }
+        : { type: 'prime', label: 'Prime Zenith (2011-12)', evaluationDate: '2012-05-25', seasonOrEra: '2011-12', peakContext: 'Peak note.' }
       : { type: 'current', label: 'Current Form', evaluationDate: today, seasonOrEra: '2026-27', peakContext: null };
   return {
     calibration: {
@@ -159,6 +163,15 @@ async function main() {
     assert.equal(card.version?.type, 'prime');
     assert.equal(card.clubManager, undefined);
     assert.equal(managerCalls().length, 0);
+  });
+
+  await test('a prime spanning several seasons is sent back for one season', async () => {
+    scenario = { status: 'RETIRED', search: () => '- Summary of the player.', primeSpan: '2010-13' };
+    const card = await rate('Rate Prime Carles Puyol');
+    const syntheses = calls.filter((c) => c.structured && c.prompt.includes('synthesis_instructions'));
+    assert.equal(syntheses.length, 2);
+    assert.match(syntheses[1].prompt, /spans several seasons/);
+    assert.equal(card.version?.seasonOrEra, '2011-12');
   });
 
   await test('an empty status reply still finds the retirement in the grounding', async () => {

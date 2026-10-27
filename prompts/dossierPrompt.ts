@@ -15,10 +15,10 @@ You are generating a structured scouting dossier JSON object representing an off
      - Set \`version.peakContext\` to \`null\`.
    - **Historical / Peak / Prime Player Evaluation (a "prime" or "peak" request, or a retired player with no timeframe):**
      - You MUST identify and evaluate the player at their ABSOLUTE CAREER ZENITH.
-     - Research and pinpoint the exact peak season and a specific peak date within it (YYYY-MM-DD), such as the date that defining campaign concluded.
+     - Research and pinpoint the single season in which the player was at his best — one season, never a span of several — and a specific peak date within it (YYYY-MM-DD), such as the date that campaign concluded.
      - Set \`version.type\` to \`"prime"\`.
      - Set \`version.evaluationDate\` to that verified peak date (YYYY-MM-DD).
-     - Set \`version.seasonOrEra\` to the peak season or era, formatted YYYY-YY.
+     - Set \`version.seasonOrEra\` to that one season, formatted YYYY-YY with consecutive years (a single calendar year only when the peak was a summer tournament or a calendar-year league).
      - Set \`version.label\` to \`"Prime Zenith (<Season/Era>)"\`.
      - Set \`version.peakContext\` to a concise 1–2 sentence analytical note defining what specific trophies, statistical output, and tactical dominance made this the player's career zenith.
 

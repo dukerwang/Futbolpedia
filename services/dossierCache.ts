@@ -446,9 +446,17 @@ export async function fetchGlobalHubDossiers(
       });
     }
 
+    // A player has one prime card, and one card per named season. A replaced card stays in the
+    // archive but not in the Hub, so the newest one (the one the prime pointer holds) is listed.
+    const historical = new Map<string, PlayerProfile>();
     for (const card of cards) {
-      if (card.version?.type !== 'current') results.push({ profile: card, isCurrentRating: false });
+      if (card.version?.type === 'current') continue;
+      const edition = cardEdition(card);
+      const slot = edition === 'season_snapshot' ? `season:${card.version?.seasonOrEra ?? ''}` : edition;
+      const kept = historical.get(slot);
+      if (!kept || (card.createdAt ?? 0) > (kept.createdAt ?? 0)) historical.set(slot, card);
     }
+    for (const card of historical.values()) results.push({ profile: card, isCurrentRating: false });
   }
 
   // Sort: current official ratings first, then by Overall descending

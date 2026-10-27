@@ -111,6 +111,17 @@ export const parseRequestedSeason = (text: string): string | null => {
   return end === start + 1 ? `${start}-${String(end).slice(2)}` : m[1];
 };
 
+/** One season ("2013-14") or one calendar year ("1962"), not a span of several ("2012-15"). */
+export const isSingleSeason = (season: string): boolean => {
+  const s = season.trim();
+  if (/^\d{4}$/.test(s)) return true;
+  const m = s.match(/^(\d{4})\s*[-/–]\s*(\d{2}|\d{4})$/);
+  if (!m) return false;
+  const start = Number(m[1]);
+  const end = Number(m[2].length === 2 ? `${m[1].slice(0, 2)}${m[2]}` : m[2]);
+  return end === start + 1 || (m[2].length === 2 && end + 100 === start + 1);
+};
+
 /** First calendar year a season reference covers: "2005-06" -> 2005, "2006" -> 2006. */
 export const seasonStartYear = (season: string): number | null => {
   const m = season.match(/(?:19|20)\d{2}/);

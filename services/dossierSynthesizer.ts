@@ -31,7 +31,14 @@ import {
   type FutbolpediaVerifiedFacts,
 } from './profileManagerGrounding';
 import type { ApiFootballPlayerFactSheet } from './groundingService';
-import { EDITION_NAME_RE, isValidEvaluationDate, seasonMatches, todayIso, toBasePlayerSlug } from './dossierCards';
+import {
+  EDITION_NAME_RE,
+  isSingleSeason,
+  isValidEvaluationDate,
+  seasonMatches,
+  todayIso,
+  toBasePlayerSlug,
+} from './dossierCards';
 
 const OUTFIELD_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
@@ -830,6 +837,13 @@ function findSynthesisValidationIssues(
     issues.push(...managerIssues);
   }
 
+  const era = profile.version?.seasonOrEra ?? '';
+  if (profile.version && profile.version.type !== 'current' && era && !isSingleSeason(era)) {
+    issues.push(
+      `version.seasonOrEra "${era}" spans several seasons. A card rates one version of the player: pick the single season he was at his best, formatted YYYY-YY with consecutive years, and date the card within it.`,
+    );
+  }
+
   if (profile.version && profile.version.type !== 'current' && !profile.version.evaluationDate) {
     issues.push(
       'The historical card has no valid date. Set version.evaluationDate to a real YYYY-MM-DD date from the season this card rates and version.seasonOrEra to that season.',
@@ -883,7 +897,7 @@ export async function synthesizePlayerDossier(
     ? `
     - HISTORICAL / PEAK DATED CARD EVALUATION: Evaluate the player at their ABSOLUTE CAREER ZENITH on the exact same 1–99 scale as modern players (zero nostalgia inflation, zero conservative underselling).
     - ONE VERSION, NOT A CAREER: This card rates the best version of the player — the footballer he was in his peak season — not his career, longevity, trophy count or legacy. A long career or a full cabinet earns nothing by itself; honours count only as evidence of how good he was at that peak.
-    - PEAK DATING REQUIREMENT: You MUST research and pinpoint the exact peak season and a specific date within it. Set \`version.type\` = "prime", \`version.evaluationDate\` = verified peak date (YYYY-MM-DD), \`version.seasonOrEra\` = peak season formatted YYYY-YY, \`version.label\` = "Prime Zenith (<Season>)", and \`version.peakContext\` = concise 1–2 sentence note explaining the trophies, role, and dominance that defined this zenith.
+    - PEAK DATING REQUIREMENT: You MUST research and pinpoint the single season in which he was at his best (one season, never a span of several) and a specific date within it. Set \`version.type\` = "prime", \`version.evaluationDate\` = verified peak date (YYYY-MM-DD), \`version.seasonOrEra\` = peak season formatted YYYY-YY, \`version.label\` = "Prime Zenith (<Season>)", and \`version.peakContext\` = concise 1–2 sentence note explaining the trophies, role, and dominance that defined this zenith.
     - If the player at their peak was the #1 player in the world at their position or an all-time benchmark at it, calibrate them in \`93_95_WC_ELITE\` (94–95) — do not cap historic defenders or midfielders at 91–92.
     - Because a Prime/Peak dossier represents the player's realized peak, set \`ratings.potential\` equal to \`ratings.overall\` (unless their career was cut short before their prime).
     - Disregard their ${year} status (retired, manager, veteran) when rating attributes and Overall.`

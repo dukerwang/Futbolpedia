@@ -36,6 +36,8 @@ import {
   renameDossierCard,
   parseRequestedSeason,
   seasonMatches,
+  isSingleSeason,
+  fetchGlobalHubDossiers,
 } from '../services/dossierStore';
 import { extractCandidatePlayerName } from '../services/turnRouter';
 import { groundingShowsRetirement, parseCareerStatus } from '../services/groundingService';
@@ -519,6 +521,30 @@ async function main() {
     assert.equal(q.version?.type, 'season_snapshot');
     assert.equal(q.version?.evaluationDate, '');
     assert.equal(ensureDossierDated(q, Date.now()), null);
+  });
+
+  await test('a prime is one season, not a span', () => {
+    assert.equal(isSingleSeason('2013-14'), true);
+    assert.equal(isSingleSeason('1999-00'), true);
+    assert.equal(isSingleSeason('1962'), true);
+    assert.equal(isSingleSeason('2012-15'), false);
+    assert.equal(isSingleSeason('1961-1963'), false);
+    assert.equal(isSingleSeason('2010-13'), false);
+    assert.equal(isSingleSeason('2013-2014'), true);
+  });
+
+  await test('the Hub lists one prime per player, the newest', async () => {
+    const at = (n: number) => ({ createdAt: CALIBRATION_EPOCH_MS + n });
+    const older = primeCard('Cristiano Ronaldo', '2014-05-24', { ...at(1), ratings: { overall: 98, potential: 98 } });
+    const newer = primeCard('Cristiano Ronaldo', '2015-05-23', { ...at(2), ratings: { overall: 98, potential: 98 } });
+    const season = primeCard('Cristiano Ronaldo', '2008-05-21', { ...at(3), ratings: { overall: 93, potential: 95 } });
+    season.version = { ...season.version!, type: 'season_snapshot', seasonOrEra: '2007-08' };
+    const items = await fetchGlobalHubDossiers([older, newer, season]);
+    const keys = items.map((i) => getCardKey(i.profile)).sort();
+    assert.deepEqual(keys, [
+      'cristiano-ronaldo:prime:2015-05-23',
+      'cristiano-ronaldo:season_snapshot:2008-05-21',
+    ]);
   });
 
   await test('seasons parse from messages and match card seasons', () => {
