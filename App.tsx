@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Header } from './components/Header';
+import { Header, type AppView } from './components/Header';
 import { ChatHistory } from './components/ChatHistory';
 import { ChatInput } from './components/ChatInput';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import { WhatsNewPopup } from './components/WhatsNewPopup';
-import { GlobalDossierHub } from './components/GlobalDossierHub';
+import { DossierHub, type HubTab } from './components/DossierHub';
 import type {
   ChatMessage,
   PlayerProfile,
@@ -101,7 +101,9 @@ const App: React.FC = () => {
   const [activeProfile, setActiveProfile] = useState<PlayerProfile | null>(null);
   const [allProfiles, setAllProfiles] = useState<PlayerProfile[]>([]);
   const [globalDossiers, setGlobalDossiers] = useState<PlayerProfile[]>([]);
-  const [isHubOpen, setIsHubOpen] = useState(false);
+  // Main view: the chat, or the dossier hub ("Your dossiers" and the global hub as tabs)
+  const [view, setView] = useState<AppView>('chat');
+  const [hubTab, setHubTab] = useState<HubTab>('mine');
 
   // Chat domain (Futbolpedia default vs Gaffa Q&A) — persisted per conversation
   const [domain, setDomain] = useState<ChatDomain>('default');
@@ -872,6 +874,7 @@ const App: React.FC = () => {
 
   const handleSelectConversation = useCallback((id: string) => {
     resetChat();
+    setView('chat');
     const target = conversations.find(c => c.id === id);
     if (!target) return;
 
@@ -887,6 +890,7 @@ const App: React.FC = () => {
 
   const handleNewConversation = useCallback(() => {
     resetChat();
+    setView('chat');
     const newId = generateId();
     const newConv: Conversation = {
       id: newId,
@@ -966,9 +970,15 @@ const App: React.FC = () => {
     });
   }, [activeConversationId]);
 
-  const togglePanel = () => {
-    setIsPanelOpen(prev => !prev);
-  };
+  const handleSelectHubDossier = useCallback((profile: PlayerProfile, from: HubTab) => {
+    // A global card opened from the hub joins your dossiers, as before.
+    if (from === 'global') saveAndSetActiveProfile(profile);
+    else handleSelectProfile(profile);
+    setIsPanelOpen(true);
+  }, [saveAndSetActiveProfile, handleSelectProfile]);
+
+  // The panel only ever shows one dossier, so it's closed whenever none is active.
+  const showPanel = isPanelOpen && activeProfile !== null;
 
   const toggleConversations = () => {
     setIsConversationsOpen(!isConversationsOpen);
@@ -982,36 +992,21 @@ const App: React.FC = () => {
         onNewChat={handleNewConversation} 
         toggleTheme={toggleTheme} 
         isDarkMode={isDarkMode} 
-        allProfilesCount={globalDossiers.length}
-        onToggleDossier={togglePanel}
-        isPanelOpen={isPanelOpen}
+        dossierCount={globalDossiers.length}
+        view={view}
+        onViewChange={setView}
         onToggleConversations={toggleConversations}
         isConversationsOpen={isConversationsOpen}
-        onOpenHub={() => setIsHubOpen(true)}
-        isHubOpen={isHubOpen}
-      />
-
-      {/* Global Dossier Hub Modal */}
-      <GlobalDossierHub
-        isOpen={isHubOpen}
-        onClose={() => setIsHubOpen(false)}
-        onSelectDossier={(p) => {
-          saveAndSetActiveProfile(p);
-          setIsPanelOpen(true);
-        }}
-        localSavedProfiles={globalDossiers}
       />
       
       {/* Slide-out Dossier Panel - LEFT SIDED */}
       <SidePanel 
-          isOpen={isPanelOpen} 
+          isOpen={showPanel} 
           onClose={() => setIsPanelOpen(false)} 
           profile={activeProfile} 
           allProfiles={globalDossiers}
           onSelectProfile={handleSelectProfile}
-          onBackToHome={() => handleSelectProfile(null)}
-          onRenameDossier={handleRenameDossier}
-          onDeleteDossier={handleDeleteDossier}
+          onOpenHub={view === 'hub' ? undefined : () => setView('hub')}
       />
 
       {/* Slide-out Conversations Panel - RIGHT SIDED */}
@@ -1026,9 +1021,27 @@ const App: React.FC = () => {
           onDeleteConversation={handleDeleteConversation}
       />
 
-      <div className={`flex-1 flex flex-col relative overflow-hidden transition-all duration-500 ease-ios-ease ${isPanelOpen ? 'md:pl-[450px]' : ''} ${isConversationsOpen ? 'md:pr-[350px]' : ''}`}>
+      <div className={`flex-1 flex flex-col relative overflow-hidden transition-all duration-500 ease-ios-ease ${showPanel ? 'md:pl-[450px]' : ''} ${isConversationsOpen ? 'md:pr-[350px]' : ''}`}>
+          {/* Dossier hub, layered over the chat so both keep their scroll position, tab and filters */}
+          <div
+            className={`absolute inset-0 z-30 flex flex-col bg-cream-200 dark:bg-charcoal transition-[padding] duration-500 ease-ios-ease ${view === 'hub' ? '' : 'invisible'} ${showPanel ? 'md:pl-[450px]' : ''} ${isConversationsOpen ? 'md:pr-[350px]' : ''}`}
+            inert={view !== 'hub'}
+          >
+            <DossierHub
+              isActive={view === 'hub'}
+              tab={hubTab}
+              onTabChange={setHubTab}
+              savedProfiles={globalDossiers}
+              activeCardKey={showPanel && activeProfile ? getCardKey(activeProfile) : null}
+              onSelectDossier={handleSelectHubDossier}
+              onRenameDossier={handleRenameDossier}
+              onDeleteDossier={handleDeleteDossier}
+              onStartChat={() => setView('chat')}
+            />
+          </div>
+
           {/* Main Chat Area */}
-          <main className="flex-1 flex flex-col w-full h-full relative min-h-0">
+          <main className="flex-1 flex flex-col w-full h-full relative min-h-0" inert={view !== 'chat'}>
             <ChatHistory 
                 messages={messages} 
                 isLoading={isLoading} 
