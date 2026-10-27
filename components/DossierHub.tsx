@@ -23,6 +23,8 @@ interface DossierHubProps {
   /** Card open in the side panel, highlighted in the grid. */
   activeCardKey: string | null;
   onSelectDossier: (profile: PlayerProfile, from: HubTab) => void;
+  /** Takes the card into the chat to ask about it. */
+  onAskAbout: (profile: PlayerProfile, from: HubTab) => void;
   onRenameDossier: (cardKey: string, newName: string) => void;
   onDeleteDossier: (cardKey: string) => void;
   onStartChat: () => void;
@@ -105,6 +107,7 @@ interface DossierCardProps {
   onOpen: () => void;
   onOpenVersion: (profile: PlayerProfile) => void;
   onShowAllVersions: () => void;
+  onAsk: () => void;
   onRename?: (newName: string) => void;
   onDelete?: () => void;
 }
@@ -118,6 +121,7 @@ const DossierCard: React.FC<DossierCardProps> = ({
   onOpen,
   onOpenVersion,
   onShowAllVersions,
+  onAsk,
   onRename,
   onDelete,
 }) => {
@@ -330,6 +334,17 @@ const DossierCard: React.FC<DossierCardProps> = ({
 
         <div className="flex items-center gap-0.5">
           <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onAsk();
+            }}
+            className="mr-1 flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-sans font-semibold text-charcoal/70 dark:text-cream-300 hover:text-emerald-700 dark:hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors"
+            title={`Ask about ${profile.basicInfo.name} in chat`}
+          >
+            <span aria-hidden="true" className="material-symbols-outlined text-[16px]">chat_bubble</span>
+            Ask
+          </button>
+          <button
             onClick={handleShare}
             className={`${iconButton} ${shareState === 'copied' ? '!text-emerald-600 dark:!text-emerald-400' : 'hover:text-emerald-600 dark:hover:text-emerald-400'}`}
             title={shareState === 'copied' ? 'Link copied' : 'Copy share link'}
@@ -385,6 +400,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   savedProfiles,
   activeCardKey,
   onSelectDossier,
+  onAskAbout,
   onRenameDossier,
   onDeleteDossier,
   onStartChat,
@@ -778,6 +794,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
                   )}
                   onOpen={() => onSelectDossier(item.profile, tab)}
                   onOpenVersion={(version) => onSelectDossier(version, tab)}
+                  onAsk={() => onAskAbout(item.profile, tab)}
                   onShowAllVersions={() => {
                     setEditionFilter('all');
                     setSearchQuery(item.profile.basicInfo.name);

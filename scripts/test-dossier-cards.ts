@@ -43,7 +43,7 @@ import {
   findEraCard,
   toEraKey,
 } from '../services/dossierStore';
-import { describeCardEdition } from '../components/pills';
+import { cardReference, describeCardEdition } from '../components/pills';
 import { classifyTurn, extractCandidatePlayerName } from '../services/turnRouter';
 import { SCOUT_CORE_INSTRUCTION } from '../prompts/scoutCore';
 import { CONVERSATIONAL_SCOUT_MANDATE } from '../prompts/chatPrompt';
@@ -937,6 +937,24 @@ async function main() {
     assert.equal(q.version?.type, 'era');
     assert.equal(q.version?.label, 'Young era');
     assert.equal(getDossierEvaluationDate(q), null, 'no window or date yet: validation asks for them');
+  });
+
+  await test('"Ask" names the exact card version the chat should stay on', () => {
+    const psg = eraCard('Neymar Jr', 'psg', '2017-20', '2020-05-30');
+    assert.equal(cardReference(psg), 'Neymar Jr, Paris Saint-Germain era (2017-20)');
+    assert.equal(parseRequestedSeason(cardReference(psg)) !== null, true);
+    const prime = primeCard('Xavi', '2011-05-28', {
+      version: { id: 'xavi-prime-2011-05-28', type: 'prime', label: 'Prime (2008-11)', evaluationDate: '2011-05-28', seasonOrEra: '2008–11' },
+    });
+    assert.equal(cardReference(prime), 'Prime Xavi (2008-11)');
+    assert.equal(cardReference(card('Prime Kaká', { evaluationDate: '2007-05-23' })), 'Prime Kaká');
+    const season = card('Pedri', {
+      evaluationDate: '2021-05-22',
+      version: { id: 'pedri-season_snapshot-2021-05-22', type: 'season_snapshot', label: 'Season (2020-21)', evaluationDate: '2021-05-22', seasonOrEra: '2020-21' },
+    });
+    assert.equal(cardReference(season), 'Pedri in 2020-21');
+    assert.equal(cardReference(currentCard('Pedri', '2026-10-20')), 'Pedri (current form)');
+    assert.equal(cardReference(card('Pedri', { evaluationDate: '2026-10-20' })), 'Pedri');
   });
 
   await test('no scouting prompt mentions re-rating', () => {

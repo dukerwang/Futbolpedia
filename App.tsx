@@ -6,6 +6,7 @@ import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import { WhatsNewPopup } from './components/WhatsNewPopup';
 import { DossierHub, type HubTab } from './components/DossierHub';
+import { cardReference } from './components/pills';
 import type {
   ChatMessage,
   PlayerProfile,
@@ -104,6 +105,8 @@ const App: React.FC = () => {
   // Main view: the chat, or the dossier hub ("Your dossiers" and the global hub as tabs)
   const [view, setView] = useState<AppView>('chat');
   const [hubTab, setHubTab] = useState<HubTab>('mine');
+  // Text the hub's "Ask" puts in the chat box
+  const [chatDraft, setChatDraft] = useState<{ id: number; text: string } | null>(null);
 
   // Chat domain (Futbolpedia default vs Gaffa Q&A) — persisted per conversation
   const [domain, setDomain] = useState<ChatDomain>('default');
@@ -977,6 +980,29 @@ const App: React.FC = () => {
     setIsPanelOpen(true);
   }, [saveAndSetActiveProfile, handleSelectProfile]);
 
+  // "Ask" on a hub card: the card joins this conversation as a stub (so the model reads the full
+  // card, as with a generated dossier) and the chat box starts with a reference to that exact
+  // version, which keeps the reply on it rather than another edition of the player.
+  const handleAskAboutDossier = useCallback((profile: PlayerProfile) => {
+    saveAndSetActiveProfile(profile);
+    if (domain === 'gaffa') handleDomainChange('default');
+    const reference = cardReference(profile);
+    const key = getCardKey(profile);
+    setMessages(prev =>
+      prev.at(-1)?.dossierKey === key
+        ? prev
+        : [...prev, {
+            id: `ask-${Date.now()}`,
+            sender: 'ai',
+            content: `Pulled up **${reference}**. What would you like to know?`,
+            timestamp: Date.now(),
+            dossierKey: key,
+          }],
+    );
+    setChatDraft({ id: Date.now(), text: `${reference}: ` });
+    setView('chat');
+  }, [saveAndSetActiveProfile, domain, handleDomainChange]);
+
   // The panel only ever shows one dossier, so it's closed whenever none is active.
   const showPanel = isPanelOpen && activeProfile !== null;
 
@@ -1034,6 +1060,7 @@ const App: React.FC = () => {
               savedProfiles={globalDossiers}
               activeCardKey={showPanel && activeProfile ? getCardKey(activeProfile) : null}
               onSelectDossier={handleSelectHubDossier}
+              onAskAbout={handleAskAboutDossier}
               onRenameDossier={handleRenameDossier}
               onDeleteDossier={handleDeleteDossier}
               onStartChat={() => setView('chat')}
@@ -1079,6 +1106,7 @@ const App: React.FC = () => {
                         gaffaNudge={gaffaNudge}
                         onAcceptGaffaNudge={() => handleDomainChange('gaffa')}
                         onDismissGaffaNudge={() => setGaffaNudge(null)}
+                        draft={chatDraft}
                     />
                 </div>
             </div>
