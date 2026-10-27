@@ -146,6 +146,8 @@ export async function gatherPlayerGrounding(params: {
   isHistorical: boolean;
   /** A past season to rate instead of the player's prime ("2005-06" or a bare "2006"). */
   season?: string | null;
+  /** A named version of the player to rate instead of his prime (see TurnRoute.requestedEra). */
+  era?: string | null;
 }): Promise<PlayerGroundingBundle> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
   const datePrefix = `[Date: ${month} ${year}]`;
@@ -155,7 +157,9 @@ export async function gatherPlayerGrounding(params: {
     const searchResult = await runGroundedSearch(
       params.season
         ? `${subject} in the ${params.season} season: club, age, position and role, appearances, goals, assists, honours, form and tactical profile that season ${ANTI_GAME_FILTER}`
-        : `${subject} career peak prime seasons major honours Ballon d'Or FIFPro World XI best season stats tactical profile ${ANTI_GAME_FILTER}`,
+        : params.era
+          ? `${subject} ${params.era} era: which seasons it covers, club, age, position and role, appearances, goals, assists, honours, form and tactical profile season by season ${ANTI_GAME_FILTER}`
+          : `${subject} career peak prime seasons major honours Ballon d'Or FIFPro World XI best season stats tactical profile ${ANTI_GAME_FILTER}`,
     );
     return {
       foundationText: searchResult.formattedBlock,

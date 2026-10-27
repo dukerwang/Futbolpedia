@@ -22,6 +22,11 @@ interface Scenario {
   window?: (prompt: string) => { startSeason: string; endSeason: string };
   /** The model's peer placement on the synthesized card. */
   placement?: { betterThan: string[]; levelWith: string[]; notAsGoodAs: string[] };
+  /** The name and club the model puts on the card. */
+  name?: string;
+  club?: string;
+  /** API-Football's record for the player, if it has one. */
+  apiPlayer?: { name: string; currentClub: string; age?: number };
 }
 
 interface GeminiCall {
@@ -39,7 +44,16 @@ const textOf = (body: any): string =>
 function fakeProfile(prompt: string) {
   const attributes = Object.fromEntries(ATTRIBUTE_KEYS.map((k) => [k, 80]));
   const today = new Date().toISOString().slice(0, 10);
-  const version = prompt.includes('SEASON DATED CARD')
+  const version = prompt.includes('ERA DATED CARD')
+    ? {
+        type: 'era',
+        label: 'Era',
+        evaluationDate: '2020-08-23',
+        seasonOrEra: '2017-20',
+        peakContext: 'Era note.',
+        primeWindow: scenario.window?.(prompt) ?? { startSeason: '2017-18', endSeason: '2019-20' },
+      }
+    : prompt.includes('SEASON DATED CARD')
     ? { type: 'season_snapshot', label: 'Season (2005-06)', evaluationDate: '2006-05-17', seasonOrEra: '2005-06', peakContext: 'Season note.' }
     : prompt.includes('HISTORICAL / PRIME')
       ? {
@@ -62,10 +76,10 @@ function fakeProfile(prompt: string) {
       peerPlacement: scenario.placement ?? { betterThan: [], levelWith: [], notAsGoodAs: [] },
     },
     basicInfo: {
-      name: 'Test Player',
+      name: scenario.name ?? 'Test Player',
       age: 28,
       nationality: 'Spain',
-      club: 'FC Barcelona',
+      club: scenario.club ?? 'FC Barcelona',
       primaryPosition: 'Central Midfielder',
       secondaryPosition: 'None',
       height: "5'7\"",
@@ -116,6 +130,9 @@ globalThis.fetch = (async (input: any, init?: any) => {
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     );
+  }
+  if (url.startsWith('/api/football/player') && scenario.apiPlayer) {
+    return new Response(JSON.stringify({ player: scenario.apiPlayer }), { status: 200 });
   }
   if (url.startsWith('/api/')) return new Response('{}', { status: 404 });
   return realFetch(input, init);
@@ -202,6 +219,62 @@ async function main() {
     assert.match(synthesisPrompt(), /SEASON DATED CARD EVALUATION \(2006\)/);
     assert.equal(card.version?.type, 'season_snapshot');
     assert.equal(card.version?.seasonOrEra, '2005-06');
+    assert.equal(card.clubManager, undefined);
+  });
+
+  await test('a named era gets an era card, with no manager and no status check', async () => {
+    scenario = { status: 'ACTIVE', search: () => '- Those seasons in summary.', name: 'Neymar Jr', club: 'Paris Saint-Germain' };
+    const card = await rate('rate the psg version of neymar');
+    assert.match(synthesisPrompt(), /ERA DATED CARD EVALUATION \(\W*psg\W*\)/);
+    assert.doesNotMatch(synthesisPrompt(), /CURRENT FORM DATED CARD/);
+    assert.equal(card.version?.type, 'era');
+    assert.equal(card.version?.qualifier, 'psg');
+    assert.equal(card.version?.seasonOrEra, '2017-20');
+    assert.equal(card.version?.label, 'Paris Saint-Germain era (2017-20)');
+    assert.equal(card.basicInfo.club, 'Paris Saint-Germain');
+    assert.equal(card.clubManager, undefined);
+    assert.equal(managerCalls().length, 0);
+    assert.equal(statusCalls().length, 0);
+  });
+
+  await test('the same era asked another way is the stored card', async () => {
+    scenario = { status: 'ACTIVE', search: () => '- Those seasons in summary.', name: 'Neymar Jr' };
+    const card = await rate('rate neymar at paris saint-germain');
+    assert.equal(synthesisPrompt(), '', 'no re-rating');
+    assert.equal(card.version?.label, 'Paris Saint-Germain era (2017-20)');
+  });
+
+  await test('an era covering the same years as a stored card is that card', async () => {
+    scenario = { status: 'ACTIVE', search: () => '- Those seasons in summary.', name: 'Neymar Jr' };
+    const card = await rate("rate neymar's post-barcelona years");
+    assert.match(synthesisPrompt(), /ERA DATED CARD EVALUATION \(\W*post-barcelona\W*\)/);
+    assert.equal(card.version?.qualifier, 'psg', 'the published card for 2017-20');
+  });
+
+  await test('an era named after his current club is his current form', async () => {
+    scenario = {
+      status: 'ACTIVE',
+      search: () => '- Regular starter this season.',
+      name: 'Neymar Jr',
+      club: 'Santos',
+      apiPlayer: { name: 'Neymar Jr', currentClub: 'Santos', age: 34 },
+    };
+    const card = await rate('rate the santos version of neymar');
+    assert.match(synthesisPrompt(), /CURRENT FORM DATED CARD/);
+    assert.equal(card.version?.type, 'current');
+    assert.equal(card.clubManager?.name, 'Test Coach');
+  });
+
+  await test("a current card names no manager when its club isn't the one API-Football registers", async () => {
+    scenario = {
+      status: 'ACTIVE',
+      search: () => '- Regular starter this season.',
+      name: 'Jordan Okafor',
+      club: 'Paris Saint-Germain',
+      apiPlayer: { name: 'Jordan Okafor', currentClub: 'Santos' },
+    };
+    const card = await rate('Rate Jordan Okafor');
+    assert.equal(card.version?.type, 'current');
     assert.equal(card.clubManager, undefined);
   });
 

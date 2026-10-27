@@ -61,17 +61,22 @@ export interface PlaystyleAndRole {
   bestRoles: string[];
 }
 
-export type DossierVersionType = 'current' | 'prime' | 'season_snapshot' | 'retro';
+export type DossierVersionType = 'current' | 'prime' | 'season_snapshot' | 'era' | 'retro';
 
 export interface DossierVersion {
   id: string;
   type: DossierVersionType;
   label: string;
   evaluationDate: string; // ISO YYYY-MM-DD (e.g. "2026-10-25" or peak snapshot date)
-  seasonOrEra: string; // e.g. "2026-27", "2008-09", or a prime window "2003-06"
+  seasonOrEra: string; // e.g. "2026-27", "2008-09", or a prime or era window "2003-06"
   peakContext?: string | null;
-  /** A prime card's window: the first and last season of the player's best stretch (YYYY-YY). */
+  /**
+   * A prime or era card's window: its first and last season (YYYY-YY). For a prime, the player's
+   * best stretch; for an era, the seasons that define the version the user named.
+   */
   primeWindow?: { startSeason: string; endSeason: string } | null;
+  /** An era card's name for its version, as the user put it (a club, role or career phase). */
+  qualifier?: string | null;
 }
 
 export type EvidenceGrade = 'A' | 'B' | 'C';

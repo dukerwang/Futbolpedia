@@ -3,6 +3,7 @@ import {
   cardEdition,
   dropSupersededPrimes,
   ensureDossierDated,
+  findEraCard,
   getCardKey,
   isCardInRefreshWindow,
   isPrimeCard,
@@ -84,37 +85,50 @@ export const getCachedDossier = async (
 };
 
 /**
- * The shared card that rates `name` in `season`: a season card, or a prime card whose peak is
- * that season. Archive rows are immutable, so whichever was published first is the card.
+ * The player's shared historical cards (season, prime and era), oldest published first, so
+ * whichever card was published first for a season or window is the card. Re-rated primes are
+ * dropped, so their old numbers can't come back as a season or era card.
  */
-export const getCachedSeasonCard = async (
-  name: string,
-  season: string,
-): Promise<PlayerProfile | null> => {
+const fetchHistoricalCards = async (name: string): Promise<PlayerProfile[]> => {
   const base = toBasePlayerSlug(name);
-  if (!supabase || !base) return null;
+  if (!supabase || !base) return [];
   try {
     const { data, error } = await supabase
       .from('player_profiles')
       .select('player_slug, player_data, updated_at')
-      .or(`player_slug.like.${base}--season_snapshot--%,player_slug.like.${base}--prime--%`)
+      .or(
+        ['season_snapshot', 'prime', 'era'].map((e) => `player_slug.like.${base}--${e}--%`).join(','),
+      )
       .order('updated_at', { ascending: true });
-    if (error || !Array.isArray(data)) return null;
+    if (error || !Array.isArray(data)) return [];
     const cards: PlayerProfile[] = [];
     for (const row of data as PlayerProfileRow[]) {
       const at = rowTimeMs(row.updated_at);
       const card = ensureDossierDated(row.player_data, at);
       if (card && isPrimeCard(card) && isRatedOnCurrentScale(card, at)) cards.push(card);
     }
-    // A re-rated prime replaces the old one here too, so its numbers can't return as a season card.
-    return (
-      dropSupersededPrimes(cards).find((card) => seasonMatches(card.version?.seasonOrEra, season)) ??
-      null
-    );
+    return dropSupersededPrimes(cards);
   } catch {
-    return null;
+    return [];
   }
 };
+
+/**
+ * The shared card that rates `name` in `season`: a season card, or a prime or era card whose
+ * window is that one season.
+ */
+export const getCachedSeasonCard = async (
+  name: string,
+  season: string,
+): Promise<PlayerProfile | null> =>
+  (await fetchHistoricalCards(name)).find((card) => seasonMatches(card.version?.seasonOrEra, season)) ??
+  null;
+
+/** The shared card that already rates the era the user named (see findEraCard). */
+export const getCachedEraCard = async (
+  name: string,
+  criteria: { qualifier?: string | null; window?: string | null },
+): Promise<PlayerProfile | null> => findEraCard(await fetchHistoricalCards(name), criteria);
 
 /**
  * Persists a dated card. Writes the mutable "latest" pointer slug and an immutable versioned
@@ -149,9 +163,9 @@ export const upsertCachedDossier = async (
     const nowIso = new Date().toISOString();
     const rows: PlayerProfileRow[] = [];
 
-    // A season card is one of many historical versions of a player: it lives only under its
-    // archive slug, so it never takes the prime pointer.
-    if (cardEdition(stamped) === 'season_snapshot') {
+    // Season and era cards are some of many historical versions of a player: they live only
+    // under their archive slug, so they never take the prime pointer.
+    if (cardEdition(stamped) === 'season_snapshot' || cardEdition(stamped) === 'era') {
       if (versioned) {
         await supabase
           .from('player_profiles')

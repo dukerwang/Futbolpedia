@@ -189,7 +189,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
           <span className={META_PILL_CLASS}>
             {basicInfo.club}
           </span>
-          {clubManager && (
+          {clubManager && !isPrime && (
             <span
               className={META_PILL_CLASS}
               title={`Verified by live search on ${clubManager.verifiedOn}`}
