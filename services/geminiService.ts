@@ -25,8 +25,11 @@ import {
   fetchRevisionsForCard,
   fetchRevisionsForPlayer,
   fetchSupabaseCalibratedPool,
+  findEraCard,
   findReferencedDossiers,
+  formatEraQualifier,
   getCachedDossier,
+  getCachedEraCard,
   getCachedSeasonCard,
   getCardKey,
   renameDossierCard,
@@ -48,16 +51,18 @@ import {
   supabase,
   toBasePlayerSlug,
   toDossierCardSlug,
+  toEraKey,
   toPlayerSlug,
   toVersionedSlug,
   upsertCachedDossier,
   wantsSavedDossierAccess,
 } from './dossierStore';
 import { synthesizePlayerDossier } from './dossierSynthesizer';
-import { getClubManager, toClubKey } from './clubManagers';
+import { getClubManager, isSameClub } from './clubManagers';
 import { attachVerifiedManager } from './profileManagerGrounding';
 import {
   type CareerStatus,
+  fetchApiFootballPlayer,
   gatherPlayerGrounding,
   gatherSearchFoundation,
   getCareerStatus,
@@ -245,24 +250,43 @@ export const sendMessageToAI = async (
       extractCandidateSlug(message) ||
       '';
 
-    // A dossier rates one version of a player: today's form, his prime, or a named past
-    // season. A retired player asked about with no timeframe gets his prime (see below).
+    // A dossier rates one version of a player: today's form, his prime, a named past season, or
+    // a named era ("PSG Neymar"). A retired player asked about with no timeframe gets his prime
+    // (see below).
     let isHistorical = route.isHistorical;
     const season = route.requestedSeason ?? null;
+    let era = season ? null : route.requestedEra ?? null;
+    // An era named after the club he plays for now is his current form, unless he has retired.
+    if (era && primaryPlayer && !imageData) {
+      const apiPlayer = await fetchApiFootballPlayer(primaryPlayer);
+      if (
+        apiPlayer?.currentClub &&
+        isSameClub(apiPlayer.currentClub, era) &&
+        (await getCareerStatus(primaryPlayer)) !== 'retired'
+      ) {
+        perf('era at his current club: rating current form');
+        era = null;
+        isHistorical = false;
+      }
+    }
     // An explicit "rerate" of a prime card regenerates it from scratch and replaces the frozen
     // shared card. Read after the retirement check too, since that can turn a request historical.
-    const reratingPrime = (): boolean => Boolean(route.rerate) && isHistorical && !season;
+    const reratingPrime = (): boolean => Boolean(route.rerate) && isHistorical && !season && !era;
     const careerStatusPromise =
       !isHistorical && !season && !route.wantsCurrentForm && !imageData && primaryPlayer
         ? getCareerStatus(primaryPlayer)
         : Promise.resolve<CareerStatus>('unknown');
 
-    // A player can hold several cards (current, prime, past seasons). Shortcuts and locks only
-    // consider cards of the version this request is asking for.
+    // A player can hold several cards (current, prime, past seasons, eras). Shortcuts and locks
+    // only consider cards of the version this request is asking for.
     const matchesRequestedEdition = (p: PlayerProfile): boolean =>
       season
         ? isPrimeCard(p) && seasonMatches(p.version?.seasonOrEra, season)
-        : isPrimeCard(p) === isHistorical && cardEdition(p) !== 'season_snapshot';
+        : era
+          ? cardEdition(p) === 'era' && toEraKey(p.version?.qualifier) === toEraKey(era)
+          : isPrimeCard(p) === isHistorical &&
+            cardEdition(p) !== 'season_snapshot' &&
+            cardEdition(p) !== 'era';
     const currentReferenced = referencedDossiers.filter((p) => !isPrimeCard(p));
     const currentSaved = savedResult.dossiers.filter((p) => !isPrimeCard(p));
 
@@ -313,6 +337,12 @@ export const sendMessageToAI = async (
         perf('supabase season card hit');
         return seasonCard;
       }
+    } else if (!imageData && era) {
+      const eraCard = await getCachedEraCard(primaryPlayer, { qualifier: era });
+      if (eraCard) {
+        perf('supabase era card hit');
+        return eraCard;
+      }
     } else if (!imageData && !reratingPrime()) {
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
@@ -331,9 +361,11 @@ export const sendMessageToAI = async (
     options?.onStageChange?.(
       season
         ? `Researching ${primaryPlayer || 'player'}'s ${season} season...`
-        : isHistorical
-          ? `Researching ${primaryPlayer || 'player'}'s career peak & honours...`
-          : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
+        : era
+          ? `Researching ${primaryPlayer || 'player'}'s ${formatEraQualifier(era)} era...`
+          : isHistorical
+            ? `Researching ${primaryPlayer || 'player'}'s career peak & honours...`
+            : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
     );
 
     // Prior authored cards (longitudinal memory) only need the name, so fetch them alongside
@@ -344,12 +376,21 @@ export const sendMessageToAI = async (
         rawMessage: message,
         isHistorical,
         season,
+        era,
       }),
       fetchPriorDossiersForPlayer(primaryPlayer, [...savedDossiers, ...conversationDossiers]),
       fetchRevisionsForPlayer(primaryPlayer),
       careerStatusPromise,
     ]);
     perf('hybrid grounding');
+
+    // The typed name may not be the card's ("neymar" for "Neymar Jr"), so the archive lookup
+    // above can miss an era card the player's other cards hold.
+    const knownEraCard = era && !imageData ? findEraCard(priorDossiers, { qualifier: era }) : null;
+    if (knownEraCard) {
+      perf('era card hit');
+      return knownEraCard;
+    }
 
     // A retired player has no current form to rate, so with no timeframe he gets his prime.
     // When the status check is inconclusive, the grounding itself can still show it.
@@ -381,6 +422,7 @@ export const sendMessageToAI = async (
       !imageData &&
       !supersede &&
       !season &&
+      !era &&
       !reratingPrime() &&
       canonicalName &&
       toPlayerSlug(canonicalName) !== toPlayerSlug(primaryPlayer)
@@ -454,20 +496,36 @@ export const sendMessageToAI = async (
       peerLedgerCards: synthesisPeerLedger,
       priorTrajectoryBlock,
       requestedSeason: season,
+      requestedEra: era,
     });
     perf('calibrated synthesis');
 
+    // An era is defined by its years: when a card already rates these seasons (another era's,
+    // the prime's, or the season's), that card is the answer, whatever this era is called.
+    if (era && !imageData) {
+      const window = synthesized.version?.seasonOrEra;
+      const published =
+        findEraCard(priorDossiers, { window }) ??
+        (await getCachedEraCard(synthesized.basicInfo.name, { window }));
+      if (published) {
+        perf('era already rated under another name');
+        return published;
+      }
+    }
+
     let profile = synthesized;
     if (!isHistorical) {
-      let manager = await managerPromise;
-      // The card's club wins when it differs from API-Football's (e.g. a recent transfer).
-      if (
-        profile.basicInfo.club !== 'N/A' &&
-        (!manager || toClubKey(manager.club) !== toClubKey(profile.basicInfo.club))
-      ) {
-        manager = await getClubManager(profile.basicInfo.club).catch(() => null);
-      }
-      profile = attachVerifiedManager(profile, manager);
+      // API-Football's registered club decides whose manager is shown. The card's club stands in
+      // only when API-Football has no record; when they disagree, nobody can say which club is
+      // current, so no manager is named.
+      const apiClub = grounding.apiPlayer?.currentClub;
+      const manager =
+        apiClub || profile.basicInfo.club === 'N/A'
+          ? await managerPromise
+          : await getClubManager(profile.basicInfo.club).catch(() => null);
+      const sameClub =
+        !manager || profile.basicInfo.club === 'N/A' || isSameClub(manager.club, profile.basicInfo.club);
+      profile = attachVerifiedManager(profile, sameClub ? manager : null);
       perf('verified manager');
     }
 

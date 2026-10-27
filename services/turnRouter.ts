@@ -47,6 +47,12 @@ export interface TurnRoute {
    * player as he was that season instead of at his prime.
    */
   requestedSeason?: string | null;
+  /**
+   * A dossier request for a named version of the player that is neither a season, his prime nor
+   * his current form: a club, role or career phase he is identified with, as the user put it.
+   * The card rates the seasons that define that version.
+   */
+  requestedEra?: string | null;
   /** The message explicitly asks about the player now ("current", "right now", "this season"). */
   wantsCurrentForm?: boolean;
   wantsRegeneration: boolean;
@@ -105,6 +111,12 @@ const TURN_ROUTE_SCHEMA: Record<string, unknown> = {
       enum: ['low', 'medium', 'high'],
       description:
         '"high" for multi-player debates, rankings, tactical system breakdowns, or contested rating challenges; "medium" for standard comparisons or player analysis; "low" for simple factual lookups or archive checks.',
+    },
+    requestedEra: {
+      type: Type.STRING,
+      nullable: true,
+      description:
+        'single_dossier only: the named version of the player the user asks for when it is not a season, not his prime or peak, and not his current form — a club, role or career phase he is identified with, in the user\'s own words. Null otherwise.',
     },
     isHistorical: {
       type: Type.BOOLEAN,
@@ -212,8 +224,66 @@ export const extractThreadClubs = (message: string, history: ChatMessage[]): str
   return [];
 };
 
+const ERA_NOUN = '(?:version|era|days|years|spell|stint|iteration|edition|incarnation)';
+const ERA_WORD = "\\p{L}[\\p{L}'\\u2019.]*";
+const ERA_NAME = `${ERA_WORD}(?:[\\s-]+${ERA_WORD}){0,2}`;
+const ERA_PHASE = 'young|teenage|early|late[- ]career|veteran|old|pre-\\p{L}[\\p{L}-]*|post-\\p{L}[\\p{L}-]*';
+const ERA_LEAD = '(?:^|\\b(?:rate|profile|scout|evaluate|dossier|on|of|about)\\s+)(?:the\\s+|a\\s+)?';
+
+/**
+ * Phrasings that name a version of a player. Each captures the version's name; the whole match is
+ * what names it, and is stripped from the player name.
+ */
+const ERA_PATTERNS: RegExp[] = [
+  // "the PSG version of Neymar"
+  new RegExp(`\\b(?:the|his)\\s+(${ERA_NAME})\\s+${ERA_NOUN}\\s+of\\b`, 'iu'),
+  // "Neymar's PSG era"
+  new RegExp(`['\\u2019]s\\s+(${ERA_NAME})\\s+${ERA_NOUN}\\b`, 'iu'),
+  // "Neymar from his PSG days"
+  new RegExp(`\\b(?:from|in|during)\\s+his\\s+(${ERA_NAME})\\s+${ERA_NOUN}\\b`, 'iu'),
+  // "PSG-era Neymar", "Barca era Neymar"
+  new RegExp(`\\b(${CLUB_NAME_ALTERNATION}|\\p{L}+)-${ERA_NOUN}\\b`, 'iu'),
+  new RegExp(`\\b(${CLUB_NAME_ALTERNATION})\\s+${ERA_NOUN}\\b`, 'iu'),
+  // "Neymar at PSG"
+  new RegExp(`\\b(?:at|with)\\s+(${CLUB_NAME_ALTERNATION})\\b`, 'iu'),
+  // "Barca Neymar"
+  new RegExp(`${ERA_LEAD}(${CLUB_NAME_ALTERNATION})\\s+(?=\\p{L})`, 'iu'),
+  // "young Messi", "pre-injury Neymar"
+  new RegExp(`${ERA_LEAD}(${ERA_PHASE})\\s+(?=\\p{L})`, 'iu'),
+];
+
+/** Names that aren't an era: his prime, his current form, or a season. */
+const NOT_AN_ERA_RE =
+  /^(?:(?:his|the)\s+)?(?:best|peak|prime|golden|greatest|finest|current|latest|recent|present|today'?s?|this\s+season'?s?)$|\d/i;
+
+/** An era name from the classifier or a pattern, or null when it names no era. */
+const cleanEraName = (raw: string | null | undefined): string | null => {
+  const name = raw?.trim().replace(/\s+/g, ' ') ?? '';
+  return name && name.length <= 40 && !NOT_AN_ERA_RE.test(name) ? name : null;
+};
+
+/** The version of a player the message names ("PSG Neymar", "young Messi"), if any. */
+export const eraIn = (message: string): string | null => {
+  for (const re of ERA_PATTERNS) {
+    const name = cleanEraName(message.match(re)?.[1]);
+    if (name) return name;
+  }
+  return null;
+};
+
+/** Removes the phrase naming an era, keeping what precedes and follows it. */
+const stripEraPhrase = (message: string): string => {
+  for (const re of ERA_PATTERNS) {
+    const m = message.match(re);
+    if (m && cleanEraName(m[1])) {
+      return `${message.slice(0, m.index)} ${message.slice(m.index! + m[0].length)}`.trim();
+    }
+  }
+  return message;
+};
+
 const stripClubAndDossierQualifiers = (message: string): string =>
-  message
+  stripEraPhrase(message)
     .replace(/\b(give me a?n?|create|generate|can you|please|show me|pull up|what is|what's)\b/gi, '')
     .replace(
       /\b(rate|rating|profile|scout(?:ing)?(?: report)?|evaluate|dossier|how good is|rank(?:ing)?|tier|analyze|analysis|breakdown|report|brief(?:ing)?)\b/gi,
@@ -421,12 +491,19 @@ export async function classifyTurn(params: {
   const message = params.message.trim();
   const requestedSeason = pastSeasonIn(message);
   const wantsCurrentForm = hasCurrentFormCue(message);
+  // A named version of the player ("PSG Neymar") is an era card; a season or "current" says more.
+  const requestedEra =
+    route.intent === 'single_dossier' && !requestedSeason && !wantsCurrentForm
+      ? eraIn(message) ?? cleanEraName(route.requestedEra)
+      : null;
   return {
     ...route,
     requestedSeason,
+    requestedEra,
     wantsCurrentForm,
     isHistorical:
       requestedSeason !== null ||
+      requestedEra !== null ||
       (route.isHistorical && (hasHistoricalWordCue(message) || !parseRequestedSeason(message))),
   };
 }

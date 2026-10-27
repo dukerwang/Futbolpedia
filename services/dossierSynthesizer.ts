@@ -34,6 +34,7 @@ import {
 import type { ApiFootballPlayerFactSheet } from './groundingService';
 import {
   EDITION_NAME_RE,
+  formatEraQualifier,
   formatPrimeWindow,
   isValidEvaluationDate,
   seasonMatches,
@@ -55,7 +56,7 @@ const GK_ATTRIBUTES_SCHEMA = {
   ),
 };
 
-const DOSSIER_VERSION_TYPES: DossierVersionType[] = ['current', 'prime', 'season_snapshot', 'retro'];
+const DOSSIER_VERSION_TYPES: DossierVersionType[] = ['current', 'prime', 'season_snapshot', 'era', 'retro'];
 
 /** Career phases in age order, with the oldest age each one covers when the model's is unusable. */
 const AGE_CURVE_PHASES: Array<[AgeCurvePhase, number]> = [
@@ -82,23 +83,23 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         label: {
           type: Type.STRING,
           description:
-            "Card title label: 'Current Form (<Mon> <Year>)', 'Prime Zenith (<Window>)' or 'Season (<Season>)'.",
+            "Card title label: 'Current Form (<Mon> <Year>)', 'Prime Zenith (<Window>)', 'Season (<Season>)' or '<Era> era (<Window>)'.",
         },
         evaluationDate: {
           type: Type.STRING,
           description:
-            'Exact ISO date (YYYY-MM-DD) of this evaluation snapshot (current system date for active players, or a verified date from the last season of the prime window for prime players).',
+            'Exact ISO date (YYYY-MM-DD) of this evaluation snapshot (current system date for active players, or a verified date from the last season of the window for prime and era cards).',
         },
         seasonOrEra: {
           type: Type.STRING,
           description:
-            'Season formatted YYYY-YY. For a prime card, the window from its first season to its last (YYYY-YY for one season).',
+            'Season formatted YYYY-YY. For a prime or era card, the window from its first season to its last (YYYY-YY for one season).',
         },
         primeWindow: {
           type: Type.OBJECT,
           nullable: true,
           description:
-            'Prime cards only: the first and last season of the stretch when the player was at his best, each formatted YYYY-YY (YYYY for calendar-year leagues), the same season twice for a one-season prime. Null for current and season cards.',
+            'Prime and era cards only: the first and last season of the window, each formatted YYYY-YY (YYYY for calendar-year leagues), the same season twice for a one-season window. For a prime, the stretch when the player was at his best; for an era, the seasons that define the version the user asked for. Null for current and season cards.',
           properties: {
             startSeason: { type: Type.STRING },
             endSeason: { type: Type.STRING },
@@ -109,7 +110,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
           type: Type.STRING,
           nullable: true,
           description:
-            'For prime dossiers: concise analytical explanation of why this stretch was the player at his best (his level, role and the evidence for it). Null for current players.',
+            'For prime dossiers: concise analytical explanation of why this stretch was the player at his best (his level, role and the evidence for it). For era dossiers: what defined this version of him in those seasons. Null for current players.',
         },
       },
       required: ['type', 'label', 'evaluationDate', 'seasonOrEra'],
@@ -537,10 +538,10 @@ export const sanitizeProfileData = (
       ? todayIso()
       : '';
 
-  // A prime card's window comes from its first and last season; one season is a window too.
+  // A prime or era card's window comes from its first and last season; one season is a window too.
   const rawSeason = rawVersion?.seasonOrEra?.trim() ?? '';
   const window =
-    inferredType === 'prime'
+    inferredType === 'prime' || inferredType === 'era'
       ? formatPrimeWindow(rawVersion?.primeWindow?.startSeason, rawVersion?.primeWindow?.endSeason) ??
         formatPrimeWindow(rawSeason, rawSeason)
       : null;
@@ -790,6 +791,7 @@ export function applyVersionRules(
   profile: PlayerProfile,
   isHistorical: boolean,
   requestedSeason?: string | null,
+  requestedEra?: string | null,
 ): PlayerProfile {
   const v = profile.version;
   if (!v) return profile;
@@ -832,6 +834,33 @@ export function applyVersionRules(
         evaluationDate: date,
         seasonOrEra: season,
         peakContext: v.type === 'current' ? null : v.peakContext ?? null,
+      },
+    };
+  }
+
+  if (requestedEra) {
+    // A named version is an era card, whatever edition the model picked. Its window and date
+    // come from the model; when it gave none, they stay empty so validation asks for them.
+    const fromModel = v.type !== 'current';
+    const window = fromModel
+      ? formatPrimeWindow(v.primeWindow?.startSeason, v.primeWindow?.endSeason)
+      : null;
+    const date = fromModel ? v.evaluationDate || '' : '';
+    const name = formatEraQualifier(requestedEra);
+    const { evaluationDate: _today, ...rest } = profile;
+    return {
+      ...rest,
+      ...(date ? { evaluationDate: date } : {}),
+      version: {
+        ...v,
+        id: `${base}-era-${window?.seasonOrEra || 'undated'}`,
+        type: 'era',
+        qualifier: requestedEra.trim(),
+        label: window ? `${name} era (${window.seasonOrEra})` : `${name} era`,
+        evaluationDate: date,
+        seasonOrEra: window?.seasonOrEra ?? '',
+        primeWindow: window ? v.primeWindow : undefined,
+        peakContext: fromModel ? v.peakContext ?? null : null,
       },
     };
   }
@@ -886,18 +915,23 @@ function findSynthesisValidationIssues(
     issues.push(...managerIssues);
   }
 
-  const primeWindow =
-    profile.version?.type === 'prime'
-      ? formatPrimeWindow(profile.version.primeWindow?.startSeason, profile.version.primeWindow?.endSeason)
-      : null;
-  if (profile.version?.type === 'prime' && !primeWindow) {
+  const isEra = profile.version?.type === 'era';
+  const windowed = profile.version?.type === 'prime' || isEra;
+  const primeWindow = windowed
+    ? formatPrimeWindow(profile.version?.primeWindow?.startSeason, profile.version?.primeWindow?.endSeason)
+    : null;
+  if (windowed && !primeWindow) {
     issues.push(
-      'The prime card has no valid window. Set version.primeWindow to the first and last season (YYYY-YY each) of the stretch when the player was at his best.',
+      isEra
+        ? 'The era card has no valid window. Set version.primeWindow to the first and last season (YYYY-YY each) of the seasons that define the version of the player the user asked for.'
+        : 'The prime card has no valid window. Set version.primeWindow to the first and last season (YYYY-YY each) of the stretch when the player was at his best.',
     );
   }
   if (primeWindow && primeWindow.seasons > MAX_PRIME_WINDOW_SEASONS) {
     issues.push(
-      `A prime is the player's best stretch, not his career: the window ${primeWindow.seasonOrEra} covers ${primeWindow.seasons} seasons. Narrow version.primeWindow to the seasons (at most ${MAX_PRIME_WINDOW_SEASONS}) when he played at his very highest level, and rate that level.`,
+      isEra
+        ? `An era card rates one version of the player, not a whole spell: the window ${primeWindow.seasonOrEra} covers ${primeWindow.seasons} seasons. Narrow version.primeWindow to the seasons (at most ${MAX_PRIME_WINDOW_SEASONS}) when he was most fully that version and at his best in it, and rate that level.`
+        : `A prime is the player's best stretch, not his career: the window ${primeWindow.seasonOrEra} covers ${primeWindow.seasons} seasons. Narrow version.primeWindow to the seasons (at most ${MAX_PRIME_WINDOW_SEASONS}) when he played at his very highest level, and rate that level.`,
     );
   }
 
@@ -938,6 +972,8 @@ export interface SynthesizeDossierParams {
   priorTrajectoryBlock?: string;
   /** A past season to rate instead of the player's prime ("2005-06" or a bare "2006"). */
   requestedSeason?: string | null;
+  /** A named version of the player to rate instead of his prime (see TurnRoute.requestedEra). */
+  requestedEra?: string | null;
 }
 
 export async function synthesizePlayerDossier(
@@ -951,6 +987,14 @@ export async function synthesizePlayerDossier(
     - SEASON DATED CARD EVALUATION (${params.requestedSeason}): Rate the player exactly as he was in the ${params.requestedSeason} season — not his career peak, not his career as a whole, and not who he became later. Wherever he was in his development or decline that season, the card reflects it.
     - DATING REQUIREMENT: Set \`version.type\` = "season_snapshot", \`version.seasonOrEra\` = that season formatted YYYY-YY (for a bare year, the season the grounding shows he is best remembered for in that year), \`version.evaluationDate\` = a verified date from that season (YYYY-MM-DD), \`version.label\` = "Season (<Season>)", and \`version.peakContext\` = 1–2 sentences on his club, role and output that season.
     - basicInfo (club, age) describes him in that season. Set \`ratings.potential\` to the ceiling he projected to from that season, which can exceed Overall for a young player.
+    - Disregard his ${year} status (retired, manager, veteran) when rating attributes and Overall.`
+    : params.requestedEra
+    ? `
+    - ERA DATED CARD EVALUATION ("${params.requestedEra}"): The user asked for the version of the player they call "${params.requestedEra}": a stage of his career defined by its years, named after the club, role or phase he is identified with in it. Rate that version of him: not his career as a whole, not his prime unless those seasons are his prime, and not who he became later.
+    - THE ERA IS A WINDOW: Identify the consecutive seasons that define that version, at most ${MAX_PRIME_WINDOW_SEASONS}. When that stage of his career lasted longer, choose the stretch when he was most fully that version and at his best in it, judged by his level as a footballer rather than his output, trophies or awards. Rate the level he sustained across the window. The attributes describe him across it (Consistency is how reliably he played at that level through it).
+    - ERA DATING REQUIREMENT: Set \`version.type\` = "era", \`version.primeWindow\` = { startSeason, endSeason } (YYYY-YY each, YYYY for calendar-year leagues; the same season twice for a one-season window), \`version.seasonOrEra\` = the window from its first season to its last (YYYY-YY for one season), \`version.evaluationDate\` = a verified date from the window's last season (YYYY-MM-DD), \`version.label\` = "<Era> era (<Window>)", and \`version.peakContext\` = 1–2 sentences on what defined this version of him in those seasons: his club, role and level, and the evidence for it.
+    - basicInfo (club, age) describes him in the window's middle season; name the club he played for through most of it.
+    - Because an era card rates a level he realized, set \`ratings.potential\` equal to \`ratings.overall\`.
     - Disregard his ${year} status (retired, manager, veteran) when rating attributes and Overall.`
     : params.isHistorical
     ? `
@@ -1002,7 +1046,12 @@ ${temporalRules}
       schema: PLAYER_PROFILE_SYNTHESIS_SCHEMA,
     });
 
-    let profile = applyVersionRules(sanitizeProfileData(raw), params.isHistorical, params.requestedSeason);
+    let profile = applyVersionRules(
+      sanitizeProfileData(raw),
+      params.isHistorical,
+      params.requestedSeason,
+      params.requestedEra,
+    );
     profile.basicInfo.position = resolveLiberoPosition(profile.basicInfo.position, params.isHistorical);
 
     // Deterministically backfill missing bio fields from API-Football on active players

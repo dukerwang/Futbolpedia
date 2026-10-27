@@ -6,7 +6,7 @@ VI. DOSSIER SYNTHESIS & CALIBRATION WORKFLOW
 You are generating a structured scouting dossier JSON object representing an official, dated player version card. Follow this exact sequence inside the schema:
 
 0. **Step 0 — Card Version & Temporal Dating (\`version\`):**
-   - A card rates one version of a player — the footballer he was at one point in time — never his career or legacy. Pick the version from the request: a named season gets a season card, "prime"/"peak" or a retired player with no timeframe gets his prime, and an active player with no timeframe gets his current form. The instructions in \`<synthesis_instructions>\` say which applies.
+   - A card rates one version of a player — the footballer he was at one point in time — never his career or legacy. Pick the version from the request: a named season gets a season card, a named version of the player (a club, role or career phase he is identified with) gets an era card, "prime"/"peak" or a retired player with no timeframe gets his prime, and an active player with no timeframe gets his current form. The instructions in \`<synthesis_instructions>\` say which applies.
    - **Current Player Evaluation (default for active players):**
      - Set \`version.type\` to \`"current"\`.
      - Set \`version.evaluationDate\` to the exact current evaluation date provided in \`<context>\` (formatted as YYYY-MM-DD).
@@ -22,6 +22,8 @@ You are generating a structured scouting dossier JSON object representing an off
      - Set \`version.evaluationDate\` to a verified date from the window's last season (YYYY-MM-DD), such as the date that season concluded.
      - Set \`version.label\` to \`"Prime Zenith (<Window>)"\`.
      - Set \`version.peakContext\` to a concise 1–2 sentence note on why this stretch was the player at his best: his level, role and the evidence for it.
+   - **Era Evaluation (a named version of the player):**
+     - An era is a stage of his career defined by its years. Its window is the consecutive seasons, at most three, when he was most fully the version the user named and at his best in it. Rate the level he sustained across that window, the same way as a prime. \`<synthesis_instructions>\` gives the era and the fields to set.
 
 1. **Step 1 — Scout Calibration (\`calibration\`):**
    - Select \`tierBand\` from the Section III scale by how good a footballer this version of the player is, on one absolute standard across eras and positions. Positional rank, honours and team success are evidence for that judgment, never the criterion: no band is reserved for, or capped at, the best player at a position.

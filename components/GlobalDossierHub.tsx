@@ -25,7 +25,7 @@ type SortOption = 'overall_desc' | 'date_desc' | 'name_asc' | 'trajectory_desc';
 const EDITION_OPTIONS: Array<{ id: EditionFilter; label: string; activeClass: string }> = [
   { id: 'all', label: 'All Cards', activeClass: 'bg-white dark:bg-charcoal text-charcoal dark:text-cream-50 shadow-xs' },
   { id: 'current', label: 'Current Ratings', activeClass: 'bg-emerald-600 text-white shadow-xs' },
-  { id: 'prime', label: 'Prime Zeniths', activeClass: 'bg-amber-600 text-white shadow-xs' },
+  { id: 'prime', label: 'Historical', activeClass: 'bg-amber-600 text-white shadow-xs' },
 ];
 
 /** Substrings of a lowercased position that put a card in each position filter. */
