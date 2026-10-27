@@ -1,6 +1,7 @@
 import type { Conversation, PlayerProfile } from '../types';
 import {
   cardEdition,
+  dropSupersededPrimes,
   ensureDossierDated,
   getCardKey,
   isCardInRefreshWindow,
@@ -99,19 +100,17 @@ export const getCachedSeasonCard = async (
       .or(`player_slug.like.${base}--season_snapshot--%,player_slug.like.${base}--prime--%`)
       .order('updated_at', { ascending: true });
     if (error || !Array.isArray(data)) return null;
+    const cards: PlayerProfile[] = [];
     for (const row of data as PlayerProfileRow[]) {
       const at = rowTimeMs(row.updated_at);
       const card = ensureDossierDated(row.player_data, at);
-      if (
-        card &&
-        isPrimeCard(card) &&
-        isRatedOnCurrentScale(card, at) &&
-        seasonMatches(card.version?.seasonOrEra, season)
-      ) {
-        return card;
-      }
+      if (card && isPrimeCard(card) && isRatedOnCurrentScale(card, at)) cards.push(card);
     }
-    return null;
+    // A re-rated prime replaces the old one here too, so its numbers can't return as a season card.
+    return (
+      dropSupersededPrimes(cards).find((card) => seasonMatches(card.version?.seasonOrEra, season)) ??
+      null
+    );
   } catch {
     return null;
   }
@@ -359,7 +358,7 @@ export async function fetchPriorDossiersForPlayer(
     matchedByPlayer.get(targetSlug) ??
     (matchedByPlayer.size === 1 ? [...matchedByPlayer.values()][0] : undefined);
   if (!matched) return [];
-  const list = [...matched.values()];
+  const list = dropSupersededPrimes([...matched.values()]);
   list.sort((a, b) => (a.evaluationDate || '').localeCompare(b.evaluationDate || ''));
   return list;
 }
@@ -419,8 +418,9 @@ export async function fetchGlobalHubDossiers(
   }
 
   // Group by player to pick each player's official "Current" rating and trajectory.
+  // A re-rated prime card replaces the old one even when its window moved the evaluation date.
   const byPlayer = new Map<string, PlayerProfile[]>();
-  for (const p of mapByCardKey.values()) {
+  for (const p of dropSupersededPrimes([...mapByCardKey.values()])) {
     const base = toBasePlayerSlug(p.basicInfo.name);
     if (!byPlayer.has(base)) byPlayer.set(base, []);
     byPlayer.get(base)!.push(p);

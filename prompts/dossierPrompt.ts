@@ -42,7 +42,7 @@ You are generating a structured scouting dossier JSON object representing an off
      - Populate all 25 attributes with real, considered values for any identifiable professional player; missing current-season stats lower confidence but never zero out an attribute (Protocol P).
 
 3. **Step 3 — Basic Info (\`basicInfo\`):**
-   - Select \`primaryPosition\` and \`secondaryPosition\` (use \`"None"\` unless the player genuinely operates in a dual role) from the schema enum (Protocol S).
+   - Select \`primaryPosition\` and \`secondaryPosition\` (use \`"None"\` unless the player genuinely plays a dual role) from the schema enum (Protocol S).
    - \`Libero\` is the sweeper of the man-marking era: a free defender behind the line who covered, read play and stepped out with the ball. Use it only on a card whose evaluated season had the player in that position; a modern player in a similar role is a \`Centre-Back\`, and the role belongs in \`playstyleAndRole\`. When \`primaryPosition\` is \`Libero\`, set \`secondaryPosition\` to the modern position their toolset would hold today, and let \`holisticProjection\` explain how they would be deployed in the modern game.
    - Use the club's standard English media name, verified against the grounding facts.
    - Use \`"N/A"\` for height or weight only if unverified — never output \`"0'0\\""\` or \`"0 lbs"\`.

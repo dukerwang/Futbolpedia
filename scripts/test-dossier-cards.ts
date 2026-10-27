@@ -20,6 +20,7 @@ import {
   mergeAllCalibratedDossiers,
   mergeConversationDossiers,
   latestCardPerPlayer,
+  dropSupersededPrimes,
   resolveSavedDossiersForRequest,
   toBasePlayerSlug,
   toDossierCardSlug,
@@ -812,6 +813,22 @@ async function main() {
     assert.ok(kept.includes(season));
     // Without re-ratings, the later generated prime card wins.
     assert.deepEqual(latestCardPerPlayer([old, primeCard('Ronaldinho', '2005-05-29', { createdAt: 1_000 })]), [old]);
+  });
+
+  await test('a re-rated prime with a new window supersedes the old prime card everywhere', () => {
+    // The re-rating moved the window, so the old card keeps its own archive row and card key.
+    const old = primeCard('Pelé', '1962-10-11', { createdAt: 2_000 });
+    const rerated = primeCard('Pelé', '1963-11-16', { createdAt: 5_000, rerateAt: 5_000 });
+    const season = card('Pelé', {
+      evaluationDate: '1958-06-29',
+      version: { id: 'p-s', type: 'season_snapshot', label: 'Season (1958)', evaluationDate: '1958-06-29', seasonOrEra: '1958' },
+    });
+    const other = primeCard('Garrincha', '1962-06-17', { createdAt: 1_000 });
+    assert.notEqual(getCardKey(old), getCardKey(rerated));
+    const kept = dropSupersededPrimes([old, rerated, season, other]);
+    assert.deepEqual(kept, [rerated, season, other]);
+    // Without a re-rating, nothing is dropped.
+    assert.deepEqual(dropSupersededPrimes([old, other]), [old, other]);
   });
 
   await test('no scouting prompt mentions re-rating', () => {

@@ -342,6 +342,25 @@ export const latestCardPerPlayer = (cards: PlayerProfile[]): PlayerProfile[] => 
   return [...byPlayer.values()];
 };
 
+/**
+ * Drops prime cards a re-rating has replaced. A re-rating can move the prime's window and with it
+ * the evaluation date, so the old card keeps its own archive row and card key; any prime card of
+ * the same player re-rated later supersedes it.
+ */
+export const dropSupersededPrimes = (cards: PlayerProfile[]): PlayerProfile[] => {
+  const latestRerate = new Map<string, number>();
+  for (const p of cards) {
+    if (cardEdition(p) !== 'prime' || !p.rerateAt) continue;
+    const base = toBasePlayerSlug(p.basicInfo.name);
+    latestRerate.set(base, Math.max(latestRerate.get(base) ?? 0, p.rerateAt));
+  }
+  return cards.filter(
+    (p) =>
+      cardEdition(p) !== 'prime' ||
+      (p.rerateAt ?? 0) >= (latestRerate.get(toBasePlayerSlug(p.basicInfo.name)) ?? 0),
+  );
+};
+
 /** Immutable archive slug for a dated card, e.g. "joshua-kimmich--current--2026-10-25". */
 export const toVersionedSlug = (p: PlayerProfile): string | null => {
   const date = getDossierEvaluationDate(p);
