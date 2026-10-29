@@ -48,7 +48,7 @@ import { classifyTurn, extractCandidatePlayerName } from '../services/turnRouter
 import { SCOUT_CORE_INSTRUCTION } from '../prompts/scoutCore';
 import { CONVERSATIONAL_SCOUT_MANDATE } from '../prompts/chatPrompt';
 import { DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION } from '../prompts/dossierPrompt';
-import { groundingShowsRetirement, parseCareerStatus } from '../services/groundingService';
+import { groundingShowsRetirement, parseCareerStatus, parsePlayerIdentity } from '../services/groundingService';
 import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynthesizer';
 import { getCurrentSeasonInfo } from '../services/aiClient';
 import { getAttributeLabel, normalizePosition, resolveLiberoPosition } from '../constants/ratingTiers';
@@ -553,6 +553,20 @@ async function main() {
     assert.equal(parseCareerStatus('active'), 'active');
     assert.equal(parseCareerStatus(''), 'unknown');
     assert.equal(parseCareerStatus('UNKNOWN'), 'unknown');
+
+    assert.deepEqual(
+      parsePlayerIdentity('STATUS: RETIRED | KNOWN AS: Zico | FULL NAME: Arthur Antunes Coimbra'),
+      { status: 'retired', knownAs: 'Zico', fullName: 'Arthur Antunes Coimbra' },
+    );
+    assert.deepEqual(
+      parsePlayerIdentity('**STATUS:** ACTIVE | **KNOWN AS:** "Pedri" | FULL NAME: UNKNOWN'),
+      { status: 'active', knownAs: 'Pedri', fullName: null },
+    );
+    // An unknown status says nothing, whatever the names contain.
+    assert.equal(parsePlayerIdentity('STATUS: UNKNOWN | KNOWN AS: Active Player | FULL NAME: UNKNOWN').status, 'unknown');
+    assert.deepEqual(parsePlayerIdentity('RETIRED'), { status: 'retired', knownAs: null, fullName: null });
+    assert.equal(parsePlayerIdentity('STATUS: NONE').noSuchPlayer, true);
+    assert.equal(parsePlayerIdentity('STATUS: UNKNOWN | KNOWN AS: UNKNOWN | FULL NAME: UNKNOWN').noSuchPlayer, undefined);
 
     const retiredText = '- Retired from professional football in 2024 after a spell in the UAE.';
     assert.equal(groundingShowsRetirement(retiredText, null), true);
