@@ -460,6 +460,11 @@ export const sendMessageToAI = async (
     // No published card answers the request, so this one is rated, under the name he is commonly
     // known by: one player gets one name, whatever the user called him.
     const identity = await loadIdentity();
+    // Never rate somebody else when the name isn't a footballer's.
+    if (identity.noSuchPlayer) {
+      perf('no such footballer');
+      return `I couldn't find a footballer called "${primaryPlayer}". Which player did you mean?`;
+    }
     const subjectName = identity.knownAs || primaryPlayer;
 
     options?.onStageChange?.(

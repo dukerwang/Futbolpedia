@@ -565,6 +565,8 @@ async function main() {
     // An unknown status says nothing, whatever the names contain.
     assert.equal(parsePlayerIdentity('STATUS: UNKNOWN | KNOWN AS: Active Player | FULL NAME: UNKNOWN').status, 'unknown');
     assert.deepEqual(parsePlayerIdentity('RETIRED'), { status: 'retired', knownAs: null, fullName: null });
+    assert.equal(parsePlayerIdentity('STATUS: NONE').noSuchPlayer, true);
+    assert.equal(parsePlayerIdentity('STATUS: UNKNOWN | KNOWN AS: UNKNOWN | FULL NAME: UNKNOWN').noSuchPlayer, undefined);
 
     const retiredText = '- Retired from professional football in 2024 after a spell in the UAE.';
     assert.equal(groundingShowsRetirement(retiredText, null), true);

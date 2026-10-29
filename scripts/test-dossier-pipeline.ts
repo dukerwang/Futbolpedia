@@ -27,6 +27,8 @@ interface Scenario {
   club?: string;
   /** API-Football's record for the player, if it has one. */
   apiPlayer?: { name: string; currentClub: string; age?: number };
+  /** The turn classifier's answer, for messages no fast path routes. */
+  route?: { intent: string; targetPlayers: string[] };
 }
 
 interface GeminiCall {
@@ -103,6 +105,18 @@ function geminiReply(body: any): string {
   if (prompt.includes('still playing professionally')) return scenario.status;
   if (prompt.includes('first-team head coach')) {
     return 'COACH: Test Coach | SINCE: UNKNOWN | PREVIOUS: UNKNOWN | SOURCE_DATE: UNKNOWN';
+  }
+  if (structured && prompt.includes("Classify the user's football scouting message")) {
+    const route = scenario.route ?? { intent: 'tactical_chat', targetPlayers: [] };
+    return JSON.stringify({
+      analyticalMode: route.intent === 'single_dossier' ? 'dossier' : 'debate_or_verdict',
+      targetClubs: [],
+      searchQueries: [],
+      reasoningComplexity: 'low',
+      isHistorical: false,
+      needsSearch: false,
+      ...route,
+    });
   }
   if (structured && prompt.includes('synthesis_instructions')) return JSON.stringify(fakeProfile(prompt));
   if (structured && prompt.includes('Rewrite the Latest Update')) {
@@ -224,6 +238,37 @@ async function main() {
     assert.equal(card.basicInfo.name, 'Pelé');
     assert.equal(card.version?.type, 'prime');
     assert.match(card.version?.id ?? '', /^pele-prime-/);
+  });
+
+  await test('a surname that is also a ranking word still gets his dossier', async () => {
+    scenario = {
+      status: 'STATUS: RETIRED | KNOWN AS: George Best | FULL NAME: George Best',
+      search: () => '- Summary of the player.',
+      name: 'George Best',
+      route: { intent: 'single_dossier', targetPlayers: ['George Best'] },
+    };
+    const card = await rate('rate george best');
+    assert.equal(card.basicInfo?.name, 'George Best');
+    assert.equal(card.version?.type, 'prime');
+  });
+
+  await test('a message that names no player is never rated as one', async () => {
+    const { classifyTurn } = await import('../services/turnRouter');
+    scenario = { status: 'ACTIVE', search: () => '', route: { intent: 'single_dossier', targetPlayers: [] } };
+    const route = await classifyTurn({ message: 'yo what the fuck is happening', history: [], conversationDossiers: [], hasImage: false });
+    assert.notEqual(route.intent, 'single_dossier');
+    // A ranking question is still not a dossier, whoever the classifier names.
+    scenario.route = { intent: 'single_dossier', targetPlayers: ['Lamine Yamal'] };
+    const ranking = await classifyTurn({ message: 'Is Yamal the best RW in the world?', history: [], conversationDossiers: [], hasImage: false });
+    assert.notEqual(ranking.intent, 'single_dossier');
+  });
+
+  await test('a name no footballer goes by gets a question back, not somebody else', async () => {
+    scenario = { status: 'STATUS: NONE', search: () => '- Kylian Mbappé news.', name: 'Kylian Mbappé' };
+    const reply = await rate('rate blorpington fizzwick');
+    assert.equal(typeof reply, 'string');
+    assert.match(reply as unknown as string, /couldn't find a footballer called "blorpington fizzwick"/);
+    assert.equal(synthesisPrompt(), '');
   });
 
   await test('a named season gets a season card whatever his status', async () => {

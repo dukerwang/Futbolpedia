@@ -362,6 +362,8 @@ export const extractCandidateSlug = (message: string): string | null => {
   return name ? toPlayerSlug(name) : null;
 };
 
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const hasChallengeOrQuestionCue = (msg: string): boolean =>
   /\b(why|how come|explain|justify|disagree|wrong|too (?:high|low)|overrated|underrated|make(?:s)? no sense|didn['\u2019]?t ask|don['\u2019]?t (?:rate|generate|make|want)|raw text|in prose|should be|bump|lower|raise|change his|adjust)\b/i.test(
     msg,
@@ -733,7 +735,12 @@ User message: "${trimmed}"`;
       route.intent = 'compare';
       route.analyticalMode = 'head_to_head';
     }
-    if (route.intent === 'single_dossier' && isNonPlayerSubject) {
+    // Words in the player's own name are not cues: the "best" in a surname is not a ranking.
+    const subjectText = route.targetPlayers
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .reduce((text, name) => text.replace(new RegExp(escapeRegExp(name), 'gi'), 'Someone'), trimmed);
+    if (route.intent === 'single_dossier' && isNonSinglePlayerSubject(subjectText)) {
       route.intent = 'tactical_chat';
       if (!route.analyticalMode || route.analyticalMode === 'dossier') {
         route.analyticalMode = /\b(top\s+\d+|rank|tier\s*list|best)\b/i.test(trimmed)
@@ -751,7 +758,9 @@ User message: "${trimmed}"`;
       route.analyticalMode = hasCompare ? 'head_to_head' : 'player_qa';
     }
     if (route.intent === 'single_dossier' && !hasImage && route.targetPlayers.length === 0) {
-      const fallbackName = extractCandidatePlayerName(trimmed);
+      // Only a message that asks for a rating, or is a bare name, can be read as a player's name.
+      const fallbackName =
+        hasDossierTrigger || isBarePlayerName ? extractCandidatePlayerName(trimmed) : null;
       if (fallbackName) {
         route.targetPlayers = [fallbackName];
       } else {

@@ -338,6 +338,8 @@ export interface PlayerIdentity {
   status: CareerStatus;
   knownAs: string | null;
   fullName: string | null;
+  /** The check found that no footballer goes by this name. */
+  noSuchPlayer?: boolean;
 }
 
 const identityCache = new Map<string, Promise<PlayerIdentity>>();
@@ -348,12 +350,18 @@ export function parseCareerStatus(text: string): CareerStatus {
   return m ? (m[1] === 'RETIRED' ? 'retired' : 'active') : 'unknown';
 }
 
-/** Reads "STATUS: … | KNOWN AS: … | FULL NAME: …"; a bare status word still reads as the status. */
+/**
+ * Reads "STATUS: … | KNOWN AS: … | FULL NAME: …"; a bare status word still reads as the status, and
+ * "STATUS: NONE" means no footballer goes by the name.
+ */
 export function parsePlayerIdentity(text: string): PlayerIdentity {
   const field = (label: string): string | null =>
     text.match(new RegExp(`${label}\\s*:\\s*([^|\\n]+)`, 'i'))?.[1].replace(/[*"]/g, '').trim() || null;
   const name = (value: string | null): string | null =>
     value && value.length <= 60 && !/^(unknown|n\/a|none)$/i.test(value) ? value : null;
+  if (/^none\b/i.test(field('STATUS') ?? '')) {
+    return { status: 'unknown', knownAs: null, fullName: null, noSuchPlayer: true };
+  }
   return {
     status: parseCareerStatus(field('STATUS') ?? text),
     knownAs: name(field('KNOWN AS')),
@@ -397,7 +405,7 @@ export function getPlayerIdentity(playerName: string): Promise<PlayerIdentity> {
   const job = getAi()
     .models.generateContent({
       model: FLASH_MODEL,
-      contents: `As of ${month} ${year}, is the footballer ${playerName} still playing professionally, or has he retired from playing? Also give the name football coverage commonly calls him by and his full name. Reply on one line, exactly: STATUS: <ACTIVE, RETIRED or UNKNOWN> | KNOWN AS: <name> | FULL NAME: <name>. Write UNKNOWN for anything you cannot tell.`,
+      contents: `As of ${month} ${year}, is the footballer ${playerName} still playing professionally, or has he retired from playing? Also give the name football coverage commonly calls him by and his full name. Reply on one line, exactly: STATUS: <ACTIVE, RETIRED or UNKNOWN> | KNOWN AS: <name> | FULL NAME: <name>. Write UNKNOWN for anything you cannot tell. If no footballer goes by that name or anything close to it, reply exactly: STATUS: NONE. Never answer with a different footballer.`,
       config: {
         temperature: 0,
         // Thinking tokens count against this budget, so leave room beyond the one-line answer.
@@ -410,7 +418,9 @@ export function getPlayerIdentity(playerName: string): Promise<PlayerIdentity> {
       const identity = parsePlayerIdentity(res.text ?? '');
       if (identity.status === 'unknown') identityCache.delete(key);
       console.info(
-        `[PlayerIdentity] ${playerName}: ${identity.status}, known as ${identity.knownAs ?? '?'} (${identity.fullName ?? '?'})`,
+        identity.noSuchPlayer
+          ? `[PlayerIdentity] ${playerName}: no such footballer`
+          : `[PlayerIdentity] ${playerName}: ${identity.status}, known as ${identity.knownAs ?? '?'} (${identity.fullName ?? '?'})`,
       );
       return identity;
     })
