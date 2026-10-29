@@ -2,8 +2,9 @@
 /**
  * Offline checks that a published shared card is served without re-rating: sendMessageToAI runs
  * for real against an in-memory stand-in for Supabase, with Gemini answered by a fake at the
- * fetch layer (no network or API keys). The shared store holds a prime card the way the Global
- * Dossier Hub does: under the player's full name ("prime-zinedine-zidane").
+ * fetch layer (no network or API keys). The shared store holds cards the way the Global Dossier
+ * Hub does: under the name the card was published with ("prime-zinedine-zidane"), which can be a
+ * player's full name rather than the one he is known by ("prime-arthur-antunes-coimbra").
  *
  * Usage:
  *   npx tsx scripts/test-dossier-cache-hit.ts
@@ -71,7 +72,7 @@ let writes: Row[] = [];
 };
 
 interface Scenario {
-  /** Reply text for the "still playing professionally?" check. */
+  /** Reply text for the identity check ("still playing professionally?", known-as and full name). */
   status: string;
   /** Digest text returned by grounded searches. */
   search: (query: string) => string;
@@ -209,6 +210,62 @@ async function main() {
     // Synthesis gets the fake's empty answer, so the request fails after reaching it.
     await rate('rerate zidane').catch(() => null);
     assert.ok(syntheses().length > 0);
+  });
+
+  const zicoPrime: PlayerProfile = {
+    ...zidanePrime,
+    basicInfo: { ...zidanePrime.basicInfo, name: 'Arthur Antunes Coimbra', club: 'Flamengo' },
+    ratings: { overall: 97, potential: 97 },
+    evaluationDate: '1982-07-05',
+    version: {
+      id: 'arthur-antunes-coimbra-prime-1982-07-05',
+      type: 'prime',
+      label: 'Prime Zenith (1980-82)',
+      evaluationDate: '1982-07-05',
+      seasonOrEra: '1980-82',
+    },
+  };
+  const zicoSeason: PlayerProfile = {
+    ...zicoPrime,
+    ratings: { overall: 96, potential: 96 },
+    evaluationDate: '1981-12-13',
+    version: {
+      id: 'arthur-antunes-coimbra-season_snapshot-1981-12-13',
+      type: 'season_snapshot',
+      label: 'Season (1981)',
+      evaluationDate: '1981-12-13',
+      seasonOrEra: '1981',
+    },
+  };
+  tables.player_profiles.push(
+    { player_slug: 'prime-arthur-antunes-coimbra', player_data: zicoPrime, updated_at: publishedAt },
+    { player_slug: 'arthur-antunes-coimbra--prime--1982-07-05', player_data: zicoPrime, updated_at: publishedAt },
+    { player_slug: 'arthur-antunes-coimbra--season_snapshot--1981-12-13', player_data: zicoSeason, updated_at: publishedAt },
+  );
+  const zicoIdentity = 'STATUS: RETIRED | KNOWN AS: Zico | FULL NAME: Arthur Antunes Coimbra';
+
+  await test('"rate prime zico" finds the prime published under his full name', async () => {
+    scenario = { status: zicoIdentity, search: () => '- Summary of the player.' };
+    const card = await rate('rate prime zico');
+    assert.equal(card.basicInfo.name, 'Arthur Antunes Coimbra');
+    assert.equal(card.ratings.overall, 97);
+    assert.equal(geminiPrompts.length, 1, 'the identity check alone');
+    assert.equal(apiFootballCalls, 0);
+    assert.equal(writes.length, 0, 'no second card');
+  });
+
+  await test('"rate zico" serves the same prime', async () => {
+    const card = await rate('rate zico');
+    assert.equal(card.ratings.overall, 97);
+    assert.equal(syntheses().length, 0);
+    assert.equal(writes.length, 0);
+  });
+
+  await test('"rate zico 1981" finds the season card published under his full name', async () => {
+    const card = await rate('rate zico 1981');
+    assert.equal(card.version?.type, 'season_snapshot');
+    assert.equal(card.ratings.overall, 96);
+    assert.equal(syntheses().length, 0);
   });
 
   await test('an active player with a published prime still gets his current form', async () => {

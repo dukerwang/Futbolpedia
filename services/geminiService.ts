@@ -66,7 +66,9 @@ import {
   gatherPlayerGrounding,
   gatherSearchFoundation,
   getCareerStatus,
+  getPlayerIdentity,
   groundingShowsRetirement,
+  type PlayerIdentity,
 } from './groundingService';
 import { withFreshLatestUpdate } from './latestUpdateRefresh';
 import { classifyTurn, extractCandidateSlug } from './turnRouter';
@@ -272,9 +274,22 @@ export const sendMessageToAI = async (
     // An explicit "rerate" of a prime card regenerates it from scratch and replaces the frozen
     // shared card. Read after the retirement check too, since that can turn a request historical.
     const reratingPrime = (): boolean => Boolean(route.rerate) && isHistorical && !season && !era;
+    // Who the typed name refers to: the name he is commonly known by, his full name and his
+    // career status. With no timeframe it is asked right away, since his status picks the edition;
+    // otherwise only once no published card answers the request under the typed name.
+    let identityPromise: Promise<PlayerIdentity> | null = null;
+    const loadIdentity = (): Promise<PlayerIdentity> =>
+      (identityPromise ??=
+        imageData || !primaryPlayer
+          ? Promise.resolve({ status: 'unknown', knownAs: null, fullName: null })
+          : getPlayerIdentity(primaryPlayer));
+    const identityNames = async (): Promise<(string | null)[]> => {
+      const { knownAs, fullName } = await loadIdentity();
+      return [knownAs, fullName];
+    };
     const careerStatusPromise =
       !isHistorical && !season && !route.wantsCurrentForm && !imageData && primaryPlayer
-        ? getCareerStatus(primaryPlayer)
+        ? loadIdentity().then((identity) => identity.status)
         : Promise.resolve<CareerStatus>('unknown');
 
     // A player can hold several cards (current, prime, past seasons, eras). Shortcuts and locks
@@ -327,13 +342,36 @@ export const sendMessageToAI = async (
       }
     }
 
-    // Prior authored cards (longitudinal memory) only need the name. Fetched once, on first use.
-    let priorDossiersPromise: Promise<PlayerProfile[]> | null = null;
-    const loadPriorDossiers = (): Promise<PlayerProfile[]> =>
-      (priorDossiersPromise ??= fetchPriorDossiersForPlayer(primaryPlayer, [
-        ...savedDossiers,
-        ...conversationDossiers,
-      ]));
+    // Prior authored cards (longitudinal memory) only need the name. Fetched once per name.
+    const priorDossiersByName = new Map<string, Promise<PlayerProfile[]>>();
+    const priorDossiersFor = (name: string | null | undefined): Promise<PlayerProfile[]> => {
+      const base = name ? toBasePlayerSlug(name) : '';
+      if (!name || !base) return Promise.resolve([]);
+      if (!priorDossiersByName.has(base)) {
+        priorDossiersByName.set(
+          base,
+          fetchPriorDossiersForPlayer(name, [...savedDossiers, ...conversationDossiers]),
+        );
+      }
+      return priorDossiersByName.get(base)!;
+    };
+    // His cards under every name he goes by, oldest first.
+    const loadAllPriorDossiers = async (): Promise<PlayerProfile[]> => {
+      const names = [primaryPlayer, ...(await identityNames())];
+      const byKey = new Map<string, PlayerProfile>();
+      for (const p of (await Promise.all(names.map(priorDossiersFor))).flat()) {
+        byKey.set(getCardKey(p), p);
+      }
+      return [...byKey.values()].sort((x, y) =>
+        (x.evaluationDate || '').localeCompare(y.evaluationDate || ''),
+      );
+    };
+
+    const sharedCardBySlug = new Map<string, Promise<PlayerProfile | null>>();
+    const sharedCardAt = (slug: string): Promise<PlayerProfile | null> => {
+      if (!sharedCardBySlug.has(slug)) sharedCardBySlug.set(slug, getCachedDossier(slug));
+      return sharedCardBySlug.get(slug)!;
+    };
 
     // The shared card of one edition. The typed name may not be the card's ("zidane" for
     // "Zinedine Zidane"), so the names on the player's other cards are tried too.
@@ -341,15 +379,11 @@ export const sendMessageToAI = async (
       historical: boolean,
       ...names: (string | null | undefined)[]
     ): Promise<PlayerProfile | null> => {
-      const priorCards = loadPriorDossiers();
-      const tried = new Set<string>();
+      const priorCards = priorDossiersFor(primaryPlayer);
       const lookUp = async (candidates: (string | null | undefined)[]) => {
         for (const name of candidates) {
           if (!name || !toBasePlayerSlug(name)) continue;
-          const slug = toDossierCardSlug(name, historical);
-          if (tried.has(slug)) continue;
-          tried.add(slug);
-          const card = await getCachedDossier(slug);
+          const card = await sharedCardAt(toDossierCardSlug(name, historical));
           if (card) return card;
         }
         return null;
@@ -360,18 +394,38 @@ export const sendMessageToAI = async (
       );
     };
 
+    // A published card under the typed name, else under the names the identity check gives him
+    // ("zico" for a card published as "Arthur Antunes Coimbra").
+    const findUnderAnyName = async (
+      find: (name: string) => Promise<PlayerProfile | null>,
+    ): Promise<PlayerProfile | null> => {
+      const tried = new Set<string>();
+      for (const name of [primaryPlayer, ...(await identityNames())]) {
+        const base = name ? toBasePlayerSlug(name) : '';
+        if (!name || !base || tried.has(base)) continue;
+        tried.add(base);
+        const card = await find(name);
+        if (card) return card;
+      }
+      return null;
+    };
+
     // Shared cards: one current card per player per month, and prime cards are frozen, so even a
     // regeneration request gets the published card while it's in its refresh window. The one
     // exception is consensus: enough people independently challenging it the same way.
     let supersede = false;
     if (!imageData && season) {
-      const seasonCard = await getCachedSeasonCard(primaryPlayer, season);
+      const seasonCard =
+        (await getCachedSeasonCard(primaryPlayer, season)) ??
+        (await findUnderAnyName((name) => getCachedSeasonCard(name, season)));
       if (seasonCard) {
         perf('supabase season card hit');
         return seasonCard;
       }
     } else if (!imageData && era) {
-      const eraCard = await getCachedEraCard(primaryPlayer, { qualifier: era });
+      const eraCard =
+        (await getCachedEraCard(primaryPlayer, { qualifier: era })) ??
+        (await findUnderAnyName((name) => getCachedEraCard(name, { qualifier: era })));
       if (eraCard) {
         perf('supabase era card hit');
         return eraCard;
@@ -379,11 +433,13 @@ export const sendMessageToAI = async (
     } else if (!imageData && !reratingPrime()) {
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
-        let cached = await findSharedCard(isHistorical, rawSlug);
+        let cached =
+          (await findSharedCard(isHistorical, rawSlug)) ??
+          (await findSharedCard(isHistorical, ...(await identityNames())));
         // With no timeframe, a retired player's answer is his prime card. When one is published,
         // the status check alone decides, so a retired player's prime needs no grounding.
         if (!cached && !isHistorical && !route.wantsCurrentForm && !route.rerate) {
-          const primeCard = await findSharedCard(true, rawSlug);
+          const primeCard = await findSharedCard(true, rawSlug, ...(await identityNames()));
           if (primeCard && (await careerStatusPromise) === 'retired') {
             perf('retired player: his published prime');
             isHistorical = true;
@@ -401,28 +457,33 @@ export const sendMessageToAI = async (
       }
     }
 
+    // No published card answers the request, so this one is rated, under the name he is commonly
+    // known by: one player gets one name, whatever the user called him.
+    const identity = await loadIdentity();
+    const subjectName = identity.knownAs || primaryPlayer;
+
     options?.onStageChange?.(
       season
-        ? `Researching ${primaryPlayer || 'player'}'s ${season} season...`
+        ? `Researching ${subjectName || 'player'}'s ${season} season...`
         : era
-          ? `Researching ${primaryPlayer || 'player'}'s ${formatEraQualifier(era)} era...`
+          ? `Researching ${subjectName || 'player'}'s ${formatEraQualifier(era)} era...`
           : isHistorical
-            ? `Researching ${primaryPlayer || 'player'}'s career peak & honours...`
-            : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
+            ? `Researching ${subjectName || 'player'}'s career peak & honours...`
+            : `Verifying ${subjectName || 'player'}'s live club, coach & stats...`,
     );
 
     // Prior cards and the career status check run alongside grounding, so active players wait
     // for nothing.
     let [grounding, priorDossiers, challengeRows, careerStatus] = await Promise.all([
       gatherPlayerGrounding({
-        playerName: primaryPlayer,
+        playerName: subjectName,
         rawMessage: message,
         isHistorical,
         season,
         era,
       }),
-      loadPriorDossiers(),
-      fetchRevisionsForPlayer(primaryPlayer),
+      loadAllPriorDossiers(),
+      fetchRevisionsForPlayer(subjectName),
       careerStatusPromise,
     ]);
     perf('hybrid grounding');
@@ -451,12 +512,18 @@ export const sendMessageToAI = async (
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       const primeCard = reratingPrime()
         ? null
-        : await findSharedCard(true, rawSlug, grounding.apiPlayer?.name);
+        : await findSharedCard(
+            true,
+            rawSlug,
+            identity.knownAs,
+            identity.fullName,
+            grounding.apiPlayer?.name,
+          );
       if (primeCard && !hasRevisionConsensus(await fetchRevisionsForCard(primeCard))) {
         return primeCard;
       }
-      options?.onStageChange?.(`Researching ${primaryPlayer}'s career peak & honours...`);
-      grounding = await gatherPlayerGrounding({ playerName: primaryPlayer, rawMessage: message, isHistorical });
+      options?.onStageChange?.(`Researching ${subjectName}'s career peak & honours...`);
+      grounding = await gatherPlayerGrounding({ playerName: subjectName, rawMessage: message, isHistorical });
     }
 
     // The typed name may not match the shared card's ("pedro", a nickname, a fuller name).
@@ -483,7 +550,7 @@ export const sendMessageToAI = async (
     }
 
     options?.onStageChange?.(
-      `Calibrating 25-attribute dossier for ${grounding.apiPlayer?.name || primaryPlayer || 'player'}...`,
+      `Calibrating 25-attribute dossier for ${grounding.apiPlayer?.name || subjectName || 'player'}...`,
     );
 
     const freshReferencedDossiers = referencedDossiers
@@ -494,7 +561,9 @@ export const sendMessageToAI = async (
       : buildLockedDossiersBlock(freshReferencedDossiers);
     const synthesisPeerLedgerOptions = { ...peerLedgerOptions, positionHint: grounding.apiPlayer?.position };
     // A re-rating starts from scratch: the player's own earlier cards never anchor it.
-    const ownSlugs = new Set([toBasePlayerSlug(primaryPlayer), toBasePlayerSlug(canonicalName ?? '')]);
+    const ownSlugs = new Set(
+      [primaryPlayer, subjectName, identity.fullName, canonicalName].map((n) => toBasePlayerSlug(n ?? '')),
+    );
     const synthesisPeerLedger = (
       grounding.apiPlayer?.position
         ? selectPositionalPeerLedger(savedDossiers, conversationDossiers, synthesisPeerLedgerOptions)
@@ -520,7 +589,7 @@ export const sendMessageToAI = async (
       ? ''
       : buildPriorDossierTrajectoryBlock(
           priorDossiers,
-          grounding.apiPlayer?.name || primaryPlayer || 'player',
+          grounding.apiPlayer?.name || subjectName || 'player',
         ) + buildRevisionProposalsBlock(replacedCardChallenges);
 
     // Look up the club's verified manager while the card is synthesized; prime cards skip it.
@@ -542,6 +611,7 @@ export const sendMessageToAI = async (
       priorTrajectoryBlock,
       requestedSeason: season,
       requestedEra: era,
+      cardName: identity.knownAs,
     });
     perf('calibrated synthesis');
 

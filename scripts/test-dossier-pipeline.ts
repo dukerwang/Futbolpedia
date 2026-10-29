@@ -212,17 +212,30 @@ async function main() {
     assert.equal(card.clubManager?.name, 'Test Coach');
   });
 
-  await test('a named season gets a season card and skips the status check', async () => {
+  await test('a new card goes under the name he is known by, whatever he was called', async () => {
+    scenario = {
+      status: 'STATUS: RETIRED | KNOWN AS: Pelé | FULL NAME: Edson Arantes do Nascimento',
+      search: () => '- Summary of the player.',
+      // The model keeps the name it was asked about.
+      name: 'Edson Arantes do Nascimento',
+    };
+    const card = await rate('Rate Edson Arantes do Nascimento');
+    assert.match(synthesisPrompt(), /`basicInfo\.name` = \\"Pelé\\"/);
+    assert.equal(card.basicInfo.name, 'Pelé');
+    assert.equal(card.version?.type, 'prime');
+    assert.match(card.version?.id ?? '', /^pele-prime-/);
+  });
+
+  await test('a named season gets a season card whatever his status', async () => {
     scenario = { status: 'RETIRED', search: () => '- That season in summary.' };
     const card = await rate('Rate Thierry Henry 2006');
-    assert.equal(statusCalls().length, 0);
     assert.match(synthesisPrompt(), /SEASON DATED CARD EVALUATION \(2006\)/);
     assert.equal(card.version?.type, 'season_snapshot');
     assert.equal(card.version?.seasonOrEra, '2005-06');
     assert.equal(card.clubManager, undefined);
   });
 
-  await test('a named era gets an era card, with no manager and no status check', async () => {
+  await test('a named era gets an era card, with no manager', async () => {
     scenario = { status: 'ACTIVE', search: () => '- Those seasons in summary.', name: 'Neymar Jr', club: 'Paris Saint-Germain' };
     const card = await rate('rate the psg version of neymar');
     assert.match(synthesisPrompt(), /ERA DATED CARD EVALUATION \(\W*psg\W*\)/);
@@ -234,7 +247,6 @@ async function main() {
     assert.equal(card.basicInfo.club, 'Paris Saint-Germain');
     assert.equal(card.clubManager, undefined);
     assert.equal(managerCalls().length, 0);
-    assert.equal(statusCalls().length, 0);
   });
 
   await test('the same era asked another way is the stored card', async () => {

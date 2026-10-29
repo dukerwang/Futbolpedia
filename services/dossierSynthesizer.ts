@@ -974,6 +974,8 @@ export interface SynthesizeDossierParams {
   requestedSeason?: string | null;
   /** A named version of the player to rate instead of his prime (see TurnRoute.requestedEra). */
   requestedEra?: string | null;
+  /** The name the card goes under: the one football coverage commonly calls him by. */
+  cardName?: string | null;
 }
 
 export async function synthesizePlayerDossier(
@@ -1027,7 +1029,9 @@ ${params.savedDossiersBlock}
 ${temporalRules}
 - Complete the \`calibration\` block first: choose the exact \`tierBand\` from Section III by how good a footballer this version of the player is (positional rank and honours are evidence, not the criterion), name 1-2 positional peers in \`peerBenchmark\`, fill \`peerPlacement\` against <calibrated_peer_ledger>, and identify \`signatureSpikes\` and \`genuineFlaws\`.
 - Ensure \`ratings.overall\` sits inside the integer range of your chosen \`calibration.tierBand\` and agrees with \`calibration.peerPlacement\`.
-- Make the 25 attributes reflect a realistic, spiky scouting profile where \`signatureSpikes\` are high and \`genuineFlaws\` stay low.
+- Make the 25 attributes reflect a realistic, spiky scouting profile where \`signatureSpikes\` are high and \`genuineFlaws\` stay low.${
+    params.cardName ? `\n- Set \`basicInfo.name\` = "${params.cardName}", the name football coverage commonly calls him by.` : ''
+  }
 </synthesis_instructions>
 <task>${params.rawMessage}</task>`;
 
@@ -1046,8 +1050,14 @@ ${temporalRules}
       schema: PLAYER_PROFILE_SYNTHESIS_SCHEMA,
     });
 
+    // One player, one name: the card always goes under the name he is commonly known by, so a
+    // request by his full name or a nickname never publishes a second card for him.
+    const named =
+      params.cardName && raw.basicInfo
+        ? { ...raw, basicInfo: { ...raw.basicInfo, name: params.cardName } }
+        : raw;
     let profile = applyVersionRules(
-      sanitizeProfileData(raw),
+      sanitizeProfileData(named),
       params.isHistorical,
       params.requestedSeason,
       params.requestedEra,
