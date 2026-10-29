@@ -18,6 +18,16 @@ cd packages/engine && npm ci && npm test   # outlook engine + manager-fidelity v
 
 CI (`.github/workflows/ci.yml`) runs all of the above plus `npm run build` on every PR and push to `main`. The tests need no network or API keys; add new offline checks to `npm test`.
 
+## Deploying
+
+The live app (futbolpedia.ai.studio) is hosted by Google AI Studio and does not deploy from GitHub on its own. A change goes live in three steps, all of which are needed:
+
+1. **Push to GitHub and merge into `main`.** The pull script copies `main` only, so a pushed branch or an open PR is not live.
+2. **Run the pull script in Google AI Studio** (`sync.sh`: `degit` of `dukerwang/Futbolpedia` into the workspace, `npm install`, `npm run build`).
+3. **Publish from Google AI Studio.** Until this step, the live app keeps serving the previously published build.
+
+So when reporting that a fix is done, say whether it is merged, and remind the user that the AI Studio pull and publish are still needed before it reaches the live app.
+
 ## Environment Variables
 
 - `GEMINI_API_KEY` — Google Gemini key. Vite injects it into the client as `process.env.API_KEY` (read by `services/aiClient.ts`); the server's `/gemini-api-proxy/*` also uses it.
