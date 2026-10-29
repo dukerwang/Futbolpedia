@@ -327,6 +327,39 @@ export const sendMessageToAI = async (
       }
     }
 
+    // Prior authored cards (longitudinal memory) only need the name. Fetched once, on first use.
+    let priorDossiersPromise: Promise<PlayerProfile[]> | null = null;
+    const loadPriorDossiers = (): Promise<PlayerProfile[]> =>
+      (priorDossiersPromise ??= fetchPriorDossiersForPlayer(primaryPlayer, [
+        ...savedDossiers,
+        ...conversationDossiers,
+      ]));
+
+    // The shared card of one edition. The typed name may not be the card's ("zidane" for
+    // "Zinedine Zidane"), so the names on the player's other cards are tried too.
+    const findSharedCard = async (
+      historical: boolean,
+      ...names: (string | null | undefined)[]
+    ): Promise<PlayerProfile | null> => {
+      const priorCards = loadPriorDossiers();
+      const tried = new Set<string>();
+      const lookUp = async (candidates: (string | null | undefined)[]) => {
+        for (const name of candidates) {
+          if (!name || !toBasePlayerSlug(name)) continue;
+          const slug = toDossierCardSlug(name, historical);
+          if (tried.has(slug)) continue;
+          tried.add(slug);
+          const card = await getCachedDossier(slug);
+          if (card) return card;
+        }
+        return null;
+      };
+      return (
+        (await lookUp(names)) ??
+        (await lookUp((await priorCards).map((p) => p.basicInfo.name)))
+      );
+    };
+
     // Shared cards: one current card per player per month, and prime cards are frozen, so even a
     // regeneration request gets the published card while it's in its refresh window. The one
     // exception is consensus: enough people independently challenging it the same way.
@@ -346,7 +379,17 @@ export const sendMessageToAI = async (
     } else if (!imageData && !reratingPrime()) {
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
-        const cached = await getCachedDossier(toDossierCardSlug(rawSlug, isHistorical));
+        let cached = await findSharedCard(isHistorical, rawSlug);
+        // With no timeframe, a retired player's answer is his prime card. When one is published,
+        // the status check alone decides, so a retired player's prime needs no grounding.
+        if (!cached && !isHistorical && !route.wantsCurrentForm && !route.rerate) {
+          const primeCard = await findSharedCard(true, rawSlug);
+          if (primeCard && (await careerStatusPromise) === 'retired') {
+            perf('retired player: his published prime');
+            isHistorical = true;
+            cached = primeCard;
+          }
+        }
         if (cached) {
           supersede = hasRevisionConsensus(await fetchRevisionsForCard(cached));
           if (!supersede) {
@@ -368,8 +411,8 @@ export const sendMessageToAI = async (
             : `Verifying ${primaryPlayer || 'player'}'s live club, coach & stats...`,
     );
 
-    // Prior authored cards (longitudinal memory) only need the name, so fetch them alongside
-    // grounding. The career status check runs alongside too, so active players wait for nothing.
+    // Prior cards and the career status check run alongside grounding, so active players wait
+    // for nothing.
     let [grounding, priorDossiers, challengeRows, careerStatus] = await Promise.all([
       gatherPlayerGrounding({
         playerName: primaryPlayer,
@@ -378,7 +421,7 @@ export const sendMessageToAI = async (
         season,
         era,
       }),
-      fetchPriorDossiersForPlayer(primaryPlayer, [...savedDossiers, ...conversationDossiers]),
+      loadPriorDossiers(),
       fetchRevisionsForPlayer(primaryPlayer),
       careerStatusPromise,
     ]);
@@ -395,19 +438,21 @@ export const sendMessageToAI = async (
     // A retired player has no current form to rate, so with no timeframe he gets his prime.
     // When the status check is inconclusive, the grounding itself can still show it.
     const retired =
-      careerStatus === 'retired' ||
-      (careerStatus === 'unknown' &&
-        !imageData &&
-        !isHistorical &&
-        !season &&
-        !route.wantsCurrentForm &&
-        groundingShowsRetirement(grounding.foundationText, grounding.apiPlayer));
+      !isHistorical &&
+      (careerStatus === 'retired' ||
+        (careerStatus === 'unknown' &&
+          !imageData &&
+          !season &&
+          !route.wantsCurrentForm &&
+          groundingShowsRetirement(grounding.foundationText, grounding.apiPlayer)));
     if (retired) {
       isHistorical = true;
       perf('retired player: rating his prime');
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
-      const primeCard = rawSlug ? await getCachedDossier(toDossierCardSlug(rawSlug, true)) : null;
-      if (primeCard && !reratingPrime() && !hasRevisionConsensus(await fetchRevisionsForCard(primeCard))) {
+      const primeCard = reratingPrime()
+        ? null
+        : await findSharedCard(true, rawSlug, grounding.apiPlayer?.name);
+      if (primeCard && !hasRevisionConsensus(await fetchRevisionsForCard(primeCard))) {
         return primeCard;
       }
       options?.onStageChange?.(`Researching ${primaryPlayer}'s career peak & honours...`);
