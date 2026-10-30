@@ -28,8 +28,10 @@ const STARTER_PROMPTS: Record<ChatDomain, { icon: string; label: string; prompt:
   ],
 };
 
-/** Distance from the bottom (px) within which new content keeps the view pinned to the latest message. */
+/** Distance from the bottom (px) within which scrolling back down re-pins the view to the latest message. */
 const PIN_THRESHOLD = 120;
+/** How long (ms) after the last growth the output still counts as live for the jump button. */
+const LIVE_IDLE_MS = 900;
 
 export const ChatHistory: React.FC<ChatHistoryProps> = ({
   messages,
@@ -42,8 +44,13 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   onRetry,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+  const lastTouchYRef = useRef<number | null>(null);
+  const liveTimerRef = useRef<number | undefined>(undefined);
   const [showJump, setShowJump] = useState(false);
+  const [isGrowing, setIsGrowing] = useState(false);
 
   // Scroll the container itself: scrollIntoView also scrolls ancestors, which shifts the whole page on iOS.
   const scrollToEnd = useCallback((behavior: ScrollBehavior = 'smooth') => {
@@ -51,27 +58,90 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
     if (el) el.scrollTo({ top: el.scrollHeight, behavior });
   }, []);
 
+  const unpin = () => {
+    const el = scrollRef.current;
+    // A conversation that still fits on screen has nothing to scroll back to.
+    if (!el || el.scrollHeight <= el.clientHeight + 2) return;
+    pinnedRef.current = false;
+    setShowJump(true);
+  };
+
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    pinnedRef.current = distance < PIN_THRESHOLD;
-    setShowJump(distance > PIN_THRESHOLD * 2);
+    const movedUp = el.scrollTop < lastScrollTopRef.current - 1;
+    lastScrollTopRef.current = el.scrollTop;
+    // Content shrinking clamps scrollTop upward too, so sitting at the very bottom always counts as pinned.
+    if (distance <= 2) pinnedRef.current = true;
+    else if (movedUp) pinnedRef.current = false;
+    else if (distance < PIN_THRESHOLD) pinnedRef.current = true;
+    setShowJump(!pinnedRef.current);
   };
+
+  // Unpin on the gesture itself, before its scroll event lands, so a growth tick can't snap the reader back down.
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.deltaY < 0) unpin();
+  };
+  const handleTouchMove = (e: React.TouchEvent) => {
+    const y = e.touches[0]?.clientY;
+    if (y === undefined) return;
+    if (lastTouchYRef.current !== null && y > lastTouchYRef.current + 2) unpin();
+    lastTouchYRef.current = y;
+  };
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (['ArrowUp', 'PageUp', 'Home'].includes(e.key)) unpin();
+  };
+
+  // Streaming chunks, the typewriter and late-mounting cards all grow the content outside the messages prop,
+  // so follow the rendered height rather than state changes.
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    let lastHeight = content.offsetHeight;
+    const observer = new ResizeObserver(() => {
+      const height = content.offsetHeight;
+      const grew = height > lastHeight;
+      lastHeight = height;
+      if (!grew) return;
+      if (pinnedRef.current) {
+        scrollToEnd('auto');
+        return;
+      }
+      setShowJump(true);
+      setIsGrowing(true);
+      window.clearTimeout(liveTimerRef.current);
+      liveTimerRef.current = window.setTimeout(() => setIsGrowing(false), LIVE_IDLE_MS);
+    });
+    observer.observe(content);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(liveTimerRef.current);
+    };
+  }, [scrollToEnd]);
 
   // A freshly opened conversation always starts at the latest message.
   useEffect(() => {
     pinnedRef.current = true;
+    setShowJump(false);
     scrollToEnd('auto');
   }, [conversationKey, scrollToEnd]);
 
-  // Follow streaming output only while the reader is already at the bottom, so scrolling up to reread isn't hijacked.
-  // A message the user just sent always re-pins the view.
+  // A message the user just sent always re-pins the view, even if they had scrolled up to reread.
   useEffect(() => {
-    const last = messages[messages.length - 1];
-    if (last?.sender === 'user') pinnedRef.current = true;
-    if (pinnedRef.current) scrollToEnd(last?.sender === 'user' ? 'smooth' : 'auto');
-  }, [messages, isLoading, scrollToEnd]);
+    if (messages[messages.length - 1]?.sender !== 'user') return;
+    pinnedRef.current = true;
+    setShowJump(false);
+    scrollToEnd('smooth');
+  }, [messages, scrollToEnd]);
+
+  const jumpToLatest = () => {
+    pinnedRef.current = true;
+    setShowJump(false);
+    scrollToEnd();
+  };
+
+  const isLive = isLoading || isGrowing;
 
   const lastUserIndex = messages.reduce((acc, m, i) => (m.sender === 'user' ? i : acc), -1);
 
@@ -80,11 +150,15 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
       <div
           ref={scrollRef}
           onScroll={handleScroll}
+          onWheel={handleWheel}
+          onTouchStart={(e) => { lastTouchYRef.current = e.touches[0]?.clientY ?? null; }}
+          onTouchMove={handleTouchMove}
+          onKeyDown={handleKeyDown}
           className="h-full overflow-y-auto overscroll-contain pb-6 sm:pb-16"
           id="chat-container"
           style={{ overflowAnchor: 'none' }}
       >
-        <div className="max-w-[800px] w-full mx-auto flex flex-col gap-1 sm:gap-2 px-4 sm:px-6 pt-4 sm:pt-10">
+        <div ref={contentRef} className="max-w-[800px] w-full mx-auto flex flex-col gap-1 sm:gap-2 px-4 sm:px-6 pt-4 sm:pt-10">
 
           {messages.length === 0 && (
               <div
@@ -158,17 +232,21 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
         </div>
       </div>
 
-      {showJump && (
+      {showJump && messages.length > 0 && (
         <button
           type="button"
-          onClick={() => {
-            pinnedRef.current = true;
-            scrollToEnd();
-          }}
+          onClick={jumpToLatest}
+          aria-label={isLive ? 'Jump to live output' : 'Jump to latest message'}
           className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 min-h-9 px-3.5 rounded-full bg-charcoal dark:bg-cream-200 text-cream-50 dark:text-charcoal shadow-float dark:shadow-dark-float text-[11px] font-sans font-bold uppercase tracking-widest animate-fade-in"
         >
+          {isLive ? (
+            <span className="relative flex size-2 mr-0.5" aria-hidden="true">
+              <span className="absolute inline-flex size-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+              <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+            </span>
+          ) : null}
           <span className="material-symbols-outlined text-[18px]">arrow_downward</span>
-          Latest
+          {isLive ? 'Live' : 'Latest'}
         </button>
       )}
     </div>
