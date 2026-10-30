@@ -12,18 +12,19 @@ You are generating a structured scouting dossier JSON object representing an off
      - Set \`version.seasonOrEra\` to the current season (e.g., "2026-27").
      - Set \`version.label\` to \`"Current Form (<Month> <Year>)"\` (e.g., "Current Form (Oct 2026)").
      - Set \`version.peakContext\` to \`null\`.
-   - **Historical / Peak / Prime Player Evaluation (e.g., "Prime Steven Gerrard", "Prime Joshua Kimmich", "Pelé"):**
-     - You MUST identify and evaluate the player at their ABSOLUTE CAREER ZENITH.
-     - Research and pinpoint the exact peak season (e.g. 2008–09 for Gerrard, 2019–20 for Kimmich) and the specific peak date (YYYY-MM-DD, e.g. the conclusion date of that defining campaign or tournament triumph).
-     - Set \`version.type\` to \`"prime"\`.
-     - Set \`version.evaluationDate\` to that verified peak date (YYYY-MM-DD).
-     - Set \`version.seasonOrEra\` to the peak season or era (e.g., "2008-09" or "2019-20").
-     - Set \`version.label\` to \`"Prime Zenith (<Season/Era>)"\` (e.g., "Prime Zenith (2008–09 Season)").
-     - Set \`version.peakContext\` to a concise 1–2 sentence analytical note defining what specific trophies, statistical output, and tactical dominance made this the player's career zenith.
+   - **Historical Window Evaluation (e.g., "Prime Steven Gerrard", "Gerrard 2012–15", "Pelé in the 1970s"):**
+     - A historical card rates ONE window of 2–4 consecutive seasons, never a whole career and never a whole club stint. Judge the level, role and attributes the player showed across those seasons only. Ignore everything before and after.
+     - **Prime window (\`version.type = "prime"\`):** the request says prime, peak or zenith. Choose the player's best 2–4 consecutive seasons.
+     - **Era window (\`version.type = "era"\`):** the request names seasons, an era or a decade. Use the named seasons if they span 2–4 seasons. Otherwise choose the closest 2–4 season window that fits (for a decade or a long span, the strongest 2–4 seasons inside it). A single named season widens to 2–3 seasons that contain it.
+     - Set \`version.windowStart\` and \`version.windowEnd\` to the first and last season of the window, each as the year the season starts (2005 for 2005-06). \`windowEnd - windowStart\` must be 1 to 3.
+     - Set \`version.seasonOrEra\` to the window text (e.g., "2005-06 to 2008-09").
+     - Set \`version.label\` to \`"Prime Zenith (<window>)"\` for a prime or \`"Era (<window>)"\` for an era.
+     - Set \`version.evaluationDate\` to the date the window ended (YYYY-MM-DD, such as the last league match or final of its last season). It must not be in the future.
+     - Set \`version.peakContext\` to a concise 1–2 sentence note on the trophies, role and tactical standing that defined the window.
 
 1. **Step 1 — Scout Calibration (\`calibration\`):**
    - Select \`tierBand\` from the Section III scale based on the player's intrinsic footballing quality and global positional standing:
-     - **93–95 (\`93_95_WC_ELITE\`):** #1–2 in the world at their position at their peak, all-time league/UCL positional benchmark (e.g., Prime John Terry at 94–95, peak Rodri at 94–95), or apex continental superstar/talisman.
+     - **93–95 (\`93_95_WC_ELITE\`):** #1–2 in the world at their position at their peak, all-time league/UCL positional benchmark (e.g., John Terry's 2004-05 to 2007-08 prime at 94–95, Rodri's 2022-23 to 2024-25 prime at 94–95), or apex continental superstar/talisman.
      - **90–92 (\`90_92_WORLD_CLASS\`):** Undisputed World-Class player and Top 3–5 in the world at their position right now (e.g., Willian Pacho at 90–91, or elite continental focal points at 92–93). Never drop a genuine top-3 to top-5 positional player into \`87_89_BORDERLINE_WC\` out of reputation lag.
      - **Historical & Modern Parity:** Grade historical peaks and current players on the exact same scale with zero nostalgia bias and zero conservative cap on defenders, defensive midfielders, or goalkeepers.
    - Write \`peerBenchmark\`: name 1–2 real-world same-position peers (preferring calibrated peers from \`<calibrated_peer_ledger>\` when applicable, or indisputable global positional peers in the same tier) with their ratings to lock the exact integer within that tier band.

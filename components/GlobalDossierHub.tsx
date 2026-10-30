@@ -3,10 +3,14 @@ import type { PlayerProfile } from '../types';
 import {
   fetchGlobalHubDossiers,
   type GlobalHubDossierItem,
+  getCardDecades,
   getCardKey,
+  getCardStatus,
+  getHistoricalKind,
   isPrimeCard,
   shareDossierCard,
 } from '../services/geminiService';
+import { decadeLabel } from '../services/careerWindow';
 import { getTierForRating, getShortTierLabel } from '../constants/ratingTiers';
 
 interface GlobalDossierHubProps {
@@ -16,7 +20,8 @@ interface GlobalDossierHubProps {
   localSavedProfiles?: PlayerProfile[];
 }
 
-type EditionFilter = 'all' | 'current' | 'prime';
+type EditionFilter = 'all' | 'current' | 'legacy' | 'prime' | 'era';
+type DecadeFilter = 'all' | number;
 type PositionFilter = 'all' | 'forward' | 'midfield' | 'defender' | 'goalkeeper';
 type SortOption = 'overall_desc' | 'date_desc' | 'name_asc' | 'trajectory_desc';
 
@@ -36,6 +41,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [editionFilter, setEditionFilter] = useState<EditionFilter>('all');
+  const [decadeFilter, setDecadeFilter] = useState<DecadeFilter>('all');
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('all');
   const [minTierFilter, setMinTierFilter] = useState<number>(0);
   const [sortOption, setSortOption] = useState<SortOption>('overall_desc');
@@ -85,6 +91,16 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
     return { totalCards, uniquePlayers, worldClassCount, latestDate };
   }, [items]);
 
+  // Decades that hold at least one card, with how many cards each holds. A card whose window
+  // crosses a decade boundary counts under both.
+  const decadeOptions = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const i of items) {
+      for (const d of getCardDecades(i.profile)) counts.set(d, (counts.get(d) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[0] - a[0]);
+  }, [items]);
+
   const filteredItems = useMemo(() => {
     let result = [...items];
 
@@ -110,9 +126,18 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
 
     // Edition filter
     if (editionFilter === 'current') {
-      result = result.filter((i) => i.profile.version?.type === 'current');
+      result = result.filter((i) => getCardStatus(i.profile) === 'current');
+    } else if (editionFilter === 'legacy') {
+      result = result.filter((i) => getCardStatus(i.profile) === 'legacy');
     } else if (editionFilter === 'prime') {
-      result = result.filter((i) => isPrimeCard(i.profile));
+      result = result.filter((i) => getHistoricalKind(i.profile) === 'prime');
+    } else if (editionFilter === 'era') {
+      result = result.filter((i) => getHistoricalKind(i.profile) === 'era');
+    }
+
+    // Decade filter
+    if (decadeFilter !== 'all') {
+      result = result.filter((i) => getCardDecades(i.profile).includes(decadeFilter));
     }
 
     // Position filter
@@ -163,7 +188,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
     });
 
     return result;
-  }, [items, searchQuery, editionFilter, positionFilter, minTierFilter, sortOption]);
+  }, [items, searchQuery, editionFilter, decadeFilter, positionFilter, minTierFilter, sortOption]);
 
   const handleCopyLink = async (profile: PlayerProfile, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -335,6 +360,17 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                 Current Ratings
               </button>
               <button
+                onClick={() => setEditionFilter('legacy')}
+                className={`px-2.5 py-1 rounded-md transition-colors ${
+                  editionFilter === 'legacy'
+                    ? 'bg-stone-600 text-white shadow-xs'
+                    : 'text-charcoal/60 dark:text-cream-400 hover:text-charcoal'
+                }`}
+                title="Cards rated in a season that has since ended"
+              >
+                Legacy
+              </button>
+              <button
                 onClick={() => setEditionFilter('prime')}
                 className={`px-2.5 py-1 rounded-md transition-colors ${
                   editionFilter === 'prime'
@@ -344,7 +380,34 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
               >
                 Prime Zeniths
               </button>
+              <button
+                onClick={() => setEditionFilter('era')}
+                className={`px-2.5 py-1 rounded-md transition-colors ${
+                  editionFilter === 'era'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-charcoal/60 dark:text-cream-400 hover:text-charcoal'
+                }`}
+              >
+                Eras
+              </button>
             </div>
+
+            {/* Decade Filter */}
+            <select
+              value={decadeFilter}
+              onChange={(e) =>
+                setDecadeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))
+              }
+              className="px-2.5 py-1.5 text-xs font-sans rounded-lg bg-cream-100 dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border text-charcoal dark:text-cream-50 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              title="Cards whose 2–4 season window includes a season from this decade"
+            >
+              <option value="all">All Decades</option>
+              {decadeOptions.map(([decade, count]) => (
+                <option key={decade} value={decade}>
+                  {decadeLabel(decade)} ({count})
+                </option>
+              ))}
+            </select>
 
             {/* Position Filter */}
             <select
@@ -413,6 +476,7 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                 onClick={() => {
                   setSearchQuery('');
                   setEditionFilter('all');
+                  setDecadeFilter('all');
                   setPositionFilter('all');
                   setMinTierFilter(0);
                 }}
@@ -425,7 +489,8 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {filteredItems.map(({ profile, isCurrentRating, trajectoryDiff, previousRatingDate }) => {
                 const cardKey = getCardKey(profile);
-                const isPrime = isPrimeCard(profile);
+                const isPrime = getHistoricalKind(profile) !== 'era' && isPrimeCard(profile);
+                const isEra = getHistoricalKind(profile) === 'era';
                 const evalDate = profile.evaluationDate || (profile.createdAt ? new Date(profile.createdAt).toISOString().split('T')[0] : 'Undated');
                 const tierLabel = getShortTierLabel(profile.ratings.overall);
                 const isCopied = copiedSlug === cardKey;
@@ -453,9 +518,15 @@ export const GlobalDossierHub: React.FC<GlobalDossierHubProps> = ({
                               <span className="material-symbols-outlined text-[12px]">workspace_premium</span>
                               Prime Zenith
                             </span>
+                          ) : isEra ? (
+                            <span className="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30 font-mono text-[9px] font-bold uppercase tracking-wider flex items-center gap-1">
+                              <span className="material-symbols-outlined text-[12px]">date_range</span>
+                              Era
+                            </span>
                           ) : (
-                            <span className="px-2 py-0.5 rounded-full bg-cream-200 dark:bg-charcoal-light text-charcoal/70 dark:text-cream-300 font-mono text-[9px] font-bold uppercase tracking-wider border border-cream-300 dark:border-charcoal-border">
-                              Historical Snapshot
+                            <span className="px-2 py-0.5 rounded-full bg-stone-500/10 text-stone-600 dark:text-stone-300 font-mono text-[9px] font-bold uppercase tracking-wider border border-stone-400/40 flex items-center gap-1">
+                              <span className="material-symbols-outlined text-[12px]">history</span>
+                              {getCardStatus(profile) === 'legacy' ? 'Legacy' : 'Earlier Rating'}
                             </span>
                           )}
 

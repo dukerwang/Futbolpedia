@@ -12,6 +12,14 @@ import {
   normalizeClub,
   normalizePosition,
 } from '../constants/ratingTiers';
+import {
+  decadesOfWindow,
+  formatWindow,
+  parseSeasonSpan,
+  toWindow,
+  type CareerWindow,
+  type HistoricalKind,
+} from './careerWindow';
 
 const supabaseUrl = 'https://hrocnbcavstmjysptjdk.supabase.co';
 const supabaseKey = 'sb_publishable_NKyG9miYqS8JgdpgWuXm9A_tc3vaVCL';
@@ -79,13 +87,68 @@ const seasonForDate = (dateStr: string): string => {
 };
 
 /**
- * True for any non-"current" card (prime, season snapshot, retro). Legacy cards with no
- * version fall back to an edition marker in the name.
+ * True for any non-"current" card: a prime or era window of the past. The name is historical;
+ * it covers eras too. Legacy cards with no version fall back to an edition marker in the name.
  */
 export const isPrimeCard = (p: PlayerProfile): boolean => {
   const t = p.version?.type;
   if (t) return t !== 'current';
   return /\b(prime|peak)\b/i.test(p.basicInfo?.name ?? '');
+};
+
+/** Which kind of past window a card is, or null for a current card. */
+export const getHistoricalKind = (p: PlayerProfile): HistoricalKind | null => {
+  if (!isPrimeCard(p)) return null;
+  return p.version?.type === 'era' ? 'era' : 'prime';
+};
+
+/**
+ * The seasons a card covers. A current card covers its season. A legacy historical card has
+ * only free text such as "2008-09", so the window is read from that, then from its date.
+ */
+export const getCardWindow = (p: PlayerProfile): CareerWindow | null => {
+  const explicit = toWindow(p.version?.windowStart, p.version?.windowEnd);
+  if (explicit) return explicit;
+  const parsed = parseSeasonSpan(p.version?.seasonOrEra ?? '');
+  if (parsed) return parsed;
+  const date = getDossierEvaluationDate(p);
+  if (!date) return null;
+  const start = Number(seasonForDate(date).slice(0, 4));
+  return { start, end: start };
+};
+
+/** Decades (2000, 2010, ...) that hold at least one season of the card's window. */
+export const getCardDecades = (p: PlayerProfile): number[] => {
+  const w = getCardWindow(p);
+  return w ? decadesOfWindow(w) : [];
+};
+
+export type CardStatus = 'current' | 'legacy' | HistoricalKind;
+
+/**
+ * A card is "current" only while the football season it was rated in is still running. Nothing
+ * is rewritten when a season ends: the card stays stored as `current`, and this check turns it
+ * into a legacy card the day the next season starts. Prime and era cards are never current.
+ */
+export const isCurrentCard = (p: PlayerProfile, today: string = todayIso()): boolean => {
+  if (isPrimeCard(p)) return false;
+  const date = getDossierEvaluationDate(p);
+  return date !== null && seasonForDate(date) === seasonForDate(today);
+};
+
+/** What a card is right now: current, legacy (a past current card), prime or era. */
+export const getCardStatus = (p: PlayerProfile, today?: string): CardStatus =>
+  getHistoricalKind(p) ?? (isCurrentCard(p, today) ? 'current' : 'legacy');
+
+/** Card title for display. A legacy card never reads "Current Form". */
+export const getCardLabel = (p: PlayerProfile, today?: string): string => {
+  const status = getCardStatus(p, today);
+  const stored = p.version?.label;
+  if (status === 'legacy') {
+    return stored ? stored.replace(/^Current Form/i, 'Legacy Form') : 'Legacy Form';
+  }
+  if (stored) return stored;
+  return status === 'era' ? 'Era' : status === 'prime' ? 'Prime Zenith' : 'Current Form';
 };
 
 /**
@@ -140,6 +203,13 @@ export const ensureDossierDated = (
     peakContext: null,
   };
 
+  // Past cards carry their window explicitly so filters don't re-parse text. Legacy cards only
+  // have free text such as "2008-09", which parses to a one-season window.
+  const window = prime
+    ? toWindow(version.windowStart, version.windowEnd) ??
+      parseSeasonSpan(version.seasonOrEra ?? '')
+    : null;
+
   return {
     ...p,
     evaluationDate: dateStr,
@@ -147,6 +217,13 @@ export const ensureDossierDated = (
     version: {
       ...version,
       evaluationDate: dateStr,
+      ...(window
+        ? {
+            windowStart: window.start,
+            windowEnd: window.end,
+            seasonOrEra: version.seasonOrEra || formatWindow(window),
+          }
+        : {}),
     },
   };
 };
@@ -168,10 +245,17 @@ export const toVersionedSlug = (p: PlayerProfile): string | null => {
   return `${toBasePlayerSlug(p.basicInfo.name)}--${type}--${date}`;
 };
 
-/** Mutable "latest card" pointer slug. Share links and cache lookups use this one. */
-export const toDossierCardSlug = (name: string, isHistorical = false): string => {
+/**
+ * Mutable "latest card" pointer slug. Share links and cache lookups use this one. Each kind
+ * of card has its own pointer, so rating a player's era never replaces their prime.
+ */
+export const toDossierCardSlug = (
+  name: string,
+  historical: boolean | HistoricalKind = false,
+): string => {
   const base = toBasePlayerSlug(name);
-  return isHistorical ? `prime-${base}` : base;
+  if (historical === 'era') return `era-${base}`;
+  return historical ? `prime-${base}` : base;
 };
 
 export const getCachedDossier = async (
@@ -226,7 +310,7 @@ export const upsertCachedDossier = async (
     createdAt: dated.createdAt || Date.now(),
   };
   const key = getCardKey(stamped);
-  const alias = toDossierCardSlug(stamped.basicInfo.name, isPrimeCard(stamped));
+  const alias = toDossierCardSlug(stamped.basicInfo.name, getHistoricalKind(stamped) ?? false);
   const versioned = toVersionedSlug(stamped);
 
   // Update in-memory Supabase calibrated pool immediately
@@ -390,13 +474,14 @@ export async function fetchPriorDossiersForPlayer(
 export function buildPriorDossierTrajectoryBlock(
   priorDossiers: PlayerProfile[],
   targetPlayer: string,
+  options: { historical?: boolean } = {},
 ): string {
   const datedPriors = priorDossiers.filter(isDossierDated);
   if (datedPriors.length === 0) return '';
 
   const entries = datedPriors.map((p) => {
     const date = p.evaluationDate || formatIsoDate(p.createdAt) || 'Previous Date';
-    const edition = p.version?.label || (p.version?.type === 'prime' ? 'Prime Zenith' : 'Current Form');
+    const edition = getCardLabel(p);
     const topAttrs = Object.entries(p.attributes || {})
       .filter(([, v]) => typeof v === 'number' && v >= 85)
       .sort((a, b) => b[1] - a[1])
@@ -407,6 +492,17 @@ export function buildPriorDossierTrajectoryBlock(
     return `- [${edition} · Evaluated ${date}]: Overall ${p.ratings.overall} / Potential ${p.ratings.potential} (${p.basicInfo.club}, ${p.basicInfo.position})
   Archetype: ${p.playstyleAndRole?.playstyle?.archetype || 'N/A'}${topAttrs ? ` | Key Spikes: ${topAttrs}` : ''}`;
   });
+
+  if (options.historical) {
+    return `
+<prior_authored_dossiers>
+Futbolpedia previously authored the following dated dossier card(s) for ${targetPlayer}:
+${entries.join('\n')}
+
+WINDOW CONSISTENCY PROTOCOL:
+You are rating a different window of this player's career. Keep it consistent with the cards above: a window where the player was better or worse must read that way in Overall, attributes and archetype. Do not copy a rating from another window, and do not carry a later or earlier window's traits into this one.
+</prior_authored_dossiers>`;
+  }
 
   return `
 <prior_authored_dossiers>
@@ -487,16 +583,17 @@ export async function fetchGlobalHubDossiers(
   const results: GlobalHubDossierItem[] = [];
 
   for (const [, cards] of byPlayer.entries()) {
-    // Separate current cards from prime cards
+    // Every card rated as "current" when it was made, newest first. Some may be legacy by now.
     const currentCards = cards
-      .filter((c) => c.version?.type === 'current')
+      .filter((c) => !isPrimeCard(c))
       .sort((a, b) => (b.evaluationDate || '').localeCompare(a.evaluationDate || ''));
 
-    const primeCards = cards.filter((c) => c.version?.type !== 'current');
+    const primeCards = cards.filter(isPrimeCard);
 
-    // Newest current card is the player's official Current rating
-    const newestCurrent = currentCards[0];
-    const previousCurrent = currentCards[1];
+    // The newest card is the player's official Current rating, unless its season has ended.
+    const newestCurrent =
+      currentCards[0] && isCurrentCard(currentCards[0]) ? currentCards[0] : undefined;
+    const previousCurrent = newestCurrent ? currentCards[1] : undefined;
 
     for (const card of currentCards) {
       const isLatest = card === newestCurrent;
@@ -1238,7 +1335,11 @@ export function buildPositionalPeerLedgerBlock(
             .filter(Boolean)
             .join(', ')
         : '';
-    const editionTag = isPrimeCard(p) ? ` [Prime ${p.version?.seasonOrEra ?? ''}]`.replace(' ]', ']') : '';
+    const editionTag = isPrimeCard(p)
+      ? ` [${getHistoricalKind(p) === 'era' ? 'Era' : 'Prime'} ${p.version?.seasonOrEra ?? ''}]`.replace(' ]', ']')
+      : getCardStatus(p) === 'legacy'
+        ? ` [Legacy ${p.version?.seasonOrEra ?? ''}]`.replace(' ]', ']')
+        : '';
     return `- ${p.basicInfo.name}${editionTag} (${p.basicInfo.position}, ${p.basicInfo.club}): ${p.ratings.overall} OVR / ${p.ratings.potential} POT${topSpikes ? ` [Spikes: ${topSpikes}]` : ''}${queriedSlice ? ` [Queried: ${queriedSlice}]` : ''}`;
   });
 

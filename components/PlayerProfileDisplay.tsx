@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { PlayerProfile } from '../types';
 import { AttributeTable } from './AttributeTable';
 import { getTierForRating } from '../constants/ratingTiers';
+import { getCardLabel, getCardStatus } from '../services/dossierStore';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -62,11 +63,15 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
     profile.version?.type ||
     (basicInfo.name.toLowerCase().includes('prime') ? 'prime' : 'current');
   const isPrime = versionType === 'prime';
+  const isEra = versionType === 'era';
+  const isLegacy = getCardStatus(profile) === 'legacy';
   const versionLabel =
-    profile.version?.label ||
+    (profile.version?.label && getCardLabel(profile)) ||
     (isPrime
       ? `Prime Zenith (${profile.version?.seasonOrEra || 'Apex'})`
-      : `Current Form (${evalDate || '2026'})`);
+      : isEra
+        ? `Era (${profile.version?.seasonOrEra || 'Window'})`
+        : `Current Form (${evalDate || '2026'})`);
 
   const confidence = profile.confidence;
   const scoutingDebate = profile.scoutingDebate;
@@ -93,7 +98,11 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
         className={`rounded-2xl shadow-sm p-6 sm:p-8 text-center relative overflow-hidden transition-all border ${
           isPrime
             ? 'bg-gradient-to-b from-amber-500/[0.04] via-white to-white dark:from-amber-500/[0.07] dark:via-charcoal-surface dark:to-charcoal-surface border-amber-500/30 ring-1 ring-amber-500/20'
-            : 'bg-white dark:bg-charcoal-surface border-cream-300/80 dark:border-charcoal-border'
+            : isEra
+              ? 'bg-gradient-to-b from-indigo-500/[0.04] via-white to-white dark:from-indigo-500/[0.07] dark:via-charcoal-surface dark:to-charcoal-surface border-indigo-500/30 ring-1 ring-indigo-500/20'
+              : isLegacy
+                ? 'bg-white dark:bg-charcoal-surface border-stone-400/40 dark:border-stone-500/30'
+                : 'bg-white dark:bg-charcoal-surface border-cream-300/80 dark:border-charcoal-border'
         }`}
       >
         {/* Subtle decorative watermark/accent line */}
@@ -101,7 +110,11 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
           className={`absolute top-0 left-0 right-0 h-1.5 ${
             isPrime
               ? 'bg-gradient-to-r from-amber-400 via-yellow-500 to-amber-600'
-              : 'bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600'
+              : isEra
+                ? 'bg-gradient-to-r from-indigo-400 via-violet-500 to-indigo-600'
+                : isLegacy
+                  ? 'bg-gradient-to-r from-stone-300 via-stone-400 to-stone-500'
+                  : 'bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600'
           }`}
         />
 
@@ -112,11 +125,15 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
               className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-bold tracking-wider uppercase border flex items-center gap-1.5 shadow-2xs ${
                 isPrime
                   ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
-                  : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                  : isEra
+                    ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/30'
+                    : isLegacy
+                      ? 'bg-stone-500/10 text-stone-600 dark:text-stone-300 border-stone-400/40'
+                      : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
               }`}
             >
               <span className="material-symbols-outlined text-[14px]">
-                {isPrime ? 'workspace_premium' : 'bolt'}
+                {isPrime ? 'workspace_premium' : isEra ? 'date_range' : isLegacy ? 'history' : 'bolt'}
               </span>
               {versionLabel}
             </span>
@@ -218,12 +235,12 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
           </div>
         </div>
 
-        {/* Peak Context Note for Prime Cards */}
+        {/* Context note for prime and era windows */}
         {profile.version?.peakContext && (
           <div className="mb-6 px-4 py-3 rounded-xl bg-amber-500/[0.07] border border-amber-500/25 text-left">
             <p className="text-xs font-serif italic text-amber-950 dark:text-amber-200 leading-relaxed">
               <span className="font-bold not-italic font-sans uppercase text-[10px] tracking-wider text-amber-700 dark:text-amber-400 mr-2">
-                Zenith Context:
+                {isEra ? 'Era Context:' : 'Zenith Context:'}
               </span>
               {profile.version.peakContext}
             </p>

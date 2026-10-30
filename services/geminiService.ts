@@ -22,11 +22,17 @@ import {
   fetchSupabaseCalibratedPool,
   findReferencedDossiers,
   getCachedDossier,
+  getCardDecades,
   getCardKey,
+  getCardLabel,
+  getCardStatus,
+  getCardWindow,
   getDossierEvaluationDate,
   getSharedConversation,
   grepDossiers,
   isDossierDated,
+  getHistoricalKind,
+  isCurrentCard,
   isPrimeCard,
   isSupabaseReady,
   mergeAllCalibratedDossiers,
@@ -41,6 +47,7 @@ import {
   wantsSavedDossierAccess,
 } from './dossierStore';
 import { synthesizePlayerDossier } from './dossierSynthesizer';
+import { classifyHistoricalRequest, windowContains } from './careerWindow';
 import { gatherPlayerGrounding, gatherSearchFoundation } from './groundingService';
 import { classifyTurn, extractCandidateSlug } from './turnRouter';
 
@@ -61,7 +68,13 @@ export {
   isDossierDated,
   getDossierEvaluationDate,
   getCardKey,
+  getCardDecades,
+  getCardLabel,
+  getCardStatus,
+  getCardWindow,
+  getHistoricalKind,
   shareDossierCard,
+  isCurrentCard,
   isPrimeCard,
 };
 
@@ -208,11 +221,22 @@ export const sendMessageToAI = async (
     const isFreshlyCalibrated = (p?: PlayerProfile): boolean =>
       Boolean(p?.createdAt && p.createdAt >= CALIBRATION_EPOCH_MS);
 
-    // A player can hold several cards (current plus prime). Shortcuts and locks only consider
-    // cards of the edition this request is asking for.
+    // A player can hold several cards (current, prime and era windows). Shortcuts and locks only
+    // consider cards of the edition this request is asking for. For a past card that also means
+    // the same kind, and the named seasons when the user gave any.
+    const historicalRequest = route.isHistorical ? classifyHistoricalRequest(message) : null;
+    const matchesRequestedWindow = (p: PlayerProfile): boolean => {
+      if (!historicalRequest) return true;
+      if (getHistoricalKind(p) !== historicalRequest.kind) return false;
+      const w = getCardWindow(p);
+      return !historicalRequest.window || (w !== null && windowContains(w, historicalRequest.window));
+    };
+    // A card from a finished season is legacy: it can inform a new rating but never stands in
+    // for one.
     const matchesRequestedEdition = (p: PlayerProfile): boolean =>
-      isPrimeCard(p) === route.isHistorical;
-    const currentReferenced = referencedDossiers.filter((p) => !isPrimeCard(p));
+      route.isHistorical ? isPrimeCard(p) && matchesRequestedWindow(p) : isCurrentCard(p);
+    const currentReferenced = referencedDossiers.filter((p) => isCurrentCard(p));
+    // Asking for a saved card by name returns it even when its season has ended.
     const currentSaved = savedResult.dossiers.filter((p) => !isPrimeCard(p));
 
     if (!imageData && !route.wantsRegeneration) {
@@ -238,7 +262,7 @@ export const sendMessageToAI = async (
       // Check in-memory calibrated pool first (0ms hit for last-name or full-name matches)
       if (!route.isHistorical && primaryPlayer) {
         const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers).filter(
-          (p) => !isPrimeCard(p),
+          (p) => isCurrentCard(p),
         );
         const poolHits = findReferencedDossiers(primaryPlayer, allCalibrated, [primaryPlayer]);
         if (poolHits.length === 1 && isFreshlyCalibrated(poolHits[0])) {
@@ -251,11 +275,15 @@ export const sendMessageToAI = async (
       const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
       if (rawSlug) {
         const lookupSlug =
-          route.isHistorical && !rawSlug.startsWith('prime-') && !rawSlug.startsWith('peak-')
-            ? `prime-${rawSlug}`
+          historicalRequest &&
+          !rawSlug.startsWith('prime-') &&
+          !rawSlug.startsWith('peak-') &&
+          !rawSlug.startsWith('era-')
+            ? toDossierCardSlug(rawSlug, historicalRequest.kind)
             : rawSlug;
         const cached = await getCachedDossier(lookupSlug);
-        if (cached) {
+        // The pointer holds the latest card of its kind, which may cover other seasons.
+        if (cached && (historicalRequest ? matchesRequestedWindow(cached) : isCurrentCard(cached))) {
           perf('supabase cache hit');
           return cached;
         }
@@ -272,6 +300,8 @@ export const sendMessageToAI = async (
       playerName: primaryPlayer,
       rawMessage: message,
       isHistorical: route.isHistorical,
+      historicalKind: historicalRequest?.kind,
+      requestedWindow: historicalRequest?.window,
     });
     perf('hybrid grounding');
 
@@ -301,11 +331,14 @@ export const sendMessageToAI = async (
     const priorTrajectoryBlock = buildPriorDossierTrajectoryBlock(
       priorDossiers,
       grounding.apiPlayer?.name || primaryPlayer || 'player',
+      { historical: route.isHistorical },
     );
 
     const profile = await synthesizePlayerDossier({
       rawMessage: message,
       isHistorical: route.isHistorical,
+      historicalKind: historicalRequest?.kind,
+      requestedWindow: historicalRequest?.window,
       foundationText: grounding.foundationText,
       verifiedFacts: grounding.verifiedFacts,
       verifiedFactsBlock: grounding.verifiedFactsBlock,
@@ -324,7 +357,7 @@ export const sendMessageToAI = async (
 
     const cacheSlug = toDossierCardSlug(
       stampedProfile.basicInfo.name,
-      route.isHistorical,
+      getHistoricalKind(stampedProfile) ?? false,
     );
     upsertCachedDossier(cacheSlug, stampedProfile);
     return stampedProfile;

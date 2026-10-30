@@ -2,6 +2,7 @@ import { Type } from '@google/genai';
 import type { ChatMessage, PlayerProfile } from '../types';
 import { CLUB_CANON } from '../constants/ratingTiers';
 import { generateStructured, getCurrentSeasonInfo } from './aiClient';
+import { hasHistoricalWindowCue } from './careerWindow';
 import {
   findReferencedDossiers,
   isPlayerProfile,
@@ -251,8 +252,7 @@ const HAS_REGEN_CUE = (msg: string): boolean =>
     msg,
   );
 
-const HAS_HISTORICAL_CUE = (msg: string): boolean =>
-  /\b(prime|peak|all[- ]time|historical|\b(?:19|20)\d{2}(?:[/-]\d{2,4})?\b)\b/i.test(msg);
+const HAS_HISTORICAL_CUE = (msg: string): boolean => hasHistoricalWindowCue(msg);
 
 const HAS_DOSSIER_TRIGGER = (msg: string): boolean =>
   /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good is|rank|tier|analyze|breakdown)\b/i.test(

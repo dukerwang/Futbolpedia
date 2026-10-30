@@ -4,7 +4,7 @@ import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { getCardKey, isPrimeCard, shareDossierCard } from '../services/geminiService';
+import { getCardKey, getCardLabel, getCardStatus, isPrimeCard, shareDossierCard } from '../services/geminiService';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -361,7 +361,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                                 </h4>
                                                 {isPrimeCard(p) && (
                                                     <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0">
-                                                        Prime
+                                                        {p.version?.type === 'era' ? 'Era' : 'Prime'}
                                                     </span>
                                                 )}
                                                 {p.confidence?.grade && (
@@ -582,16 +582,18 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase border flex items-center gap-1 ${
                                 isPrimeCard(profile)
                                     ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
-                                    : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                                    : getCardStatus(profile) === 'legacy'
+                                        ? 'bg-stone-500/10 text-stone-600 dark:text-stone-300 border-stone-400/40'
+                                        : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
                             }`}>
                                 <span className="material-symbols-outlined text-[13px]">
-                                    {isPrimeCard(profile) ? 'workspace_premium' : 'bolt'}
+                                    {isPrimeCard(profile) ? 'workspace_premium' : getCardStatus(profile) === 'legacy' ? 'history' : 'bolt'}
                                 </span>
-                                {profile.version?.label || (isPrimeCard(profile) ? 'Prime Zenith' : 'Current Form')}
+                                {getCardLabel(profile)}
                             </span>
                             {profile.version?.seasonOrEra && (
                                 <span className="text-[10px] font-mono text-charcoal/60 dark:text-cream-400 font-semibold">
-                                    Era: {profile.version.seasonOrEra}
+                                    {isPrimeCard(profile) ? 'Window' : 'Season'}: {profile.version.seasonOrEra}
                                 </span>
                             )}
                         </div>
@@ -606,7 +608,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
                     {profile.version?.peakContext && (
                         <div className="p-3 rounded-lg bg-amber-500/5 dark:bg-amber-950/20 border border-amber-500/20 text-xs font-serif italic text-charcoal/80 dark:text-amber-200 leading-relaxed">
-                            <span className="font-sans not-italic font-bold text-[9px] uppercase tracking-wider text-amber-700 dark:text-amber-400 mr-1.5">Zenith Context:</span>
+                            <span className="font-sans not-italic font-bold text-[9px] uppercase tracking-wider text-amber-700 dark:text-amber-400 mr-1.5">{profile.version.type === 'era' ? 'Era Context:' : 'Zenith Context:'}</span>
                             {profile.version.peakContext}
                         </div>
                     )}

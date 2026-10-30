@@ -68,7 +68,7 @@ II. THE SCOUT'S CODE (EVALUATION & CALIBRATION LOGIC)
    - **Young World-Class Stars (Under 25 & Overall 90+ — Protocol A):** Must project \`Potential\` into the next tier above their current standing.
    - **Prime Consolidation (25–27):** \`Potential\` sits at \`Overall\` or \`+1\` to \`+2\` if a specific tactical or technical refinement is still unlocking.
    - **Peak & Veteran Masters (28+):** \`Potential\` equals \`Overall\`. Recognize how elite veterans compensate for declining top-end \`Speed\` or \`Acceleration\` through elite \`Football IQ\`, \`Defensive/Offensive Positioning\`, \`Retention\`, and \`Composure\`.
-   - **Historical / Prime Requests:** \`Overall\` represents the player's realized career peak, so \`Potential\` equals \`Overall\` (unless their career was famously cut short before their physical prime).
+   - **Historical Window Requests (prime or era):** \`Overall\` rates the player across the 2–4 season window as played, so \`Potential\` equals \`Overall\`.
 10. **Paths to Generational Icon (96+ Only — Protocol C):**
    - To rate or project a player at 96+ (Generational Icon), they must possess one defining Generational Weapon:
      - *Physical:* Uncatchable speed and power (e.g., peak Ronaldo Nazário)

@@ -3,6 +3,7 @@ import {
   runGroundedSearch,
 } from './aiClient';
 import type { FutbolpediaVerifiedFacts } from './profileManagerGrounding';
+import { formatWindow, type CareerWindow, type HistoricalKind } from './careerWindow';
 
 export interface ApiFootballFixtureItem {
   date: string | null;
@@ -134,15 +135,20 @@ export async function gatherPlayerGrounding(params: {
   playerName: string;
   rawMessage: string;
   isHistorical: boolean;
+  historicalKind?: HistoricalKind;
+  requestedWindow?: CareerWindow | null;
 }): Promise<PlayerGroundingBundle> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
   const datePrefix = `[Date: ${month} ${year}]`;
   const subject = params.playerName || params.rawMessage;
 
   if (params.isHistorical) {
-    const searchResult = await runGroundedSearch(
-      `${subject} career peak prime seasons major honours Ballon d'Or FIFPro World XI best season stats tactical profile ${ANTI_GAME_FILTER}`,
-    );
+    const { historicalKind, requestedWindow } = params;
+    const query =
+      historicalKind === 'era'
+        ? `${subject} ${requestedWindow ? `${formatWindow(requestedWindow)} seasons` : params.rawMessage} club, role, form, stats, honours, tactical profile ${ANTI_GAME_FILTER}`
+        : `${subject} career peak prime seasons (best consecutive 2-4 seasons) major honours Ballon d'Or FIFPro World XI best season stats tactical profile ${ANTI_GAME_FILTER}`;
+    const searchResult = await runGroundedSearch(query);
     return {
       foundationText: searchResult.formattedBlock,
       verifiedFacts: null,

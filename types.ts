@@ -61,14 +61,20 @@ export interface PlaystyleAndRole {
   bestRoles: string[];
 }
 
-export type DossierVersionType = 'current' | 'prime' | 'season_snapshot' | 'retro';
+/**
+ * `current` rates the player today. `prime` and `era` rate a 2–4 season window of the past:
+ * the prime is the player's best window, an era is any other window.
+ */
+export type DossierVersionType = 'current' | 'prime' | 'era';
 
 export interface DossierVersion {
   id: string;
   type: DossierVersionType;
   label: string;
-  evaluationDate: string; // ISO YYYY-MM-DD (e.g. "2026-10-25" or peak snapshot date)
-  seasonOrEra: string; // e.g. "2026-27" or "2008-09"
+  evaluationDate: string; // ISO YYYY-MM-DD (e.g. "2026-10-25", or the date a historical window ends)
+  seasonOrEra: string; // display text: "2026-27" for current, "2005-06 to 2008-09" for a window
+  windowStart?: number; // first season of a window, as its start year (2005 = 2005-06)
+  windowEnd?: number; // last season of a window, as its start year
   peakContext?: string | null;
 }
 
