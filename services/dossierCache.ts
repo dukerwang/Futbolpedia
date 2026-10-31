@@ -7,6 +7,7 @@ import {
   getCardKey,
   isCardInRefreshWindow,
   isPrimeCard,
+  latestCardPerPlayer,
   seasonMatches,
   toBasePlayerSlug,
   toDossierCardSlug,
@@ -508,4 +509,59 @@ export const getSharedConversation = async (code: string): Promise<Conversation 
   } catch {
     return null;
   }
+};
+
+let cardIndex: PlayerProfile[] = [];
+let cardIndexFetchedAt = 0;
+let cardIndexRequest: Promise<PlayerProfile[]> | null = null;
+const CARD_INDEX_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Every shared card a request would be served today, for the Rate command's suggestions: each
+ * player's newest current card (while it is in its refresh window) and prime, and his era and
+ * season cards. Rows carry only the fields a suggestion shows, not the whole card, so these are
+ * card outlines; the pipeline serves the full card when one is picked.
+ */
+export const fetchCardIndex = async (): Promise<PlayerProfile[]> => {
+  if (!supabase) return [];
+  if (Date.now() - cardIndexFetchedAt < CARD_INDEX_TTL_MS) return cardIndex;
+  cardIndexRequest ??= (async () => {
+    try {
+      const { data, error } = await supabase
+        .from('player_profiles')
+        .select(
+          'updated_at, basicInfo:player_data->basicInfo, ratings:player_data->ratings, version:player_data->version, createdAt:player_data->createdAt, evaluationDate:player_data->evaluationDate, revision:player_data->revision, rerateAt:player_data->rerateAt',
+        )
+        .order('updated_at', { ascending: false })
+        .limit(2000);
+      if (error || !Array.isArray(data)) return cardIndex;
+      const outlines: PlayerProfile[] = [];
+      for (const row of data as Array<Record<string, any>>) {
+        const outline = {
+          basicInfo: row.basicInfo,
+          ratings: { overall: row.ratings?.overall, potential: row.ratings?.potential },
+          version: row.version ?? undefined,
+          createdAt: row.createdAt ?? undefined,
+          evaluationDate: row.evaluationDate ?? undefined,
+          revision: row.revision ?? undefined,
+          rerateAt: row.rerateAt ?? undefined,
+        } as unknown as PlayerProfile;
+        const at = row.updated_at ? rowTimeMs(row.updated_at) : undefined;
+        if (!outline.basicInfo?.name || !isRatedOnCurrentScale(outline, at)) continue;
+        const dated = ensureDossierDated(outline, at);
+        if (!dated || dated.revision || (dated.ratings?.overall ?? 0) < 60) continue;
+        if (!isPrimeCard(dated) && !isCardInRefreshWindow(dated)) continue;
+        outlines.push(dated);
+      }
+      cardIndex = latestCardPerPlayer(dropSupersededPrimes(outlines));
+      cardIndexFetchedAt = Date.now();
+      return cardIndex;
+    } catch (e) {
+      console.warn('[CardIndex] Fetch failed:', e);
+      return cardIndex;
+    } finally {
+      cardIndexRequest = null;
+    }
+  })();
+  return cardIndexRequest;
 };

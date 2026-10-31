@@ -7,7 +7,7 @@ import {
   isPrimeCard,
   shareDossierCard,
 } from '../services/geminiService';
-import { cardEdition, formatEraQualifier } from '../services/dossierStore';
+import { cardEdition, compareVersions, formatEraQualifier } from '../services/dossierStore';
 import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
 import { describeCardEdition, pillClass, PILL_ICON_CLASS, shortEditionLabel } from './pills';
 
@@ -54,12 +54,6 @@ const matchesEdition = (p: PlayerProfile, filter: EditionFilter): boolean => {
   if (filter === 'season') return edition === 'season_snapshot';
   return edition === 'prime';
 };
-
-/** How a player's versions line up: current form, prime, eras, then single seasons. */
-const EDITION_ORDER: Record<string, number> = { current: 0, prime: 1, era: 2, season_snapshot: 3 };
-const compareVersions = (a: PlayerProfile, b: PlayerProfile): number =>
-  (EDITION_ORDER[cardEdition(a)] ?? 4) - (EDITION_ORDER[cardEdition(b)] ?? 4) ||
-  (a.version?.seasonOrEra || '').localeCompare(b.version?.seasonOrEra || '');
 
 /** At most this many of a player's other versions show as chips on a card. */
 const MAX_VERSION_CHIPS = 3;
