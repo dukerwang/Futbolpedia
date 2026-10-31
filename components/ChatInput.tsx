@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 import type { ChatDomain } from '../types';
 
 interface ChatInputProps {
@@ -48,6 +48,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [draft?.id]);
   const gaffaOn = domain === 'gaffa';
 
+  // Grow with the draft up to the CSS max-height, then scroll inside the field.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [message]);
+
   const handleFile = useCallback((file: File) => {
     if (!file.type.startsWith('image/')) {
       alert('Please upload an image file.');
@@ -55,11 +63,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
     const reader = new FileReader();
     reader.onload = (e) => setImage(e.target?.result as string);
+    reader.readAsDataURL(file);
   }, []);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) handleFile(file);
+    // Reset so picking the same file again still fires onChange.
+    e.target.value = '';
+  };
+
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith('image/'));
+    if (file) {
+      e.preventDefault();
+      handleFile(file);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -71,7 +90,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // On touch keyboards Return inserts a newline; the send button submits.
+    const isTouch = window.matchMedia('(pointer: coarse)').matches;
+    if (e.key === 'Enter' && !e.shiftKey && !isTouch && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit(e as any);
     }
@@ -81,7 +102,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     <div className="relative group bg-cream-50 dark:bg-charcoal-surface rounded-none shadow-float dark:shadow-dark-float border-t-2 border-charcoal dark:border-cream-400 overflow-hidden transition-colors duration-300">
       <div className="flex flex-col relative z-10">
         {gaffaNudge && (
-          <div className="px-4 pt-3 flex items-start gap-3 text-sm border-b border-charcoal/10 dark:border-cream-400/10 pb-3">
+          <div className="px-4 pt-3 flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1 text-sm border-b border-charcoal/10 dark:border-cream-400/10 pb-3">
             <span className="flex-1 font-serif italic text-charcoal/80 dark:text-cream-200/80 leading-snug">
               {gaffaNudge}
             </span>
@@ -89,14 +110,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               <button
                 type="button"
                 onClick={onAcceptGaffaNudge}
-                className="text-xs font-sans uppercase tracking-wide text-emerald-700 dark:text-emerald-400 hover:underline"
+                className="min-h-9 px-1 text-xs font-sans uppercase tracking-wide text-emerald-700 dark:text-emerald-400 hover:underline"
               >
                 Switch
               </button>
               <button
                 type="button"
                 onClick={onDismissGaffaNudge}
-                className="text-xs font-sans uppercase tracking-wide text-charcoal/50 dark:text-cream-400/50 hover:underline"
+                className="min-h-9 px-1 text-xs font-sans uppercase tracking-wide text-charcoal/50 dark:text-cream-400/50 hover:underline"
               >
                 Dismiss
               </button>
@@ -105,11 +126,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         )}
 
         {image && (
-          <div className="px-6 pt-4 pb-0 flex items-center gap-2">
+          <div className="px-4 sm:px-6 pt-3 sm:pt-4 pb-0 flex items-center gap-3">
+            <div className="relative">
+              <img src={image} alt="Attachment preview" className="size-14 object-cover rounded border border-charcoal/10 dark:border-cream-100/10" />
+              <button
+                type="button"
+                onClick={() => setImage(null)}
+                aria-label="Remove image"
+                className="absolute -top-2 -right-2 size-6 rounded-full bg-charcoal dark:bg-cream-200 text-cream-50 dark:text-charcoal flex items-center justify-center shadow-sm hover:bg-red-600 dark:hover:bg-red-400"
+              >
+                <span className="material-symbols-outlined text-[14px]">close</span>
+              </button>
+            </div>
             <span className="text-xs font-serif italic text-emerald-600 dark:text-emerald-400">Image attached</span>
-            <button onClick={() => setImage(null)} className="text-charcoal dark:text-cream-400 hover:text-red-500">
-              <span className="material-symbols-outlined text-[16px]">close</span>
-            </button>
           </div>
         )}
 
@@ -118,8 +147,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={isLoading}
-          className="w-full bg-transparent text-charcoal dark:text-cream-50 placeholder-charcoal/40 dark:placeholder-cream-400/30 text-[18px] font-serif italic px-6 py-5 pr-14 border-none focus:ring-0 resize-none max-h-32 overflow-y-auto leading-relaxed scrollbar-hide outline-none"
+          onPaste={onPaste}
+          enterKeyHint="send"
+          aria-label="Message"
+          className="w-full bg-transparent text-charcoal dark:text-cream-50 placeholder-charcoal/40 dark:placeholder-cream-400/30 text-[17px] sm:text-[18px] font-serif italic px-4 py-4 sm:px-6 sm:py-5 border-none focus:ring-0 resize-none max-h-40 sm:max-h-48 overflow-y-auto leading-relaxed scrollbar-hide outline-none"
           placeholder={
             isLoading
               ? loadingMessage
@@ -130,12 +161,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           rows={1}
         />
 
-        <div className="flex items-center justify-between px-4 pb-3">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between px-2.5 sm:px-4 pb-2.5 sm:pb-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="p-2 text-cream-800 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50 transition-colors"
+              aria-label="Attach image"
+              className="size-10 flex items-center justify-center text-cream-800 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50 transition-colors"
               title="Attach image"
               disabled={isLoading}
             >
@@ -144,14 +176,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <input type="file" ref={fileInputRef} onChange={onFileChange} accept="image/*" className="hidden" />
 
             {/* Domain Toggle: Futbolpedia vs Gaffa */}
-            <div
+            <button
+              type="button"
               role="switch"
               aria-checked={gaffaOn}
-              aria-label="Toggle between Futbolpedia scouting mode and Gaffa fantasy mode"
-              className="relative flex items-center bg-cream-200 dark:bg-charcoal-light rounded-full p-1 w-24 h-9 cursor-pointer ml-2 border border-cream-300 dark:border-charcoal-border select-none"
-              onClick={() => {
-                if (!isLoading) onDomainChange(gaffaOn ? 'default' : 'gaffa');
-              }}
+              aria-label="Gaffa fantasy mode"
+              disabled={isLoading}
+              className="relative flex items-center bg-cream-200 dark:bg-charcoal-light rounded-full p-1 w-24 h-10 sm:h-9 cursor-pointer border border-cream-300 dark:border-charcoal-border select-none disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => onDomainChange(gaffaOn ? 'default' : 'gaffa')}
               title={
                 gaffaOn
                   ? 'Gaffa mode active — click to switch to Futbolpedia'
@@ -209,13 +241,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   />
                 </svg>
               </div>
-            </div>
+            </button>
+            <span className={`hidden sm:inline text-[10px] font-sans font-bold uppercase tracking-widest ${gaffaOn ? 'text-emerald-700 dark:text-emerald-400' : 'text-charcoal/40 dark:text-cream-400/50'}`}>
+              {gaffaOn ? 'Gaffa' : 'Scouting'}
+            </span>
           </div>
 
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={isLoading || (!message.trim() && !image)}
-            className="flex items-center justify-center size-10 bg-charcoal dark:bg-emerald-500 text-cream-50 hover:bg-black dark:hover:bg-emerald-400 transition-all group disabled:opacity-50"
+            aria-label={isLoading ? 'Working' : 'Send message'}
+            className="flex items-center justify-center size-11 sm:size-10 bg-charcoal dark:bg-emerald-500 text-cream-50 hover:bg-black dark:hover:bg-emerald-400 transition-all group disabled:opacity-50"
           >
             {isLoading ? (
               <div className="size-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />

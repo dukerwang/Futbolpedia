@@ -14,7 +14,9 @@ import type {
   ChatDomain,
   GaffaAuthUser,
   GaffaUserClub,
+  ChatDossierRef,
 } from './types';
+import { toChatDossierRef } from './components/DossierChatCard';
 import {
   sendMessageToAI,
   resetChat,
@@ -112,6 +114,16 @@ const App: React.FC = () => {
   const [domain, setDomain] = useState<ChatDomain>('default');
   const [gaffaNudge, setGaffaNudge] = useState<string | null>(null);
   const [gaffaLink, setGaffaLink] = useState<GaffaLinkState | null>(null);
+  // Phones only: the connect strip can be folded away so the conversation keeps most of the screen.
+  const [gaffaStripCollapsed, setGaffaStripCollapsed] = useState(() => {
+    try { return localStorage.getItem('futbolpedia-gaffa-strip-collapsed') === 'true'; } catch { return false; }
+  });
+  const toggleGaffaStrip = () => {
+    setGaffaStripCollapsed(prev => {
+      try { localStorage.setItem('futbolpedia-gaffa-strip-collapsed', String(!prev)); } catch { /* storage unavailable */ }
+      return !prev;
+    });
+  };
   const [gaffaSyncing, setGaffaSyncing] = useState(false);
   const [gaffaSyncError, setGaffaSyncError] = useState<string | null>(null);
   const [gaffaUser, setGaffaUser] = useState<GaffaAuthUser | null>(null);
@@ -800,6 +812,7 @@ const App: React.FC = () => {
           sender: 'ai',
           content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
           timestamp: Date.now(),
+          dossier: toChatDossierRef(profile),
           dossierKey: getCardKey(profile),
         };
       } else {
@@ -825,6 +838,7 @@ const App: React.FC = () => {
         sender: 'ai',
         content: `Editor's Note: I encountered an issue. ${errorMessage}`,
         timestamp: Date.now(),
+        isError: true,
       }]);
     } finally {
       setIsLoading(false);
@@ -839,6 +853,42 @@ const App: React.FC = () => {
       localStorage.removeItem(ACTIVE_PROFILE_KEY);
     }
   }, []);
+
+  const handleOpenDossier = useCallback((ref: ChatDossierRef) => {
+    const byKey = ref.cardKey ? globalDossiers.find(d => getCardKey(d) === ref.cardKey) : undefined;
+    const byName = globalDossiers.filter(d => d.basicInfo.name.toLowerCase() === ref.name.toLowerCase());
+    // Name fallback covers legacy messages and cards re-dated since the reply; prefer the newest card.
+    const match = byKey ?? byName.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
+    setIsConversationsOpen(false);
+    // A deleted dossier falls back to the hub so the tap still lands somewhere useful.
+    if (!match) {
+      setView('hub');
+      return;
+    }
+    handleSelectProfile(match);
+    setIsPanelOpen(true);
+  }, [globalDossiers, handleSelectProfile]);
+
+  // Retry drops the failed exchange first, then resends once state (and the history closure) has caught up.
+  const [pendingRetry, setPendingRetry] = useState<{ text: string; image?: string } | null>(null);
+
+  const handleRetry = useCallback((errorMessageId: string) => {
+    const errorIndex = messages.findIndex(m => m.id === errorMessageId);
+    if (errorIndex < 0) return;
+    let userIndex = errorIndex - 1;
+    while (userIndex >= 0 && messages[userIndex].sender !== 'user') userIndex--;
+    const userMessage = messages[userIndex];
+    if (!userMessage || typeof userMessage.content !== 'string') return;
+    const dropIds = new Set(messages.slice(userIndex, errorIndex + 1).map(m => m.id));
+    setMessages(prev => prev.filter(m => !dropIds.has(m.id)));
+    setPendingRetry({ text: userMessage.content, image: userMessage.image });
+  }, [messages]);
+
+  useEffect(() => {
+    if (!pendingRetry || isLoading) return;
+    setPendingRetry(null);
+    handleSendMessage(pendingRetry.text, pendingRetry.image);
+  }, [pendingRetry, isLoading, handleSendMessage]);
 
   const handleRenameDossier = useCallback((cardKey: string, newName: string) => {
     const rename = (d: PlayerProfile): PlayerProfile => renameDossierCard(d, newName);
@@ -1074,12 +1124,35 @@ const App: React.FC = () => {
                 isLoading={isLoading} 
                 loadingMessage={loadingMessage}
                 conversationKey={`${activeConversationId ?? 'init'}-${newChatRevision}`}
+                domain={domain}
+                onSuggestion={(prompt) => handleSendMessage(prompt)}
+                onOpenDossier={handleOpenDossier}
+                onRetry={handleRetry}
             />
             
             {/* Input Container - Sticky Bottom */}
-            <div className="flex-none px-6 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:pb-8 bg-gradient-to-t from-cream-200 dark:from-charcoal via-cream-200/95 dark:via-charcoal/95 to-transparent z-20">
+            <div className="flex-none px-3 sm:px-6 pt-2 sm:pt-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-8 bg-gradient-to-t from-cream-200 dark:from-charcoal via-cream-200/95 dark:via-charcoal/95 to-transparent z-20">
                 <div className="max-w-[800px] mx-auto w-full">
                     {domain === 'gaffa' && (
+                      <button
+                        type="button"
+                        onClick={toggleGaffaStrip}
+                        aria-expanded={!gaffaStripCollapsed}
+                        className="sm:hidden w-full mb-2 flex items-center justify-between gap-2 min-h-9 px-3 border border-charcoal/15 dark:border-cream-400/15 bg-cream-50/85 dark:bg-charcoal-surface/85 text-left"
+                      >
+                        <span className="min-w-0 truncate text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/55 dark:text-cream-400/60">
+                          Gaffa club
+                          <span className="normal-case tracking-normal font-serif italic font-normal text-xs text-charcoal/80 dark:text-cream-200/80 ml-2">
+                            {gaffaLink?.club_name ?? (gaffaUser ? 'Not connected' : 'Signed out')}
+                          </span>
+                        </span>
+                        <span className="material-symbols-outlined text-[18px] text-charcoal/60 dark:text-cream-400/60">
+                          {gaffaStripCollapsed ? 'expand_less' : 'expand_more'}
+                        </span>
+                      </button>
+                    )}
+                    {domain === 'gaffa' && (
+                      <div className={gaffaStripCollapsed ? 'hidden sm:block' : ''}>
                       <GaffaConnectStrip
                         link={gaffaLink}
                         syncing={gaffaSyncing}
@@ -1096,6 +1169,7 @@ const App: React.FC = () => {
                         onSignInGoogle={handleGaffaSignInGoogle}
                         onSignOut={handleGaffaSignOut}
                       />
+                      </div>
                     )}
                     <ChatInput
                         onSendMessage={handleSendMessage}

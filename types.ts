@@ -224,6 +224,25 @@ export interface ChatMessage {
   dossierKey?: string;
   /** Present on Gaffa asset-trade replies after the scorecard path runs. */
   gaffaScorecard?: GaffaTradeScorecard;
+  /** Compact snapshot of the dossier this reply produced, rendered as an in-chat card. */
+  dossier?: ChatDossierRef;
+  /** Marks a failed reply so the UI renders it as an error with a retry action. */
+  isError?: boolean;
+}
+
+/** Lightweight dossier pointer stored on chat messages (the full profile lives in the dossier store). */
+export interface ChatDossierRef {
+  /** `getCardKey` of the saved card; empty for legacy messages that only know the name. */
+  cardKey: string;
+  name: string;
+  club?: string;
+  position?: string;
+  nationality?: string;
+  age?: number;
+  overall?: number;
+  potential?: number;
+  archetype?: string;
+  versionLabel?: string;
 }
 
 export type ChatDomain = 'default' | 'gaffa';

@@ -24,7 +24,7 @@ export const Header: React.FC<HeaderProps> = ({
     isConversationsOpen,
 }) => {
   return (
-    <header className="sticky top-0 w-full flex items-center justify-between gap-3 px-4 sm:px-8 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-5 bg-cream-200 dark:bg-charcoal z-50 shrink-0 border-b border-cream-300 dark:border-charcoal-border select-none transition-colors duration-300">
+    <header className="sticky top-0 w-full flex items-center justify-between gap-3 px-4 sm:px-8 pt-[calc(0.75rem+env(safe-area-inset-top))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] pb-3 sm:pb-5 bg-cream-200 dark:bg-charcoal z-50 shrink-0 border-b border-cream-300 dark:border-charcoal-border select-none transition-colors duration-300">
         {/* The brand doubles as the way home to the chat */}
         <button
             onClick={() => onViewChange('chat')}
@@ -41,7 +41,7 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
         </button>
         
-        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-0.5 sm:gap-3 shrink-0">
             <button
                 onClick={() => onViewChange(view === 'hub' ? 'chat' : 'hub')}
                 aria-pressed={view === 'hub'}
@@ -73,6 +73,7 @@ export const Header: React.FC<HeaderProps> = ({
                     : 'text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light'
                 }`}
                 title={isConversationsOpen ? "Close Saved Briefings" : "Open Saved Briefings"}
+                aria-label={isConversationsOpen ? "Close Saved Briefings" : "Open Saved Briefings"}
             >
                 <span className="material-symbols-outlined text-[20px] block">forum</span>
             </button>
@@ -81,14 +82,16 @@ export const Header: React.FC<HeaderProps> = ({
                 onClick={toggleTheme} 
                 className="p-2 text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light rounded-full transition-colors"
                 title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                aria-label={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
             >
-                <span className="material-symbols-outlined text-[20px]">{isDarkMode ? 'light_mode' : 'dark_mode'}</span>
+                <span className="material-symbols-outlined text-[20px] block">{isDarkMode ? 'light_mode' : 'dark_mode'}</span>
             </button>
 
             <button 
                 onClick={onNewChat} 
                 className="btn-new-chat p-2 text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light rounded-full"
                 title="New Chat"
+                aria-label="New Chat"
             >
                 <span className="material-symbols-outlined text-[20px] block btn-new-chat-icon">add_comment</span>
             </button>
