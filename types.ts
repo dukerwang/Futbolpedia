@@ -230,6 +230,8 @@ export interface ChatMessage {
   isError?: boolean;
   /** Present on a user message sent with the Rate command: the rating it asked for. */
   rating?: RatingRequest;
+  /** The @ mentions in a user message ("@Florian Wirtz"), each naming a card in the conversation. */
+  mentions?: string[];
 }
 
 /**

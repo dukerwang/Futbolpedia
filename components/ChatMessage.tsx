@@ -68,6 +68,19 @@ const ActionButton: React.FC<{ icon: string; label: string; onClick: () => void 
     </button>
 );
 
+/** A user message's text with its @ mentions tinted, as they were in the chat box. */
+const withMentions = (text: string, mentions?: string[]): React.ReactNode => {
+    if (!mentions?.length) return text;
+    const pattern = new RegExp(`(${[...mentions].sort((a, b) => b.length - a.length).map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`);
+    return text.split(pattern).map((part, i) =>
+        mentions.includes(part) ? (
+            <span key={i} className="not-italic font-semibold text-emerald-700 dark:text-emerald-400">{part}</span>
+        ) : (
+            part
+        ),
+    );
+};
+
 interface ChatMessageProps {
     message: ChatMessageType;
     onOpenDossier?: (dossier: ChatDossierRef) => void;
@@ -157,7 +170,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
                     <div className="bg-[#EBE8DE] dark:bg-charcoal-light text-charcoal dark:text-cream-50 px-4 py-3 sm:px-6 sm:py-4 rounded-tl-xl rounded-bl-xl rounded-br-xl shadow-sm relative border border-transparent dark:border-charcoal-border">
                         {message.image && <img src={message.image} alt="Attached image" className="max-w-[180px] max-h-[180px] object-cover mb-2 rounded border border-charcoal/10 dark:border-cream-100/10" />}
                         <p className="text-[16px] sm:text-[17px] font-serif italic leading-relaxed break-words whitespace-pre-wrap">
-                           {typeof content === 'string' ? content : ''}
+                           {typeof content === 'string' ? withMentions(content, message.mentions) : ''}
                         </p>
                     </div>
                     <span className="text-[10px] text-cream-800 dark:text-cream-400 tracking-wider uppercase font-medium">

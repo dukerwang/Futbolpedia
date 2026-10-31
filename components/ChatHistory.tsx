@@ -9,13 +9,15 @@ interface ChatHistoryProps {
   conversationKey?: string;
   domain?: ChatDomain;
   onSuggestion?: (prompt: string) => void;
+  /** The "Build a dossier" starter opens Scout rather than sending a chat message. */
+  onOpenScout?: () => void;
   onOpenDossier?: (dossier: ChatDossierRef) => void;
   onRetry?: (messageId: string) => void;
 }
 
 const STARTER_PROMPTS: Record<ChatDomain, { icon: string; label: string; prompt: string }[]> = {
   default: [
-    { icon: 'badge', label: 'Build a dossier', prompt: 'Profile Florian Wirtz' },
+    { icon: 'person_search', label: 'Build a dossier', prompt: 'Open Scout to rate any player' },
     { icon: 'compare_arrows', label: 'Compare players', prompt: 'Compare Pedri and Vitinha as deep playmakers' },
     { icon: 'travel_explore', label: 'Scout a shortlist', prompt: 'Best U21 centre-backs in Serie A right now' },
     { icon: 'strategy', label: 'Tactical read', prompt: "Break down Arsenal's build-up shape this season" },
@@ -40,6 +42,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   conversationKey,
   domain = 'default',
   onSuggestion,
+  onOpenScout,
   onOpenDossier,
   onRetry,
 }) => {
@@ -176,7 +179,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                         <button
                           key={s.prompt}
                           type="button"
-                          onClick={() => onSuggestion(s.prompt)}
+                          onClick={() => (s.label === 'Build a dossier' && onOpenScout ? onOpenScout() : onSuggestion(s.prompt))}
                           disabled={isLoading}
                           className="btn-new-chat text-left flex items-start gap-3 px-4 py-3 border border-charcoal/10 dark:border-cream-400/15 bg-cream-50/60 dark:bg-charcoal-surface/60 hover:border-charcoal/30 dark:hover:border-cream-400/35 disabled:opacity-40 select-text"
                         >
