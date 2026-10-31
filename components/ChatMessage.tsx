@@ -5,6 +5,8 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { GaffaTradeScorecardView, formatScorecardCopy } from './GaffaTradeScorecard';
 import { DossierChatCard, getLegacyDossierRef } from './DossierChatCard';
+import { pillClass, type PillTone } from './pills';
+import { ratingVersionLabel } from '../services/ratingCommand';
 
 // External links in model prose should never navigate away from an in-progress chat.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -124,6 +126,28 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
     const handleShare = () => {
         navigator.share({ title: 'Futbolpedia analysis', text: getCopyText() }).catch(() => {});
     };
+
+    // A Rate command: a compact command line rather than a speech bubble.
+    if (isUser && message.rating) {
+        const version = ratingVersionLabel(message.rating);
+        const { edition } = message.rating;
+        const versionTone: PillTone = edition === 'prime' ? 'amber' : edition === 'era' ? 'blue' : 'neutral';
+        return (
+            <div className="flex justify-end w-full py-2 sm:py-4 animate-fade-in">
+                <div className="flex flex-col items-end gap-1 max-w-[88%] md:max-w-[70%]">
+                    <div className="flex items-center gap-2 min-w-0 px-3 py-1.5 rounded-full border border-cream-300 dark:border-charcoal-border bg-cream-50/70 dark:bg-charcoal-surface/70 text-charcoal dark:text-cream-100">
+                        <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-emerald-600 dark:text-emerald-400">star</span>
+                        <span className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/55 dark:text-cream-400/60">Rate</span>
+                        <span className="min-w-0 truncate font-serif font-bold text-[15px]">{message.rating.name}</span>
+                        {version && <span className={pillClass(versionTone, 'xs')}>{version}</span>}
+                    </div>
+                    <span className="text-[10px] text-cream-800 dark:text-cream-400 tracking-wider uppercase font-medium">
+                        You{timestamp ? ` · ${formatTime(timestamp)}` : ''}
+                    </span>
+                </div>
+            </div>
+        );
+    }
 
     // User Message
     if (isUser) {

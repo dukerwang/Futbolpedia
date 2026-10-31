@@ -408,6 +408,12 @@ export const latestCardPerPlayer = (cards: PlayerProfile[]): PlayerProfile[] => 
  * the evaluation date, so the old card keeps its own archive row and card key; any prime card of
  * the same player re-rated later supersedes it.
  */
+/** How a player's versions line up: current form, prime, eras, then single seasons. */
+const EDITION_ORDER: Record<string, number> = { current: 0, prime: 1, era: 2, season_snapshot: 3 };
+export const compareVersions = (a: PlayerProfile, b: PlayerProfile): number =>
+  (EDITION_ORDER[cardEdition(a)] ?? 4) - (EDITION_ORDER[cardEdition(b)] ?? 4) ||
+  (a.version?.seasonOrEra || '').localeCompare(b.version?.seasonOrEra || '');
+
 export const dropSupersededPrimes = (cards: PlayerProfile[]): PlayerProfile[] => {
   const latestRerate = new Map<string, number>();
   for (const p of cards) {

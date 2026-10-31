@@ -15,10 +15,12 @@ import type {
   GaffaAuthUser,
   GaffaUserClub,
   ChatDossierRef,
+  RatingRequest,
 } from './types';
 import { toChatDossierRef } from './components/DossierChatCard';
 import {
   sendMessageToAI,
+  ratePlayer,
   resetChat,
   getCachedDossier,
   getSharedConversation,
@@ -27,6 +29,7 @@ import {
   renameDossierCard,
   stampDossier,
 } from './services/geminiService';
+import { ratingTask } from './services/ratingCommand';
 import { sendGaffaMessage } from './services/gaffaChatService';
 import { looksLikeGaffaQuestion } from './services/gaffaDetect';
 import {
@@ -109,6 +112,8 @@ const App: React.FC = () => {
   const [hubTab, setHubTab] = useState<HubTab>('mine');
   // Text the hub's "Ask" puts in the chat box
   const [chatDraft, setChatDraft] = useState<{ id: number; text: string } | null>(null);
+  // Opens the chat box's Rate command (from the keyboard shortcut).
+  const [openRate, setOpenRate] = useState<number | null>(null);
 
   // Chat domain (Futbolpedia default vs Gaffa Q&A) — persisted per conversation
   const [domain, setDomain] = useState<ChatDomain>('default');
@@ -610,6 +615,28 @@ const App: React.FC = () => {
     setGaffaSyncError(null);
   }, []);
 
+  // A reply that filed a dossier: the card is saved and shown, and the chat gets its card.
+  const dossierReply = useCallback((profile: PlayerProfile, id: string): ChatMessage => {
+    saveAndSetActiveProfile(profile);
+    setIsPanelOpen(true);
+    return {
+      id,
+      sender: 'ai',
+      content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
+      timestamp: Date.now(),
+      dossier: toChatDossierRef(profile),
+      dossierKey: getCardKey(profile),
+    };
+  }, [saveAndSetActiveProfile]);
+
+  const errorReply = (err: unknown): ChatMessage => ({
+    id: generateId(),
+    sender: 'ai',
+    content: `Editor's Note: I encountered an issue. ${err instanceof Error ? err.message : 'An unknown error occurred.'}`,
+    timestamp: Date.now(),
+    isError: true,
+  });
+
   const handleSendMessage = useCallback(async (
     userMessageText: string,
     imageData?: string,
@@ -803,18 +830,7 @@ const App: React.FC = () => {
       let newAiMessage: ChatMessage;
 
       if (typeof aiResponse === 'object' && 'basicInfo' in aiResponse) {
-        const profile = aiResponse as PlayerProfile;
-        saveAndSetActiveProfile(profile);
-        setIsPanelOpen(true);
-
-        newAiMessage = {
-          id: streamingMessageId,
-          sender: 'ai',
-          content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
-          timestamp: Date.now(),
-          dossier: toChatDossierRef(profile),
-          dossierKey: getCardKey(profile),
-        };
+        newAiMessage = dossierReply(aiResponse as PlayerProfile, streamingMessageId);
       } else {
         newAiMessage = {
           id: streamingMessageId,
@@ -832,18 +848,54 @@ const App: React.FC = () => {
         return [...prev, newAiMessage];
       });
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setMessages(prev => [...prev, {
-        id: generateId(),
-        sender: 'ai',
-        content: `Editor's Note: I encountered an issue. ${errorMessage}`,
-        timestamp: Date.now(),
-        isError: true,
-      }]);
+      setMessages(prev => [...prev, errorReply(err)]);
     } finally {
       setIsLoading(false);
     }
-  }, [messages, allProfiles, globalDossiers, domain, gaffaLink, saveAndSetActiveProfile]);
+  }, [messages, allProfiles, globalDossiers, domain, gaffaLink, saveAndSetActiveProfile, dossierReply]);
+
+  // The Rate command: a rating without a chat turn to route. It lands in the chat like a typed one.
+  const handleRate = useCallback(async (request: RatingRequest) => {
+    if (isLoading) return;
+    if (domain === 'gaffa') handleDomainChange('default');
+    setGaffaNudge(null);
+    setLoadingMessage(`Scouting ${request.name}...`);
+    setIsLoading(true);
+    setMessages(prev => [...prev, {
+      id: generateId(),
+      sender: 'user',
+      content: ratingTask(request),
+      timestamp: Date.now(),
+      rating: request,
+    }]);
+    try {
+      const reply = await ratePlayer(request, messages, allProfiles, globalDossiers, {
+        onStageChange: (label) => setLoadingMessage(label),
+      });
+      const id = generateId();
+      const aiMessage: ChatMessage =
+        typeof reply === 'object' && 'basicInfo' in reply
+          ? dossierReply(reply, id)
+          : { id, sender: 'ai', content: reply, timestamp: Date.now() };
+      setMessages(prev => [...prev, aiMessage]);
+    } catch (err) {
+      setMessages(prev => [...prev, errorReply(err)]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isLoading, domain, handleDomainChange, messages, allProfiles, globalDossiers, dossierReply]);
+
+  // Cmd/Ctrl+K opens the Rate command from anywhere.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'k') return;
+      e.preventDefault();
+      setView('chat');
+      setOpenRate(Date.now());
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const handleSelectProfile = useCallback((profile: PlayerProfile | null) => {
     setActiveProfile(profile);
@@ -870,7 +922,7 @@ const App: React.FC = () => {
   }, [globalDossiers, handleSelectProfile]);
 
   // Retry drops the failed exchange first, then resends once state (and the history closure) has caught up.
-  const [pendingRetry, setPendingRetry] = useState<{ text: string; image?: string } | null>(null);
+  const [pendingRetry, setPendingRetry] = useState<{ text: string; image?: string; rating?: RatingRequest } | null>(null);
 
   const handleRetry = useCallback((errorMessageId: string) => {
     const errorIndex = messages.findIndex(m => m.id === errorMessageId);
@@ -881,14 +933,15 @@ const App: React.FC = () => {
     if (!userMessage || typeof userMessage.content !== 'string') return;
     const dropIds = new Set(messages.slice(userIndex, errorIndex + 1).map(m => m.id));
     setMessages(prev => prev.filter(m => !dropIds.has(m.id)));
-    setPendingRetry({ text: userMessage.content, image: userMessage.image });
+    setPendingRetry({ text: userMessage.content, image: userMessage.image, rating: userMessage.rating });
   }, [messages]);
 
   useEffect(() => {
     if (!pendingRetry || isLoading) return;
     setPendingRetry(null);
-    handleSendMessage(pendingRetry.text, pendingRetry.image);
-  }, [pendingRetry, isLoading, handleSendMessage]);
+    if (pendingRetry.rating) handleRate(pendingRetry.rating);
+    else handleSendMessage(pendingRetry.text, pendingRetry.image);
+  }, [pendingRetry, isLoading, handleSendMessage, handleRate]);
 
   const handleRenameDossier = useCallback((cardKey: string, newName: string) => {
     const rename = (d: PlayerProfile): PlayerProfile => renameDossierCard(d, newName);
@@ -1181,6 +1234,9 @@ const App: React.FC = () => {
                         onAcceptGaffaNudge={() => handleDomainChange('gaffa')}
                         onDismissGaffaNudge={() => setGaffaNudge(null)}
                         draft={chatDraft}
+                        onRate={handleRate}
+                        localCards={globalDossiers}
+                        openRate={openRate}
                     />
                 </div>
             </div>
