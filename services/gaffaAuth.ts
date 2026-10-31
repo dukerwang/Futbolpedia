@@ -4,6 +4,7 @@ import type {
   GaffaFreeAgent,
   GaffaLeagueSettings,
   GaffaLineup,
+  GaffaLineupSlot,
   GaffaMatchup,
   GaffaOpenAuction,
   GaffaOpenListing,
@@ -16,7 +17,7 @@ const GAFFA_SUPABASE_URL = 'https://hnkavimrsbytsesdzwvj.supabase.co';
 const GAFFA_SUPABASE_PUBLISHABLE_KEY =
   'sb_publishable_t1EWa_vXscUV_u6M7Xu7JA_uWwdwzdo';
 
-export const gaffaSupabase =
+const gaffaSupabase =
   typeof window !== 'undefined' && (window as any).supabase
     ? (window as any).supabase.createClient(
         GAFFA_SUPABASE_URL,
@@ -32,8 +33,19 @@ export const gaffaSupabase =
       )
     : null;
 
-export function isGaffaSupabaseReady(): boolean {
-  return Boolean(gaffaSupabase);
+const AUTH_UNAVAILABLE = 'Gaffa authentication client is unavailable';
+
+const PLAYER_COLUMNS =
+  'id, name, web_name, date_of_birth, pl_team, primary_position, secondary_positions, market_value, is_active';
+
+/** Rows from a Supabase list query, or [] when it errored or returned nothing. */
+function rowsOf(res: { data?: unknown }): any[] {
+  return Array.isArray(res.data) ? res.data : [];
+}
+
+/** Supabase numeric column → number, keeping null/undefined as null. */
+function numOrNull(v: unknown): number | null {
+  return v != null ? Number(v) : null;
 }
 
 function mapSupabaseUser(raw: any): GaffaAuthUser | null {
@@ -74,7 +86,7 @@ export async function signInGaffaWithPassword(
   password: string,
 ): Promise<GaffaAuthUser> {
   if (!gaffaSupabase) {
-    throw new Error('Gaffa authentication client is unavailable');
+    throw new Error(AUTH_UNAVAILABLE);
   }
   const trimmedEmail = email.trim();
   if (!trimmedEmail || !password) {
@@ -96,7 +108,7 @@ export async function signInGaffaWithPassword(
 
 export async function signInGaffaWithGoogle(): Promise<void> {
   if (!gaffaSupabase) {
-    throw new Error('Gaffa authentication client is unavailable');
+    throw new Error(AUTH_UNAVAILABLE);
   }
   const redirectTo =
     typeof window !== 'undefined'
@@ -137,7 +149,7 @@ export async function fetchMyGaffaClubs(
     throw new Error(teamsErr.message || 'Could not load your Gaffa clubs');
   }
 
-  const rows: any[] = Array.isArray(teamsData) ? teamsData : [];
+  const rows = rowsOf({ data: teamsData });
   if (rows.length === 0) return [];
 
   const leagueIds = Array.from(
@@ -168,6 +180,37 @@ export async function fetchMyGaffaClubs(
       league_status: lg?.status ? String(lg.status) : null,
     };
   });
+}
+
+interface TeamStats {
+  wins: number;
+  draws: number;
+  losses: number;
+  played: number;
+  pf: number;
+  pa: number;
+}
+
+function emptyTeamStats(): TeamStats {
+  return { wins: 0, draws: 0, losses: 0, played: 0, pf: 0, pa: 0 };
+}
+
+/** One side of a completed matchup. A null winner with an opponent present is a draw. */
+function recordResult(
+  st: TeamStats | undefined,
+  selfId: string | null,
+  oppId: string | null,
+  scored: number,
+  conceded: number,
+  winnerId: string | null,
+): void {
+  if (!selfId || !st) return;
+  st.played += 1;
+  st.pf += scored;
+  st.pa += conceded;
+  if (winnerId === selfId) st.wins += 1;
+  else if (winnerId && winnerId === oppId) st.losses += 1;
+  else if (!winnerId && oppId) st.draws += 1;
 }
 
 function computeAgeFromDob(dob: string | null | undefined): number | null {
@@ -233,9 +276,7 @@ export async function fetchGaffaContextFromSupabase(
       .eq('league_id', leagueId),
     gaffaSupabase
       .from('players')
-      .select(
-        'id, name, web_name, date_of_birth, pl_team, primary_position, secondary_positions, market_value, is_active',
-      )
+      .select(PLAYER_COLUMNS)
       .eq('is_active', true)
       .order('market_value', { ascending: false })
       .limit(1000),
@@ -267,7 +308,7 @@ export async function fetchGaffaContextFromSupabase(
   }
 
   const league = leagueRes.data;
-  const teams: any[] = Array.isArray(teamsRes.data) ? teamsRes.data : [];
+  const teams = rowsOf(teamsRes);
   const clubTeam = teams.find((t) => String(t.id) === clubId);
   if (!clubTeam) {
     throw new Error('Club not found in this league');
@@ -278,21 +319,11 @@ export async function fetchGaffaContextFromSupabase(
     teamsById.set(String(t.id), t);
   }
 
-  const allRosterEntries: any[] = Array.isArray(rosterEntriesRes.data)
-    ? rosterEntriesRes.data
-    : [];
-  const activePlayers: any[] = Array.isArray(activePlayersRes.data)
-    ? activePlayersRes.data
-    : [];
-  const matchups: any[] = Array.isArray(matchupsRes.data)
-    ? matchupsRes.data
-    : [];
-  const openListingsRaw: any[] = Array.isArray(listingsRes.data)
-    ? listingsRes.data
-    : [];
-  const liveAuctionsRaw: any[] = Array.isArray(auctionsRes.data)
-    ? auctionsRes.data
-    : [];
+  const allRosterEntries = rowsOf(rosterEntriesRes);
+  const activePlayers = rowsOf(activePlayersRes);
+  const matchups = rowsOf(matchupsRes);
+  const openListingsRaw = rowsOf(listingsRes);
+  const liveAuctionsRaw = rowsOf(auctionsRes);
 
   const playersById = new Map<string, any>();
   for (const p of activePlayers) {
@@ -301,28 +332,16 @@ export async function fetchGaffaContextFromSupabase(
 
   // Fetch any inactive/departed players referenced on rosters, listings, or auctions
   const referencedIds = new Set<string>();
-  for (const r of allRosterEntries) {
-    if (r?.player_id && !playersById.has(String(r.player_id))) {
-      referencedIds.add(String(r.player_id));
-    }
-  }
-  for (const l of openListingsRaw) {
-    if (l?.player_id && !playersById.has(String(l.player_id))) {
-      referencedIds.add(String(l.player_id));
-    }
-  }
-  for (const a of liveAuctionsRaw) {
-    if (a?.player_id && !playersById.has(String(a.player_id))) {
-      referencedIds.add(String(a.player_id));
+  for (const row of [...allRosterEntries, ...openListingsRaw, ...liveAuctionsRaw]) {
+    if (row?.player_id && !playersById.has(String(row.player_id))) {
+      referencedIds.add(String(row.player_id));
     }
   }
 
   if (referencedIds.size > 0) {
     const { data: extraPlayers } = await gaffaSupabase
       .from('players')
-      .select(
-        'id, name, web_name, date_of_birth, pl_team, primary_position, secondary_positions, market_value, is_active',
-      )
+      .select(PLAYER_COLUMNS)
       .in('id', Array.from(referencedIds));
     for (const p of extraPlayers ?? []) {
       if (p?.id) playersById.set(String(p.id), p);
@@ -348,26 +367,9 @@ export async function fetchGaffaContextFromSupabase(
   });
 
   // 2. Standings across all teams in the league
-  const statsByTeam = new Map<
-    string,
-    {
-      wins: number;
-      draws: number;
-      losses: number;
-      played: number;
-      pf: number;
-      pa: number;
-    }
-  >();
+  const statsByTeam = new Map<string, TeamStats>();
   for (const t of teams) {
-    statsByTeam.set(String(t.id), {
-      wins: 0,
-      draws: 0,
-      losses: 0,
-      played: 0,
-      pf: 0,
-      pa: 0,
-    });
+    statsByTeam.set(String(t.id), emptyTeamStats());
   }
 
   for (const m of matchups) {
@@ -377,25 +379,8 @@ export async function fetchGaffaContextFromSupabase(
     const scoreA = Number(m.score_a ?? 0);
     const scoreB = Number(m.score_b ?? 0);
     const winnerId = m.winner_team_id ? String(m.winner_team_id) : null;
-
-    if (aId && statsByTeam.has(aId)) {
-      const st = statsByTeam.get(aId)!;
-      st.played += 1;
-      st.pf += scoreA;
-      st.pa += scoreB;
-      if (winnerId === aId) st.wins += 1;
-      else if (winnerId && winnerId === bId) st.losses += 1;
-      else if (!winnerId && bId) st.draws += 1;
-    }
-    if (bId && statsByTeam.has(bId)) {
-      const st = statsByTeam.get(bId)!;
-      st.played += 1;
-      st.pf += scoreB;
-      st.pa += scoreA;
-      if (winnerId === bId) st.wins += 1;
-      else if (winnerId && winnerId === aId) st.losses += 1;
-      else if (!winnerId && aId) st.draws += 1;
-    }
+    recordResult(statsByTeam.get(aId ?? ''), aId, bId, scoreA, scoreB, winnerId);
+    recordResult(statsByTeam.get(bId ?? ''), bId, aId, scoreB, scoreA, winnerId);
   }
 
   const rankedTeams = [...teams].sort((a, b) => {
@@ -409,14 +394,7 @@ export async function fetchGaffaContextFromSupabase(
   });
 
   const rankIdx = rankedTeams.findIndex((t) => String(t.id) === clubId);
-  const myStats = statsByTeam.get(clubId) ?? {
-    wins: 0,
-    draws: 0,
-    losses: 0,
-    played: 0,
-    pf: 0,
-    pa: 0,
-  };
+  const myStats = statsByTeam.get(clubId) ?? emptyTeamStats();
   const standings: GaffaStandings = {
     rank: rankIdx >= 0 ? rankIdx + 1 : null,
     of_teams: teams.length,
@@ -452,20 +430,8 @@ export async function fetchGaffaContextFromSupabase(
       gameweek: Number(focusMatchup.gameweek),
       opponent_club_name: oppTeam?.team_name ? String(oppTeam.team_name) : null,
       status: String(focusMatchup.status),
-      your_score: isTeamA
-        ? focusMatchup.score_a != null
-          ? Number(focusMatchup.score_a)
-          : null
-        : focusMatchup.score_b != null
-          ? Number(focusMatchup.score_b)
-          : null,
-      opponent_score: isTeamA
-        ? focusMatchup.score_b != null
-          ? Number(focusMatchup.score_b)
-          : null
-        : focusMatchup.score_a != null
-          ? Number(focusMatchup.score_a)
-          : null,
+      your_score: numOrNull(isTeamA ? focusMatchup.score_a : focusMatchup.score_b),
+      opponent_score: numOrNull(isTeamA ? focusMatchup.score_b : focusMatchup.score_a),
     };
   }
 
@@ -491,12 +457,16 @@ export async function fetchGaffaContextFromSupabase(
     }
   }
 
-  const resolvePlayerName = (playerId: string): string => {
-    const p = playersById.get(playerId);
-    if (p?.name) return String(p.name);
-    const rp = roster.find((r) => r.player_id === playerId);
-    return rp?.name ?? 'Unknown Player';
-  };
+  // Roster names come from playersById too, so it is the only place to look.
+  const mapLineupSlots = (raw: unknown, defaultSlot: string): GaffaLineupSlot[] =>
+    (Array.isArray(raw) ? raw : []).map((s: any) => {
+      const pid = String(s.player_id || '');
+      return {
+        player_id: pid,
+        name: String(s.name || playersById.get(pid)?.name || 'Unknown Player'),
+        slot: String(s.slot || defaultSlot),
+      };
+    });
 
   let lineup: GaffaLineup | null = null;
   if (chosenLineup) {
@@ -504,24 +474,8 @@ export async function fetchGaffaContextFromSupabase(
     lineup = {
       formation: raw.formation ? String(raw.formation) : null,
       gameweek: gw,
-      starters: (Array.isArray(raw.starters) ? raw.starters : []).map(
-        (s: any) => {
-          const pid = String(s.player_id || '');
-          return {
-            player_id: pid,
-            name: s.name ? String(s.name) : resolvePlayerName(pid),
-            slot: String(s.slot || 'CM'),
-          };
-        },
-      ),
-      bench: (Array.isArray(raw.bench) ? raw.bench : []).map((b: any) => {
-        const pid = String(b.player_id || '');
-        return {
-          player_id: pid,
-          name: b.name ? String(b.name) : resolvePlayerName(pid),
-          slot: String(b.slot || 'FLEX'),
-        };
-      }),
+      starters: mapLineupSlots(raw.starters, 'CM'),
+      bench: mapLineupSlots(raw.bench, 'FLEX'),
     };
   }
 
@@ -537,10 +491,9 @@ export async function fetchGaffaContextFromSupabase(
       seller_club_name: String(sellerTeam?.team_name || 'Club'),
       yours: String(l.seller_team_id) === clubId,
       status: String(l.status || 'pending'),
-      min_bid_eur_m: l.min_bid != null ? Number(l.min_bid) : null,
-      ask_eur_m: l.ask_price != null ? Number(l.ask_price) : null,
-      release_clause_eur_m:
-        l.buy_now_price != null ? Number(l.buy_now_price) : null,
+      min_bid_eur_m: numOrNull(l.min_bid),
+      ask_eur_m: numOrNull(l.ask_price),
+      release_clause_eur_m: numOrNull(l.buy_now_price),
       open_to_trade: Boolean(l.open_to_trade),
       open_to_sale: Boolean(l.open_to_sale),
       open_to_loan: Boolean(l.open_to_loan),
@@ -558,7 +511,7 @@ export async function fetchGaffaContextFromSupabase(
       name: String(p?.name || 'Unknown Player'),
       position: String(p?.primary_position || 'CM'),
       kind: String(a.kind || 'free_agent'),
-      highest_bid_eur_m: a.highest_bid != null ? Number(a.highest_bid) : null,
+      highest_bid_eur_m: numOrNull(a.highest_bid),
       expires_at: a.expires_at ? String(a.expires_at) : null,
     };
   });
@@ -577,8 +530,7 @@ export async function fetchGaffaContextFromSupabase(
         display_name: p.web_name ? String(p.web_name) : undefined,
         position: String(p.primary_position || 'CM'),
         pl_team: p.pl_team ?? null,
-        market_value_eur_m:
-          p.market_value != null ? Number(p.market_value) : null,
+        market_value_eur_m: numOrNull(p.market_value),
         age: computeAgeFromDob(p.date_of_birth),
         live_auction: liveAuctionIds.has(pid),
       };
@@ -589,30 +541,15 @@ export async function fetchGaffaContextFromSupabase(
     roster_size: Number(league.roster_size ?? 22),
     bench_size: Number(league.bench_size ?? 4),
     ir_size: Number(clubTeam.ir_slots ?? league.ir_size ?? 2),
-    taxi_size:
-      clubTeam.academy_slots != null
-        ? Number(clubTeam.academy_slots)
-        : league.taxi_size != null
-          ? Number(league.taxi_size)
-          : null,
-    taxi_age_limit:
-      league.taxi_age_limit != null ? Number(league.taxi_age_limit) : null,
+    // Club-level slot overrides win over the league default.
+    taxi_size: numOrNull(clubTeam.academy_slots ?? league.taxi_size),
+    taxi_age_limit: numOrNull(league.taxi_age_limit),
     max_teams: Number(league.max_teams ?? teams.length),
     is_dynasty: Boolean(league.is_dynasty),
-    starting_faab_eur_m:
-      league.faab_budget != null ? Number(league.faab_budget) : null,
-    free_agent_bid_floor:
-      league.free_agent_bid_floor != null
-        ? Number(league.free_agent_bid_floor)
-        : 0.6,
-    max_loan_outs:
-      clubTeam.loan_out_slots != null
-        ? Number(clubTeam.loan_out_slots)
-        : league.max_loan_outs != null
-          ? Number(league.max_loan_outs)
-          : null,
-    max_loan_ins:
-      league.max_loan_ins != null ? Number(league.max_loan_ins) : null,
+    starting_faab_eur_m: numOrNull(league.faab_budget),
+    free_agent_bid_floor: numOrNull(league.free_agent_bid_floor) ?? 0.6,
+    max_loan_outs: numOrNull(clubTeam.loan_out_slots ?? league.max_loan_outs),
+    max_loan_ins: numOrNull(league.max_loan_ins),
     league_status: league.status ? String(league.status) : null,
   };
 

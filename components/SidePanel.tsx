@@ -3,18 +3,22 @@ import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { marked } from 'marked';
+import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS } from './pills';
 import DOMPurify from 'dompurify';
-import { getCardKey, getCardLabel, getCardStatus, isPrimeCard, shareDossierCard } from '../services/geminiService';
+import {
+  getCardKey,
+  isPrimeCard,
+  shareDossierCard,
+} from '../services/geminiService';
 
 interface SidePanelProps {
   isOpen: boolean;
   onClose: () => void;
   profile: PlayerProfile | null;
   allProfiles: PlayerProfile[];
-  onSelectProfile: (profile: PlayerProfile | null) => void;
-  onBackToHome: () => void;
-  onRenameDossier?: (oldName: string, newName: string) => void;
-  onDeleteDossier?: (cardKey: string) => void;
+  onSelectProfile: (profile: PlayerProfile) => void;
+  /** Shows the dossier hub; omitted while the hub is already the main view. */
+  onOpenHub?: () => void;
 }
 
 const getTierColorClass = (rating: number) => {
@@ -22,6 +26,38 @@ const getTierColorClass = (rating: number) => {
     if (rating >= 80) return 'bg-emerald-400'; // 80-89 Sage/Light Green
     if (rating >= 70) return 'bg-charcoal/50 dark:bg-gray-400'; // 70-79 Charcoal Light
     return 'bg-gray-200 dark:bg-gray-700'; // <70 Faint Grey
+};
+
+const renderMarkdown = (text: string) => {
+    if (!text) return { __html: '' };
+    return { __html: DOMPurify.sanitize(marked.parse(text) as string) };
+};
+
+/** Short codes for canonical position names, keyed by lowercase name. */
+const POSITION_ABBREVIATIONS: Record<string, string> = {
+    'goalkeeper': 'GK',
+    'center back': 'CB', 'centre back': 'CB', 'centre-back': 'CB',
+    'left back': 'LB', 'left-back': 'LB',
+    'right back': 'RB', 'right-back': 'RB',
+    'left wing back': 'LWB', 'left wing-back': 'LWB',
+    'right wing back': 'RWB', 'right wing-back': 'RWB',
+    'defensive midfielder': 'CDM',
+    'central midfielder': 'CM',
+    'attacking midfielder': 'CAM',
+    'left winger': 'LW', 'left midfielder': 'LM',
+    'right winger': 'RW', 'right midfielder': 'RM',
+    'libero': 'LIB',
+    'striker': 'CF', 'centre forward': 'CF', 'center forward': 'CF',
+    'second striker': 'SS', 'forward': 'FW',
+};
+
+const formatPosition = (position: string) => {
+    if (!position) return '';
+    return position.split(/[\/,]/).map(p => {
+        const trimmed = p.trim();
+        const key = trimmed.toLowerCase();
+        return Object.hasOwn(POSITION_ABBREVIATIONS, key) ? POSITION_ABBREVIATIONS[key] : trimmed;
+    }).join('/');
 };
 
 const AttributeLine: React.FC<{ label: string; rating: number }> = ({ label: attrLabel, rating }) => {
@@ -48,24 +84,14 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   profile,
   allProfiles = [],
   onSelectProfile,
-  onBackToHome,
-  onRenameDossier,
-  onDeleteDossier
+  onOpenHub,
 }) => {
   const [shareStatus, setShareStatus] = useState<'idle' | 'saving' | 'copied'>('idle');
   const [isDesktop, setIsDesktop] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
-  
-  // Dossier list editing states
-  const [editingName, setEditingName] = useState<string | null>(null);
-  const [editNameText, setEditNameText] = useState('');
-  const [confirmDeleteName, setConfirmDeleteName] = useState<string | null>(null);
-  const [sharingName, setSharingName] = useState<string | null>(null);
-  const [sharedName, setSharedName] = useState<string | null>(null);
 
-  const currentIndex = profile && allProfiles
-    ? allProfiles.findIndex(p => getCardKey(p) === getCardKey(profile))
-    : -1;
+  const profileKey = profile ? getCardKey(profile) : null;
+  const currentIndex = profileKey ? allProfiles.findIndex(p => getCardKey(p) === profileKey) : -1;
   
   // Mobile Gesture State
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -89,14 +115,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     }
   }, [isOpen]);
 
-  const getTierText = (rating: number) => getShortTierLabel(rating);
-
-  const renderMarkdown = (text: string) => {
-      if (!text) return { __html: '' };
-      const safeText = DOMPurify.sanitize(marked.parse(text) as string);
-      return { __html: safeText };
-  };
-
   const handleShare = async () => {
     if (!profile) return;
     setShareStatus('saving');
@@ -109,32 +127,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     } catch (err) {
         console.error(err);
         setShareStatus('idle');
+        if (err instanceof Error) window.alert(err.message);
     }
-  };
-
-  const formatPosition = (position: string) => {
-      if (!position) return '';
-      const mappings: Record<string, string> = {
-          'Goalkeeper': 'GK',
-          'Center Back': 'CB', 'Centre Back': 'CB', 'Centre-Back': 'CB',
-          'Left Back': 'LB', 'Left-Back': 'LB',
-          'Right Back': 'RB', 'Right-Back': 'RB',
-          'Left Wing Back': 'LWB', 'Left Wing-Back': 'LWB',
-          'Right Wing Back': 'RWB', 'Right Wing-Back': 'RWB',
-          'Defensive Midfielder': 'CDM',
-          'Central Midfielder': 'CM',
-          'Attacking Midfielder': 'CAM',
-          'Left Winger': 'LW', 'Left Midfielder': 'LM',
-          'Right Winger': 'RW', 'Right Midfielder': 'RM',
-          'Striker': 'ST', 'Centre Forward': 'CF', 'Center Forward': 'CF',
-          'Second Striker': 'SS', 'Forward': 'FW'
-      };
-      
-      return position.split(/[\/,]/).map(p => {
-          const trimmed = p.trim();
-          const key = Object.keys(mappings).find(k => k.toLowerCase() === trimmed.toLowerCase());
-          return key ? mappings[key] : trimmed;
-      }).join('/');
   };
 
   // --- NATIVE SWIPE LOGIC ---
@@ -197,244 +191,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
       }
   };
 
-  const handleStartRename = (cardKey: string, name: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingName(cardKey);
-    setEditNameText(name);
-  };
+  // Prevent render if not open and not visible. The dossier list lives in the hub, so the
+  // panel only ever shows one dossier.
+  if ((!isOpen && !isVisible) || !profile) return null;
 
-  const handleSaveRename = (targetCardKey: string, e: React.FormEvent) => {
-    e.preventDefault();
-    if (editNameText.trim() && onRenameDossier) {
-      onRenameDossier(targetCardKey, editNameText.trim());
-    }
-    setEditingName(null);
-  };
-
-  const handleCancelRename = () => {
-    setEditingName(null);
-  };
-
-  const handleDeleteClick = (cardKey: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirmDeleteName === cardKey) {
-      if (onDeleteDossier) {
-        onDeleteDossier(cardKey);
-      }
-      setConfirmDeleteName(null);
-    } else {
-      setConfirmDeleteName(cardKey);
-      // Automatically reset confirmation after 3 seconds
-      setTimeout(() => {
-        setConfirmDeleteName(prev => prev === cardKey ? null : prev);
-      }, 3000);
-    }
-  };
-
-  const handleShareDossierItem = async (p: PlayerProfile, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const cardKey = getCardKey(p);
-    if (sharingName) return;
-    setSharingName(cardKey);
-    try {
-      const slug = await shareDossierCard(p);
-      await navigator.clipboard.writeText(`${window.location.origin}/#/p/${slug}`);
-      setSharedName(cardKey);
-      setTimeout(() => setSharedName(null), 2000);
-    } catch (err) {
-      console.error('Failed to share dossier:', err);
-    } finally {
-      setSharingName(null);
-    }
-  };
-
-  // Prevent render if not open and not visible
-  if (!isOpen && !isVisible) return null;
-
-  // Render Dossier Library Home if active profile is null
-  if (!profile) {
-    return (
-      <>
-        {!isDesktop && isOpen && (
-            <div 
-                className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 md:hidden animate-fade-in"
-                onClick={onClose}
-            />
-        )}
-
-        <div 
-            style={getPanelStyle()}
-            className={`fixed z-[60] bg-cream-100 dark:bg-charcoal border-r border-cream-300/80 dark:border-charcoal-border/80 shadow-right-depth dark:shadow-dark-float flex flex-col
-                inset-x-0 bottom-0 h-[92vh] rounded-t-2xl transition-transform duration-500 ease-ios-ease will-change-transform
-                md:inset-y-0 md:left-0 md:h-full md:w-[450px] md:rounded-none
-            `}
-        >
-            {/* Header Area */}
-            <div className="flex justify-between items-center px-8 py-6 border-b border-cream-300 dark:border-charcoal-border bg-cream-50 dark:bg-charcoal-surface rounded-t-2xl md:rounded-none sticky top-0 z-50">
-                <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[22px] text-emerald-600 dark:text-emerald-400">folder_shared</span>
-                    <h3 className="text-sm font-serif font-bold text-charcoal dark:text-white uppercase tracking-widest">
-                        Dossier Library
-                    </h3>
-                </div>
-                <button
-                    onClick={onClose}
-                    className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-red-500 hover:bg-cream-200 dark:hover:bg-charcoal-light rounded-full transition-colors"
-                    title="Close Panel"
-                >
-                    <span className="material-symbols-outlined text-[18px] block">close</span>
-                </button>
-            </div>
-
-            {/* Scrollable Dossiers List */}
-            <div className="flex-1 overflow-y-auto px-6 py-6 space-y-3 bg-cream-100 dark:bg-charcoal">
-                {allProfiles.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-64 opacity-40 text-center px-4 select-none">
-                        <span className="material-symbols-outlined text-[40px] mb-2">folder_open</span>
-                        <p className="text-sm font-serif italic">No dossiers generated yet</p>
-                        <p className="text-xs font-sans mt-2 max-w-[280px] leading-relaxed mx-auto text-charcoal/60 dark:text-cream-400">
-                            Ask Futbolpedia to rate or scout a player to compile a scouting dossier here.
-                        </p>
-                    </div>
-                ) : (
-                    allProfiles.map((p) => {
-                        const cardKey = getCardKey(p);
-                        const isEditing = editingName === cardKey;
-                        const isDeleting = confirmDeleteName === cardKey;
-                        const formattedDate = new Date(p.createdAt || Date.now()).toLocaleDateString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric'
-                        });
-
-                        return (
-                            <div
-                                key={cardKey}
-                                onClick={() => {
-                                    if (!isEditing) {
-                                        onSelectProfile(p);
-                                    }
-                                }}
-                                className="group relative flex flex-col p-4 rounded-xl border transition-all duration-300 cursor-pointer bg-white dark:bg-charcoal-surface/30 border-cream-300/60 dark:border-charcoal-border hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 shadow-sm"
-                            >
-                                {isEditing ? (
-                                    <form
-                                        onSubmit={(e) => handleSaveRename(cardKey, e)}
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="flex items-center gap-1.5 w-full"
-                                    >
-                                        <input
-                                            type="text"
-                                            value={editNameText}
-                                            onChange={(e) => setEditNameText(e.target.value)}
-                                            autoFocus
-                                            onBlur={() => {
-                                                // Wait for form actions to proceed
-                                                setTimeout(() => {
-                                                    setEditingName(null);
-                                                }, 200);
-                                            }}
-                                            className="flex-1 px-3 py-1.5 text-xs font-serif bg-cream-100 dark:bg-charcoal border border-emerald-500/50 rounded focus:outline-none focus:ring-1 focus:ring-emerald-500 text-charcoal dark:text-cream-50"
-                                        />
-                                        <button
-                                            type="submit"
-                                            className="p-1 text-emerald-600 hover:text-emerald-500 active:scale-95 transition-transform"
-                                            title="Save name"
-                                        >
-                                            <span className="material-symbols-outlined text-[18px] block font-bold">check</span>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={handleCancelRename}
-                                            className="p-1 text-red-500 hover:text-red-400 active:scale-95 transition-transform"
-                                            title="Cancel"
-                                        >
-                                            <span className="material-symbols-outlined text-[18px] block">close</span>
-                                        </button>
-                                    </form>
-                                ) : (
-                                    <div className="flex justify-between items-center pr-12">
-                                        <div className="flex flex-col">
-                                            <div className="flex items-center gap-2">
-                                                <h4 className="font-serif font-bold text-sm tracking-tight text-charcoal dark:text-cream-50 line-clamp-1">
-                                                    {p.basicInfo.name}
-                                                </h4>
-                                                {isPrimeCard(p) && (
-                                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0">
-                                                        {p.version?.type === 'era' ? 'Era' : 'Prime'}
-                                                    </span>
-                                                )}
-                                                {p.confidence?.grade && (
-                                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
-                                                        Gr.{p.confidence.grade}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <div className="flex items-center gap-1.5 mt-1 text-[10px] font-mono text-charcoal/50 dark:text-cream-400 font-medium">
-                                                <span>{p.evaluationDate || p.version?.evaluationDate || formattedDate}</span>
-                                                <span className="size-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                                <span>{formatPosition(p.basicInfo.position)}</span>
-                                                <span className="size-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                                <span className="line-clamp-1 max-w-[120px]">{p.basicInfo.club}</span>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-1 bg-cream-200/50 dark:bg-charcoal-light/40 px-2.5 py-1 rounded-lg border border-cream-300/40 dark:border-charcoal-border shrink-0 ml-2">
-                                            <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">{p.ratings.overall}</span>
-                                            <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider">OVR</span>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {!isEditing && (
-                                    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity bg-gradient-to-l from-white dark:from-charcoal-surface via-white dark:via-charcoal-surface to-transparent pl-4 py-1.5 rounded-r-xl">
-                                        <button
-                                            onClick={(e) => handleShareDossierItem(p, e)}
-                                            disabled={sharingName === cardKey}
-                                            className={`p-1 rounded transition-all ${
-                                                sharedName === cardKey
-                                                    ? 'text-emerald-600 dark:text-emerald-400'
-                                                    : 'text-charcoal/50 dark:text-cream-400/60 hover:text-blue-500 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40'
-                                            }`}
-                                            title="Share Dossier"
-                                        >
-                                            <span className="material-symbols-outlined text-[14px] block">
-                                                {sharingName === cardKey ? 'hourglass_empty' : sharedName === cardKey ? 'check' : 'link'}
-                                            </span>
-                                        </button>
-                                        <button
-                                            onClick={(e) => handleStartRename(cardKey, p.basicInfo.name, e)}
-                                            className="p-1 text-charcoal/50 dark:text-cream-400/60 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40 rounded transition-all"
-                                            title="Rename Dossier"
-                                        >
-                                            <span className="material-symbols-outlined text-[14px] block">edit</span>
-                                        </button>
-                                        <button
-                                            onClick={(e) => handleDeleteClick(cardKey, e)}
-                                            className={`p-1 rounded transition-all ${
-                                                isDeleting
-                                                    ? 'bg-red-500/10 text-red-600 border border-red-500/30 hover:bg-red-500 hover:text-white px-2'
-                                                    : 'text-charcoal/50 dark:text-cream-400/60 hover:text-red-500 hover:bg-cream-300/30 dark:hover:bg-charcoal-light/40'
-                                            }`}
-                                            title={isDeleting ? "Click again to confirm delete" : "Delete Dossier"}
-                                        >
-                                            {isDeleting ? (
-                                                <span className="text-[9px] font-sans font-bold uppercase tracking-wider">Confirm</span>
-                                            ) : (
-                                                <span className="material-symbols-outlined text-[14px] block">delete</span>
-                                            )}
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })
-                )}
-            </div>
-        </div>
-      </>
-    );
-  }
-
+  const edition = describeCardEdition(profile);
   const categories = profile.goalkeeperAttributes ? GK_ATTRIBUTE_CATEGORIES : ATTRIBUTE_CATEGORIES;
   const attrSource = profile.goalkeeperAttributes ? profile.goalkeeperAttributes : profile.attributes;
 
@@ -468,6 +229,17 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
                 <div className="flex justify-between items-start px-8 pt-6 pb-4">
                     <div className="flex-1 pr-4">
+                        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                            <span className={pillClass(edition.tone, 'sm')} title={edition.title}>
+                                <span className={PILL_ICON_CLASS}>{edition.icon}</span>
+                                {edition.label}
+                            </span>
+                            {profile.revision && (
+                                <span className={pillClass('indigo', 'sm')} title="Your accepted challenge of the shared card">
+                                    Your revision
+                                </span>
+                            )}
+                        </div>
                         <h2 className="text-2xl font-serif font-bold text-charcoal dark:text-white leading-tight">{profile.basicInfo.name}</h2>
                         <p className="text-emerald-600 dark:text-emerald-400 font-serif italic text-base leading-tight mt-1 mb-1">
                             {profile.playstyleAndRole?.playstyle?.archetype}
@@ -489,10 +261,18 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                     </>
                                 )}
                         </div>
+                        {profile.clubManager && !isPrimeCard(profile) && (
+                            <p
+                                className="mt-1 text-xs text-charcoal/60 dark:text-cream-400 font-sans line-clamp-1"
+                                title={`Verified by live search on ${profile.clubManager.verifiedOn}`}
+                            >
+                                Manager: {profile.clubManager.name}
+                            </p>
+                        )}
                     </div>
                     
                     <div className="flex flex-col items-end text-right shrink-0">
-                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getTierText(profile.ratings.overall)}</span>
+                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getShortTierLabel(profile.ratings.overall)}</span>
                         
                         <div className="flex gap-4">
                             <div className="flex flex-col items-center">
@@ -534,22 +314,23 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     </div>
                 </div>
 
-                {/* Toolbar / Inline Back, Share and Close */}
+                {/* Toolbar / All dossiers, Share and Close */}
                 <div className="flex justify-between items-center px-8 pb-5">
                     <div className="flex items-center">
                         <span className="text-[10px] uppercase tracking-widest text-charcoal/40 dark:text-cream-400/40 font-bold">Confidential Dossier</span>
                     </div>
                     
                     <div className="flex items-center gap-2">
-                        {/* Inline Back to Dossier Home Button */}
-                        <button 
-                            onClick={onBackToHome}
-                            className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center gap-1 rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 px-2 py-1"
-                            title="Back to Dossier Home"
-                        >
-                            <span className="material-symbols-outlined text-[18px] block">arrow_back</span>
-                            <span className="text-[10px] font-sans font-bold uppercase tracking-wider">Back</span>
-                        </button>
+                        {onOpenHub && (
+                            <button 
+                                onClick={onOpenHub}
+                                className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center gap-1 rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 px-2 py-1"
+                                title="Browse all dossiers"
+                            >
+                                <span className="material-symbols-outlined text-[18px] block">grid_view</span>
+                                <span className="text-[10px] font-sans font-bold uppercase tracking-wider">All dossiers</span>
+                            </button>
+                        )}
 
                         <button 
                             onClick={handleShare} 
@@ -575,70 +356,13 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 onPointerDownCapture={e => e.stopPropagation()} 
                 onTouchStart={e => e.stopPropagation()} 
             >
-                {/* 0. Card Edition, Date Stamp & Peak Context */}
-                <div className="p-4 rounded-xl bg-white dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border shadow-sm space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase border flex items-center gap-1 ${
-                                isPrimeCard(profile)
-                                    ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
-                                    : getCardStatus(profile) === 'legacy'
-                                        ? 'bg-stone-500/10 text-stone-600 dark:text-stone-300 border-stone-400/40'
-                                        : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                            }`}>
-                                <span className="material-symbols-outlined text-[13px]">
-                                    {isPrimeCard(profile) ? 'workspace_premium' : getCardStatus(profile) === 'legacy' ? 'history' : 'bolt'}
-                                </span>
-                                {getCardLabel(profile)}
-                            </span>
-                            {profile.version?.seasonOrEra && (
-                                <span className="text-[10px] font-mono text-charcoal/60 dark:text-cream-400 font-semibold">
-                                    {isPrimeCard(profile) ? 'Window' : 'Season'}: {profile.version.seasonOrEra}
-                                </span>
-                            )}
-                        </div>
-
-                        <div className="flex items-center gap-1 text-[11px] font-mono font-semibold text-charcoal/60 dark:text-cream-400">
-                            <span className="material-symbols-outlined text-[14px]">calendar_today</span>
-                            <span>
-                                {profile.evaluationDate || (profile.createdAt ? new Date(profile.createdAt).toISOString().split('T')[0] : 'Undated')}
-                            </span>
-                        </div>
+                {/* 0. Peak Context (historical cards) */}
+                {profile.version?.peakContext && (
+                    <div>
+                        <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Peak Context</h3>
+                        <p className="leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light font-sans">{profile.version.peakContext}</p>
                     </div>
-
-                    {profile.version?.peakContext && (
-                        <div className="p-3 rounded-lg bg-amber-500/5 dark:bg-amber-950/20 border border-amber-500/20 text-xs font-serif italic text-charcoal/80 dark:text-amber-200 leading-relaxed">
-                            <span className="font-sans not-italic font-bold text-[9px] uppercase tracking-wider text-amber-700 dark:text-amber-400 mr-1.5">{profile.version.type === 'era' ? 'Era Context:' : 'Zenith Context:'}</span>
-                            {profile.version.peakContext}
-                        </div>
-                    )}
-
-                    {/* Signature Ceiling Spikes & Flaws */}
-                    {((profile.signatureSpikes && profile.signatureSpikes.length > 0) || (profile.genuineFlaws && profile.genuineFlaws.length > 0)) && (
-                        <div className="pt-2 border-t border-cream-200 dark:border-charcoal-border/60 flex flex-wrap gap-2 text-xs">
-                            {profile.signatureSpikes && profile.signatureSpikes.length > 0 && (
-                                <div className="flex items-center gap-1 flex-wrap">
-                                    <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Spikes:</span>
-                                    {profile.signatureSpikes.map(spike => (
-                                        <span key={spike} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-500/20">
-                                            {spike}
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                            {profile.genuineFlaws && profile.genuineFlaws.length > 0 && (
-                                <div className="flex items-center gap-1 flex-wrap">
-                                    <span className="text-[9px] font-bold uppercase tracking-wider text-red-600 dark:text-red-400">Flaws:</span>
-                                    {profile.genuineFlaws.map(flaw => (
-                                        <span key={flaw} className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-700 dark:text-red-300 font-mono text-[10px] font-semibold border border-red-500/20">
-                                            {flaw}
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    )}
-                </div>
+                )}
 
                 {/* 1. Scout Summary */}
                 <div>
@@ -725,7 +449,9 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
                 {/* 6. Latest Update */}
                 <div className="bg-cream-50 dark:bg-charcoal-surface p-5 border-l-4 border-charcoal dark:border-cream-400 shadow-sm">
-                    <h3 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-2">Latest Intelligence</h3>
+                    <h3 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-2">
+                        Latest Intelligence{latestUpdateLabel(profile) && <span className="font-normal"> · {latestUpdateLabel(profile)}</span>}
+                    </h3>
                     <div className="text-xs text-charcoal dark:text-cream-200 leading-relaxed font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.latestUpdate)} />
                 </div>
 

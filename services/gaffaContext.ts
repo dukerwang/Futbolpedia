@@ -2,10 +2,17 @@ import type { GaffaClubContextResponse, GaffaContextBag } from '../types';
 import { GAFFA_RULES_VERSION, emptyGaffaContextBag } from '../constants/gaffaRules';
 import { fetchGaffaContextFromSupabase, getGaffaSessionUser } from './gaffaAuth';
 
-export const GAFFA_LINK_KEY = 'futbolpedia-gaffa-link';
+const GAFFA_LINK_KEY = 'futbolpedia-gaffa-link';
 
 const FRESH_MS = 10 * 60 * 1000;
 const STALE_MAX_MS = 24 * 60 * 60 * 1000;
+
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isUuid(value: string): boolean {
+  return UUID.test(value);
+}
 
 export interface GaffaLinkState {
   league_id: string;
@@ -60,6 +67,13 @@ export function mapResponseToBag(res: GaffaClubContextResponse): GaffaContextBag
   };
 }
 
+/** Server proxy for Gaffa's read-secret context endpoint. */
+function fetchContextViaProxy(leagueId: string, teamId: string): Promise<Response> {
+  const qs = new URLSearchParams({ leagueId, teamId });
+  return fetch(`/api/gaffa/context?${qs.toString()}`);
+}
+
+/** Signed-in managers read through Supabase RLS; everyone else (or a failed RLS read) uses the proxy. */
 export async function fetchGaffaContext(
   leagueId: string,
   teamId: string,
@@ -70,9 +84,8 @@ export async function fetchGaffaContext(
       return await fetchGaffaContextFromSupabase(leagueId, teamId);
     } catch (supabaseErr) {
       // Fall back to server proxy if configured; otherwise surface the Supabase error
-      const qs = new URLSearchParams({ leagueId, teamId });
       try {
-        const res = await fetch(`/api/gaffa/context?${qs.toString()}`);
+        const res = await fetchContextViaProxy(leagueId, teamId);
         if (res.ok) {
           return res.json();
         }
@@ -83,8 +96,7 @@ export async function fetchGaffaContext(
     }
   }
 
-  const qs = new URLSearchParams({ leagueId, teamId });
-  const res = await fetch(`/api/gaffa/context?${qs.toString()}`);
+  const res = await fetchContextViaProxy(leagueId, teamId);
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -107,7 +119,7 @@ function ageMs(iso?: string): number {
 
 /**
  * Resolve bag for a Gaffa send: refresh if older than 10m; on failure use
- * cache if &lt; 24h (stale); else disconnected.
+ * cache if < 24h (stale); else disconnected.
  */
 export async function resolveContextBagForSend(
   link: GaffaLinkState | null,
@@ -142,9 +154,6 @@ export async function resolveContextBagForSend(
   }
 }
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 /** Parse `#/gaffa/<leagueId>/<clubId>` from Futbolpedia's hash router. */
 export function parseGaffaConnectHash(
   hash: string,
@@ -153,6 +162,6 @@ export function parseGaffaConnectHash(
   if (!m) return null;
   const leagueId = m[1].trim();
   const clubId = m[2].trim();
-  if (!UUID.test(leagueId) || !UUID.test(clubId)) return null;
+  if (!isUuid(leagueId) || !isUuid(clubId)) return null;
   return { leagueId, clubId };
 }

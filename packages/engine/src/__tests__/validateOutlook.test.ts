@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { assertValidOutlook, validateOutlook } from '../gates/validateOutlook';
-import { findUnverifiedManagerMentions, scrubUnverifiedManagerText } from '../gates/managerMentions';
+import {
+  findUnverifiedManagerMentions,
+  pickCurrentCoach,
+  sameCoach,
+  scrubFormerCoaches,
+  scrubUnverifiedManagerText,
+} from '../gates/managerMentions';
 import { buildOutlookSearchQueries } from '../pipeline/queryGen';
 import type { OutlookContextBag, OutlookExtraction, PlayerOutlook } from '../types/outlook';
 
@@ -138,7 +144,7 @@ describe('validateOutlook', () => {
     const scrubbed = scrubUnverifiedManagerText(raw, ctx);
     expect(findUnverifiedManagerMentions(scrubbed, ctx)).toEqual([]);
     expect(scrubbed).toContain("Xabi Alonso's system");
-    expect(scrubbed).toContain('under Xabi Alonso');
+    expect(scrubbed).toContain('under Xabi Alonso at the club.');
   });
 
   it('scrubs capitalized "Under Enzo Maresca" and possessive "In Maresca\'s setup" into Xabi Alonso', () => {
@@ -152,5 +158,151 @@ describe('validateOutlook', () => {
     expect(scrubbed).not.toContain('Maresca');
     expect(scrubbed).toContain('Under Xabi Alonso');
     expect(scrubbed).toContain("Xabi Alonso's tactical setup");
+  });
+});
+
+describe('pickCurrentCoach', () => {
+  const CHELSEA = 49;
+  // Shaped like API-Football's /coachs?team=49 response: every coach who ever managed the team.
+  const coachsResponse = [
+    {
+      id: 1,
+      name: 'M. Pochettino',
+      firstname: 'Mauricio',
+      lastname: 'Pochettino',
+      career: [
+        { team: { id: 2384, name: 'USA' }, start: '2024-09-01', end: null },
+        { team: { id: CHELSEA, name: 'Chelsea' }, start: '2023-07-01', end: '2024-05-31' },
+      ],
+    },
+    {
+      id: 2,
+      name: 'L. Rosenior',
+      firstname: 'Liam',
+      lastname: 'Rosenior',
+      // Stale open stint API-Football never closed.
+      career: [{ team: { id: CHELSEA, name: 'Chelsea' }, start: '2026-01-06', end: null }],
+    },
+    {
+      id: 3,
+      name: 'X. Alonso',
+      firstname: 'Xabi',
+      lastname: 'Alonso',
+      career: [
+        { team: { id: CHELSEA, name: 'Chelsea' }, start: '2026-07-01', end: null },
+        { team: { id: 168, name: 'Bayer Leverkusen' }, start: '2022-10-05', end: '2025-06-30' },
+      ],
+    },
+  ];
+
+  it('picks the open stint at this team with the latest start', () => {
+    expect(pickCurrentCoach(coachsResponse, CHELSEA)).toEqual({
+      coach: 'Xabi Alonso',
+      coachSince: '2026-07-01',
+    });
+  });
+
+  it('ignores open stints at other teams', () => {
+    expect(pickCurrentCoach(coachsResponse.slice(0, 2), CHELSEA)).toEqual({
+      coach: 'Liam Rosenior',
+      coachSince: '2026-01-06',
+    });
+  });
+
+  it('falls back to the first coach, undated, when no stint is open', () => {
+    expect(pickCurrentCoach([coachsResponse[0]], CHELSEA)).toEqual({
+      coach: 'Mauricio Pochettino',
+      coachSince: null,
+    });
+    expect(pickCurrentCoach([{ name: 'Someone' }], CHELSEA)).toEqual({
+      coach: 'Someone',
+      coachSince: null,
+    });
+  });
+
+  it('handles empty or malformed responses', () => {
+    expect(pickCurrentCoach([], CHELSEA)).toEqual({ coach: null, coachSince: null });
+    expect(pickCurrentCoach(undefined, CHELSEA)).toEqual({ coach: null, coachSince: null });
+  });
+});
+
+describe('sameCoach', () => {
+  it('matches across accents and full-name vs surname', () => {
+    expect(sameCoach('Rúben Amorim', 'Ruben Amorim')).toBe(true);
+    expect(sameCoach('Xabi Alonso', 'Alonso')).toBe(true);
+    expect(sameCoach('Xabi Alonso', 'Enzo Maresca')).toBe(false);
+    expect(sameCoach('Xabi Alonso', 'Xabi')).toBe(true);
+    expect(sameCoach(null, 'Xabi Alonso')).toBe(false);
+  });
+
+  it('does not match a short fragment inside another name', () => {
+    expect(sameCoach('Arne Slot', 'Slo')).toBe(false);
+  });
+});
+
+describe('scrubFormerCoaches', () => {
+  const chelsea = { club: 'Chelsea', coach: 'Xabi Alonso', previousCoach: 'Liam Rosenior' };
+  const city = { club: 'Manchester City', coach: 'Enzo Maresca', previousCoach: 'Pep Guardiola' };
+
+  it("rewrites a club's previous coach only when the text names that club", () => {
+    expect(scrubFormerCoaches('Chelsea under Liam Rosenior pressed high.', [chelsea])).toBe(
+      'Chelsea under Xabi Alonso pressed high.',
+    );
+    expect(scrubFormerCoaches("Liam Rosenior's Strasbourg side pressed high.", [chelsea])).toBe(
+      "Liam Rosenior's Strasbourg side pressed high.",
+    );
+  });
+
+  it('never rewrites a coach who currently manages one of the given clubs', () => {
+    const moved = { club: 'Chelsea', coach: 'Xabi Alonso', previousCoach: 'Enzo Maresca' };
+    const text = "Chelsea fans remember Enzo Maresca's system; Manchester City now play it.";
+    expect(scrubFormerCoaches(text, [moved, city])).toBe(text);
+  });
+
+  it('does nothing without verified managers or a previous coach', () => {
+    const text = 'Chelsea under Liam Rosenior pressed high.';
+    expect(scrubFormerCoaches(text, [])).toBe(text);
+    expect(scrubFormerCoaches(text, [{ club: 'Chelsea', coach: 'Xabi Alonso' }])).toBe(text);
+  });
+});
+
+describe('strict current-coach mode', () => {
+  const ctx = {
+    currentHeadCoach: 'Xabi Alonso',
+    currentClub: 'Chelsea',
+    // Search text that mentions the sacked coach would normally count as verifying him.
+    verifiedFacts: ['Chelsea sacked Enzo Maresca and appointed Xabi Alonso.'],
+  };
+
+  it('lets a name through when it only appears in grounding text, in normal mode', () => {
+    expect(findUnverifiedManagerMentions("He thrives in Maresca's system.", ctx)).toEqual([]);
+  });
+
+  it('allows only the verified coach in strict mode', () => {
+    const strict = { ...ctx, strictCurrentCoach: true };
+    expect(findUnverifiedManagerMentions("He thrives in Maresca's system.", strict)).toHaveLength(1);
+    expect(scrubUnverifiedManagerText("He thrives in Maresca's system.", strict)).toBe(
+      "He thrives in Xabi Alonso's system.",
+    );
+    expect(findUnverifiedManagerMentions("He thrives in Alonso's system.", strict)).toEqual([]);
+  });
+
+  it('catches a possessive after a lowercase verb, and names nobody when no coach is verified', () => {
+    const none = { currentHeadCoach: null, verifiedFacts: [], strictCurrentCoach: true };
+    expect(scrubUnverifiedManagerText("He anchors Maresca's system.", none)).toBe(
+      "He anchors the team's system.",
+    );
+  });
+
+  it('accepts any verified club manager in a multi-club chat turn', () => {
+    const chat = {
+      currentHeadCoach: null,
+      verifiedFacts: [],
+      clubManagers: [
+        { club: 'Chelsea', coach: 'Xabi Alonso' },
+        { club: 'Arsenal', coach: 'Mikel Arteta' },
+      ],
+    };
+    expect(findUnverifiedManagerMentions("Arteta's system against Alonso's setup.", chat)).toEqual([]);
   });
 });

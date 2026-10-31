@@ -3,18 +3,6 @@
  * Prefer misses over false positives.
  */
 
-/** Manual QA examples — true / false expectations for spot checks. */
-export const GAFFA_DETECT_EXAMPLES: Array<{ text: string; expect: boolean }> = [
-  { text: 'Can a CB auto-sub for an LB?', expect: true },
-  { text: "What's the OOP penalty?", expect: true },
-  { text: 'Would you trade Isak for Jackson + €70m?', expect: true },
-  { text: 'How does formation lock work in gaffa?', expect: true },
-  { text: 'Rate Erling Haaland', expect: false },
-  { text: 'Who plays for Arsenal this season?', expect: false },
-  { text: 'Is the academy good at Chelsea?', expect: false },
-  { text: 'Trade rumours about Isak', expect: false },
-];
-
 export function looksLikeGaffaQuestion(message: string): boolean {
   const text = message.trim();
   if (!text) return false;
@@ -39,7 +27,7 @@ export function looksLikeGaffaQuestion(message: string): boolean {
 
   // Multi-signal roster terms (avoid lone "academy" / "IR" / "trade").
   const hasGaffaRoster =
-    (/\binjured\s+reserve\b/i.test(text) || /\b\bir\b/i.test(text)) &&
+    (/\binjured\s+reserve\b/i.test(text) || /\bir\b/i.test(text)) &&
     /\b(cap|slot|bid|roster|park|stash)\b/i.test(text);
   const hasAcademyGaffa =
     /\bacademy\b/i.test(text) &&

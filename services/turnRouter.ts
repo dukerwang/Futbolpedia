@@ -2,30 +2,37 @@ import { Type } from '@google/genai';
 import type { ChatMessage, PlayerProfile } from '../types';
 import { CLUB_CANON } from '../constants/ratingTiers';
 import { generateStructured, getCurrentSeasonInfo } from './aiClient';
-import { hasHistoricalWindowCue } from './careerWindow';
 import {
   findReferencedDossiers,
   isPlayerProfile,
+  isPrimeCard,
+  parseRequestedSeason,
+  seasonStartYear,
   toPlayerSlug,
   wantsSavedDossierInventory,
 } from './dossierStore';
+import { buildSquadTurnoverQuery } from './groundingService';
 
-export type TurnIntent =
-  | 'single_dossier'
-  | 'compare'
-  | 'challenge_or_revise'
-  | 'archive_inventory'
-  | 'tactical_chat';
+const TURN_INTENTS = [
+  'single_dossier',
+  'compare',
+  'challenge_or_revise',
+  'archive_inventory',
+  'tactical_chat',
+] as const;
+export type TurnIntent = (typeof TURN_INTENTS)[number];
 
-export type AnalyticalMode =
-  | 'dossier'
-  | 'head_to_head'
-  | 'debate_or_verdict'
-  | 'ranking_or_tierlist'
-  | 'tactical_or_system'
-  | 'squad_or_recruitment'
-  | 'player_qa'
-  | 'archive';
+const ANALYTICAL_MODES = [
+  'dossier',
+  'head_to_head',
+  'debate_or_verdict',
+  'ranking_or_tierlist',
+  'tactical_or_system',
+  'squad_or_recruitment',
+  'player_qa',
+  'archive',
+] as const;
+export type AnalyticalMode = (typeof ANALYTICAL_MODES)[number];
 
 export interface TurnRoute {
   intent: TurnIntent;
@@ -35,35 +42,49 @@ export interface TurnRoute {
   searchQueries?: string[];
   reasoningComplexity?: 'low' | 'medium' | 'high';
   isHistorical: boolean;
+  /**
+   * A past season the message names ("2005-06", or a bare "2006"). A dossier then rates the
+   * player as he was that season instead of at his prime.
+   */
+  requestedSeason?: string | null;
+  /**
+   * A dossier request for a named version of the player that is neither a season, his prime nor
+   * his current form: a club, role or career phase he is identified with, as the user put it.
+   * The card rates the seasons that define that version.
+   */
+  requestedEra?: string | null;
+  /** The message explicitly asks about the player now ("current", "right now", "this season"). */
+  wantsCurrentForm?: boolean;
   wantsRegeneration: boolean;
   needsSearch: boolean;
+  /** An explicit "rerate": a prime card is regenerated from scratch instead of served. */
+  rerate?: boolean;
 }
+
+/** Fills the defaults shared by the local fast-path routes. */
+const buildRoute = (
+  route: Pick<TurnRoute, 'intent' | 'analyticalMode'> & Partial<TurnRoute>,
+): TurnRoute => ({
+  targetPlayers: [],
+  targetClubs: [],
+  searchQueries: [],
+  reasoningComplexity: 'medium',
+  isHistorical: false,
+  wantsRegeneration: false,
+  needsSearch: true,
+  ...route,
+});
 
 const TURN_ROUTE_SCHEMA: Record<string, unknown> = {
   type: Type.OBJECT,
   properties: {
     intent: {
       type: Type.STRING,
-      enum: [
-        'single_dossier',
-        'compare',
-        'challenge_or_revise',
-        'archive_inventory',
-        'tactical_chat',
-      ],
+      enum: [...TURN_INTENTS],
     },
     analyticalMode: {
       type: Type.STRING,
-      enum: [
-        'dossier',
-        'head_to_head',
-        'debate_or_verdict',
-        'ranking_or_tierlist',
-        'tactical_or_system',
-        'squad_or_recruitment',
-        'player_qa',
-        'archive',
-      ],
+      enum: [...ANALYTICAL_MODES],
       description:
         'Fine-grained analytical mode: "dossier" for single player card; "head_to_head" for comparing 2+ specific players; "debate_or_verdict" for football debates, hot takes, or settling an argument; "ranking_or_tierlist" for top-N lists, positional rankings, or tier lists; "tactical_or_system" for manager systems, formations, or phase-of-play breakdowns; "squad_or_recruitment" for club squad building, transfers, or lineup fit; "player_qa" for specific questions about a player in prose; "archive" for saved dossier queries.',
     },
@@ -91,9 +112,16 @@ const TURN_ROUTE_SCHEMA: Record<string, unknown> = {
       description:
         '"high" for multi-player debates, rankings, tactical system breakdowns, or contested rating challenges; "medium" for standard comparisons or player analysis; "low" for simple factual lookups or archive checks.',
     },
+    requestedEra: {
+      type: Type.STRING,
+      nullable: true,
+      description:
+        'single_dossier only: the named version of the player the user asks for when it is not a season, not his prime or peak, and not his current form — a club, role or career phase he is identified with, in the user\'s own words. Null otherwise.',
+    },
     isHistorical: {
       type: Type.BOOLEAN,
-      description: 'True if evaluating a historical/prime/peak/all-time version of a player or era.',
+      description:
+        'True if evaluating a historical version of a player (prime, peak, a past season, or a retired player) or a past era. A dossier always rates one version of a player, never a whole career.',
     },
     wantsRegeneration: {
       type: Type.BOOLEAN,
@@ -119,8 +147,52 @@ const TURN_ROUTE_SCHEMA: Record<string, unknown> = {
   ],
 };
 
-const KNOWN_CLUB_REGEX =
-  /\b(arsenal|chelsea|liverpool|manchester\s+city|man\s+city|manchester\s+united|man\s+utd|tottenham(?:\s+hotspur)?|spurs|newcastle(?:\s+united)?|aston\s+villa|brighton|real\s+madrid|fc\s+barcelona|barcelona|barca|atl[eé]tico\s+madrid|atletico|bayern\s+munich|bayern|borussia\s+dortmund|dortmund|bayer\s+leverkusen|leverkusen|paris\s+saint[- ]germain|psg|inter\s+milan|ac\s+milan|juventus|napoli|benfica|porto|sporting(?:\s+cp)?|ajax)\b/gi;
+/** Alternation of club names the router recognizes in free text (shared by every club regex). */
+const CLUB_NAME_ALTERNATION = [
+  'arsenal',
+  'chelsea',
+  'liverpool',
+  'manchester\\s+city',
+  'man\\s+city',
+  'manchester\\s+united',
+  'man\\s+utd',
+  'tottenham(?:\\s+hotspur)?',
+  'spurs',
+  'newcastle(?:\\s+united)?',
+  'aston\\s+villa',
+  'brighton',
+  'real\\s+madrid',
+  'fc\\s+barcelona',
+  'barcelona',
+  'barca',
+  'atl[eé]tico\\s+madrid',
+  'atletico',
+  'bayern\\s+munich',
+  'bayern',
+  'borussia\\s+dortmund',
+  'dortmund',
+  'bayer\\s+leverkusen',
+  'leverkusen',
+  'paris\\s+saint[- ]germain',
+  'psg',
+  'inter\\s+milan',
+  'ac\\s+milan',
+  'juventus',
+  'napoli',
+  'benfica',
+  'porto',
+  'sporting(?:\\s+cp)?',
+  'ajax',
+].join('|');
+
+const KNOWN_CLUB_REGEX = new RegExp(`\\b(${CLUB_NAME_ALTERNATION})\\b`, 'gi');
+// "Chelsea's Cole Palmer" / "PSG's Willian Pacho"
+const POSSESSIVE_CLUB_PREFIX_REGEX = new RegExp(`\\b(${CLUB_NAME_ALTERNATION})['\\u2019]s\\s+`, 'gi');
+// "Cole Palmer at Chelsea" / "Pacho for PSG"
+const TRAILING_CLUB_QUALIFIER_REGEX = new RegExp(
+  `\\b(?:at|for|from|of|in)\\s+(${CLUB_NAME_ALTERNATION})\\b`,
+  'gi',
+);
 
 export const extractReferencedClubs = (message: string): string[] => {
   const matches = message.match(KNOWN_CLUB_REGEX) ?? [];
@@ -152,26 +224,79 @@ export const extractThreadClubs = (message: string, history: ChatMessage[]): str
   return [];
 };
 
+const ERA_NOUN = '(?:version|era|days|years|spell|stint|iteration|edition|incarnation)';
+const ERA_WORD = "\\p{L}[\\p{L}'\\u2019.]*";
+const ERA_NAME = `${ERA_WORD}(?:[\\s-]+${ERA_WORD}){0,2}`;
+const ERA_PHASE = 'young|teenage|early|late[- ]career|veteran|old|pre-\\p{L}[\\p{L}-]*|post-\\p{L}[\\p{L}-]*';
+const ERA_LEAD = '(?:^|\\b(?:rate|profile|scout|evaluate|dossier|on|of|about)\\s+)(?:the\\s+|a\\s+)?';
+
+/**
+ * Phrasings that name a version of a player. Each captures the version's name; the whole match is
+ * what names it, and is stripped from the player name.
+ */
+const ERA_PATTERNS: RegExp[] = [
+  // "the PSG version of Neymar"
+  new RegExp(`\\b(?:the|his)\\s+(${ERA_NAME})\\s+${ERA_NOUN}\\s+of\\b`, 'iu'),
+  // "Neymar's PSG era"
+  new RegExp(`['\\u2019]s\\s+(${ERA_NAME})\\s+${ERA_NOUN}\\b`, 'iu'),
+  // "Neymar from his PSG days"
+  new RegExp(`\\b(?:from|in|during)\\s+his\\s+(${ERA_NAME})\\s+${ERA_NOUN}\\b`, 'iu'),
+  // "PSG-era Neymar", "Barca era Neymar"
+  new RegExp(`\\b(${CLUB_NAME_ALTERNATION}|\\p{L}+)-${ERA_NOUN}\\b`, 'iu'),
+  new RegExp(`\\b(${CLUB_NAME_ALTERNATION})\\s+${ERA_NOUN}\\b`, 'iu'),
+  // "Neymar at PSG"
+  new RegExp(`\\b(?:at|with)\\s+(${CLUB_NAME_ALTERNATION})\\b`, 'iu'),
+  // "Barca Neymar"
+  new RegExp(`${ERA_LEAD}(${CLUB_NAME_ALTERNATION})\\s+(?=\\p{L})`, 'iu'),
+  // "young Messi", "pre-injury Neymar"
+  new RegExp(`${ERA_LEAD}(${ERA_PHASE})\\s+(?=\\p{L})`, 'iu'),
+];
+
+/** Names that aren't an era: his prime, his current form, or a season. */
+const NOT_AN_ERA_RE =
+  /^(?:(?:his|the)\s+)?(?:best|peak|prime|golden|greatest|finest|current|latest|recent|present|today'?s?|this\s+season'?s?)$|\d/i;
+
+/** An era name from the classifier or a pattern, or null when it names no era. */
+const cleanEraName = (raw: string | null | undefined): string | null => {
+  const name = raw?.trim().replace(/\s+/g, ' ') ?? '';
+  return name && name.length <= 40 && !NOT_AN_ERA_RE.test(name) ? name : null;
+};
+
+/** The version of a player the message names ("PSG Neymar", "young Messi"), if any. */
+export const eraIn = (message: string): string | null => {
+  for (const re of ERA_PATTERNS) {
+    const name = cleanEraName(message.match(re)?.[1]);
+    if (name) return name;
+  }
+  return null;
+};
+
+/** Removes the phrase naming an era, keeping what precedes and follows it. */
+const stripEraPhrase = (message: string): string => {
+  for (const re of ERA_PATTERNS) {
+    const m = message.match(re);
+    if (m && cleanEraName(m[1])) {
+      return `${message.slice(0, m.index)} ${message.slice(m.index! + m[0].length)}`.trim();
+    }
+  }
+  return message;
+};
+
 const stripClubAndDossierQualifiers = (message: string): string =>
-  message
+  stripEraPhrase(message)
     .replace(/\b(give me a?n?|create|generate|can you|please|show me|pull up|what is|what's)\b/gi, '')
     .replace(
       /\b(rate|rating|profile|scout(?:ing)?(?: report)?|evaluate|dossier|how good is|rank(?:ing)?|tier|analyze|analysis|breakdown|report|brief(?:ing)?)\b/gi,
       '',
     )
-    // Strip possessive club prefixes like "Chelsea's Cole Palmer" or "PSG's Willian Pacho"
-    .replace(
-      /\b(arsenal|chelsea|liverpool|manchester\s+city|man\s+city|manchester\s+united|man\s+utd|tottenham|spurs|newcastle|aston\s+villa|brighton|real\s+madrid|barcelona|barca|atl[eé]tico\s+madrid|bayern\s+munich|bayern|dortmund|leverkusen|psg|paris\s+saint[- ]germain|inter\s+milan|ac\s+milan|juventus|napoli|benfica|porto|sporting|ajax)['\u2019]s\s+/gi,
-      '',
-    )
-    // Strip trailing club qualifiers like "at PSG" or "for Chelsea"
-    .replace(
-      /\b(?:at|for|from|of|in)\s+(arsenal|chelsea|liverpool|manchester\s+city|man\s+city|manchester\s+united|man\s+utd|tottenham|spurs|newcastle|aston\s+villa|brighton|real\s+madrid|fc\s+barcelona|barcelona|barca|atl[eé]tico\s+madrid|bayern\s+munich|bayern|dortmund|leverkusen|psg|paris\s+saint[- ]germain|inter\s+milan|ac\s+milan|juventus|napoli|benfica|porto|sporting|ajax)\b/gi,
-      '',
-    )
+    .replace(POSSESSIVE_CLUB_PREFIX_REGEX, '')
+    .replace(TRAILING_CLUB_QUALIFIER_REGEX, '')
     // Strip trailing "'s" left over after dossier keywords were removed (e.g. "Cole Palmer's [dossier]")
     .replace(/['\u2019]s(?:\s*$)/gi, '')
     .replace(/\b(on|for|about|of|a|an|the|me|right now|currently)\b/gi, '')
+    // Timeframes ("Henry 2006", "Kaká in the 2006-07 season") are read separately.
+    .replace(/\b(?:19|20)\d{2}(?:\s*[-/–]\s*(?:19|20)?\d{2})?\b/g, '')
+    .replace(/\b(in|during|season|campaign|version)\b/gi, '')
     .replace(/[?!.,]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -237,29 +362,49 @@ export const extractCandidateSlug = (message: string): string | null => {
   return name ? toPlayerSlug(name) : null;
 };
 
-const HAS_CHALLENGE_OR_QUESTION_CUE = (msg: string): boolean =>
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const hasChallengeOrQuestionCue = (msg: string): boolean =>
   /\b(why|how come|explain|justify|disagree|wrong|too (?:high|low)|overrated|underrated|make(?:s)? no sense|didn['\u2019]?t ask|don['\u2019]?t (?:rate|generate|make|want)|raw text|in prose|should be|bump|lower|raise|change his|adjust)\b/i.test(
     msg,
   ) ||
   /\byou (?:rate|rated|gave|ranked|put|said)\b/i.test(msg) ||
   /\byour (?:rating|ranking|score|take|analysis)\b/i.test(msg);
 
-const HAS_COMPARE_CUE = (msg: string): boolean =>
+const hasCompareCue = (msg: string): boolean =>
   /\b(compare|versus|vs\.?|who(?:'s| is) better|between .+ and)\b/i.test(msg);
 
-const HAS_REGEN_CUE = (msg: string): boolean =>
+const hasRegenCue = (msg: string): boolean =>
   /\b(update|refresh|latest|redo|re-?rate|re-?evaluate|recheck|instead|current form|as a|at (?:st|cf|rw|lw|cam|cm|cdm|lb|rb|cb|gk|striker|winger|midfielder|fullback))\b/i.test(
     msg,
   );
 
-const HAS_HISTORICAL_CUE = (msg: string): boolean => hasHistoricalWindowCue(msg);
+const RERATE_RE = /\bre-?rate\b/i;
 
-const HAS_DOSSIER_TRIGGER = (msg: string): boolean =>
+const hasHistoricalWordCue = (msg: string): boolean =>
+  /\b(prime|peak|all[- ]time|historical)\b/i.test(msg);
+
+/** The season a message names, when it is earlier than the current one. */
+const pastSeasonIn = (msg: string): string | null => {
+  const season = parseRequestedSeason(msg);
+  if (!season) return null;
+  const start = seasonStartYear(season);
+  const currentStart = seasonStartYear(getCurrentSeasonInfo().currentSeason);
+  return start != null && currentStart != null && start < currentStart ? season : null;
+};
+
+const hasHistoricalCue = (msg: string): boolean =>
+  hasHistoricalWordCue(msg) || pastSeasonIn(msg) !== null;
+
+const hasCurrentFormCue = (msg: string): boolean =>
+  /\b(current(?:ly)?|right now|nowadays|today|this season|these days|at the moment)\b/i.test(msg);
+
+const hasDossierTriggerCue = (msg: string): boolean =>
   /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good is|rank|tier|analyze|breakdown)\b/i.test(
     msg,
   ) || /\b(analysis on|report on|break down)\b/i.test(msg);
 
-const IS_BARE_PLAYER_QUERY = (msg: string): boolean => {
+const isBarePlayerQuery = (msg: string): boolean => {
   if (/[?!]/.test(msg)) return false;
   const words = msg.trim().split(/\s+/);
   if (words.length < 1 || words.length > 4) return false;
@@ -274,7 +419,7 @@ const IS_BARE_PLAYER_QUERY = (msg: string): boolean => {
 };
 
 /** Checks whether a challenge turn explicitly cites external/live facts requiring web verification. */
-const CHALLENGE_NEEDS_WEB_SEARCH = (msg: string): boolean =>
+const challengeNeedsWebSearch = (msg: string): boolean =>
   /\b(stats?|goals?|assists?|appearances?|apps|minutes|mins|clean\s+sheets?|xg|xa|season|202\d|club|team|transfer|loan|signed|manager|coach|injured|injury|fit|fitness|started|match|fixture|trophy|trophies|award|ballon\s+d['\u2019]?or|champions\s+league|ucl|premier\s+league|la\s+liga|serie\s+a|bundesliga|ligue\s+1)\b/i.test(
     msg,
   );
@@ -342,30 +487,76 @@ export async function classifyTurn(params: {
   conversationDossiers: PlayerProfile[];
   hasImage: boolean;
 }): Promise<TurnRoute> {
+  const route = await classifyTurnBase(params);
+  // Timeframes are read deterministically, whichever path classified the turn: a named past
+  // season is a historical version of the player; a current-season year alone is not.
+  const message = params.message.trim();
+  const requestedSeason = pastSeasonIn(message);
+  const wantsCurrentForm = hasCurrentFormCue(message);
+  // A named version of the player ("PSG Neymar") is an era card; a season or "current" says more.
+  const requestedEra =
+    route.intent === 'single_dossier' && !requestedSeason && !wantsCurrentForm
+      ? eraIn(message) ?? cleanEraName(route.requestedEra)
+      : null;
+  return {
+    ...route,
+    requestedSeason,
+    requestedEra,
+    wantsCurrentForm,
+    isHistorical:
+      requestedSeason !== null ||
+      requestedEra !== null ||
+      (route.isHistorical && (hasHistoricalWordCue(message) || !parseRequestedSeason(message))),
+  };
+}
+
+async function classifyTurnBase(params: {
+  message: string;
+  history: ChatMessage[];
+  conversationDossiers: PlayerProfile[];
+  hasImage: boolean;
+}): Promise<TurnRoute> {
   const { message, history, conversationDossiers, hasImage } = params;
   const trimmed = message.trim();
 
   // 1. 0ms local fast-path for archive inventory queries
   if (!hasImage && wantsSavedDossierInventory(trimmed)) {
-    return {
+    return buildRoute({
       intent: 'archive_inventory',
       analyticalMode: 'archive',
-      targetPlayers: [],
-      targetClubs: [],
-      searchQueries: [],
       reasoningComplexity: 'low',
-      isHistorical: false,
-      wantsRegeneration: false,
       needsSearch: false,
-    };
+    });
   }
 
-  const isHistorical = HAS_HISTORICAL_CUE(trimmed);
-  const wantsRegeneration = HAS_REGEN_CUE(trimmed);
-  const hasChallenge = HAS_CHALLENGE_OR_QUESTION_CUE(trimmed);
-  const hasCompare = HAS_COMPARE_CUE(trimmed);
-  const hasDossierTrigger = HAS_DOSSIER_TRIGGER(trimmed);
-  const isBarePlayerName = IS_BARE_PLAYER_QUERY(trimmed);
+  const isHistorical = hasHistoricalCue(trimmed);
+
+  // "Rerate <player>" (or "rerate him") regenerates the card from scratch. Only a bare command
+  // takes this path; anything longer goes through the usual routing.
+  if (!hasImage && RERATE_RE.test(trimmed) && !hasCompareCue(trimmed)) {
+    const named = extractCandidatePlayerName(trimmed.replace(RERATE_RE, ' '));
+    const last = conversationDossiers.at(-1);
+    const pronoun = Boolean(named && /^(?:he|him|his)$/i.test(named));
+    const name = pronoun ? last?.basicInfo.name : named;
+    if (name && !/\b(?:he|him|his|they|them|their|it|this|that)\b/i.test(name)) {
+      return buildRoute({
+        intent: 'single_dossier',
+        analyticalMode: 'dossier',
+        targetPlayers: [name],
+        targetClubs: extractReferencedClubs(trimmed),
+        // "Rerate him" re-rates the card he was just shown in.
+        isHistorical: isHistorical || Boolean(pronoun && last && isPrimeCard(last)),
+        wantsRegeneration: true,
+        rerate: true,
+      });
+    }
+  }
+
+  const wantsRegeneration = hasRegenCue(trimmed);
+  const hasChallenge = hasChallengeOrQuestionCue(trimmed);
+  const hasCompare = hasCompareCue(trimmed);
+  const hasDossierTrigger = hasDossierTriggerCue(trimmed);
+  const isBarePlayerName = isBarePlayerQuery(trimmed);
   const isNonPlayerSubject = isNonSinglePlayerSubject(trimmed);
   const referencedClubs = extractReferencedClubs(trimmed);
 
@@ -382,17 +573,13 @@ export async function classifyTurn(params: {
   ) {
     const candidateName = extractCandidatePlayerName(trimmed);
     if (candidateName && !/\b(he|him|his|they|them|their|it|this|that)\b/i.test(candidateName)) {
-      return {
+      return buildRoute({
         intent: 'single_dossier',
         analyticalMode: 'dossier',
         targetPlayers: [candidateName],
         targetClubs: referencedClubs,
-        searchQueries: [],
-        reasoningComplexity: 'medium',
         isHistorical,
-        wantsRegeneration: false,
-        needsSearch: true,
-      };
+      });
     }
   }
 
@@ -400,17 +587,13 @@ export async function classifyTurn(params: {
   if (!hasImage && hasCompare && !hasChallenge) {
     const comparedPlayers = extractComparedPlayersFast(trimmed, conversationDossiers);
     if (comparedPlayers && comparedPlayers.length >= 2) {
-      return {
+      return buildRoute({
         intent: 'compare',
         analyticalMode: 'head_to_head',
         targetPlayers: comparedPlayers,
         targetClubs: referencedClubs,
-        searchQueries: [],
-        reasoningComplexity: 'medium',
         isHistorical,
-        wantsRegeneration: false,
-        needsSearch: true,
-      };
+      });
     }
   }
 
@@ -426,8 +609,8 @@ export async function classifyTurn(params: {
     const targetDossier =
       referenced[0] || conversationDossiers[conversationDossiers.length - 1];
     if (targetDossier) {
-      const needsSearch = CHALLENGE_NEEDS_WEB_SEARCH(trimmed);
-      return {
+      const needsSearch = challengeNeedsWebSearch(trimmed);
+      return buildRoute({
         intent: 'challenge_or_revise',
         analyticalMode: 'debate_or_verdict',
         targetPlayers: [targetDossier.basicInfo.name],
@@ -435,11 +618,9 @@ export async function classifyTurn(params: {
         searchQueries: needsSearch
           ? [`${targetDossier.basicInfo.name} ${trimmed} current season stats verification`]
           : [],
-        reasoningComplexity: 'medium',
         isHistorical,
-        wantsRegeneration: false,
         needsSearch,
-      };
+      });
     }
   }
 
@@ -452,17 +633,14 @@ export async function classifyTurn(params: {
       trimmed,
     )
   ) {
-    return {
+    return buildRoute({
       intent: 'tactical_chat',
       analyticalMode: 'ranking_or_tierlist',
-      targetPlayers: [],
       targetClubs: referencedClubs,
       searchQueries: [`${trimmed} world football rankings performance stats`],
       reasoningComplexity: 'high',
       isHistorical,
-      wantsRegeneration: false,
-      needsSearch: true,
-    };
+    });
   }
 
   // 6. 0ms local fast-path for explicit club tactical / squad breakdowns ("Analyze Arsenal's midfield", "Break down Barcelona's high line")
@@ -481,23 +659,20 @@ export async function classifyTurn(params: {
     );
     const clubLabel = referencedClubs.join(' ');
     const { year: currentYear } = getCurrentSeasonInfo();
-    return {
+    return buildRoute({
       intent: 'tactical_chat',
       analyticalMode: isSquadMode ? 'squad_or_recruitment' : 'tactical_or_system',
-      targetPlayers: [],
       targetClubs: referencedClubs,
       searchQueries: [
-        `${clubLabel} ${currentYear} transfers out departed players sold loaned out Summer ${currentYear} and new signings current active roster`,
+        buildSquadTurnoverQuery(clubLabel, currentYear),
         `${clubLabel} current head coach tactical system starting XI by position and player roles: ${trimmed}`,
       ],
       reasoningComplexity: 'high',
       isHistorical,
-      wantsRegeneration: false,
-      needsSearch: true,
-    };
+    });
   }
 
-  // 3. Schema-enforced LLM turn classifier for nuanced/conversational/pronoun-bearing messages
+  // 7. Schema-enforced LLM turn classifier for nuanced/conversational/pronoun-bearing messages
   const activeDossierNames = conversationDossiers.map(
     (d) => `${d.basicInfo.name} (${d.ratings.overall} OVR, ${d.basicInfo.position}, ${d.basicInfo.club})`,
   );
@@ -560,7 +735,12 @@ User message: "${trimmed}"`;
       route.intent = 'compare';
       route.analyticalMode = 'head_to_head';
     }
-    if (route.intent === 'single_dossier' && isNonPlayerSubject) {
+    // Words in the player's own name are not cues: the "best" in a surname is not a ranking.
+    const subjectText = route.targetPlayers
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .reduce((text, name) => text.replace(new RegExp(escapeRegExp(name), 'gi'), 'Someone'), trimmed);
+    if (route.intent === 'single_dossier' && isNonSinglePlayerSubject(subjectText)) {
       route.intent = 'tactical_chat';
       if (!route.analyticalMode || route.analyticalMode === 'dossier') {
         route.analyticalMode = /\b(top\s+\d+|rank|tier\s*list|best)\b/i.test(trimmed)
@@ -578,7 +758,9 @@ User message: "${trimmed}"`;
       route.analyticalMode = hasCompare ? 'head_to_head' : 'player_qa';
     }
     if (route.intent === 'single_dossier' && !hasImage && route.targetPlayers.length === 0) {
-      const fallbackName = extractCandidatePlayerName(trimmed);
+      // Only a message that asks for a rating, or is a bare name, can be read as a player's name.
+      const fallbackName =
+        hasDossierTrigger || isBarePlayerName ? extractCandidatePlayerName(trimmed) : null;
       if (fallbackName) {
         route.targetPlayers = [fallbackName];
       } else {
@@ -604,7 +786,7 @@ User message: "${trimmed}"`;
       !hasChallenge &&
       !hasCompare &&
       (Boolean(candidateName) || hasImage);
-    return {
+    return buildRoute({
       intent: isFormalFallback
         ? 'single_dossier'
         : hasCompare
@@ -618,12 +800,8 @@ User message: "${trimmed}"`;
           ? 'head_to_head'
           : 'debate_or_verdict',
       targetPlayers: candidateName ? [candidateName] : [],
-      targetClubs: [],
-      searchQueries: [],
-      reasoningComplexity: 'medium',
       isHistorical,
       wantsRegeneration,
-      needsSearch: true,
-    };
+    });
   }
 }

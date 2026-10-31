@@ -10,48 +10,81 @@ npm run build    # Vite production build to /dist
 npm start        # Run production server (serves /dist statically)
 ```
 
-No test runner is configured. TypeScript type-check: `npx tsc --noEmit`.
+```bash
+npm run typecheck   # tsc --noEmit (run `npm ci` in packages/engine first for its vitest types)
+npm test            # offline app checks: scripts/test-dossier-cards.ts, test-dossier-pipeline.ts (end-to-end with Gemini faked at fetch), test-dossier-cache-hit.ts (published cards served without re-rating, Supabase faked in memory), test-chat-consistency.ts (chat vs stored cards), test-gaffa-name-matching.ts, test-club-managers.ts
+cd packages/engine && npm ci && npm test   # outlook engine + manager-fidelity vitest suite
+```
+
+CI (`.github/workflows/ci.yml`) runs all of the above plus `npm run build` on every PR and push to `main`. The tests need no network or API keys; add new offline checks to `npm test`.
+
+## Deploying
+
+The live app (futbolpedia.ai.studio) is hosted by Google AI Studio and does not deploy from GitHub on its own. A change goes live in three steps, all of which are needed:
+
+1. **Push to GitHub and merge into `main`.** The pull script copies `main` only, so a pushed branch or an open PR is not live.
+2. **Run the pull script in Google AI Studio** (`sync.sh`: `degit` of `dukerwang/Futbolpedia` into the workspace, `npm install`, `npm run build`).
+3. **Publish from Google AI Studio.** Until this step, the live app keeps serving the previously published build.
+
+So when reporting that a fix is done, say whether it is merged, and remind the user that the AI Studio pull and publish are still needed before it reaches the live app.
 
 ## Environment Variables
 
-- `API_KEY` — Google Gemini API key (used by `services/geminiService.ts`)
+- `GEMINI_API_KEY` — Google Gemini key. Vite injects it into the client as `process.env.API_KEY` (read by `services/aiClient.ts`); the server's `/gemini-api-proxy/*` also uses it.
 - `API_FOOTBALL_KEY` — API-Football key (used by `server.ts`)
+- `GAFFA_BASE_URL`, `FUTBOLPEDIA_READ_SECRET` — server-only Gaffa integration (see `.env.example`)
 
-Supabase credentials are hardcoded in `geminiService.ts` (publishable key, safe for client exposure). The Supabase JS client is loaded via a `<script>` tag in `index.html` and accessed at `window.supabase`, not via an npm package — see the guard at the top of `geminiService.ts`.
+Supabase publishable keys are hardcoded (safe for client exposure): Futbolpedia's in `services/dossierCache.ts`, Gaffa's in `services/gaffaAuth.ts`. The Supabase JS client is loaded via a `<script>` tag in `index.html` and accessed at `window.supabase`, not via an npm package.
 
 ## Architecture
 
 ### Server (`server.ts`)
 A single Express server handles everything:
-- `/api/football/squad` and `/api/football/proxy/*` — Backend proxy to API-Football (hides `API_FOOTBALL_KEY` from the client)
-- In dev: Vite is mounted as Express middleware (`middlewareMode: true`)
-- In prod: serves the built `/dist` directory
+- `/api/football/player`, `/api/football/squad`, `/api/football/fixtures`, `/api/football/proxy/*` — API-Football proxy (hides `API_FOOTBALL_KEY`), with in-memory caches for player facts and team context
+- `/api/gaffa/context`, `/api/gaffa/chat` — Gaffa integration behind `FUTBOLPEDIA_READ_SECRET`
+- `/gemini-api-proxy/*` — forwards AI Studio's redirected Gemini calls with the server-side key
+- In dev: Vite is mounted as Express middleware (`middlewareMode: true`); in prod: serves `/dist`
 
-### AI Pipeline (`services/geminiService.ts`)
-The core complexity lives here. There are two chat modes:
+### AI pipeline (`services/`)
+`geminiService.ts` is the entry point (`sendMessageToAI`) and a re-export barrel for older imports. Each turn:
+1. **Route** — `turnRouter.ts` `classifyTurn` tries 0ms regex fast paths (archive, single dossier, compare, challenge, ranking, club tactics), then falls back to a schema-enforced Flash classifier. The result is a `TurnRoute` (`intent`, `analyticalMode`, target players/clubs, search queries).
+2. **Single dossier** — checks the in-conversation dossier, the saved archive, the in-memory calibrated pool, and the shared Supabase cache (`dossierCache.ts`), in that order. `dossierStore.ts` is a barrel over the dossier modules: `dossierCards` (card keys, slugs, evaluation dates), `dossierCache` (Supabase cache, versioned archive, sharing, Global Dossier Hub), `dossierContext` (history serialization, references, locked/saved/prior-rating blocks), `dossierLedger` (grep tool, peer ledger) and `dossierPatch`. Shared cards are found under the typed name, the names on his other cards, and the names `getPlayerIdentity` gives him (`groundingService.ts`: one grounded Flash call returning the name football coverage commonly uses, his full name and his career status), so "zico" finds a card published as "Arthur Antunes Coimbra". A new card is always named by that known-as name (`cardName`), so one player never gets two cards. On a miss, `groundingService.ts` runs API-Football and Google Search grounding in parallel and `dossierSynthesizer.ts` generates the card with `responseSchema`. It then enforces calibration invariants deterministically and scrubs unverified manager mentions.
 
-**Default mode** (formal profile/comparison requests) runs a 3-stage pipeline:
-1. **Query generation** — Flash model generates 4 targeted search vectors as structured JSON
-2. **Factual foundation** — Runs those queries in parallel via `googleSearch` tool, captures grounding source URLs
-3. **Extraction** — Distills raw search results into a verified fact object (identifies data gaps for Protocol P)
-4. **Synthesis** — `synthesizeFormalResponse()` calls `generateContent` with `responseSchema` to guarantee schema-valid JSON. Falls back to `sendChatMessage` if schema enforcement fails.
+**Ratings are the model's judgment of footballing ability.** Overall is never computed from attributes. Tiers (`constants/ratingTiers.ts`, Scout's Code §II) describe how good a footballer a version is on one all-era standard; positional rank, honours and dominance of an era are evidence, never the band itself. While rating, the model fills `calibration.peerPlacement`: which `<calibrated_peer_ledger>` peers this version was better than, level with, or not as good as. `ratingPlacement.ts` resolves those names to ledger cards (same edition preferred, never the player himself, ambiguous names ignored) and moves the Overall into the range that placement allows (strictly above/below when integers leave room, a tie otherwise). A self-contradictory placement changes nothing. The resolved placement is stored on the card (`peerPlacement`), shown under the benchmark, and serialized for chat.
+3. **Everything else** — `conversationalScout.ts` handles live dossier challenges (structured patch → `applyDossierPatch`) and prose turns (comparisons, debates, rankings, tactics), pre-grounding with search when needed.
 
-**Fast mode** skips steps 1–3 and goes straight to the chat model with a compressed prompt.
+**Chat stays on the stored cards.** A new dossier shows in chat as a one-line stub carrying `dossierKey`; `buildHistoryContents` swaps each stub for the full card, so the model sees cards where the user saw them. Challenge turns get the challenged card plus the full card of every other player in the thread (in the same edition), and the thread's earlier replies keep their closing verdicts. A follow-up with no timeframe in a prime debate stays on prime cards. After generation, `dossierNumberGate.ts` puts any misquoted attribute of a card in play back to its stored value; it never touches Overall/Potential, which debate prose may propose on purpose.
+
+`aiClient.ts` wraps `@google/genai`: `generateStructured` (schema JSON), `runGroundedSearch`, and `generateProseTurn` (streaming chat with local tools `grep_saved_dossiers` / `grep_gaffa_market` and network tools backed by the API-Football routes). Per-task model, thinking level and temperature come from `constants/modelProfiles.ts`.
 
 ### Gaffa mode (`services/gaffaChatService.ts`)
 Separate chat domain from dossier synthesis. When the ChatInput **Gaffa** toggle is on, `App` routes to `sendGaffaMessage` — prose only, never `responseSchema` dossiers. Rules come from curated `constants/gaffaRules.ts` (`GAFFA_RULES_SNAPSHOT`, versioned). Soft auto-detect in `services/gaffaDetect.ts` nudges switching mode when default chat looks Gaffa-specific; it does not silently inject Gaffa context.
 
-**Phase 2 club connect:** paste league + club IDs in the Gaffa connect strip, or open `#/gaffa/<leagueId>/<clubId>` (Gaffa club page **Ask Futbolpedia**). Express `GET /api/gaffa/context` proxies to Gaffa `GET /api/integrations/futbolpedia/context` with server-only `FUTBOLPEDIA_READ_SECRET` + `GAFFA_BASE_URL`. Live bag fills `GaffaContextBag` for roster/budget/standings/matchup/XI plus listings, live auctions, and league settings.
+**Club connect:** sign in through `services/gaffaAuth.ts` and pick a club (RLS context loader), paste league + club IDs in the connect strip, or open `#/gaffa/<leagueId>/<clubId>`. Express `GET /api/gaffa/context` proxies to Gaffa `GET /api/integrations/futbolpedia/context`. The live bag fills `GaffaContextBag` (roster, budget, standings, matchup, XI, listings, auctions, FA pool, league settings); `gaffaLineupAudit.ts` derives lineup audits, alerts and bid valuations from it.
+
+### Manager fidelity
+API-Football and model memory both lag coaching changes, so neither decides who manages a club. `services/clubManagers.ts` looks it up live: a focused Google-grounded Flash search per club (coach, appointment date, immediate predecessor, source), cross-checked against API-Football's `pickCurrentCoach` record (the search wins a disagreement; no search answer means nobody is named). Results are shared through the Supabase `club_managers` table and refreshed at most once a day per club. Nothing is maintained by hand.
+- **Cards:** the dossier prompt forbids manager names in card prose. After synthesis, `attachVerifiedManager` sets `profile.clubManager` (shown on its own "Manager:" line of current cards, with its verified date) and scrubs the prose in strict mode, so only the verified coach can be named, and nobody when the lookup found no one. API-Football's registered club decides whose coach that is; the card's club stands in only when API-Football has no record, and when the two disagree (`isSameClub`) nobody is named.
+- **Chat:** `conversationalScout` looks up the clubs in play, passes them to the model as `<verified_managers>`, and gives them to the scrub as `clubManagers`.
+- **Gates** (`packages/engine/src/gates/managerMentions.ts`): `scrubUnverifiedManagerText` replaces coach names the turn didn't verify. `scrubFormerCoaches` rewrites a club's immediate predecessor to its current coach, only for clubs the text names and never for someone currently coaching another club in play. `strictCurrentCoach` closes the loophole where a sacked coach counts as verified because search text mentions him.
+- API-Football's coach is no longer written into grounding text. It's kept only as the lookup's cross-check.
 
 **Critical quirks:**
-- `ThinkingLevel` + `responseSchema` conflict on Gemini Flash — the synthesis step deliberately omits `thinkingConfig` to prevent malformed JSON output. Use `MINIMAL` thinking in any fallback path that parses JSON.
-- `SIMULATION_YEAR` / `SIMULATION_SEASON` in `constants.ts` are compile-time constants, not `new Date()`. This is intentional — keeping the system instruction byte-stable enables Gemini's implicit prompt caching.
-- The EAFC playstyle directory in `constants.ts` is only injected into the system instruction when the query matches an EAFC-specific pattern. `getMasterInstructions(includeEAFC)` controls this.
+- `gemini-3.8-flash` rejects `ThinkingLevel.MINIMAL` (HTTP 400); `aiClient.ts` maps the `minimal` tier to `LOW`.
+- `SIMULATION_YEAR` / `SIMULATION_SEASON` (`prompts/scoutCore.ts`) are computed once at module load from the real date via `getRealWorldFootballSeason`, so the system instruction stays byte-stable within a process for Gemini's implicit prompt caching. Per-turn prompts read the date through `getCurrentSeasonInfo()`.
+- The EAFC playstyle directory is only injected when the query matches an EAFC pattern — `buildConversationalScoutInstruction(includeEAFC)` controls this.
+- `CALIBRATION_EPOCH_MS` in `dossierCache.ts` marks the last rating recalibration. `isRatedOnCurrentScale` keeps older cards (by their own `createdAt`, falling back to row time) out of the cache, peer ledger, prior-rating memory, the Hub and sharing, so old-scale numbers never anchor a new rating. Cards rated before the 2026-10-20 recalibration were moved to the RLS-locked `player_profiles_pre_recalibration` table. When you change the scale, bump the epoch and archive the same way. The 2026-10-26 rule rewrite (ability-first tiers, peer placement) deliberately kept the epoch: cards are records of when they were rated, so existing cards stay in use as rated and anchor new ones.
+- Shared cards: a current card is the one shared card for `CARD_REFRESH_DAYS` (30) from its evaluation date, prime cards are frozen (except a bare "rerate <player>" command: `route.rerate` regenerates the prime card with no prior card, revision or own ledger entry in context, stamps `rerateAt`, and the `20261026120000_prime_rerate` trigger lets the newer `rerateAt` replace the pointer and archive rows; when the new window moves the evaluation date the old archive row stays, and `dropSupersededPrimes` hides it from the Hub, season lookups and prior cards; no prompt mentions it), and accepted challenges stay personal revisions logged to `dossier_revisions` (3 agreeing people re-rate early). The `enforce_dossier_refresh_window` trigger (`supabase/migrations/`) mirrors `CARD_REFRESH_DAYS`, `CALIBRATION_EPOCH_MS` and `REVISION_CONSENSUS_USERS`, so change them in both places. Inside the window only the Latest Update moves: `latestUpdateRefresh.ts` rewrites it from fresh facts once it is `LATEST_UPDATE_REFRESH_DAYS` (7) old, stamps `latestUpdateAsOf`, and writes the pointer row only (same evaluation date, so the trigger allows it).
+- Versions, not legacies: a card rates one version of a player (current form, prime, or a named past season), never a career. `classifyTurn` reads a past season from the message (`requestedSeason`) and the pipeline rates that season as a `season_snapshot` card, stored only under its archive slug and found by `getCachedSeasonCard`. With no timeframe, the career status from `getPlayerIdentity` sends a retired player to his prime, and a published prime is served on that answer alone, before any grounding. A prime is a window, not one season: the stretch of consecutive seasons (at most `MAX_PRIME_WINDOW_SEASONS`, 3) when he played at his best, chosen by level rather than output, and rated at the level he sustained across it. The model returns `version.primeWindow`; `sanitizeProfileData` derives `seasonOrEra` ("2003-06") and the label from it, and a longer window fails validation. A multi-season window never answers a single-season request (`seasonMatches`), so that season gets its own season card. Prime cards from before windows keep their one season and still serve as that season's card.
+- Eras: a named version of a player ("PSG Neymar", "young Messi", "the Barcelona version of Neymar") is an `era` card. `classifyTurn` reads it from the message (`eraIn`, else the classifier's `requestedEra`), only on dossier requests with no season or current-form cue. The model picks a window like a prime's (at most `MAX_PRIME_WINDOW_SEASONS`, the seasons when he was most fully that version) and `applyVersionRules` stores the user's name for it in `version.qualifier`. An era is defined by its years: the card key and archive slug use the window (`neymar-jr--era--2017-20`), it lives only under that archive slug like a season card, and `findEraCard` answers a request with an era card of the same name (`toEraKey`), or after synthesis with any era, prime or season card covering the same seasons, so the first card published for those years stays the card. An era named after the club he plays for now (API-Football) is his current form unless he has retired. Era cards skip the manager lookup.
+- Positions: `CANONICAL_POSITIONS` has no separate Striker (it maps to Centre Forward). `Libero` is for sweeper-era cards only: `resolveLiberoPosition` pairs it with a modern position (`Libero/Centre-Back` by default) and files it under Centre-Back on current cards.
 
 ### Frontend State
-`App.tsx` manages all state via React hooks. Two persistence layers:
+`App.tsx` manages all state via React hooks. The header's Dossiers button toggles the main view between **Chat** and **Dossiers** (`view`); the logo also returns to Chat. `DossierHub.tsx` is the one dossier browser: a "Your dossiers" tab (the local `futbolpedia-global-dossiers` list, with rename/remove/share) and a "Global hub" tab (`fetchGlobalHubDossiers`), sharing one card grid and filter bar. The edition filter splits Current, Prime, Eras and Seasons, and each card links to the player's other versions in that tab (current form, prime, eras, seasons) as chips. Era pills are blue, so a named chapter of a career doesn't read as the prime. A card's **Ask** button takes it into the chat: it adds the card to the conversation as a `dossierKey` stub and fills the input with `cardReference` ("Neymar Jr, Paris Saint-Germain era (2017-20): "), whose edition words and season keep the reply on that version. It is layered over the chat so both keep their scroll and state. `SidePanel.tsx` only reads one dossier; it has no list of its own. Opening a global card adds it to your dossiers.
+
+Two persistence layers:
 - **`localStorage`** — Conversations (`futbolpedia-conversations`), active dossiers (`futbolpedia-global-dossiers`), theme, active conversation ID
-- **Supabase** (`profiles` table, `player_data` JSONB column) — Read-only profile sharing via `#/player/<uuid>` URL hash
+- **Supabase** — `player_profiles` (dossier cache, `player_data` JSONB) and `shared_conversations` (share codes)
 
 On init, `App.tsx` runs a migration path: old `futbolpedia-chat-history` / `futbolpedia-all-profiles` keys are consolidated into the newer `futbolpedia-conversations` schema.
 
@@ -60,8 +93,9 @@ On init, `App.tsx` runs a migration path: old `futbolpedia-chat-history` / `futb
 - `Conversation` — Wraps an array of `ChatMessage` plus the `activeProfile` and `allProfiles` at the time.
 - `ChatMessage.content` is a union: `string | PlayerProfile | ReactNode`.
 
-### Prompt Engineering (`constants.ts`)
-The `MASTER_INSTRUCTION_SET` is a ~300-line system prompt. Key concepts when modifying it:
-- **Protocols A–Q** are named rules the model must follow (B = injury quarantine, E = stat-lock anti-hallucination, M = temporal firewall, P = data gap → set attribute to 0, etc.)
-- The **25-attribute schema** and **rating tier scale** (60–99) are defined here and must match `types.ts`
-- `CRITICAL_FINAL_CHECKS` (Section X) is appended last and lists the most frequently violated rules — edit this section when the model repeatedly breaks a specific rule
+### Prompt Engineering (`prompts/`, re-exported by `constants.ts`)
+- `scoutCore.ts` — shared scouting philosophy, Section III rating tier scale, the 25+7 attribute framework, and named protocols (A–Q: B = injury quarantine, E = stat-lock, M = temporal firewall, Q = contextual triangulation, …). Kept byte-stable as the cached prompt prefix.
+- `chatPrompt.ts` — conversational scouting mandate (Section VIII) built by `buildConversationalScoutInstruction`.
+- `dossierPrompt.ts` — schema-aligned calibration and synthesis workflow (Section VI).
+- **No specific examples in prompts.** Guidance that shapes cards or chat prose must be descriptive: no player names, rating anchors, quoted sample phrases or jargon lists, because the model reuses them. Format specs (YYYY-YY, label templates, enum values) are fine.
+- Tier bands, canonical positions, club/position normalization and attribute labels live in `constants/ratingTiers.ts` and must match `types.ts` and the synthesis schema.

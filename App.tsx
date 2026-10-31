@@ -1,11 +1,12 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Header } from './components/Header';
+import { Header, type AppView } from './components/Header';
 import { ChatHistory } from './components/ChatHistory';
 import { ChatInput } from './components/ChatInput';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import { WhatsNewPopup } from './components/WhatsNewPopup';
-import { GlobalDossierHub } from './components/GlobalDossierHub';
+import { DossierHub, type HubTab } from './components/DossierHub';
+import { cardReference } from './components/pills';
 import type {
   ChatMessage,
   PlayerProfile,
@@ -23,6 +24,8 @@ import {
   getSharedConversation,
   ensureDossierDated,
   getCardKey,
+  renameDossierCard,
+  stampDossier,
 } from './services/geminiService';
 import { sendGaffaMessage } from './services/gaffaChatService';
 import { looksLikeGaffaQuestion } from './services/gaffaDetect';
@@ -49,6 +52,39 @@ import { GaffaConnectStrip } from './components/GaffaConnectStrip';
 const generateId = () => `id-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 const CHAT_HISTORY_KEY = 'futbolpedia-chat-history';
 const ACTIVE_PROFILE_KEY = 'futbolpedia-active-profile';
+const GLOBAL_DOSSIERS_KEY = 'futbolpedia-global-dossiers';
+const LEGACY_ALL_PROFILES_KEY = 'futbolpedia-all-profiles';
+
+const saveGlobalDossiers = (dossiers: PlayerProfile[]) =>
+  localStorage.setItem(GLOBAL_DOSSIERS_KEY, JSON.stringify(dossiers));
+
+/**
+ * Replaces the card with the same card key, or appends it. The user's revision of a card is
+ * never replaced by the unrevised shared version (opening it from the hub, a cache hit).
+ */
+const upsertCard = (list: PlayerProfile[], card: PlayerProfile): PlayerProfile[] => {
+  const key = getCardKey(card);
+  const index = list.findIndex(p => getCardKey(p) === key);
+  if (index === -1) return [...list, card];
+  if (list[index].revision && !card.revision) return list;
+  return list.map((p, i) => (i === index ? card : p));
+};
+
+/** Appends the cards whose card key isn't in the list yet; returns the same list if none are new. */
+const addMissingCards = (list: PlayerProfile[], cards: PlayerProfile[]): PlayerProfile[] => {
+  const keys = new Set(list.map(getCardKey));
+  const added = cards.filter(card => {
+    const key = getCardKey(card);
+    if (keys.has(key)) return false;
+    keys.add(key);
+    return true;
+  });
+  return added.length > 0 ? [...list, ...added] : list;
+};
+
+/** Undated legacy cards stay in the personal library; only the shared registry requires a date. */
+const datedOrSelf = (p: PlayerProfile, fallbackMs: number): PlayerProfile =>
+  ensureDossierDated(p, fallbackMs) ?? p;
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -68,7 +104,11 @@ const App: React.FC = () => {
   const [activeProfile, setActiveProfile] = useState<PlayerProfile | null>(null);
   const [allProfiles, setAllProfiles] = useState<PlayerProfile[]>([]);
   const [globalDossiers, setGlobalDossiers] = useState<PlayerProfile[]>([]);
-  const [isHubOpen, setIsHubOpen] = useState(false);
+  // Main view: the chat, or the dossier hub ("Your dossiers" and the global hub as tabs)
+  const [view, setView] = useState<AppView>('chat');
+  const [hubTab, setHubTab] = useState<HubTab>('mine');
+  // Text the hub's "Ask" puts in the chat box
+  const [chatDraft, setChatDraft] = useState<{ id: number; text: string } | null>(null);
 
   // Chat domain (Futbolpedia default vs Gaffa Q&A) — persisted per conversation
   const [domain, setDomain] = useState<ChatDomain>('default');
@@ -122,39 +162,18 @@ const App: React.FC = () => {
   const saveAndSetActiveProfile = useCallback((profile: PlayerProfile | null) => {
     setActiveProfile(profile);
     if (profile) {
-      const datedProfile = ensureDossierDated(profile, Date.now()) || {
-        ...profile,
-        createdAt: profile.createdAt || Date.now(),
-      };
-      
+      const datedProfile = stampDossier(profile, Date.now());
       localStorage.setItem(ACTIVE_PROFILE_KEY, JSON.stringify(datedProfile));
 
-      const isSameCardVersion = (a: PlayerProfile, b: PlayerProfile): boolean =>
-        getCardKey(a) === getCardKey(b);
-      
       setGlobalDossiers(prev => {
-        const existsIndex = prev.findIndex(p => isSameCardVersion(p, datedProfile));
-        let updated: PlayerProfile[];
-        if (existsIndex === -1) {
-          updated = [...prev, datedProfile];
-        } else {
-          updated = [...prev];
-          updated[existsIndex] = datedProfile;
-        }
-        localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
+        const updated = upsertCard(prev, datedProfile);
+        saveGlobalDossiers(updated);
         return updated;
       });
 
       setAllProfiles(prev => {
-        const existsIndex = prev.findIndex(p => isSameCardVersion(p, datedProfile));
-        let updated: PlayerProfile[];
-        if (existsIndex === -1) {
-          updated = [...prev, datedProfile];
-        } else {
-          updated = [...prev];
-          updated[existsIndex] = datedProfile;
-        }
-        localStorage.setItem('futbolpedia-all-profiles', JSON.stringify(updated));
+        const updated = upsertCard(prev, datedProfile);
+        localStorage.setItem(LEGACY_ALL_PROFILES_KEY, JSON.stringify(updated));
         return updated;
       });
     } else {
@@ -179,7 +198,7 @@ const App: React.FC = () => {
       try {
         const legacyMessages = localStorage.getItem(CHAT_HISTORY_KEY);
         const legacyActiveProfile = localStorage.getItem(ACTIVE_PROFILE_KEY);
-        const legacyAllProfiles = localStorage.getItem('futbolpedia-all-profiles');
+        const legacyAllProfiles = localStorage.getItem(LEGACY_ALL_PROFILES_KEY);
 
         let initialMessages: ChatMessage[] = [];
         let initialActiveProfile: PlayerProfile | null = null;
@@ -232,42 +251,32 @@ const App: React.FC = () => {
     // Load global dossiers
     let savedGlobalDossiers: PlayerProfile[] = [];
     try {
-      const storedGlobal = localStorage.getItem('futbolpedia-global-dossiers');
+      const storedGlobal = localStorage.getItem(GLOBAL_DOSSIERS_KEY);
       if (storedGlobal) {
         const parsed = JSON.parse(storedGlobal);
         if (Array.isArray(parsed)) {
-          // Undated legacy cards stay in the personal library; only the shared registry requires a date.
-          savedGlobalDossiers = parsed.map(
-            (p: any) => ensureDossierDated(p, p.createdAt || Date.now()) ?? p,
-          );
+          savedGlobalDossiers = parsed.map((p: PlayerProfile) => datedOrSelf(p, p.createdAt || Date.now()));
         }
       } else {
-        // Migrate from 'futbolpedia-all-profiles'
-        const oldProfilesStr = localStorage.getItem('futbolpedia-all-profiles');
+        // Migrate from the legacy all-profiles key, then from saved conversations
+        const oldProfilesStr = localStorage.getItem(LEGACY_ALL_PROFILES_KEY);
         if (oldProfilesStr) {
           const parsedOld = JSON.parse(oldProfilesStr);
           if (Array.isArray(parsedOld)) {
-            savedGlobalDossiers = parsedOld.map(
-              (p: any) => ensureDossierDated(p, p.createdAt || Date.now()) ?? p,
-            );
+            savedGlobalDossiers = parsedOld.map((p: PlayerProfile) => datedOrSelf(p, p.createdAt || Date.now()));
           }
         }
 
-        // Migrate from saved conversations if present
         savedConvs.forEach(conv => {
           if (conv.allProfiles) {
-            conv.allProfiles.forEach(prof => {
-              const datedProf =
-                ensureDossierDated(prof, prof.createdAt || conv.createdAt || Date.now()) ?? prof;
-              const exists = savedGlobalDossiers.some(p => getCardKey(p) === getCardKey(datedProf));
-              if (!exists) {
-                savedGlobalDossiers.push(datedProf);
-              }
-            });
+            savedGlobalDossiers = addMissingCards(
+              savedGlobalDossiers,
+              conv.allProfiles.map(prof => datedOrSelf(prof, prof.createdAt || conv.createdAt || Date.now())),
+            );
           }
         });
 
-        localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(savedGlobalDossiers));
+        saveGlobalDossiers(savedGlobalDossiers);
       }
     } catch (e) {
       console.error("Failed to load global dossiers:", e);
@@ -312,19 +321,11 @@ const App: React.FC = () => {
             setActiveProfile(profile);
             const profileWithDate = { ...profile, createdAt: profile.createdAt || Date.now() };
             setGlobalDossiers(prev => {
-              const exists = prev.some(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
-              if (!exists) {
-                const updated = [...prev, profileWithDate];
-                localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
-                return updated;
-              }
-              return prev;
+              const updated = addMissingCards(prev, [profileWithDate]);
+              if (updated !== prev) saveGlobalDossiers(updated);
+              return updated;
             });
-            setAllProfiles(prev => {
-              const exists = prev.some(p => p.basicInfo.name.toLowerCase() === profileWithDate.basicInfo.name.toLowerCase());
-              if (!exists) return [...prev, profileWithDate];
-              return prev;
-            });
+            setAllProfiles(prev => addMissingCards(prev, [profileWithDate]));
             setIsPanelOpen(true);
             window.history.replaceState({}, '', window.location.pathname);
           }
@@ -364,12 +365,11 @@ const App: React.FC = () => {
             // Merge any dossiers from the shared conversation
             if (importedConv.allProfiles?.length > 0) {
               setGlobalDossiers(prev => {
-                let updated = [...prev];
-                importedConv.allProfiles.forEach(prof => {
-                  const exists = updated.some(p => p.basicInfo.name.toLowerCase() === prof.basicInfo.name.toLowerCase());
-                  if (!exists) updated.push({ ...prof, createdAt: prof.createdAt || Date.now() });
-                });
-                localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
+                const updated = addMissingCards(
+                  prev,
+                  importedConv.allProfiles.map(prof => ({ ...prof, createdAt: prof.createdAt || Date.now() })),
+                );
+                saveGlobalDossiers(updated);
                 return updated;
               });
             }
@@ -813,6 +813,7 @@ const App: React.FC = () => {
           content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
           timestamp: Date.now(),
           dossier: toChatDossierRef(profile),
+          dossierKey: getCardKey(profile),
         };
       } else {
         newAiMessage = {
@@ -858,9 +859,13 @@ const App: React.FC = () => {
     const byName = globalDossiers.filter(d => d.basicInfo.name.toLowerCase() === ref.name.toLowerCase());
     // Name fallback covers legacy messages and cards re-dated since the reply; prefer the newest card.
     const match = byKey ?? byName.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
-    // A deleted dossier falls back to the library so the tap still lands somewhere useful.
-    handleSelectProfile(match ?? null);
     setIsConversationsOpen(false);
+    // A deleted dossier falls back to the hub so the tap still lands somewhere useful.
+    if (!match) {
+      setView('hub');
+      return;
+    }
+    handleSelectProfile(match);
     setIsPanelOpen(true);
   }, [globalDossiers, handleSelectProfile]);
 
@@ -885,33 +890,18 @@ const App: React.FC = () => {
     handleSendMessage(pendingRetry.text, pendingRetry.image);
   }, [pendingRetry, isLoading, handleSendMessage]);
 
-  const handleRenameDossier = useCallback((cardKeyOrName: string, newName: string) => {
+  const handleRenameDossier = useCallback((cardKey: string, newName: string) => {
+    const rename = (d: PlayerProfile): PlayerProfile => renameDossierCard(d, newName);
+
     setGlobalDossiers(prev => {
-      const updated = prev.map(d => {
-        if (getCardKey(d) === cardKeyOrName || d.basicInfo.name.toLowerCase() === cardKeyOrName.toLowerCase()) {
-          return {
-            ...d,
-            basicInfo: {
-              ...d.basicInfo,
-              name: newName
-            }
-          };
-        }
-        return d;
-      });
-      localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(updated));
+      const updated = prev.map(d => (getCardKey(d) === cardKey ? rename(d) : d));
+      saveGlobalDossiers(updated);
       return updated;
     });
 
     setActiveProfile(prev => {
-      if (prev && (getCardKey(prev) === cardKeyOrName || prev.basicInfo.name.toLowerCase() === cardKeyOrName.toLowerCase())) {
-        const updated = {
-          ...prev,
-          basicInfo: {
-            ...prev.basicInfo,
-            name: newName
-          }
-        };
+      if (prev && getCardKey(prev) === cardKey) {
+        const updated = rename(prev);
         localStorage.setItem(ACTIVE_PROFILE_KEY, JSON.stringify(updated));
         return updated;
       }
@@ -922,7 +912,7 @@ const App: React.FC = () => {
   const handleDeleteDossier = useCallback((cardKey: string) => {
     setGlobalDossiers(prev => {
       const filtered = prev.filter(d => getCardKey(d) !== cardKey);
-      localStorage.setItem('futbolpedia-global-dossiers', JSON.stringify(filtered));
+      saveGlobalDossiers(filtered);
       return filtered;
     });
 
@@ -937,6 +927,7 @@ const App: React.FC = () => {
 
   const handleSelectConversation = useCallback((id: string) => {
     resetChat();
+    setView('chat');
     const target = conversations.find(c => c.id === id);
     if (!target) return;
 
@@ -952,6 +943,7 @@ const App: React.FC = () => {
 
   const handleNewConversation = useCallback(() => {
     resetChat();
+    setView('chat');
     const newId = generateId();
     const newConv: Conversation = {
       id: newId,
@@ -1031,9 +1023,38 @@ const App: React.FC = () => {
     });
   }, [activeConversationId]);
 
-  const togglePanel = () => {
-    setIsPanelOpen(prev => !prev);
-  };
+  const handleSelectHubDossier = useCallback((profile: PlayerProfile, from: HubTab) => {
+    // A global card opened from the hub joins your dossiers, as before.
+    if (from === 'global') saveAndSetActiveProfile(profile);
+    else handleSelectProfile(profile);
+    setIsPanelOpen(true);
+  }, [saveAndSetActiveProfile, handleSelectProfile]);
+
+  // "Ask" on a hub card: the card joins this conversation as a stub (so the model reads the full
+  // card, as with a generated dossier) and the chat box starts with a reference to that exact
+  // version, which keeps the reply on it rather than another edition of the player.
+  const handleAskAboutDossier = useCallback((profile: PlayerProfile) => {
+    saveAndSetActiveProfile(profile);
+    if (domain === 'gaffa') handleDomainChange('default');
+    const reference = cardReference(profile);
+    const key = getCardKey(profile);
+    setMessages(prev =>
+      prev.at(-1)?.dossierKey === key
+        ? prev
+        : [...prev, {
+            id: `ask-${Date.now()}`,
+            sender: 'ai',
+            content: `Pulled up **${reference}**. What would you like to know?`,
+            timestamp: Date.now(),
+            dossierKey: key,
+          }],
+    );
+    setChatDraft({ id: Date.now(), text: `${reference}: ` });
+    setView('chat');
+  }, [saveAndSetActiveProfile, domain, handleDomainChange]);
+
+  // The panel only ever shows one dossier, so it's closed whenever none is active.
+  const showPanel = isPanelOpen && activeProfile !== null;
 
   const toggleConversations = () => {
     setIsConversationsOpen(!isConversationsOpen);
@@ -1047,36 +1068,21 @@ const App: React.FC = () => {
         onNewChat={handleNewConversation} 
         toggleTheme={toggleTheme} 
         isDarkMode={isDarkMode} 
-        allProfilesCount={globalDossiers.length}
-        onToggleDossier={togglePanel}
-        isPanelOpen={isPanelOpen}
+        dossierCount={globalDossiers.length}
+        view={view}
+        onViewChange={setView}
         onToggleConversations={toggleConversations}
         isConversationsOpen={isConversationsOpen}
-        onOpenHub={() => setIsHubOpen(true)}
-        isHubOpen={isHubOpen}
-      />
-
-      {/* Global Dossier Hub Modal */}
-      <GlobalDossierHub
-        isOpen={isHubOpen}
-        onClose={() => setIsHubOpen(false)}
-        onSelectDossier={(p) => {
-          saveAndSetActiveProfile(p);
-          setIsPanelOpen(true);
-        }}
-        localSavedProfiles={globalDossiers}
       />
       
       {/* Slide-out Dossier Panel - LEFT SIDED */}
       <SidePanel 
-          isOpen={isPanelOpen} 
+          isOpen={showPanel} 
           onClose={() => setIsPanelOpen(false)} 
           profile={activeProfile} 
           allProfiles={globalDossiers}
           onSelectProfile={handleSelectProfile}
-          onBackToHome={() => handleSelectProfile(null)}
-          onRenameDossier={handleRenameDossier}
-          onDeleteDossier={handleDeleteDossier}
+          onOpenHub={view === 'hub' ? undefined : () => setView('hub')}
       />
 
       {/* Slide-out Conversations Panel - RIGHT SIDED */}
@@ -1091,9 +1097,28 @@ const App: React.FC = () => {
           onDeleteConversation={handleDeleteConversation}
       />
 
-      <div className={`flex-1 flex flex-col relative overflow-hidden transition-all duration-500 ease-ios-ease ${isPanelOpen ? 'md:pl-[450px]' : ''} ${isConversationsOpen ? 'md:pr-[350px]' : ''}`}>
+      <div className={`flex-1 flex flex-col relative overflow-hidden transition-all duration-500 ease-ios-ease ${showPanel ? 'md:pl-[450px]' : ''} ${isConversationsOpen ? 'md:pr-[350px]' : ''}`}>
+          {/* Dossier hub, layered over the chat so both keep their scroll position, tab and filters */}
+          <div
+            className={`absolute inset-0 z-30 flex flex-col bg-cream-200 dark:bg-charcoal transition-[padding] duration-500 ease-ios-ease ${view === 'hub' ? '' : 'invisible'} ${showPanel ? 'md:pl-[450px]' : ''} ${isConversationsOpen ? 'md:pr-[350px]' : ''}`}
+            inert={view !== 'hub'}
+          >
+            <DossierHub
+              isActive={view === 'hub'}
+              tab={hubTab}
+              onTabChange={setHubTab}
+              savedProfiles={globalDossiers}
+              activeCardKey={showPanel && activeProfile ? getCardKey(activeProfile) : null}
+              onSelectDossier={handleSelectHubDossier}
+              onAskAbout={handleAskAboutDossier}
+              onRenameDossier={handleRenameDossier}
+              onDeleteDossier={handleDeleteDossier}
+              onStartChat={() => setView('chat')}
+            />
+          </div>
+
           {/* Main Chat Area */}
-          <main className="flex-1 flex flex-col w-full h-full relative min-h-0">
+          <main className="flex-1 flex flex-col w-full h-full relative min-h-0" inert={view !== 'chat'}>
             <ChatHistory 
                 messages={messages} 
                 isLoading={isLoading} 
@@ -1155,6 +1180,7 @@ const App: React.FC = () => {
                         gaffaNudge={gaffaNudge}
                         onAcceptGaffaNudge={() => handleDomainChange('gaffa')}
                         onDismissGaffaNudge={() => setGaffaNudge(null)}
+                        draft={chatDraft}
                     />
                 </div>
             </div>

@@ -61,21 +61,22 @@ export interface PlaystyleAndRole {
   bestRoles: string[];
 }
 
-/**
- * `current` rates the player today. `prime` and `era` rate a 2–4 season window of the past:
- * the prime is the player's best window, an era is any other window.
- */
-export type DossierVersionType = 'current' | 'prime' | 'era';
+export type DossierVersionType = 'current' | 'prime' | 'season_snapshot' | 'era' | 'retro';
 
 export interface DossierVersion {
   id: string;
   type: DossierVersionType;
   label: string;
-  evaluationDate: string; // ISO YYYY-MM-DD (e.g. "2026-10-25", or the date a historical window ends)
-  seasonOrEra: string; // display text: "2026-27" for current, "2005-06 to 2008-09" for a window
-  windowStart?: number; // first season of a window, as its start year (2005 = 2005-06)
-  windowEnd?: number; // last season of a window, as its start year
+  evaluationDate: string; // ISO YYYY-MM-DD (e.g. "2026-10-25" or peak snapshot date)
+  seasonOrEra: string; // e.g. "2026-27", "2008-09", or a prime or era window "2003-06"
   peakContext?: string | null;
+  /**
+   * A prime or era card's window: its first and last season (YYYY-YY). For a prime, the player's
+   * best stretch; for an era, the seasons that define the version the user named.
+   */
+  primeWindow?: { startSeason: string; endSeason: string } | null;
+  /** An era card's name for its version, as the user put it (a club, role or career phase). */
+  qualifier?: string | null;
 }
 
 export type EvidenceGrade = 'A' | 'B' | 'C';
@@ -118,6 +119,22 @@ export interface DefiningMoment {
   description: string;
 }
 
+/**
+ * Marks a user's accepted challenge of a shared card. A revision lives only in that user's
+ * library and conversations; the shared card changes only at its next monthly re-rating.
+ */
+export interface DossierRevision {
+  /** Card key of the shared card this revision patches. */
+  baseCardKey: string;
+  revisedAt: number;
+}
+
+export interface PeerPlacement {
+  betterThan: string[];
+  levelWith: string[];
+  notAsGoodAs: string[];
+}
+
 export interface PlayerProfile {
   basicInfo: BasicInfo;
   ratings: Ratings;
@@ -128,7 +145,13 @@ export interface PlayerProfile {
   shortBio: string;
   playstyleAndRole: PlaystyleAndRole;
   latestUpdate: string;
+  /** YYYY-MM-DD of the last Latest Update refresh; absent means it dates from the card itself. */
+  latestUpdateAsOf?: string;
   createdAt?: number;
+  /** When a prime card was re-rated from scratch (ms); the newest re-rating replaces the shared card. */
+  rerateAt?: number;
+  /** Set when this is the user's revision of a shared card rather than the shared card itself */
+  revision?: DossierRevision;
   /** Formal card versioning metadata */
   version?: DossierVersion;
   /** ISO date string (YYYY-MM-DD) representing the exact date of this evaluation snapshot */
@@ -139,6 +162,8 @@ export interface PlayerProfile {
   genuineFlaws?: string[];
   /** Real-world positional peer benchmarks recorded at calibration */
   peerBenchmark?: string;
+  /** Calibrated peers this version was judged better than, level with, or below */
+  peerPlacement?: PeerPlacement;
   /** Evidence grade and sample size evaluation */
   confidence?: DossierConfidence;
   /** Dialectical arguments for higher or lower rating */
@@ -149,6 +174,18 @@ export interface PlayerProfile {
   ageCurve?: AgeCurveOutlook;
   /** Defining career moments (optional for veterans/legends) */
   definingMoments?: DefiningMoment[];
+  /**
+   * The player's club manager from the live manager lookup (services/clubManagers.ts), attached
+   * after synthesis. The model never writes it; card prose doesn't name managers.
+   */
+  clubManager?: ClubManagerSnapshot;
+}
+
+export interface ClubManagerSnapshot {
+  name: string;
+  /** YYYY-MM-DD the lookup confirmed it. */
+  verifiedOn: string;
+  sourceUrl?: string | null;
 }
 
 export type GaffaTradeVerdict = 'hold' | 'lean_hold' | 'toss_up' | 'lean_take' | 'take';
@@ -183,6 +220,8 @@ export interface ChatMessage {
   content: string | PlayerProfile | ReactNode;
   image?: string; // base64 encoded image string
   timestamp?: number;
+  /** Card key of the dossier this AI message announced, so history can carry the card itself. */
+  dossierKey?: string;
   /** Present on Gaffa asset-trade replies after the scorecard path runs. */
   gaffaScorecard?: GaffaTradeScorecard;
   /** Compact snapshot of the dossier this reply produced, rendered as an in-chat card. */

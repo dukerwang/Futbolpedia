@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/engine/package-lock.json
+
+      - name: Install app dependencies
+        run: npm ci
+
+      # The root type-check includes packages/engine, which needs its own vitest types.
+      - name: Install engine dependencies
+        run: npm ci
+        working-directory: packages/engine
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Engine tests
+        run: npm test
+        working-directory: packages/engine
+
+      - name: App tests
+        run: npm test
+
+      - name: Build
+        run: npm run build

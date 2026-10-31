@@ -1,6 +1,7 @@
 import { Type } from '@google/genai';
 import type { ChatMessage, PlayerProfile } from '../types';
 import type { ThinkingTier } from '../constants/modelProfiles';
+import { ATTRIBUTE_KEYS } from '../constants/ratingTiers';
 import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
 import { generateProseTurn, generateStructured, getCurrentSeasonInfo } from './aiClient';
 import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
@@ -10,14 +11,22 @@ import {
   buildLockedDossiersBlock,
   DossierPatch,
   findReferencedDossiers,
+  isPrimeCard,
   mergeAllCalibratedDossiers,
+  mostRecentlyShownCard,
+  pickCardPerPlayer,
   serializeProfileForHistory,
-  toPlayerSlug,
-  upsertCachedDossier,
+  recordDossierRevision,
 } from './dossierStore';
-import { gatherSearchFoundation } from './groundingService';
+import { buildSquadTurnoverQuery, gatherSearchFoundation } from './groundingService';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
-import { scrubUnverifiedManagerText } from '../packages/engine/src/gates/managerMentions.ts';
+import {
+  scrubUnverifiedManagerText,
+  type VerifiedClubManager,
+} from '../packages/engine/src/gates/managerMentions.ts';
+import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubManagers';
+import { reconcileDossierNumbers } from './dossierNumberGate';
+import { toBasePlayerSlug } from './dossierCards';
 
 /**
  * Retains the most recent verified `<factual_foundation>` for the active conversation thread
@@ -33,10 +42,29 @@ function getThreadSignature(history: ChatMessage[]): string {
   return `${first.id ?? ''}:${typeof first.content === 'string' ? first.content.slice(0, 60) : 'dossier'}`;
 }
 
-/** Strip leaked internal grounding tags or search citations from user-facing prose and enforce manager fidelity. */
+/** Recent string turns of the thread, for finding which players and edition it is about. */
+const recentThreadText = (history: ChatMessage[], count = 6): string =>
+  history
+    .slice(-count)
+    .map((m) => (typeof m.content === 'string' ? m.content : ''))
+    .join('\n');
+
+/**
+ * Whether the thread is about players' primes. A follow-up such as "he wasn't better than him"
+ * names no timeframe, but continues a prime-versus-prime debate.
+ */
+const threadIsHistorical = (route: TurnRoute, history: ChatMessage[]): boolean =>
+  route.isHistorical ||
+  (!route.wantsCurrentForm && /\b(prime|peak|all[- ]time)\b/i.test(recentThreadText(history)));
+
+/**
+ * Strip leaked internal grounding tags or search citations from user-facing prose, enforce
+ * manager fidelity, and put any misquoted attribute of a card in play back to its stored value.
+ */
 function sanitizeScoutProse(
   text: string,
-  managerCtx?: { currentHeadCoach?: string | null; verifiedFacts?: string[] },
+  managerCtx?: { verifiedFacts?: string[]; clubManagers?: VerifiedClubManager[] },
+  cardsInPlay: PlayerProfile[] = [],
 ): string {
   const stripped = text
     .replace(
@@ -51,10 +79,12 @@ function sanitizeScoutProse(
     .replace(/[ \t]+\n/g, '\n')
     .trim();
 
-  return scrubUnverifiedManagerText(stripped, {
-    currentHeadCoach: managerCtx?.currentHeadCoach ?? null,
+  const scrubbed = scrubUnverifiedManagerText(stripped, {
+    currentHeadCoach: null,
     verifiedFacts: managerCtx?.verifiedFacts ?? [],
+    clubManagers: managerCtx?.clubManagers ?? [],
   });
+  return reconcileDossierNumbers(scrubbed, cardsInPlay).text;
 }
 
 interface ChallengeTurnResponse {
@@ -90,33 +120,9 @@ const CHALLENGE_TURN_SCHEMA: Record<string, unknown> = {
         attributes: {
           type: Type.OBJECT,
           nullable: true,
-          properties: {
-            finishing: { type: Type.NUMBER, nullable: true },
-            firstTouch: { type: Type.NUMBER, nullable: true },
-            dribbling: { type: Type.NUMBER, nullable: true },
-            vision: { type: Type.NUMBER, nullable: true },
-            retention: { type: Type.NUMBER, nullable: true },
-            combinationPlay: { type: Type.NUMBER, nullable: true },
-            delivery: { type: Type.NUMBER, nullable: true },
-            progressivePassing: { type: Type.NUMBER, nullable: true },
-            footballIQ: { type: Type.NUMBER, nullable: true },
-            offensivePositioning: { type: Type.NUMBER, nullable: true },
-            defensivePositioning: { type: Type.NUMBER, nullable: true },
-            tackling: { type: Type.NUMBER, nullable: true },
-            interceptions: { type: Type.NUMBER, nullable: true },
-            pressingIntensity: { type: Type.NUMBER, nullable: true },
-            speed: { type: Type.NUMBER, nullable: true },
-            acceleration: { type: Type.NUMBER, nullable: true },
-            agility: { type: Type.NUMBER, nullable: true },
-            strength: { type: Type.NUMBER, nullable: true },
-            aerialProwess: { type: Type.NUMBER, nullable: true },
-            stamina: { type: Type.NUMBER, nullable: true },
-            composure: { type: Type.NUMBER, nullable: true },
-            clutch: { type: Type.NUMBER, nullable: true },
-            leadership: { type: Type.NUMBER, nullable: true },
-            consistency: { type: Type.NUMBER, nullable: true },
-            flair: { type: Type.NUMBER, nullable: true },
-          },
+          properties: Object.fromEntries(
+            ATTRIBUTE_KEYS.map((key) => [key, { type: Type.NUMBER, nullable: true }]),
+          ),
         },
         strengths: {
           type: Type.ARRAY,
@@ -183,14 +189,34 @@ export async function runConversationalScout(
 
   // 1. Live Dossier Challenge / Revision Path
   if (route.intent === 'challenge_or_revise' && conversationDossiers.length > 0 && !imageData) {
+    // A player can have a current and a prime card in the same conversation. Revise the edition
+    // the message names, otherwise the card the user was most recently shown.
     const referenced = findReferencedDossiers(
       message,
       conversationDossiers,
       route.targetPlayers,
     );
+    const candidates = referenced.length > 0 ? referenced : conversationDossiers;
     const targetDossier =
-      referenced[0] || conversationDossiers[conversationDossiers.length - 1];
+      (route.isHistorical ? pickCardPerPlayer(candidates, true).find(isPrimeCard) : undefined) ??
+      mostRecentlyShownCard(history, candidates) ??
+      referenced[0] ??
+      conversationDossiers[conversationDossiers.length - 1];
 
+    // Every other player the thread is about gets his full card too, in the target's edition,
+    // so a comparison inside a challenge quotes stored numbers instead of regenerating them.
+    const targetSlug = toBasePlayerSlug(targetDossier.basicInfo.name);
+    const otherCards = pickCardPerPlayer(
+      findReferencedDossiers(
+        `${recentThreadText(history)}\n${message}`,
+        mergeAllCalibratedDossiers(savedDossiers, conversationDossiers),
+        route.targetPlayers,
+      ),
+      isPrimeCard(targetDossier),
+    ).filter((p) => toBasePlayerSlug(p.basicInfo.name) !== targetSlug);
+    const challengeThread = buildOngoingThreadBlock(history, { maxAiChars: 2400 });
+
+    const challengeManagersPromise = getVerifiedClubManagers([targetDossier.basicInfo.club]);
     let groundingNotes = '';
     if (route.needsSearch) {
       onStageChange?.(`Verifying ${targetDossier.basicInfo.name}'s ${currentSeason} records...`);
@@ -213,19 +239,23 @@ export async function runConversationalScout(
     onStageChange?.(`Evaluating ${targetDossier.basicInfo.name}'s dossier calibration...`);
 
     try {
+      const challengeManagers = await challengeManagersPromise;
       const challengePrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
-${ongoingThread}
+${challengeThread}
+${formatVerifiedManagersBlock(challengeManagers)}
 ${peerLedgerBlock ?? ''}
 <active_dossier>
 ${serializeProfileForHistory(targetDossier)}
 </active_dossier>
+${buildLockedDossiersBlock(otherCards)}
 ${groundingNotes ? `<grounding_verification>\n${groundingNotes}\n</grounding_verification>` : ''}
 <instructions>
 The user is challenging, questioning, or requesting an adjustment to the dossier above.
-1. Evaluate their point honestly against the Scout's Code, the recalibrated Section III Rating Tier Scale (where World-Class starts strictly at 90), and any grounding verification or peer benchmarks above.
-2. If the current dossier rating/attribute is justified, set \`revisedDossier: false\` and defend the rating directly with concrete tactical/statistical reasoning in \`replyProse\`.
-3. If the user makes a valid evidence-backed point (or explicitly asks to adjust a rating/attribute), set \`revisedDossier: true\`, populate \`dossierPatch\` with the exact updated values so the UI card updates live, and explain the revision clearly in \`replyProse\`.
-4. Ensure every number you mention in \`replyProse\` matches either the existing dossier or your \`dossierPatch\`.
+1. Evaluate their point honestly against the Scout's Code, the recalibrated Section III Rating Tier Scale (where World-Class starts strictly at 90), and any grounding verification or peer benchmarks above. Start from what the user actually argued and answer it with evidence; never attribute their view to bias or sentiment.
+2. Check your own earlier replies in <ongoing_thread>. If they ranked these players differently from what the dossiers' Overall ratings show, say so in your opening paragraph before anything else.
+3. If the current dossier rating/attribute is justified, set \`revisedDossier: false\` and explain why with concrete tactical/statistical reasoning in \`replyProse\`, addressing the user's specific argument.
+4. If the user makes a valid evidence-backed point (or explicitly asks to adjust a rating/attribute), set \`revisedDossier: true\`, populate \`dossierPatch\` with the exact updated values so the UI card updates live, and explain the revision clearly in \`replyProse\`.
+5. Ensure every number you mention in \`replyProse\` matches the dossiers above (the active one and any in <locked_dossiers>) or your \`dossierPatch\`. Quote another player's attributes only from his dossier.
 </instructions>
 <user_message>${message}</user_message>`;
 
@@ -237,13 +267,24 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         thinkingLevelOverride: 'low',
       });
 
-      if (result.revisedDossier && result.dossierPatch) {
-        const updatedProfile = applyDossierPatch(targetDossier, result.dossierPatch);
-        upsertCachedDossier(toPlayerSlug(updatedProfile.basicInfo.name), updatedProfile);
-        onDossierUpdated?.(updatedProfile);
+      const revisedTarget =
+        result.revisedDossier && result.dossierPatch
+          ? applyDossierPatch(targetDossier, result.dossierPatch)
+          : targetDossier;
+      if (revisedTarget !== targetDossier) {
+        // The challenger keeps this as their revision; the shared card weighs it at its next re-rating.
+        void recordDossierRevision(targetDossier, revisedTarget, result.replyProse, groundingNotes);
+        onDossierUpdated?.(revisedTarget);
       }
 
-      const cleanedReply = sanitizeScoutProse(result.replyProse);
+      const cleanedReply = sanitizeScoutProse(
+        result.replyProse,
+        {
+          verifiedFacts: groundingNotes ? [groundingNotes] : [],
+          clubManagers: challengeManagers,
+        },
+        [revisedTarget, ...otherCards],
+      );
       onStreamChunk?.(cleanedReply);
       return cleanedReply;
     } catch (e) {
@@ -254,36 +295,41 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   // 2. Universal Calibrated Ledger Matching & Pre-Grounding across Comparisons, Debates, Rankings & Tactical Chat
   let factualFoundation = '';
   let effectiveLockedBlock = lockedDossiersBlock;
+  let verifiedManagers: VerifiedClubManager[] = [];
+  let cardsInPlay: PlayerProfile[] = [];
+  const isHistoricalThread = threadIsHistorical(route, history);
 
   if (!imageData && route.intent !== 'archive_inventory') {
     const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
-    const matchedDossiersBySlug = new Map<string, PlayerProfile>();
+    const matchedCards: PlayerProfile[] = [];
     const unratedPlayers: string[] = [];
 
     for (const targetName of route.targetPlayers) {
       const hits = findReferencedDossiers(targetName, allCalibrated, [targetName]);
-      if (hits.length > 0) {
-        for (const h of hits) {
-          matchedDossiersBySlug.set(toPlayerSlug(h.basicInfo.name), h);
-        }
-      } else {
-        unratedPlayers.push(targetName);
-      }
+      if (hits.length > 0) matchedCards.push(...hits);
+      else unratedPlayers.push(targetName);
     }
 
     // Also include any referenced dossiers found directly in the raw message
-    for (const d of findReferencedDossiers(message, allCalibrated, route.targetPlayers)) {
-      matchedDossiersBySlug.set(toPlayerSlug(d.basicInfo.name), d);
-    }
+    matchedCards.push(...findReferencedDossiers(message, allCalibrated, route.targetPlayers));
 
-    if (matchedDossiersBySlug.size > 0) {
-      effectiveLockedBlock = buildLockedDossiersBlock([...matchedDossiersBySlug.values()]);
+    // One card per player, in the edition this turn is about (current form vs. peak).
+    const lockedCards = pickCardPerPlayer(matchedCards, isHistoricalThread);
+    if (lockedCards.length > 0) {
+      effectiveLockedBlock = buildLockedDossiersBlock(lockedCards);
     }
+    cardsInPlay = lockedCards;
 
     const targetClubs =
       route.targetClubs && route.targetClubs.length > 0
         ? route.targetClubs
         : extractThreadClubs(message, history);
+
+    // Verified managers for the clubs in play, looked up alongside pre-grounding.
+    const managersPromise = getVerifiedClubManagers([
+      ...targetClubs,
+      ...lockedCards.filter((c) => !isPrimeCard(c)).map((c) => c.basicInfo.club),
+    ]);
 
     // Extract any capitalized 2-word player names mentioned in the message (e.g. "Marc Cucurella", "Malo Gusto")
     // so API-Football player lookup verifies their registered club even on tactical/pushback turns.
@@ -340,10 +386,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
             .slice(0, 2)
             .map((q) => (q.includes(String(year)) ? q : `${datePrefix} ${q}`));
           if (queries.length === 1 && targetClubs.length > 0) {
-            const clubLabel = targetClubs.join(' ');
-            queries.push(
-              `${datePrefix} ${clubLabel} ${year} transfers out departed players sold loaned out Summer ${year} and new signings current active roster`,
-            );
+            queries.push(`${datePrefix} ${buildSquadTurnoverQuery(targetClubs.join(' '), year)}`);
           }
         } else if (unratedPlayers.length === 2) {
           queries = unratedPlayers.map(
@@ -358,7 +401,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         } else if (targetClubs.length > 0) {
           const clubLabel = targetClubs.join(' vs ');
           queries = [
-            `${datePrefix} ${clubLabel} ${year} transfers out departed players sold loaned out Summer ${year} and new signings current active roster`,
+            `${datePrefix} ${buildSquadTurnoverQuery(clubLabel, year)}`,
             `${datePrefix} ${clubLabel} — confirmed current head coach (${year}), starting XI by position, and specific player roles in build-up and out of possession (${message})`,
           ];
         }
@@ -372,6 +415,8 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         console.warn('[ConversationalScout] Pre-grounding search failed:', e);
       }
     }
+
+    verifiedManagers = await managersPromise;
 
     const currentSig = getThreadSignature(history);
     if (factualFoundation) {
@@ -401,29 +446,30 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   } else if (route.intent === 'archive_inventory' || analyticalMode === 'archive') {
     modeGuidance = `Summarize or query the user's saved dossier archive clearly using <saved_dossier_archive> or the \`grep_saved_dossiers\` tool.`;
   } else if (analyticalMode === 'player_qa') {
-    modeGuidance = `Answer the user's specific question about ${route.targetPlayers.join(', ') || 'the player'} directly with Chief-Scout granularity. Break down the exact on-pitch mechanics involved (receiving orientation, scanning frequency, deceleration/stride cadence, passing or defensive execution), explain how their 25-attribute spikes and limitations interact in that role or match state, and separate intrinsic class from tactical environment/system tax. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Match the length and structure of your answer to the user's question without forcing unnecessary debate boilerplate. Never output a JSON dossier object.`;
+    modeGuidance = `Answer the user's specific question about ${route.targetPlayers.join(', ') || 'the player'} directly with Chief-Scout granularity. Break down the exact on-pitch mechanics involved, explain how their 25-attribute spikes and limitations interact in that role or match state, and separate intrinsic class from tactical environment/system tax. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Match the length and structure of your answer to the user's question without forcing unnecessary debate boilerplate. Never output a JSON dossier object.`;
   } else if (analyticalMode === 'ranking_or_tierlist') {
-    modeGuidance = `Build a rigorous, scout-grade positional ranking or tier breakdown anchored explicitly to the Section III Rating Tier Scale (\`93–95 World-Class Elite\`, \`90–92 World-Class\`, \`87–89 Borderline World-Class\`, \`84–86 High-End Starter\`). Honor every player rating already established in <calibrated_peer_ledger> and <locked_dossiers>. For each ranked player, cite their approximate Overall tier, signature attributes, and the exact on-pitch separator (e.g., half-turn press resistance, 40-yard recovery pace, final-third creation) that places them ahead of or behind their peers. Never output a JSON dossier object.`;
+    modeGuidance = `Build a rigorous, scout-grade positional ranking or tier breakdown tied explicitly to the Section III Rating Tier Scale (\`93–95 World-Class Elite\`, \`90–92 World-Class\`, \`87–89 Borderline World-Class\`, \`84–86 High-End Starter\`). Honor every player rating already established in <calibrated_peer_ledger> and <locked_dossiers>. For each ranked player, cite their approximate Overall tier, signature attributes, and the exact on-pitch separator that places them ahead of or behind their peers. Never output a JSON dossier object.`;
   } else if (analyticalMode === 'tactical_or_system') {
-    modeGuidance = `Deliver a concrete, player-anchored tactical breakdown — NEVER write from an aerial, nameless theoretical template (do not write generic "team inverts a full-back into a 3-2 rest-defense to overload the half-space" boilerplate). Start from the verified active squad and starting XI in <factual_foundation>: name the exact players at each relevant position, explain how their individual profiles (dominant foot, ball-carrying vs. tempo-passing tendency, turning radius, recovery pace) dictate the team's actual build-up and out-of-possession geometry, and identify the specific matchup trade-offs those personnel choices create. Every paragraph must pass the Swap Test. Ground all current squad, starter, and head-coach references strictly in verified ${currentSeason} facts. Never output a JSON dossier object.`;
+    modeGuidance = `Deliver a concrete, player-specific tactical breakdown — NEVER write from an aerial, nameless theoretical template. Start from the verified active squad and starting XI in <factual_foundation>: name the exact players at each relevant position, explain how their individual profiles dictate the team's actual build-up and out-of-possession geometry, and identify the specific matchup trade-offs those personnel choices create. Every paragraph must pass the Swap Test. Ground all current squad, starter, and head-coach references strictly in verified ${currentSeason} facts. Never output a JSON dossier object.`;
   } else if (analyticalMode === 'squad_or_recruitment') {
-    modeGuidance = `Analyze the squad structure, lineup balance, or recruitment question like a Sporting Director and Chief Scout. Anchor your analysis in the verified active squad in <factual_foundation>: name the specific current starters and rotational options, diagnose specific functional profile bottlenecks (e.g., progressive ball-carrying volume, rest-defense recovery pace, left-footed build-up angles, box-pinning presence), evaluate how candidate profiles complement existing starters, and anchor player quality to the Section III tier scale and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
+    modeGuidance = `Analyze the squad structure, lineup balance, or recruitment question like a Sporting Director and Chief Scout. Ground your analysis in the verified active squad in <factual_foundation>: name the specific current starters and rotational options, diagnose the specific functional profile the squad lacks, evaluate how candidate profiles complement existing starters, and pin player quality to the Section III tier scale and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
   } else if (analyticalMode === 'debate_or_verdict') {
     modeGuidance = `Engage the football debate with dialectical depth: (1) steelman the strongest tactical and statistical case for each side, (2) decouple intrinsic player quality from system/environment tax (how role, surrounding talent, or league tempo inflates or suppresses box-score output), (3) evaluate through the 25-attribute framework, big-game knockout translation, and Section III tiers, and (4) finish with a clear, non-fence-sitting verdict. If the user is challenging a prior factual or tactical claim, verify the facts against <factual_foundation> first, correct any prior slip concisely in one sentence without theatrical self-flagellation, and deliver the grounded analysis. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
   } else {
-    modeGuidance = `Respond conversationally in Markdown prose as the Chief Scout and Senior Tactical Columnist. Match the depth and structure of your answer to the user's question, and anchor every tactical claim to specific named players and their actual traits rather than generic tactical buzzwords. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_player_fact_sheet\` / \`get_football_squad\` / \`get_team_fixtures\` for deterministic API-Football records, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
+    modeGuidance = `Respond conversationally in Markdown prose as the Chief Scout and Senior Tactical Columnist. Match the depth and structure of your answer to the user's question, and tie every tactical claim to specific named players and their actual traits rather than generic tactical buzzwords. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_player_fact_sheet\` / \`get_football_squad\` / \`get_team_fixtures\` for deterministic API-Football records, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
   }
 
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
 ${factualFoundation ? `<factual_foundation>\n${factualFoundation}\n</factual_foundation>` : ''}
+${formatVerifiedManagersBlock(verifiedManagers)}
 ${peerLedgerBlock ?? ''}
 ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}
 2. Current-state facts (club, manager, squad membership, injuries, ${currentSeason} stats) must come from <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, \`get_team_fixtures\`, Google Search), or existing dossiers — never stale training memory. Never name an unverified head coach.
-3. CRITICAL MANAGER FIDELITY: Enzo Maresca was sacked by Chelsea; Chelsea's confirmed head coach is Xabi Alonso. Never cite former or sacked managers from pre-trained memory. Ground tactical roles in verified current managers or describe intrinsic player mechanics without naming a manager.
+3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.
 4. ${CONTINUITY_REMINDER}
 </instructions>
 <task>${message}</task>`;
@@ -448,7 +494,14 @@ ${savedDossiersBlock}
 
   const scoutManagerContext = {
     verifiedFacts: factualFoundation ? [factualFoundation] : [],
+    clubManagers: verifiedManagers,
   };
+  if (cardsInPlay.length === 0) {
+    cardsInPlay = pickCardPerPlayer(
+      findReferencedDossiers(message, conversationDossiers, route.targetPlayers),
+      isHistoricalThread,
+    );
+  }
 
   const rawReply = await generateProseTurn({
     message: fullPrompt,
@@ -459,9 +512,9 @@ ${savedDossiersBlock}
     toolMode: hasCompleteContext ? 'local_only' : 'full',
     dossiersPool,
     onStreamChunk: onStreamChunk
-      ? (partial) => onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext))
+      ? (partial) => onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay))
       : undefined,
   });
 
-  return sanitizeScoutProse(rawReply, scoutManagerContext);
+  return sanitizeScoutProse(rawReply, scoutManagerContext, cardsInPlay);
 }

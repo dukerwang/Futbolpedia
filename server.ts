@@ -3,6 +3,8 @@ import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import path from "path";
 import axios from "axios";
+import { pickCurrentCoach } from "./packages/engine/src/gates/managerMentions.ts";
+import { getRealWorldFootballSeason } from "./prompts/scoutCore";
 
 async function startServer() {
   const app = express();
@@ -12,7 +14,7 @@ async function startServer() {
   app.use(express.json({ limit: "10mb" }));
 
   // API Routes
-  app.get("/api/health", (req, res) => {
+  app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
   });
 
@@ -92,6 +94,13 @@ async function startServer() {
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
   console.log(`[startup] GEMINI_API_KEY set: ${!!GEMINI_API_KEY} (${GEMINI_API_KEY ? GEMINI_API_KEY.slice(0, 6) + '...' : 'MISSING'})`);
 
+  const apiFootballGet = (endpoint: string, params: Record<string, unknown>, timeout?: number) =>
+    axios.get(`${API_URL}/${endpoint}`, {
+      params,
+      headers: { "x-apisports-key": API_KEY },
+      ...(timeout ? { timeout } : {}),
+    });
+
   const PLAYER_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
   const playerFactCache = new Map<string, { expiresAt: number; payload: any }>();
   const teamIdCache = new Map<string, number>();
@@ -100,6 +109,7 @@ async function startServer() {
     {
       expiresAt: number;
       coach: string | null;
+      coachSince: string | null;
       recentFixtures: any[];
       upcomingFixtures: any[];
       squad: Array<{ name: string; position: string | null; age: number | null }>;
@@ -113,26 +123,10 @@ async function startServer() {
     }
 
     const [lastFixturesRes, nextFixturesRes, coachRes, squadRes] = await Promise.allSettled([
-      axios.get(`${API_URL}/fixtures`, {
-        params: { team: teamId, last: 5 },
-        headers: { "x-apisports-key": API_KEY },
-        timeout: 4500,
-      }),
-      axios.get(`${API_URL}/fixtures`, {
-        params: { team: teamId, next: 3 },
-        headers: { "x-apisports-key": API_KEY },
-        timeout: 4500,
-      }),
-      axios.get(`${API_URL}/coachs`, {
-        params: { team: teamId },
-        headers: { "x-apisports-key": API_KEY },
-        timeout: 4500,
-      }),
-      axios.get(`${API_URL}/players/squads`, {
-        params: { team: teamId },
-        headers: { "x-apisports-key": API_KEY },
-        timeout: 4500,
-      }),
+      apiFootballGet("fixtures", { team: teamId, last: 5 }, 4500),
+      apiFootballGet("fixtures", { team: teamId, next: 3 }, 4500),
+      apiFootballGet("coachs", { team: teamId }, 4500),
+      apiFootballGet("players/squads", { team: teamId }, 4500),
     ]);
 
     const formatFixture = (f: any) => ({
@@ -156,26 +150,12 @@ async function startServer() {
         ? (nextFixturesRes.value.data?.response ?? []).map(formatFixture)
         : [];
 
-    let coach: string | null = null;
-    if (coachRes.status === "fulfilled") {
-      const coaches: any[] = coachRes.value.data?.response ?? [];
-      const activeCoach =
-        coaches.find((c) =>
-          Array.isArray(c?.career) &&
-          c.career.some((stint: any) => stint?.team?.id === teamId && stint?.end === null),
-        ) || coaches[0];
-      if (activeCoach?.name) {
-        coach =
-          activeCoach.firstname && activeCoach.lastname
-            ? `${activeCoach.firstname} ${activeCoach.lastname}`
-            : String(activeCoach.name);
-      }
-    }
-
-    // Override known stale / lagged API-Football managerial records
-    if (teamId === 49 || (coach && /maresca|pochettino|potter|lampard/i.test(coach))) {
-      coach = "Xabi Alonso";
-    }
+    // API-Football's record lags managerial changes. The app treats it only as a cross-check for
+    // the live manager lookup (services/clubManagers.ts), never as the source of truth.
+    const { coach, coachSince } =
+      coachRes.status === "fulfilled"
+        ? pickCurrentCoach(coachRes.value.data?.response, teamId)
+        : { coach: null, coachSince: null };
 
     const squad: Array<{ name: string; position: string | null; age: number | null }> =
       squadRes.status === "fulfilled"
@@ -191,6 +171,7 @@ async function startServer() {
     const entry = {
       expiresAt: Date.now() + PLAYER_CACHE_TTL_MS,
       coach,
+      coachSince,
       recentFixtures,
       upcomingFixtures,
       squad,
@@ -228,8 +209,7 @@ async function startServer() {
 
   app.get("/api/football/player", async (req, res) => {
     const rawName = typeof req.query.name === "string" ? req.query.name.trim() : "";
-    const now = new Date();
-    const defaultSeason = now.getUTCMonth() >= 6 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
+    const defaultSeason = getRealWorldFootballSeason().seasonStartYear;
     const season = typeof req.query.season === "string" ? parseInt(req.query.season, 10) || defaultSeason : defaultSeason;
     if (!rawName || rawName.length < 2) {
       return res.status(400).json({ error: "Missing player name" });
@@ -248,11 +228,7 @@ async function startServer() {
       const tokens = rawName.split(/\s+/).filter(Boolean);
       const searchTerm = tokens.length > 1 ? tokens[tokens.length - 1] : rawName;
 
-      const profileRes = await axios.get(`${API_URL}/players/profiles`, {
-        params: { search: searchTerm },
-        headers: { "x-apisports-key": API_KEY },
-        timeout: 6000,
-      });
+      const profileRes = await apiFootballGet("players/profiles", { search: searchTerm }, 6000);
 
       const candidates: any[] = profileRes.data?.response ?? [];
       if (candidates.length === 0) {
@@ -280,15 +256,12 @@ async function startServer() {
       let injured: boolean | null = basePlayer?.injured ?? null;
       let seasonStats: any = null;
       let coach: string | null = null;
+      let coachSince: string | null = null;
       let recentFixtures: any[] = [];
 
       if (basePlayer?.id) {
         try {
-          const statsRes = await axios.get(`${API_URL}/players`, {
-            params: { id: basePlayer.id, season },
-            headers: { "x-apisports-key": API_KEY },
-            timeout: 6000,
-          });
+          const statsRes = await apiFootballGet("players", { id: basePlayer.id, season }, 6000);
           const statEntry = statsRes.data?.response?.[0];
           const allStats: any[] = Array.isArray(statEntry?.statistics) ? statEntry.statistics : [];
           if (statEntry?.player) {
@@ -341,6 +314,7 @@ async function startServer() {
               ]);
               if (teamCtx) {
                 coach = teamCtx.coach;
+                coachSince = teamCtx.coachSince;
                 recentFixtures = teamCtx.recentFixtures;
               } else {
                 void teamCtxPromise
@@ -348,14 +322,12 @@ async function startServer() {
                     const cachedEntry = playerFactCache.get(cacheKey);
                     if (cachedEntry?.payload?.player && resolvedCtx) {
                       cachedEntry.payload.player.coach = resolvedCtx.coach;
+                      cachedEntry.payload.player.coachSince = resolvedCtx.coachSince;
                       cachedEntry.payload.player.recentFixtures = resolvedCtx.recentFixtures;
                     }
                   })
                   .catch(() => {});
               }
-            }
-            if (primaryClubId === 49 || /chelsea/i.test(currentClub || '')) {
-              coach = "Xabi Alonso";
             }
           }
         } catch (statsErr) {
@@ -378,6 +350,7 @@ async function startServer() {
           currentClub,
           league,
           coach,
+          coachSince,
           injured,
           seasonStats,
           recentFixtures,
@@ -398,10 +371,7 @@ async function startServer() {
       if (!team) return res.status(400).json({ error: "Missing team name" });
 
       // 1. Search for team
-      const teamRes = await axios.get(`${API_URL}/teams`, {
-        params: { search: team as string },
-        headers: { "x-apisports-key": API_KEY }
-      });
+      const teamRes = await apiFootballGet("teams", { search: team as string });
 
       if (!teamRes.data.response || teamRes.data.response.length === 0) {
         return res.status(404).json({ error: "Team not found" });
@@ -413,10 +383,7 @@ async function startServer() {
       teamIdCache.set(String(team).toLowerCase().trim(), teamId);
 
       // 2. Get Squad
-      const squadRes = await axios.get(`${API_URL}/players/squads`, {
-        params: { team: teamId },
-        headers: { "x-apisports-key": API_KEY }
-      });
+      const squadRes = await apiFootballGet("players/squads", { team: teamId });
 
       res.json(squadRes.data);
     } catch (error: any) {
@@ -434,11 +401,7 @@ async function startServer() {
       let teamId = teamIdCache.get(rawTeam.toLowerCase());
       let resolvedTeamName = rawTeam;
       if (!teamId) {
-        const teamRes = await axios.get(`${API_URL}/teams`, {
-          params: { search: rawTeam },
-          headers: { "x-apisports-key": API_KEY },
-          timeout: 5000,
-        });
+        const teamRes = await apiFootballGet("teams", { search: rawTeam }, 5000);
         const first = teamRes.data?.response?.[0]?.team;
         if (!first?.id) {
           return res.status(404).json({ error: "Team not found" });
@@ -454,6 +417,7 @@ async function startServer() {
         available: true,
         team: resolvedTeamName,
         coach: ctx.coach,
+        coachSince: ctx.coachSince,
         recentFixtures: ctx.recentFixtures,
         upcomingFixtures: ctx.upcomingFixtures,
         squad: ctx.squad,
@@ -469,10 +433,7 @@ async function startServer() {
           const endpoint = Array.isArray(req.params.endpoint) ? req.params.endpoint.join('/') : req.params.endpoint;
           const query = req.query;
 
-          const response = await axios.get(`${API_URL}/${endpoint}`, {
-              params: query,
-              headers: { "x-apisports-key": API_KEY }
-          });
+          const response = await apiFootballGet(endpoint, query);
           
           res.json(response.data);
       } catch (error: any) {
@@ -528,7 +489,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*all', (req, res) => {
+    app.get('*all', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

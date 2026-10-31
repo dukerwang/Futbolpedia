@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import type { PlayerProfile } from '../types';
 import { AttributeTable } from './AttributeTable';
-import { getTierForRating } from '../constants/ratingTiers';
-import { getCardLabel, getCardStatus } from '../services/dossierStore';
+import { getTierForRating, normalizePosition } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { isPrimeCard } from '../services/geminiService';
+import { describeCardEdition, describeConfidence, latestUpdateLabel, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
 
 interface PlayerProfileDisplayProps {
   profile: PlayerProfile;
@@ -31,6 +32,20 @@ const ProfileSection: React.FC<{
   </div>
 );
 
+const renderMarkdown = (text: string | undefined) => {
+  if (!text) return { __html: '' };
+  try {
+    const rawMarkup = marked.parse(text, { gfm: true, breaks: true }) as string;
+    return { __html: DOMPurify.sanitize(rawMarkup) };
+  } catch (e) {
+    console.error('Markdown rendering error:', e);
+    return { __html: text };
+  }
+};
+
+
+const META_PILL_CLASS = pillClass('neutral');
+
 export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ profile }) => {
   const [showEvidenceModal, setShowEvidenceModal] = useState(false);
 
@@ -44,52 +59,18 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
     shortBio,
     playstyleAndRole,
     latestUpdate,
+    confidence,
+    scoutingDebate,
+    archetypeAnalysis,
+    ageCurve,
+    definingMoments,
+    clubManager,
   } = profile;
 
-  const getRatingTier = (rating: number) => getTierForRating(rating);
-
-  const evalDate =
-    profile.evaluationDate ||
-    (profile.createdAt ? new Date(profile.createdAt).toISOString().split('T')[0] : null);
-  const formattedDate = evalDate
-    ? new Date(`${evalDate}T12:00:00Z`).toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      })
-    : 'Undated Card';
-
-  const versionType =
-    profile.version?.type ||
-    (basicInfo.name.toLowerCase().includes('prime') ? 'prime' : 'current');
-  const isPrime = versionType === 'prime';
-  const isEra = versionType === 'era';
-  const isLegacy = getCardStatus(profile) === 'legacy';
-  const versionLabel =
-    (profile.version?.label && getCardLabel(profile)) ||
-    (isPrime
-      ? `Prime Zenith (${profile.version?.seasonOrEra || 'Apex'})`
-      : isEra
-        ? `Era (${profile.version?.seasonOrEra || 'Window'})`
-        : `Current Form (${evalDate || '2026'})`);
-
-  const confidence = profile.confidence;
-  const scoutingDebate = profile.scoutingDebate;
-  const archetypeAnalysis = profile.archetypeAnalysis;
-  const ageCurve = profile.ageCurve;
-  const definingMoments = profile.definingMoments;
-
-  const renderMarkdown = (text: string | undefined) => {
-    if (!text) return { __html: '' };
-    try {
-      const rawMarkup = marked.parse(text, { gfm: true, breaks: true }) as string;
-      const sanitizedMarkup = DOMPurify.sanitize(rawMarkup);
-      return { __html: sanitizedMarkup };
-    } catch (e) {
-      console.error('Markdown rendering error:', e);
-      return { __html: text };
-    }
-  };
+  const isPrime = isPrimeCard(profile);
+  const edition = describeCardEdition(profile);
+  const confidenceInfo = confidence ? describeConfidence(confidence.grade) : null;
+  const gradeTone: PillTone = confidenceInfo?.tone ?? 'neutral';
 
   return (
     <div className="space-y-8 animate-fade-in w-full max-w-5xl mx-auto pb-12">
@@ -98,11 +79,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
         className={`rounded-2xl shadow-sm p-6 sm:p-8 text-center relative overflow-hidden transition-all border ${
           isPrime
             ? 'bg-gradient-to-b from-amber-500/[0.04] via-white to-white dark:from-amber-500/[0.07] dark:via-charcoal-surface dark:to-charcoal-surface border-amber-500/30 ring-1 ring-amber-500/20'
-            : isEra
-              ? 'bg-gradient-to-b from-indigo-500/[0.04] via-white to-white dark:from-indigo-500/[0.07] dark:via-charcoal-surface dark:to-charcoal-surface border-indigo-500/30 ring-1 ring-indigo-500/20'
-              : isLegacy
-                ? 'bg-white dark:bg-charcoal-surface border-stone-400/40 dark:border-stone-500/30'
-                : 'bg-white dark:bg-charcoal-surface border-cream-300/80 dark:border-charcoal-border'
+            : 'bg-white dark:bg-charcoal-surface border-cream-300/80 dark:border-charcoal-border'
         }`}
       >
         {/* Subtle decorative watermark/accent line */}
@@ -110,43 +87,30 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
           className={`absolute top-0 left-0 right-0 h-1.5 ${
             isPrime
               ? 'bg-gradient-to-r from-amber-400 via-yellow-500 to-amber-600'
-              : isEra
-                ? 'bg-gradient-to-r from-indigo-400 via-violet-500 to-indigo-600'
-                : isLegacy
-                  ? 'bg-gradient-to-r from-stone-300 via-stone-400 to-stone-500'
-                  : 'bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600'
+              : 'bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600'
           }`}
         />
 
         {/* Card Header & Version Stamp */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-6 border-b border-cream-200 dark:border-charcoal-border text-left">
           <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-bold tracking-wider uppercase border flex items-center gap-1.5 shadow-2xs ${
-                isPrime
-                  ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
-                  : isEra
-                    ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/30'
-                    : isLegacy
-                      ? 'bg-stone-500/10 text-stone-600 dark:text-stone-300 border-stone-400/40'
-                      : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
-              }`}
-            >
-              <span className="material-symbols-outlined text-[14px]">
-                {isPrime ? 'workspace_premium' : isEra ? 'date_range' : isLegacy ? 'history' : 'bolt'}
-              </span>
-              {versionLabel}
+            <span className={pillClass(edition.tone)} title={edition.title}>
+              <span className={PILL_ICON_CLASS}>{edition.icon}</span>
+              {edition.label}
             </span>
 
-            {profile.version?.seasonOrEra && (
-              <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-cream-100 dark:bg-charcoal text-charcoal/70 dark:text-cream-300 border border-cream-300/60 dark:border-charcoal-border">
-                {profile.version.seasonOrEra}
+            {profile.revision && (
+              <span
+                className={pillClass('indigo')}
+                title="Your accepted challenge. The shared card weighs it at its next monthly re-rating."
+              >
+                Your revision
               </span>
             )}
 
             {ageCurve && (
-              <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/40 flex items-center gap-1">
-                <span className="material-symbols-outlined text-[13px]">trending_up</span>
+              <span className={pillClass('neutral')} title={ageCurve.trajectoryNote}>
+                <span className={PILL_ICON_CLASS}>trending_up</span>
                 {ageCurve.phase}
               </span>
             )}
@@ -159,20 +123,11 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
                 <button
                   type="button"
                   onClick={() => setShowEvidenceModal((prev) => !prev)}
-                  className={`group px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border flex items-center gap-1.5 transition-all cursor-pointer ${
-                    confidence.grade === 'A'
-                      ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                      : confidence.grade === 'B'
-                        ? 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-500/30'
-                        : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30'
-                  }`}
-                  title="Click to view scouting evidence report and data confidence"
+                  className={`group ${pillClass(gradeTone)} cursor-pointer transition-opacity hover:opacity-80`}
+                  title="How much evidence sits behind this rating. Click for the evidence report."
                 >
-                  <span className="material-symbols-outlined text-[13px]">verified</span>
-                  <span>Evidence: Grade {confidence.grade}</span>
-                  <span className="material-symbols-outlined text-[12px] opacity-70 group-hover:translate-x-0.5 transition-transform">
-                    info
-                  </span>
+                  <span className={PILL_ICON_CLASS}>verified</span>
+                  <span>{confidenceInfo?.label}</span>
                 </button>
 
                 {/* Evidence Tooltip Popover */}
@@ -187,18 +142,11 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
                         <span className="font-bold uppercase tracking-wider text-[10px] text-charcoal/60 dark:text-cream-400">
                           Scouting Evidence Report
                         </span>
-                        <span
-                          className={`px-1.5 py-0.5 rounded font-mono font-bold text-[10px] ${
-                            confidence.grade === 'A'
-                              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                              : confidence.grade === 'B'
-                                ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
-                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                          }`}
-                        >
-                          Grade {confidence.grade}
-                        </span>
+                        <span className={pillClass(gradeTone, 'xs')}>{confidenceInfo?.label}</span>
                       </div>
+                      <p className="text-[11px] text-charcoal/60 dark:text-cream-400 mb-2">
+                        Confidence rates the evidence behind the rating, not the player. {confidenceInfo?.hint}
+                      </p>
                       <p className="font-semibold text-charcoal dark:text-cream-50 mb-2">
                         {confidence.verdict}
                       </p>
@@ -228,24 +176,8 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
               </div>
             )}
 
-            <div className="flex items-center gap-1.5 text-xs font-mono font-semibold text-charcoal/60 dark:text-cream-400">
-              <span className="material-symbols-outlined text-[14px]">calendar_today</span>
-              <span>{formattedDate}</span>
-            </div>
           </div>
         </div>
-
-        {/* Context note for prime and era windows */}
-        {profile.version?.peakContext && (
-          <div className="mb-6 px-4 py-3 rounded-xl bg-amber-500/[0.07] border border-amber-500/25 text-left">
-            <p className="text-xs font-serif italic text-amber-950 dark:text-amber-200 leading-relaxed">
-              <span className="font-bold not-italic font-sans uppercase text-[10px] tracking-wider text-amber-700 dark:text-amber-400 mr-2">
-                {isEra ? 'Era Context:' : 'Zenith Context:'}
-              </span>
-              {profile.version.peakContext}
-            </p>
-          </div>
-        )}
 
         <h2 className="text-3xl sm:text-4xl font-serif font-extrabold text-charcoal dark:text-cream-50 mb-3 tracking-tight">
           {basicInfo.name}
@@ -253,29 +185,42 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
 
         {/* Metadata Pill Row */}
         <div className="flex flex-wrap justify-center gap-2 mb-6">
-          <span className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-mono font-bold border border-emerald-500/25">
-            {basicInfo.position}
-          </span>
-          <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border">
+          <span className={`${pillClass('emerald')} font-semibold`}>{normalizePosition(basicInfo.position)}</span>
+          <span className={META_PILL_CLASS}>
             {basicInfo.club}
           </span>
-          <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border">
+          {clubManager && !isPrime && (
+            <span
+              className={META_PILL_CLASS}
+              title={`Verified by live search on ${clubManager.verifiedOn}`}
+            >
+              Manager: {clubManager.name}
+            </span>
+          )}
+          <span className={META_PILL_CLASS}>
             {basicInfo.nationality}
           </span>
-          <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border font-mono">
+          <span className={`${META_PILL_CLASS} font-mono`}>
             Age {basicInfo.age}
           </span>
           {basicInfo.height && basicInfo.height !== 'N/A' && (
-            <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border">
+            <span className={META_PILL_CLASS}>
               {basicInfo.height}
             </span>
           )}
           {basicInfo.weight && basicInfo.weight !== 'N/A' && (
-            <span className="px-3 py-1 rounded-full bg-cream-200/60 dark:bg-charcoal text-charcoal/80 dark:text-cream-200 text-xs font-medium border border-cream-300/80 dark:border-charcoal-border">
+            <span className={META_PILL_CLASS}>
               {basicInfo.weight}
             </span>
           )}
         </div>
+
+        {/* What made this the player's peak (historical cards) */}
+        {profile.version?.peakContext && (
+          <p className="max-w-2xl mx-auto -mt-2 mb-6 text-sm font-serif italic leading-relaxed text-charcoal/70 dark:text-cream-300">
+            {profile.version.peakContext}
+          </p>
+        )}
 
         {/* Main Overall / Potential Twin Badges */}
         <div className="flex justify-center items-center gap-10 sm:gap-14 my-4">
@@ -287,7 +232,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
               {ratings.overall}
             </p>
             <p className="text-emerald-700 dark:text-emerald-300 text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 inline-block">
-              {getRatingTier(ratings.overall)}
+              {getTierForRating(ratings.overall)}
             </p>
           </div>
 
@@ -301,7 +246,7 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
               {ratings.potential}
             </p>
             <p className="text-teal-700 dark:text-teal-300 text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-teal-500/10 border border-teal-500/20 inline-block">
-              {getRatingTier(ratings.potential)}
+              {getTierForRating(ratings.potential)}
             </p>
           </div>
         </div>
@@ -313,42 +258,20 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
           </div>
         )}
 
-        {/* Signature Ceiling Spikes & Flaws Badges */}
-        {((profile.signatureSpikes && profile.signatureSpikes.length > 0) ||
-          (profile.genuineFlaws && profile.genuineFlaws.length > 0)) && (
-          <div className="mt-6 pt-5 border-t border-cream-200 dark:border-charcoal-border flex flex-wrap items-center justify-center gap-4 text-xs font-sans">
-            {profile.signatureSpikes && profile.signatureSpikes.length > 0 && (
-              <div className="flex items-center gap-1.5 flex-wrap justify-center">
-                <span className="font-bold text-[10px] tracking-wider uppercase text-emerald-600 dark:text-emerald-400">
-                  Ceiling Spikes:
-                </span>
-                {profile.signatureSpikes.map((spike) => (
-                  <span
-                    key={spike}
-                    className="px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-mono text-[11px] font-semibold border border-emerald-200 dark:border-emerald-800/60"
-                  >
-                    {spike}
-                  </span>
-                ))}
+        {/* Where this version sits among calibrated peers */}
+        {profile.peerPlacement &&
+          ([
+            ['Rated above', profile.peerPlacement.betterThan],
+            ['Level with', profile.peerPlacement.levelWith],
+            ['Rated below', profile.peerPlacement.notAsGoodAs],
+          ] as const)
+            .filter(([, names]) => names.length > 0)
+            .map(([label, names]) => (
+              <div key={label} className="mt-1 text-xs font-serif text-charcoal/70 dark:text-cream-300 italic">
+                {label}: <span className="not-italic font-sans font-semibold">{names.join(', ')}</span>
               </div>
-            )}
-            {profile.genuineFlaws && profile.genuineFlaws.length > 0 && (
-              <div className="flex items-center gap-1.5 flex-wrap justify-center">
-                <span className="font-bold text-[10px] tracking-wider uppercase text-red-600 dark:text-red-400">
-                  Tactical Flaws:
-                </span>
-                {profile.genuineFlaws.map((flaw) => (
-                  <span
-                    key={flaw}
-                    className="px-2.5 py-0.5 rounded-full bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 font-mono text-[11px] font-semibold border border-red-200 dark:border-red-800/60"
-                  >
-                    {flaw}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+            ))}
+
       </header>
 
       {/* Archetype & System Blueprint (New High-Detail Section) */}
@@ -599,6 +522,11 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
 
       {/* Latest Competitive Update */}
       <ProfileSection title="Latest Competitive Status" icon="🔄">
+        {latestUpdateLabel(profile) && (
+          <p className="mb-1.5 text-[10px] font-sans uppercase tracking-widest text-charcoal/50 dark:text-cream-400">
+            {latestUpdateLabel(profile)}
+          </p>
+        )}
         <div
           className="markdown-content text-xs sm:text-sm text-charcoal/90 dark:text-cream-200 leading-relaxed"
           dangerouslySetInnerHTML={renderMarkdown(latestUpdate)}

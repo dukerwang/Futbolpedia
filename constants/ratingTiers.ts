@@ -25,8 +25,10 @@ export interface RatingTierDefinition {
  * Single source of truth for Futbolpedia's Rating Tier Scale (1-99).
  *
  * Key principles:
- * - Every tier measures intrinsic footballing quality on an absolute historical standard,
- *   never who happens to rank #1 in a single calendar year ("Best in World" is not a tier).
+ * - Every tier measures how good a footballer the player is (or was, for a past version) on one
+ *   absolute, all-era standard. Positional rank, honours and dominance of an era are evidence of
+ *   that level, never the definition of a tier: being the best at a position in a given season
+ *   does not by itself place a player in any band.
  * - The "World-Class" label begins strictly at 90.
  * - Starters below 90 range from Borderline World-Class (87-89) and High-End Starter (84-86)
  *   to Quality Top-Flight Starter (80-83) and Rotational / Average Top-Flight (75-79).
@@ -38,7 +40,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     max: 99,
     label: 'GOAT Status',
     shortLabel: 'GOAT',
-    description: 'Once-in-history footballing peak that defines the sport itself.',
+    description: 'A footballer with no equal in the history of the game: the most complete and decisive player the sport has produced.',
   },
   {
     id: '96_98_ICON',
@@ -47,7 +49,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'Generational Icon',
     shortLabel: 'Generational Icon',
     description:
-      'Historic, era-defining peak that redefines the position across decades. Requires a defined Generational Weapon.',
+      'One of the greatest footballers the game has produced: a level of ability only a handful of players in history have reached, in any position. Higher in the band means a more complete and more decisive footballer.',
   },
   {
     id: '93_95_WC_ELITE',
@@ -56,7 +58,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'World-Class Elite',
     shortLabel: 'World-Class Elite',
     description:
-      'The absolute apex of a position in a given era or an all-time league/continental benchmark (e.g., the #1 player in the world at their position at their peak, an all-time Premier League/UCL positional standard-bearer like peak John Terry at 94–95, or a Ballon d\'Or-caliber superstar dominating European football). Applies equally to defenders, midfielders, goalkeepers, and attackers.',
+      'Elite footballers of exceptional, all-time-relevant ability: among the very best players of their generation. Applies equally to defenders, midfielders, goalkeepers, and attackers. Not a ceiling for the best player of an era: a footballer better than the players rated 95 belongs above them.',
   },
   {
     id: '90_92_WORLD_CLASS',
@@ -65,7 +67,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'World-Class',
     shortLabel: 'World-Class',
     description:
-      'Undisputed World-Class players at their position globally (typically Top 3–5 in the world in their role). Any player who is already performing as a top-3 to top-5 player in the world at their position for an elite club (such as Willian Pacho at PSG) belongs here at 90–92, never down in Borderline World-Class.',
+      'Undisputed World-Class footballers: at any one time only a small group of players in the world are this good. A player already performing at this level for an elite club belongs here, never down in Borderline World-Class.',
   },
   {
     id: '87_89_BORDERLINE_WC',
@@ -74,7 +76,7 @@ export const RATING_TIERS: readonly RatingTierDefinition[] = [
     label: 'Borderline World-Class',
     shortLabel: 'Borderline World-Class',
     description:
-      'Standout Champions League stars who sit just outside the top 5 at their position globally, or high-level starters who have not yet established top-of-the-position dominance.',
+      'Standout Champions League stars just short of world-class ability, or high-level starters who have not yet reached it.',
   },
   {
     id: '84_86_HIGH_END_STARTER',
@@ -156,6 +158,7 @@ export function formatRatingScaleForPrompt(): string {
 
 export const CANONICAL_POSITIONS = [
   'Goalkeeper',
+  'Libero',
   'Centre-Back',
   'Left Back',
   'Right Back',
@@ -168,7 +171,6 @@ export const CANONICAL_POSITIONS = [
   'Right Midfielder',
   'Left Winger',
   'Right Winger',
-  'Striker',
   'Centre Forward',
   'Second Striker',
 ] as const;
@@ -183,6 +185,8 @@ export const POSITION_CANON: Record<string, CanonicalPosition> = {
   rightback: 'Right Back',
   lb: 'Left Back',
   leftback: 'Left Back',
+  libero: 'Libero',
+  sweeper: 'Libero',
   cb: 'Centre-Back',
   centreback: 'Centre-Back',
   centerback: 'Centre-Back',
@@ -214,8 +218,8 @@ export const POSITION_CANON: Record<string, CanonicalPosition> = {
   cf: 'Centre Forward',
   centreforward: 'Centre Forward',
   centerforward: 'Centre Forward',
-  st: 'Striker',
-  striker: 'Striker',
+  st: 'Centre Forward',
+  striker: 'Centre Forward',
   ss: 'Second Striker',
   secondstriker: 'Second Striker',
   attacker: 'Centre Forward',
@@ -293,6 +297,21 @@ export function normalizePosition(raw: string): string {
   return unique.join('/') || raw;
 }
 
+/**
+ * The libero is a sweeper-era position. A card of that era keeps it, paired with the modern
+ * position the player would hold today ("Libero/Centre-Back" when the model gave none). A
+ * current card files the role under Centre-Back, so roles stay out of the position list.
+ */
+export function resolveLiberoPosition(position: string, isHistorical: boolean): string {
+  const parts = position.split('/').map((p) => p.trim()).filter(Boolean);
+  if (!parts.includes('Libero')) return position;
+  if (!isHistorical) {
+    return [...new Set(parts.map((p) => (p === 'Libero' ? 'Centre-Back' : p)))].join('/');
+  }
+  const modern = parts.find((p) => p !== 'Libero') ?? 'Centre-Back';
+  return `Libero/${modern}`;
+}
+
 export function normalizeClub(raw: string): string {
   if (!raw || raw === 'N/A') return raw || 'N/A';
   const key = raw.toLowerCase().replace(/[^a-z]/g, '');
@@ -327,6 +346,9 @@ export const ATTRIBUTE_LABELS: Record<keyof Attributes, string> = {
   flair: 'Flair',
 };
 
+/** The 25 outfield attribute keys, in canonical display order. */
+export const ATTRIBUTE_KEYS = Object.keys(ATTRIBUTE_LABELS) as Array<keyof Attributes>;
+
 export const GK_ATTRIBUTE_LABELS: Record<keyof GoalkeeperAttributes, string> = {
   reflexes: 'Reflexes',
   handling: 'Handling',
@@ -336,6 +358,12 @@ export const GK_ATTRIBUTE_LABELS: Record<keyof GoalkeeperAttributes, string> = {
   sweeping: 'Sweeping',
   ballPlaying: 'Ball Playing',
 };
+
+/** Display label for an attribute key ("progressivePassing" → "Progressive Passing"). */
+export const getAttributeLabel = (key: string): string =>
+  ATTRIBUTE_LABELS[key as keyof Attributes] ??
+  GK_ATTRIBUTE_LABELS[key as keyof GoalkeeperAttributes] ??
+  key;
 
 export const ATTRIBUTE_CATEGORIES: Record<string, Array<{ key: string; label: string }>> = {
   Technical: [

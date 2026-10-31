@@ -1,9 +1,25 @@
 import { Type } from '@google/genai';
-import type { Attributes, GoalkeeperAttributes, PlayerProfile } from '../types';
+import type {
+  AgeCurveOutlook,
+  AgeCurvePhase,
+  ArchetypeAnalysis,
+  Attributes,
+  DefiningMoment,
+  DossierConfidence,
+  DossierVersion,
+  DossierVersionType,
+  GoalkeeperAttributes,
+  PeerPlacement,
+  PlayerProfile,
+  ScoutingDebate,
+} from '../types';
 import {
+  ATTRIBUTE_KEYS,
   CANONICAL_POSITIONS,
+  GK_ATTRIBUTE_LABELS,
   normalizeClub,
   normalizePosition,
+  resolveLiberoPosition,
   TIER_BAND_IDS,
   TIER_BAND_MAP,
   TierBandId,
@@ -16,88 +32,40 @@ import {
   type FutbolpediaVerifiedFacts,
 } from './profileManagerGrounding';
 import type { ApiFootballPlayerFactSheet } from './groundingService';
-import { toBasePlayerSlug } from './dossierStore';
 import {
-  coerceWindowSpan,
-  formatWindow,
-  isValidWindowSpan,
-  parseSeasonSpan,
-  toWindow,
-  windowSeasonCount,
-  type CareerWindow,
-  type HistoricalKind,
-} from './careerWindow';
+  EDITION_NAME_RE,
+  formatEraQualifier,
+  formatPrimeWindow,
+  isValidEvaluationDate,
+  seasonMatches,
+  todayIso,
+  toBasePlayerSlug,
+} from './dossierCards';
+import { applyPeerPlacement } from './ratingPlacement';
 
 const OUTFIELD_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
-  properties: {
-    finishing: { type: Type.NUMBER },
-    firstTouch: { type: Type.NUMBER },
-    dribbling: { type: Type.NUMBER },
-    vision: { type: Type.NUMBER },
-    retention: { type: Type.NUMBER },
-    combinationPlay: { type: Type.NUMBER },
-    delivery: { type: Type.NUMBER },
-    progressivePassing: { type: Type.NUMBER },
-    footballIQ: { type: Type.NUMBER },
-    offensivePositioning: { type: Type.NUMBER },
-    defensivePositioning: { type: Type.NUMBER },
-    tackling: { type: Type.NUMBER },
-    interceptions: { type: Type.NUMBER },
-    pressingIntensity: { type: Type.NUMBER },
-    speed: { type: Type.NUMBER },
-    acceleration: { type: Type.NUMBER },
-    agility: { type: Type.NUMBER },
-    strength: { type: Type.NUMBER },
-    aerialProwess: { type: Type.NUMBER },
-    stamina: { type: Type.NUMBER },
-    composure: { type: Type.NUMBER },
-    clutch: { type: Type.NUMBER },
-    leadership: { type: Type.NUMBER },
-    consistency: { type: Type.NUMBER },
-    flair: { type: Type.NUMBER },
-  },
-  required: [
-    'finishing',
-    'firstTouch',
-    'dribbling',
-    'vision',
-    'retention',
-    'combinationPlay',
-    'delivery',
-    'progressivePassing',
-    'footballIQ',
-    'offensivePositioning',
-    'defensivePositioning',
-    'tackling',
-    'interceptions',
-    'pressingIntensity',
-    'speed',
-    'acceleration',
-    'agility',
-    'strength',
-    'aerialProwess',
-    'stamina',
-    'composure',
-    'clutch',
-    'leadership',
-    'consistency',
-    'flair',
-  ],
+  properties: Object.fromEntries(ATTRIBUTE_KEYS.map((key) => [key, { type: Type.NUMBER }])),
+  required: [...ATTRIBUTE_KEYS],
 };
 
 const GK_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
-  properties: {
-    reflexes: { type: Type.NUMBER },
-    handling: { type: Type.NUMBER },
-    distribution: { type: Type.NUMBER },
-    commandOfArea: { type: Type.NUMBER },
-    GKpositioning: { type: Type.NUMBER },
-    sweeping: { type: Type.NUMBER },
-    ballPlaying: { type: Type.NUMBER },
-  },
+  properties: Object.fromEntries(
+    Object.keys(GK_ATTRIBUTE_LABELS).map((key) => [key, { type: Type.NUMBER }]),
+  ),
 };
+
+const DOSSIER_VERSION_TYPES: DossierVersionType[] = ['current', 'prime', 'season_snapshot', 'era', 'retro'];
+
+/** Career phases in age order, with the oldest age each one covers when the model's is unusable. */
+const AGE_CURVE_PHASES: Array<[AgeCurvePhase, number]> = [
+  ['Emergent Runway', 21],
+  ['Prime Ascent', 25],
+  ['Apex Window', 30],
+  ['Post-Peak Adaptation', 34],
+  ['Late Career Mastery', Infinity],
+];
 
 export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
   type: Type.OBJECT,
@@ -105,46 +73,44 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
     version: {
       type: Type.OBJECT,
       description:
-        'Mandatory card edition and temporal dating object. Identifies whether this card rates current form or a 2–4 season window of the past (prime or era), along with the exact snapshot date.',
+        'Mandatory card edition and temporal dating object. Identifies whether this card represents current form or a historical career peak, along with the exact snapshot date.',
       properties: {
         type: {
           type: Type.STRING,
-          enum: ['current', 'prime', 'era'],
-          description:
-            'Card edition type: "current" for today, "prime" for the best 2–4 season window of the career, "era" for any other 2–4 season window.',
+          enum: DOSSIER_VERSION_TYPES,
+          description: 'Card edition type.',
         },
         label: {
           type: Type.STRING,
           description:
-            "Card title label, e.g. 'Current Form (Oct 2026)', 'Prime Zenith (2005-06 to 2008-09)' or 'Era (2012-13 to 2014-15)'.",
+            "Card title label: 'Current Form (<Mon> <Year>)', 'Prime Zenith (<Window>)', 'Season (<Season>)' or '<Era> era (<Window>)'.",
         },
         evaluationDate: {
           type: Type.STRING,
           description:
-            'Exact ISO date (YYYY-MM-DD) of this evaluation snapshot: the current system date for current cards, or the date the window ended for prime and era cards.',
+            'Exact ISO date (YYYY-MM-DD) of this evaluation snapshot (current system date for active players, or a verified date from the last season of the window for prime and era cards).',
         },
         seasonOrEra: {
           type: Type.STRING,
           description:
-            "Season for current cards (e.g. '2026-27'), or the full window for prime and era cards (e.g. '2005-06 to 2008-09').",
+            'Season formatted YYYY-YY. For a prime or era card, the window from its first season to its last (YYYY-YY for one season).',
         },
-        windowStart: {
-          type: Type.INTEGER,
+        primeWindow: {
+          type: Type.OBJECT,
           nullable: true,
           description:
-            'Prime and era cards: first season of the window as the year it starts (2005 for 2005-06). Null for current cards.',
-        },
-        windowEnd: {
-          type: Type.INTEGER,
-          nullable: true,
-          description:
-            'Prime and era cards: last season of the window as the year it starts (2008 for 2008-09). Must be 1 to 3 more than windowStart. Null for current cards.',
+            'Prime and era cards only: the first and last season of the window, each formatted YYYY-YY (YYYY for calendar-year leagues), the same season twice for a one-season window. For a prime, the stretch when the player was at his best; for an era, the seasons that define the version the user asked for. Null for current and season cards.',
+          properties: {
+            startSeason: { type: Type.STRING },
+            endSeason: { type: Type.STRING },
+          },
+          required: ['startSeason', 'endSeason'],
         },
         peakContext: {
           type: Type.STRING,
           nullable: true,
           description:
-            'For prime and era cards: concise explanation of what defined this window (honors, trophies, role). Null for current cards.',
+            'For prime dossiers: concise analytical explanation of why this stretch was the player at his best (his level, role and the evidence for it). For era dossiers: what defined this version of him in those seasons. Null for current players.',
         },
       },
       required: ['type', 'label', 'evaluationDate', 'seasonOrEra'],
@@ -152,7 +118,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
     calibration: {
       type: Type.OBJECT,
       description:
-        'Mandatory pre-rating calibration and grounding verification step. Anchor the tier band, peer comparison, top spike attributes, true flaws, and verified head coach BEFORE assigning numbers.',
+        'Mandatory pre-rating calibration and grounding verification step. Fix the tier band, peer comparison, top spike attributes, true flaws, and verified head coach BEFORE assigning numbers.',
       properties: {
         tierBand: {
           type: Type.STRING,
@@ -162,7 +128,18 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         peerBenchmark: {
           type: Type.STRING,
           description:
-            '1-2 real-world positional peers (with their approximate ratings) that anchor where this player sits inside the tier.',
+            '1-2 real-world positional peers (with their approximate ratings) that pin down where this player sits inside the tier.',
+        },
+        peerPlacement: {
+          type: Type.OBJECT,
+          description:
+            'Who was the better footballer, judged against other players in <calibrated_peer_ledger> (names exactly as listed). Overall must sit above every betterThan peer, equal to every levelWith peer and below every notAsGoodAs peer. Empty arrays when there is no ledger.',
+          properties: {
+            betterThan: { type: Type.ARRAY, items: { type: Type.STRING } },
+            levelWith: { type: Type.ARRAY, items: { type: Type.STRING } },
+            notAsGoodAs: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ['betterThan', 'levelWith', 'notAsGoodAs'],
         },
         signatureSpikes: {
           type: Type.ARRAY,
@@ -189,6 +166,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
       required: [
         'tierBand',
         'peerBenchmark',
+        'peerPlacement',
         'signatureSpikes',
         'genuineFlaws',
         'verifiedCurrentHeadCoach',
@@ -265,7 +243,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         },
         sampleSize: {
           type: Type.STRING,
-          description: 'Explicit competitive senior sample evaluated (e.g. "Over 120 senior appearances across UCL and domestic league").',
+          description: 'The competitive senior sample evaluated, with its size and competitions.',
         },
         dataGaps: {
           type: Type.ARRAY,
@@ -300,17 +278,19 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
       properties: {
         playsLikeBlend: {
           type: Type.STRING,
-          description: '1 composite player blend, e.g. "Joshua Kimmich central vision crossed with Kyle Walker recovery pace".',
+          description:
+            "One composite blend of two (at most three) real players, each lending one specific trait that matches this player's own spikes: \"<Player A>'s <trait> with <Player B>'s <trait>\". Choose players by profile, not club, nationality, era or fame.",
         },
         holisticProjection: {
           type: Type.STRING,
           description:
-            'Holistic analysis of the player native physical, athletic, and technical profile as a complete footballer independently of the role currently assigned by their manager (e.g. traits profiling better at alternative positions or higher-ceiling systemic roles).',
+            'Holistic analysis of the player native physical, athletic, and technical profile as a complete footballer independently of the role currently assigned by their manager, including any alternative positions or higher-ceiling roles their traits suit.',
         },
         playstyleTags: {
           type: Type.ARRAY,
           items: { type: Type.STRING },
-          description: '4 to 6 concise, highly accurate trait chips (e.g. ["Deep-Lying Dictator", "Press-Resistant Pivot", "Laser Diagonal Switch"]).',
+          description:
+            '4 to 6 short trait chips (2–3 words) naming observable on-pitch behaviours specific to this player and supported by the card; no generic praise or bare position names.',
         },
         tacticalSynergy: {
           type: Type.STRING,
@@ -335,13 +315,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
       properties: {
         phase: {
           type: Type.STRING,
-          enum: [
-            'Emergent Runway',
-            'Prime Ascent',
-            'Apex Window',
-            'Post-Peak Adaptation',
-            'Late Career Mastery',
-          ],
+          enum: AGE_CURVE_PHASES.map(([phase]) => phase),
           description: 'Current phase on the career trajectory arc.',
         },
         trajectoryNote: {
@@ -386,18 +360,11 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
 };
 
 interface RawSynthesizedProfile {
-  version?: {
-    type?: 'current' | 'prime' | 'era';
-    label?: string;
-    evaluationDate?: string;
-    seasonOrEra?: string;
-    windowStart?: number | null;
-    windowEnd?: number | null;
-    peakContext?: string | null;
-  };
+  version?: Partial<Omit<DossierVersion, 'id'>>;
   calibration?: {
     tierBand: TierBandId;
     peerBenchmark: string;
+    peerPlacement?: PeerPlacement;
     signatureSpikes: string[];
     genuineFlaws: string[];
     verifiedCurrentHeadCoach?: string | null;
@@ -425,62 +392,17 @@ interface RawSynthesizedProfile {
     bestRoles?: string[];
   };
   latestUpdate?: string;
-  confidence?: {
-    grade?: 'A' | 'B' | 'C';
-    sampleSize?: string;
-    dataGaps?: string[];
-    verdict?: string;
-  };
-  scoutingDebate?: {
-    caseForHigher?: string;
-    caseForLower?: string;
-  };
-  archetypeAnalysis?: {
-    playsLikeBlend?: string;
-    holisticProjection?: string;
-    playstyleTags?: string[];
-    tacticalSynergy?: string;
-    tacticalKryptonite?: string;
-  };
-  ageCurve?: {
-    phase?: 'Emergent Runway' | 'Prime Ascent' | 'Apex Window' | 'Post-Peak Adaptation' | 'Late Career Mastery';
-    trajectoryNote?: string;
-  };
-  definingMoments?: Array<{
-    year?: string;
-    title?: string;
-    description?: string;
-  }>;
+  confidence?: Partial<DossierConfidence>;
+  scoutingDebate?: Partial<ScoutingDebate>;
+  archetypeAnalysis?: Partial<ArchetypeAnalysis>;
+  ageCurve?: Partial<AgeCurveOutlook>;
+  definingMoments?: Array<Partial<DefiningMoment>>;
 }
 
 export const createDefaultProfile = (): PlayerProfile => {
-  const defaultAttributes: Attributes = {
-    finishing: 0,
-    firstTouch: 0,
-    dribbling: 0,
-    vision: 0,
-    retention: 0,
-    combinationPlay: 0,
-    delivery: 0,
-    progressivePassing: 0,
-    footballIQ: 0,
-    offensivePositioning: 0,
-    defensivePositioning: 0,
-    tackling: 0,
-    interceptions: 0,
-    pressingIntensity: 0,
-    speed: 0,
-    acceleration: 0,
-    agility: 0,
-    strength: 0,
-    aerialProwess: 0,
-    stamina: 0,
-    composure: 0,
-    clutch: 0,
-    leadership: 0,
-    consistency: 0,
-    flair: 0,
-  };
+  const defaultAttributes = Object.fromEntries(
+    ATTRIBUTE_KEYS.map((key) => [key, 0]),
+  ) as Record<keyof Attributes, number>;
   return {
     basicInfo: {
       name: 'N/A',
@@ -509,8 +431,9 @@ export const sanitizeProfileData = (
 ): PlayerProfile => {
   const defaults = createDefaultProfile();
   if (!raw) return defaults;
+  const r = raw as RawSynthesizedProfile;
 
-  const rawBasic = (raw as RawSynthesizedProfile).basicInfo ?? {};
+  const rawBasic = r.basicInfo ?? {};
   const primaryPos = rawBasic.primaryPosition;
   const secondaryPos = rawBasic.secondaryPosition;
   const combinedPosition =
@@ -604,33 +527,33 @@ export const sanitizeProfileData = (
   // Card versioning & temporal dating. Dates are never invented here: a historical card
   // without a valid peak date stays undated and is excluded from the shared database.
   const { year, month, currentSeason } = getCurrentSeasonInfo();
-  const todayIso = new Date().toISOString().split('T')[0];
 
-  const rawVersion = (raw as RawSynthesizedProfile).version;
+  const rawVersion = r.version;
   const inferredType =
-    rawVersion?.type ||
-    (/\b(prime|peak)\b/i.test(sanitized.basicInfo.name) ? 'prime' : 'current');
+    rawVersion?.type || (EDITION_NAME_RE.test(sanitized.basicInfo.name) ? 'prime' : 'current');
   const rawDate = rawVersion?.evaluationDate;
-  const validRawDate = typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && rawDate <= todayIso;
-  const evaluationDate = validRawDate ? (rawDate as string) : inferredType === 'current' ? todayIso : '';
+  const evaluationDate = isValidEvaluationDate(rawDate)
+    ? rawDate
+    : inferredType === 'current'
+      ? todayIso()
+      : '';
 
-  // A past card's window comes from the explicit season years, falling back to the text.
+  // A prime or era card's window comes from its first and last season; one season is a window too.
+  const rawSeason = rawVersion?.seasonOrEra?.trim() ?? '';
   const window =
-    inferredType === 'current' && rawVersion?.windowStart == null
-      ? null
-      : toWindow(rawVersion?.windowStart, rawVersion?.windowEnd) ??
-        parseSeasonSpan(rawVersion?.seasonOrEra ?? '');
+    inferredType === 'prime' || inferredType === 'era'
+      ? formatPrimeWindow(rawVersion?.primeWindow?.startSeason, rawVersion?.primeWindow?.endSeason) ??
+        formatPrimeWindow(rawSeason, rawSeason)
+      : null;
   const seasonOrEra =
-    (window ? formatWindow(window) : rawVersion?.seasonOrEra?.trim()) ||
-    (inferredType === 'current' ? currentSeason : '');
-  const historicalName = inferredType === 'era' ? 'Era' : 'Prime Zenith';
+    window?.seasonOrEra || rawSeason || (inferredType === 'current' ? currentSeason : '');
   const versionLabel =
-    rawVersion?.label?.trim() ||
-    (inferredType === 'current'
-      ? `Current Form (${month} ${year})`
-      : seasonOrEra
-        ? `${historicalName} (${seasonOrEra})`
-        : historicalName);
+    inferredType === 'prime'
+      ? seasonOrEra
+        ? `Prime Zenith (${seasonOrEra})`
+        : 'Prime Zenith'
+      : rawVersion?.label?.trim() ||
+        (inferredType === 'current' ? `Current Form (${month} ${year})` : 'Prime Zenith');
   const peakContext = rawVersion?.peakContext?.trim() || null;
 
   sanitized.version = {
@@ -639,12 +562,19 @@ export const sanitizeProfileData = (
     label: clean(versionLabel),
     evaluationDate,
     seasonOrEra: clean(seasonOrEra),
-    ...(window ? { windowStart: window.start, windowEnd: window.end } : {}),
     peakContext: peakContext ? clean(peakContext) : null,
+    ...(window
+      ? {
+          primeWindow: {
+            startSeason: rawVersion?.primeWindow?.startSeason?.trim() || rawSeason,
+            endSeason: rawVersion?.primeWindow?.endSeason?.trim() || rawSeason,
+          },
+        }
+      : {}),
   };
   if (evaluationDate) sanitized.evaluationDate = evaluationDate;
 
-  const rawCalib = (raw as RawSynthesizedProfile).calibration;
+  const rawCalib = r.calibration;
   if (Array.isArray(rawCalib?.signatureSpikes) && rawCalib.signatureSpikes.length > 0) {
     sanitized.signatureSpikes = rawCalib.signatureSpikes.map(clean);
   }
@@ -656,13 +586,10 @@ export const sanitizeProfileData = (
   }
 
   // Enhanced dossier fields: Confidence & Evidence Grade
-  const rawConf = (raw as RawSynthesizedProfile).confidence;
+  const rawConf = r.confidence;
   if (rawConf) {
-    const rawGrade = rawConf.grade as string;
-    const grade: 'A' | 'B' | 'C' =
-      rawGrade === 'A' || rawGrade === 'B' || rawGrade === 'C' ? rawGrade : 'B';
     sanitized.confidence = {
-      grade,
+      grade: rawConf.grade === 'A' || rawConf.grade === 'C' ? rawConf.grade : 'B',
       sampleSize: clean(rawConf.sampleSize || 'Top-flight competitive sample'),
       dataGaps: Array.isArray(rawConf.dataGaps) ? rawConf.dataGaps.map(clean) : [],
       verdict: clean(rawConf.verdict || 'Evaluation calibrated against position peer baselines.'),
@@ -670,7 +597,7 @@ export const sanitizeProfileData = (
   }
 
   // Scouting Debate (+2 / -2 OVR)
-  const rawDebate = (raw as RawSynthesizedProfile).scoutingDebate;
+  const rawDebate = r.scoutingDebate;
   if (rawDebate && (rawDebate.caseForHigher || rawDebate.caseForLower)) {
     sanitized.scoutingDebate = {
       caseForHigher: clean(
@@ -685,7 +612,7 @@ export const sanitizeProfileData = (
   }
 
   // Archetype Analysis & Holistic Projection
-  const rawArch = (raw as RawSynthesizedProfile).archetypeAnalysis;
+  const rawArch = r.archetypeAnalysis;
   if (rawArch) {
     sanitized.archetypeAnalysis = {
       playsLikeBlend: clean(rawArch.playsLikeBlend || ''),
@@ -699,36 +626,19 @@ export const sanitizeProfileData = (
   }
 
   // Career Curve
-  const rawAge = (raw as RawSynthesizedProfile).ageCurve;
+  const rawAge = r.ageCurve;
   if (rawAge) {
-    const phases = [
-      'Emergent Runway',
-      'Prime Ascent',
-      'Apex Window',
-      'Post-Peak Adaptation',
-      'Late Career Mastery',
-    ];
-    const inferredPhase =
-      sanitized.basicInfo.age <= 21
-        ? 'Emergent Runway'
-        : sanitized.basicInfo.age <= 25
-          ? 'Prime Ascent'
-          : sanitized.basicInfo.age <= 30
-            ? 'Apex Window'
-            : sanitized.basicInfo.age <= 34
-              ? 'Post-Peak Adaptation'
-              : 'Late Career Mastery';
-    const phase = phases.includes(rawAge.phase as string)
-      ? (rawAge.phase as any)
-      : inferredPhase;
+    const byAge =
+      AGE_CURVE_PHASES.find(([, maxAge]) => sanitized.basicInfo.age <= maxAge) ??
+      AGE_CURVE_PHASES[AGE_CURVE_PHASES.length - 1];
     sanitized.ageCurve = {
-      phase,
+      phase: AGE_CURVE_PHASES.find(([phase]) => phase === rawAge.phase)?.[0] ?? byAge[0],
       trajectoryNote: clean(rawAge.trajectoryNote || ''),
     };
   }
 
   // Defining Moments
-  const rawMoments = (raw as RawSynthesizedProfile).definingMoments;
+  const rawMoments = r.definingMoments;
   if (Array.isArray(rawMoments) && rawMoments.length > 0) {
     sanitized.definingMoments = rawMoments
       .filter((m) => m && (m.title || m.year))
@@ -753,7 +663,6 @@ function resolveEffectiveVerifiedFacts(
   if (isHistorical) return null;
   const supplementalCorpus = [
     foundationText,
-    apiPlayer?.coach ?? undefined,
     apiPlayer?.currentClub ?? undefined,
     profile.basicInfo.name,
     profile.basicInfo.club,
@@ -771,8 +680,8 @@ function resolveEffectiveVerifiedFacts(
   if (!raw.calibration) return null;
   return {
     currentClub: profile.basicInfo.club,
-    currentHeadCoach:
-      raw.calibration.verifiedCurrentHeadCoach ?? apiPlayer?.coach ?? null,
+    // API-Football's coach record lags managerial changes, so it is never a fallback here.
+    currentHeadCoach: raw.calibration.verifiedCurrentHeadCoach ?? null,
     conflictingManagerReports: raw.calibration.conflictingManagerReports ?? [],
     season2526Stats: null,
     recentForm: null,
@@ -878,10 +787,11 @@ function enforceCalibrationInvariants(
  * Current cards always carry today's date. Historical cards keep the model's verified peak date
  * and are never relabelled "current".
  */
-function applyVersionRules(
+export function applyVersionRules(
   profile: PlayerProfile,
   isHistorical: boolean,
-  kind: HistoricalKind = 'prime',
+  requestedSeason?: string | null,
+  requestedEra?: string | null,
 ): PlayerProfile {
   const v = profile.version;
   if (!v) return profile;
@@ -889,12 +799,13 @@ function applyVersionRules(
   const base = toBasePlayerSlug(profile.basicInfo.name);
 
   if (!isHistorical) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayIso();
     return {
       ...profile,
       evaluationDate: today,
       version: {
         ...v,
+        primeWindow: undefined,
         id: `${base}-current-${today}`,
         type: 'current',
         evaluationDate: today,
@@ -905,77 +816,129 @@ function applyVersionRules(
     };
   }
 
-  // The route decides prime versus era, whatever the model returned. The label is rebuilt from
-  // the window so it always matches the season years.
-  const window = toWindow(v.windowStart, v.windowEnd) ?? parseSeasonSpan(v.seasonOrEra ?? '');
-  const seasonOrEra = window ? formatWindow(window) : v.seasonOrEra;
-  const label = window ? `${kind === 'era' ? 'Era' : 'Prime Zenith'} (${seasonOrEra})` : v.label;
+  if (requestedSeason) {
+    // A named season is a season card, never the player's prime, even when the model picked
+    // a peak edition. An unconfirmed date stays empty so validation asks for it.
+    const season = v.type === 'current' ? '' : v.seasonOrEra || '';
+    const date = v.type === 'current' ? '' : v.evaluationDate || '';
+    const { evaluationDate: _today, ...rest } = profile;
+    return {
+      ...rest,
+      ...(date ? { evaluationDate: date } : {}),
+      version: {
+        ...v,
+        primeWindow: undefined,
+        id: `${base}-season_snapshot-${date || 'undated'}`,
+        type: 'season_snapshot',
+        label: season ? `Season (${season})` : 'Season',
+        evaluationDate: date,
+        seasonOrEra: season,
+        peakContext: v.type === 'current' ? null : v.peakContext ?? null,
+      },
+    };
+  }
+
+  if (requestedEra) {
+    // A named version is an era card, whatever edition the model picked. Its window and date
+    // come from the model; when it gave none, they stay empty so validation asks for them.
+    const fromModel = v.type !== 'current';
+    const window = fromModel
+      ? formatPrimeWindow(v.primeWindow?.startSeason, v.primeWindow?.endSeason)
+      : null;
+    const date = fromModel ? v.evaluationDate || '' : '';
+    const name = formatEraQualifier(requestedEra);
+    const { evaluationDate: _today, ...rest } = profile;
+    return {
+      ...rest,
+      ...(date ? { evaluationDate: date } : {}),
+      version: {
+        ...v,
+        id: `${base}-era-${window?.seasonOrEra || 'undated'}`,
+        type: 'era',
+        qualifier: requestedEra.trim(),
+        label: window ? `${name} era (${window.seasonOrEra})` : `${name} era`,
+        evaluationDate: date,
+        seasonOrEra: window?.seasonOrEra ?? '',
+        primeWindow: window ? v.primeWindow : undefined,
+        peakContext: fromModel ? v.peakContext ?? null : null,
+      },
+    };
+  }
+
+  if (v.type === 'current') {
+    // The model labelled a peak request as current form, so sanitize dated, seasoned and
+    // labelled it as today's card. None of that describes a peak: leave it undated so
+    // validation asks for the real peak date.
+    const { evaluationDate: _today, ...rest } = profile;
+    return {
+      ...rest,
+      version: {
+        ...v,
+        id: `${base}-prime-undated`,
+        type: 'prime',
+        label: 'Prime Zenith',
+        evaluationDate: '',
+        seasonOrEra: '',
+        primeWindow: undefined,
+      },
+    };
+  }
+
   return {
     ...profile,
     version: {
       ...v,
-      id: `${base}-${kind}-${v.evaluationDate || 'undated'}`,
-      type: kind,
-      seasonOrEra,
-      label,
-      ...(window ? { windowStart: window.start, windowEnd: window.end } : {}),
+      id: `${base}-${v.type}-${v.evaluationDate || 'undated'}`,
     },
   };
 }
 
-/** Last resort once the retry also missed: forces a past card's window into 2–4 seasons. */
-function coerceHistoricalWindow(profile: PlayerProfile): PlayerProfile {
-  const v = profile.version;
-  const window = v && toWindow(v.windowStart, v.windowEnd);
-  if (!v || !window || isValidWindowSpan(window)) return profile;
-  const latestStart = Number(getCurrentSeasonInfo().currentSeason.slice(0, 4));
-  const fixed = coerceWindowSpan(window, latestStart);
-  const seasonOrEra = formatWindow(fixed);
-  return {
-    ...profile,
-    version: {
-      ...v,
-      windowStart: fixed.start,
-      windowEnd: fixed.end,
-      seasonOrEra,
-      label: `${v.type === 'era' ? 'Era' : 'Prime Zenith'} (${seasonOrEra})`,
-    },
-  };
-}
+/** A prime window longer than this is a career, not a version. */
+const MAX_PRIME_WINDOW_SEASONS = 3;
 
 function findSynthesisValidationIssues(
   raw: RawSynthesizedProfile,
   profile: PlayerProfile,
   verifiedFacts: FutbolpediaVerifiedFacts | null,
+  requestedSeason?: string | null,
 ): string[] {
   const issues: string[] = [];
+
+  if (requestedSeason && !seasonMatches(profile.version?.seasonOrEra, requestedSeason)) {
+    issues.push(
+      `The user asked for the player in ${requestedSeason}. Rate that season's version of him: set version.seasonOrEra to that season (YYYY-YY) and version.evaluationDate to a real date from it.`,
+    );
+  }
 
   if (verifiedFacts) {
     const managerIssues = findProfileManagerGroundingIssues(profile, verifiedFacts);
     issues.push(...managerIssues);
   }
 
-  const version = profile.version;
-  if (version && version.type !== 'current') {
-    if (!version.evaluationDate) {
-      issues.push(
-        'The historical card has no valid date. Set version.evaluationDate to the real YYYY-MM-DD date the window ended (not in the future).',
-      );
-    }
-    const window = toWindow(version.windowStart, version.windowEnd);
-    if (!window) {
-      issues.push(
-        'The historical card has no season window. Set version.windowStart and version.windowEnd to the first and last season of the window, each as the year the season starts (2005 for 2005-06).',
-      );
-    } else if (!isValidWindowSpan(window)) {
-      issues.push(
-        `The window ${formatWindow(window)} spans ${windowSeasonCount(window)} season(s). A historical card must rate 2–4 consecutive seasons, never a whole career or club stint. Choose the best-fitting 2–4 season window.`,
-      );
-    } else if (window.end > Number(getCurrentSeasonInfo().currentSeason.slice(0, 4))) {
-      issues.push(
-        `The window ${formatWindow(window)} ends after the current season. Choose a window that has already been played.`,
-      );
-    }
+  const isEra = profile.version?.type === 'era';
+  const windowed = profile.version?.type === 'prime' || isEra;
+  const primeWindow = windowed
+    ? formatPrimeWindow(profile.version?.primeWindow?.startSeason, profile.version?.primeWindow?.endSeason)
+    : null;
+  if (windowed && !primeWindow) {
+    issues.push(
+      isEra
+        ? 'The era card has no valid window. Set version.primeWindow to the first and last season (YYYY-YY each) of the seasons that define the version of the player the user asked for.'
+        : 'The prime card has no valid window. Set version.primeWindow to the first and last season (YYYY-YY each) of the stretch when the player was at his best.',
+    );
+  }
+  if (primeWindow && primeWindow.seasons > MAX_PRIME_WINDOW_SEASONS) {
+    issues.push(
+      isEra
+        ? `An era card rates one version of the player, not a whole spell: the window ${primeWindow.seasonOrEra} covers ${primeWindow.seasons} seasons. Narrow version.primeWindow to the seasons (at most ${MAX_PRIME_WINDOW_SEASONS}) when he was most fully that version and at his best in it, and rate that level.`
+        : `A prime is the player's best stretch, not his career: the window ${primeWindow.seasonOrEra} covers ${primeWindow.seasons} seasons. Narrow version.primeWindow to the seasons (at most ${MAX_PRIME_WINDOW_SEASONS}) when he played at his very highest level, and rate that level.`,
+    );
+  }
+
+  if (profile.version && profile.version.type !== 'current' && !profile.version.evaluationDate) {
+    issues.push(
+      'The historical card has no valid date. Set version.evaluationDate to a real YYYY-MM-DD date from the season this card rates and version.seasonOrEra to that season.',
+    );
   }
 
   const isGK = profile.basicInfo.position.toLowerCase().includes('goalkeeper');
@@ -997,10 +960,6 @@ function findSynthesisValidationIssues(
 export interface SynthesizeDossierParams {
   rawMessage: string;
   isHistorical: boolean;
-  /** Which past card to build when `isHistorical` is true. Defaults to the prime window. */
-  historicalKind?: HistoricalKind;
-  /** The seasons the user named, if any. */
-  requestedWindow?: CareerWindow | null;
   foundationText: string;
   verifiedFacts: FutbolpediaVerifiedFacts | null;
   verifiedFactsBlock: string;
@@ -1008,36 +967,52 @@ export interface SynthesizeDossierParams {
   lockedDossiersBlock: string;
   savedDossiersBlock: string;
   peerLedgerBlock?: string;
+  /** The cards behind peerLedgerBlock, which the model's peer placement is checked against. */
+  peerLedgerCards?: PlayerProfile[];
   priorTrajectoryBlock?: string;
+  /** A past season to rate instead of the player's prime ("2005-06" or a bare "2006"). */
+  requestedSeason?: string | null;
+  /** A named version of the player to rate instead of his prime (see TurnRoute.requestedEra). */
+  requestedEra?: string | null;
+  /** The name the card goes under: the one football coverage commonly calls him by. */
+  cardName?: string | null;
 }
 
 export async function synthesizePlayerDossier(
   params: SynthesizeDossierParams,
 ): Promise<PlayerProfile> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
-  const currentDateIso = new Date().toISOString().split('T')[0];
+  const currentDateIso = todayIso();
 
-  const kind: HistoricalKind = params.historicalKind ?? 'prime';
-  const requested = params.requestedWindow ?? null;
-  const windowRule =
-    kind === 'prime'
-      ? `PRIME WINDOW: pick the player's best 2–4 consecutive seasons and set \`version.type\` = "prime"${requested ? `. The user mentioned ${formatWindow(requested)}; treat it as a hint, not a limit` : ''}.`
-      : requested
-        ? `ERA WINDOW: the user asked for ${formatWindow(requested)}. If that spans 2–4 seasons use exactly those seasons; if it is longer pick the strongest 2–4 seasons inside it; if it is a single season widen it to 2–3 seasons that contain it. Set \`version.type\` = "era".`
-        : `ERA WINDOW: the user named an era or decade. Pick the strongest 2–4 consecutive seasons inside it. Set \`version.type\` = "era".`;
-  const temporalRules = params.isHistorical
+  const temporalRules = params.requestedSeason
     ? `
-    - HISTORICAL WINDOW CARD EVALUATION: Rate the player over ONE window of 2–4 consecutive seasons, never a whole career and never a whole club stint. Judge the level, role and attributes shown across those seasons only, on the exact same 1–99 scale as modern players (zero nostalgia inflation, zero conservative underselling). Ignore what came before and after, including their ${year} status (retired, manager, veteran).
-    - ${windowRule}
-    - DATING REQUIREMENT: Set \`version.windowStart\` and \`version.windowEnd\` to the first and last season of the window as the year each starts (2005 for 2005-06; windowEnd - windowStart must be 1 to 3). Set \`version.seasonOrEra\` = the window text (e.g. "2005-06 to 2008-09"), \`version.label\` = "${kind === 'era' ? 'Era' : 'Prime Zenith'} (<window>)", \`version.evaluationDate\` = the date the window ended (YYYY-MM-DD, not in the future), and \`version.peakContext\` = concise 1–2 sentence note on the trophies, role and dominance that defined the window.
-    - If the player across this window was the #1 player in the world at their position or an all-time league/Champions League benchmark (such as John Terry across 2004-05 to 2007-08), calibrate them in \`93_95_WC_ELITE\` (94–95). Do not cap historic defenders or midfielders at 91–92. Rate a weaker window on its own merit, not at the player's career-best tier.
-    - Set \`ratings.potential\` equal to \`ratings.overall\`: the card rates the window as played.`
+    - SEASON DATED CARD EVALUATION (${params.requestedSeason}): Rate the player exactly as he was in the ${params.requestedSeason} season — not his career peak, not his career as a whole, and not who he became later. Wherever he was in his development or decline that season, the card reflects it.
+    - DATING REQUIREMENT: Set \`version.type\` = "season_snapshot", \`version.seasonOrEra\` = that season formatted YYYY-YY (for a bare year, the season the grounding shows he is best remembered for in that year), \`version.evaluationDate\` = a verified date from that season (YYYY-MM-DD), \`version.label\` = "Season (<Season>)", and \`version.peakContext\` = 1–2 sentences on his club, role and output that season.
+    - basicInfo (club, age) describes him in that season. Set \`ratings.potential\` to the ceiling he projected to from that season, which can exceed Overall for a young player.
+    - Disregard his ${year} status (retired, manager, veteran) when rating attributes and Overall.`
+    : params.requestedEra
+    ? `
+    - ERA DATED CARD EVALUATION ("${params.requestedEra}"): The user asked for the version of the player they call "${params.requestedEra}": a stage of his career defined by its years, named after the club, role or phase he is identified with in it. Rate that version of him: not his career as a whole, not his prime unless those seasons are his prime, and not who he became later.
+    - THE ERA IS A WINDOW: Identify the consecutive seasons that define that version, at most ${MAX_PRIME_WINDOW_SEASONS}. When that stage of his career lasted longer, choose the stretch when he was most fully that version and at his best in it, judged by his level as a footballer rather than his output, trophies or awards. Rate the level he sustained across the window. The attributes describe him across it (Consistency is how reliably he played at that level through it).
+    - ERA DATING REQUIREMENT: Set \`version.type\` = "era", \`version.primeWindow\` = { startSeason, endSeason } (YYYY-YY each, YYYY for calendar-year leagues; the same season twice for a one-season window), \`version.seasonOrEra\` = the window from its first season to its last (YYYY-YY for one season), \`version.evaluationDate\` = a verified date from the window's last season (YYYY-MM-DD), \`version.label\` = "<Era> era (<Window>)", and \`version.peakContext\` = 1–2 sentences on what defined this version of him in those seasons: his club, role and level, and the evidence for it.
+    - basicInfo (club, age) describes him in the window's middle season; name the club he played for through most of it.
+    - Because an era card rates a level he realized, set \`ratings.potential\` equal to \`ratings.overall\`.
+    - Disregard his ${year} status (retired, manager, veteran) when rating attributes and Overall.`
+    : params.isHistorical
+    ? `
+    - HISTORICAL / PRIME DATED CARD EVALUATION: Evaluate the player in his prime on the exact same 1–99 scale as modern players (zero nostalgia inflation, zero conservative underselling).
+    - THE PRIME IS A WINDOW: His prime is the stretch of consecutive seasons when he played at his highest level, usually one to three seasons, and a single season only when his best level genuinely lasted one season. Choose it by when he was the best footballer he ever was, not by when his goals, assists, trophies or awards peaked. Rate the level he sustained across that window: his standard as a footballer in those seasons, not one season's spike and not his career, longevity, trophy count or legacy. Honours count only as evidence of how good he was then. The attributes describe him across the window (Consistency is how reliably he played at that level through it).
+    - PRIME DATING REQUIREMENT: Set \`version.type\` = "prime", \`version.primeWindow\` = { startSeason, endSeason } (YYYY-YY each, YYYY for calendar-year leagues; the same season twice for a one-season prime), \`version.seasonOrEra\` = the window from its first season to its last (YYYY-YY for one season), \`version.evaluationDate\` = a verified date from the window's last season (YYYY-MM-DD), \`version.label\` = "Prime Zenith (<Window>)", and \`version.peakContext\` = 1–2 sentences on why this stretch was the player at his best: his level, role and the evidence for it.
+    - basicInfo (club, age) describes him in the window's middle season; name the club he played for through most of it.
+    - Rate the peak at the level of footballer he was, using the whole scale: 96–98 when he was among the greatest footballers the game has produced, whatever his position. Being the best at his position that season does not by itself fix a band, and it never caps him at 95; place him against the calibrated peers instead. Do not cap historic defenders or midfielders below attackers of the same ability.
+    - Because a prime dossier represents the player's realized peak level, set \`ratings.potential\` equal to \`ratings.overall\` (unless their career was cut short before their prime).
+    - Disregard their ${year} status (retired, manager, veteran) when rating attributes and Overall.`
     : `
-    - CURRENT FORM DATED CARD EVALUATION (${month} ${year}, Season ${currentSeason}, Date: ${currentDateIso}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <deterministic_bio_anchor> and <factual_foundation>.
+    - CURRENT FORM DATED CARD EVALUATION (${month} ${year}, Season ${currentSeason}, Date: ${currentDateIso}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <deterministic_bio_record> and <factual_foundation>.
     - DATING REQUIREMENT: Set \`version.type\` = "current", \`version.evaluationDate\` = "${currentDateIso}", \`version.seasonOrEra\` = "${currentSeason}", \`version.label\` = "Current Form (${month} ${year})", and \`version.peakContext\` = null.
-    - NO REPUTATION LAG: If the player is already performing as a Top 3–5 player in the world at their position for an elite club right now (e.g., Willian Pacho at PSG), rate their current Overall in \`90_92_WORLD_CLASS\` (90–92) — do not undersell them at 87–89 Borderline World-Class and hide their current level in Potential.
-    - APEX CONTINENTAL STARS: If the player is the primary talisman/focal point of a Champions League-winning or Ballon d'Or-caliber campaign (e.g., Ousmane Dembélé at PSG), rate them at 92–94 rather than scraping the 91 floor.
-    - Set \`calibration.verifiedCurrentHeadCoach\` ONLY if <factual_foundation> explicitly confirms the current head coach of the player's current club as of ${month} ${year}. Never name a head coach in shortBio, playstyle, or latestUpdate when \`verifiedCurrentHeadCoach\` is null.
+    - NO REPUTATION LAG: If the player is already performing at world-class level for an elite club right now, rate that level in his current Overall — do not undersell him at 87–89 Borderline World-Class and hide his current level in Potential.
+    - Leading a Champions League-winning or Ballon d'Or-caliber campaign is strong evidence of his level; it confirms how good he is rather than setting a fixed band.
+    - Set \`calibration.verifiedCurrentHeadCoach\` ONLY if <factual_foundation> explicitly confirms the current head coach of the player's current club as of ${month} ${year}. Never name a head coach or manager anywhere in the card's prose; the app attaches the verified manager separately.
     - If grounding shows the player started a recent match, treat them as match fit.
     - Never write a stat-based qualifier in latestUpdate without a specific verified number from the grounding data.`;
 
@@ -1052,9 +1027,11 @@ ${params.lockedDossiersBlock}
 ${params.savedDossiersBlock}
 <synthesis_instructions>
 ${temporalRules}
-- Complete the \`calibration\` block first: choose the exact \`tierBand\` from Section III based on where the player ranks globally at their position (Top 1–2 / historic positional benchmark = 93–95 World-Class Elite; Top 3–5 at their position = 90–92 World-Class), name 1-2 positional peers in \`peerBenchmark\`, and identify \`signatureSpikes\` and \`genuineFlaws\`.
-- Ensure \`ratings.overall\` sits inside the integer range of your chosen \`calibration.tierBand\`.
-- Make the 25 attributes reflect a realistic, spiky scouting profile where \`signatureSpikes\` are high and \`genuineFlaws\` stay low.
+- Complete the \`calibration\` block first: choose the exact \`tierBand\` from Section III by how good a footballer this version of the player is (positional rank and honours are evidence, not the criterion), name 1-2 positional peers in \`peerBenchmark\`, fill \`peerPlacement\` against <calibrated_peer_ledger>, and identify \`signatureSpikes\` and \`genuineFlaws\`.
+- Ensure \`ratings.overall\` sits inside the integer range of your chosen \`calibration.tierBand\` and agrees with \`calibration.peerPlacement\`.
+- Make the 25 attributes reflect a realistic, spiky scouting profile where \`signatureSpikes\` are high and \`genuineFlaws\` stay low.${
+    params.cardName ? `\n- Set \`basicInfo.name\` = "${params.cardName}", the name football coverage commonly calls him by.` : ''
+  }
 </synthesis_instructions>
 <task>${params.rawMessage}</task>`;
 
@@ -1073,7 +1050,19 @@ ${temporalRules}
       schema: PLAYER_PROFILE_SYNTHESIS_SCHEMA,
     });
 
-    let profile = applyVersionRules(sanitizeProfileData(raw), params.isHistorical, kind);
+    // One player, one name: the card always goes under the name he is commonly known by, so a
+    // request by his full name or a nickname never publishes a second card for him.
+    const named =
+      params.cardName && raw.basicInfo
+        ? { ...raw, basicInfo: { ...raw.basicInfo, name: params.cardName } }
+        : raw;
+    let profile = applyVersionRules(
+      sanitizeProfileData(named),
+      params.isHistorical,
+      params.requestedSeason,
+      params.requestedEra,
+    );
+    profile.basicInfo.position = resolveLiberoPosition(profile.basicInfo.position, params.isHistorical);
 
     // Deterministically backfill missing bio fields from API-Football on active players
     if (!params.isHistorical && params.apiPlayer) {
@@ -1097,6 +1086,13 @@ ${temporalRules}
 
     // Enforce calibration invariants deterministically in 0ms
     profile = enforceCalibrationInvariants(raw, profile, params.isHistorical);
+    // The Overall agrees with the model's own judgment of who was the better footballer.
+    profile = applyPeerPlacement(
+      profile,
+      raw.calibration?.peerPlacement,
+      params.peerLedgerCards ?? [],
+      params.isHistorical,
+    );
 
     const effectiveVerifiedFacts = resolveEffectiveVerifiedFacts(
       raw,
@@ -1115,7 +1111,7 @@ ${temporalRules}
       }
     }
 
-    lastIssues = findSynthesisValidationIssues(raw, profile, effectiveVerifiedFacts);
+    lastIssues = findSynthesisValidationIssues(raw, profile, effectiveVerifiedFacts, params.requestedSeason);
 
     if (lastIssues.length === 0) {
       return profile;
@@ -1124,7 +1120,7 @@ ${temporalRules}
     console.warn(`[DossierSynthesizer] Validation attempt ${attempt + 1} issues:`, lastIssues);
 
     if (attempt === 1) {
-      return params.isHistorical ? coerceHistoricalWindow(profile) : profile;
+      return profile;
     }
   }
 

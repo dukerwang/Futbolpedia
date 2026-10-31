@@ -1,94 +1,129 @@
+/** A club's verified current head coach, from the app's live manager lookup. */
+export interface VerifiedClubManager {
+  club: string;
+  coach: string;
+  /** Immediate predecessor; prose attributing the club to this name is rewritten to `coach`. */
+  previousCoach?: string | null;
+}
+
 export interface ManagerVerificationContext {
   verifiedFacts: string[];
   supplementalCorpus?: string[];
   currentHeadCoach: string | null;
+  /** Club the verified coach manages. */
+  currentClub?: string | null;
+  /** Verified coaches for every club in play this turn (the dossier's club, or the clubs a chat turn is about). */
+  clubManagers?: VerifiedClubManager[];
+  /**
+   * Only `currentHeadCoach` may be named (nobody, when it is null), even if another name appears
+   * in the grounding text. Search results often mention a sacked coach ("X replaced Y"), which
+   * would otherwise count as verified. Used for dossier cards, which are about one club.
+   */
+  strictCurrentCoach?: boolean;
 }
 
-export const KNOWN_STALE_CLUB_MANAGERS: Record<string, { currentCoach: string; stale: string[] }> = {
-  Chelsea: {
-    currentCoach: 'Xabi Alonso',
-    stale: [
-      'Enzo Maresca',
-      'Maresca',
-      'Mauricio Pochettino',
-      'Pochettino',
-      'Graham Potter',
-      'Potter',
-      'Frank Lampard',
-      'Lampard',
-      'Thomas Tuchel',
-      'Tuchel',
-    ],
-  },
-  Liverpool: {
-    currentCoach: 'Arne Slot',
-    stale: ['Jürgen Klopp', 'Jurgen Klopp', 'Klopp'],
-  },
-  'Manchester United': {
-    currentCoach: 'Ruben Amorim',
-    stale: ['Erik ten Hag', 'Ten Hag', 'Ole Gunnar Solskjaer'],
-  },
-  'FC Barcelona': {
-    currentCoach: 'Hansi Flick',
-    stale: ['Xavi Hernandez', 'Xavi'],
-  },
-  'Bayern Munich': {
-    currentCoach: 'Vincent Kompany',
-    stale: ['Thomas Tuchel', 'Julian Nagelsmann'],
-  },
-  Juventus: {
-    currentCoach: 'Thiago Motta',
-    stale: ['Massimiliano Allegri', 'Allegri'],
-  },
-  Napoli: {
-    currentCoach: 'Antonio Conte',
-    stale: ['Walter Mazzarri', 'Rudi Garcia', 'Luciano Spalletti'],
-  },
-  Brighton: {
-    currentCoach: 'Fabian Hürzeler',
-    stale: ['Roberto De Zerbi', 'De Zerbi', 'Graham Potter'],
-  },
+export interface CurrentCoachRecord {
+  coach: string | null;
+  /** Start date (YYYY-MM-DD) of the coach's open stint at the team, when API-Football has one. */
+  coachSince: string | null;
+}
+
+/**
+ * Picks a team's current head coach from an API-Football `/coachs?team=<id>` response. The
+ * response lists every coach who ever managed the team, so take the open stint (`end === null`)
+ * at this team with the latest start; fall back to the first entry, undated, when none is open.
+ */
+export function pickCurrentCoach(coaches: unknown, teamId: number): CurrentCoachRecord {
+  const list: any[] = Array.isArray(coaches) ? coaches : [];
+  let best: { coach: any; since: string | null; sinceMs: number } | null = null;
+  for (const coach of list) {
+    if (!Array.isArray(coach?.career)) continue;
+    for (const stint of coach.career) {
+      if (stint?.team?.id !== teamId || stint?.end !== null) continue;
+      const since = typeof stint.start === 'string' ? stint.start.slice(0, 10) : null;
+      const parsed = since ? Date.parse(since) : NaN;
+      const sinceMs = Number.isNaN(parsed) ? -Infinity : parsed;
+      if (!best || sinceMs > best.sinceMs) best = { coach, since, sinceMs };
+    }
+  }
+  const chosen = best?.coach ?? list[0];
+  if (!chosen?.name) return { coach: null, coachSince: null };
+  return {
+    coach:
+      chosen.firstname && chosen.lastname
+        ? `${chosen.firstname} ${chosen.lastname}`
+        : String(chosen.name),
+    coachSince: best?.since ?? null,
+  };
+}
+
+const foldName = (s: string): string =>
+  s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/**
+ * True when two coach names refer to the same person: equal after folding accents, or one is
+ * the other's full name ("Xabi Alonso" / "Alonso", "Rúben Amorim" / "Ruben Amorim").
+ */
+export function sameCoach(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const x = foldName(a);
+  const y = foldName(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [shorter, longer] = x.length <= y.length ? [x, y] : [y, x];
+  return shorter.length >= 4 && new RegExp(`(^| )${shorter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( |$)`).test(longer);
+}
+
+const clubMentionNames = (club: string): string[] => {
+  const name = foldName(club).replace(/\b(fc|cf|afc)\b/g, '').replace(/\s+/g, ' ').trim();
+  return name ? [name] : [];
 };
 
-export function scrubKnownStaleManagers(text: string): string {
-  if (!text) return text;
+/**
+ * Rewrites "under [previous coach]" / "[previous coach]'s system"-style attributions to the
+ * club's verified current coach. Only runs for clubs the text names, and never rewrites anyone
+ * who currently coaches one of the given clubs (a coach who moved, like a former Chelsea coach
+ * now at Manchester City).
+ */
+export function scrubFormerCoaches(text: string, managers: VerifiedClubManager[] = []): string {
+  if (!text || managers.length === 0) return text;
+  const foldedText = foldName(text);
   let result = text;
 
-  for (const [, { currentCoach, stale }] of Object.entries(KNOWN_STALE_CLUB_MANAGERS)) {
-    for (const staleName of stale) {
-      const escaped = staleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const { club, coach, previousCoach } of managers) {
+    if (!previousCoach || !coach) continue;
+    if (!clubMentionNames(club).some((name) => foldedText.includes(name))) continue;
+    if (managers.some((m) => sameCoach(m.coach, previousCoach))) continue;
+    const escaped = previousCoach.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-      // 1. "Under [Stale]" -> "Under [CurrentCoach]"
-      result = result.replace(
-        new RegExp(`\\b(under)\\s+(?:manager\\s+|head\\s+coach\\s+|coach\\s+)?${escaped}\\b`, 'gi'),
-        (match, prefix: string) => {
-          const isCapital = prefix[0] === prefix[0].toUpperCase();
-          const p = isCapital ? 'Under' : 'under';
-          return `${p} ${currentCoach}`;
-        },
-      );
+    // 1. "Under [Previous]" -> "Under [Coach]"
+    result = result.replace(
+      new RegExp(`\\b(under)\\s+(?:manager\\s+|head\\s+coach\\s+|coach\\s+)?${escaped}\\b`, 'gi'),
+      (_match, prefix: string) => `${prefix[0] === 'U' ? 'Under' : 'under'} ${coach}`,
+    );
 
-      // 2. "[Stale]'s" -> "[CurrentCoach]'s"
-      result = result.replace(
-        new RegExp(`\\b${escaped}['’]s\\b`, 'gi'),
-        `${currentCoach}'s`,
-      );
+    // 2. "[Previous]'s" -> "[Coach]'s"
+    result = result.replace(new RegExp(`\\b${escaped}['’]s\\b`, 'gi'), `${coach}'s`);
 
-      // 3. "[Stale] deploys / uses / fields" -> "[CurrentCoach] deploys / uses / fields"
-      result = result.replace(
-        new RegExp(
-          `\\b${escaped}\\s+(deploys|uses|fields|plays|favours|favors|prefers|relies on)\\b`,
-          'gi',
-        ),
-        (match, verb) => `${currentCoach} ${verb}`,
-      );
+    // 3. "[Previous] deploys / uses / fields" -> "[Coach] deploys / uses / fields"
+    result = result.replace(
+      new RegExp(
+        `\\b${escaped}\\s+(deploys|uses|fields|plays|favours|favors|prefers|relies on)\\b`,
+        'gi',
+      ),
+      (_match, verb) => `${coach} ${verb}`,
+    );
 
-      // 4. "managed by [Stale]" / "coached by [Stale]" -> "managed by [CurrentCoach]"
-      result = result.replace(
-        new RegExp(`\\b(managed by|coached by)\\s+${escaped}\\b`, 'gi'),
-        (match, prefix) => `${prefix} ${currentCoach}`,
-      );
-    }
+    // 4. "managed by [Previous]" / "coached by [Previous]" -> "managed by [Coach]"
+    result = result.replace(
+      new RegExp(`\\b(managed by|coached by)\\s+${escaped}\\b`, 'gi'),
+      (_match, prefix) => `${prefix} ${coach}`,
+    );
   }
 
   return result;
@@ -200,8 +235,19 @@ const NON_MANAGER_PHRASES = new Set([
 const LEADING_PREPOSITION_REGEX =
   /^(?:in|at|for|with|from|by|on|under|over|through|during|after|before)\s+/i;
 
+/**
+ * Strips a leading preposition and keeps the first run of capitalized words. The name patterns
+ * are case-insensitive, so they also capture surrounding lowercase words: "under Mauricio
+ * Pochettino at the club" yields "Mauricio Pochettino at the", and "He anchors Maresca's system"
+ * yields "anchors Maresca". Without trimming, neither reads as a person and both slip past.
+ */
 function cleanCandidateName(candidate: string): string {
-  return candidate.replace(LEADING_PREPOSITION_REGEX, '').trim();
+  const tokens = candidate.replace(LEADING_PREPOSITION_REGEX, '').trim().split(/\s+/);
+  const isCapitalized = (t: string) => /^[A-ZÀ-ÖØ-Þ]/.test(t);
+  const start = tokens.findIndex(isCapitalized);
+  if (start === -1) return '';
+  const end = tokens.findIndex((t, i) => i > start && !isCapitalized(t));
+  return tokens.slice(start, end === -1 ? tokens.length : end).join(' ');
 }
 
 function isLikelyPersonName(candidate: string): boolean {
@@ -237,9 +283,23 @@ function collectManagerMentions(text: string): string[] {
 }
 
 function verificationCorpus(ctx: ManagerVerificationContext): string {
-  return [...ctx.verifiedFacts, ...(ctx.supplementalCorpus ?? []), ctx.currentHeadCoach ?? '']
+  return [
+    ...ctx.verifiedFacts,
+    ...(ctx.supplementalCorpus ?? []),
+    ctx.currentHeadCoach ?? '',
+    ...(ctx.clubManagers ?? []).map((m) => m.coach),
+  ]
     .join(' ')
     .toLowerCase();
+}
+
+/** Whether a manager name may stay in prose under this context. */
+function isManagerNameAllowed(name: string, ctx: ManagerVerificationContext, corpus: string): boolean {
+  const verifiedCoach = ctx.currentHeadCoach?.trim() || null;
+  if (verifiedCoach && sameCoach(name, verifiedCoach)) return true;
+  if (ctx.strictCurrentCoach) return false;
+  if ((ctx.clubManagers ?? []).some((m) => sameCoach(name, m.coach))) return true;
+  return isNameVerified(name, corpus);
 }
 
 function isNameVerified(name: string, corpus: string): boolean {
@@ -255,29 +315,14 @@ export function findUnverifiedManagerMentions(
   ctx: ManagerVerificationContext,
 ): string[] {
   const corpus = verificationCorpus(ctx);
-  const verifiedCoach = ctx.currentHeadCoach?.trim() ?? null;
-  const issues: string[] = [];
-
-  for (const mentioned of collectManagerMentions(text)) {
-    if (verifiedCoach) {
-      const verifiedLower = verifiedCoach.toLowerCase();
-      const mentionedLower = mentioned.toLowerCase();
-      if (mentionedLower === verifiedLower || verifiedLower.includes(mentionedLower)) {
-        continue;
-      }
-      if (isNameVerified(mentioned, corpus)) continue;
-      issues.push(
-        `manager "${mentioned}" conflicts with verified head coach "${verifiedCoach}"`,
-      );
-      continue;
-    }
-
-    if (!isNameVerified(mentioned, corpus)) {
-      issues.push(`manager "${mentioned}" not verified in extraction`);
-    }
-  }
-
-  return issues;
+  const verifiedCoach = ctx.currentHeadCoach?.trim() || null;
+  return collectManagerMentions(text)
+    .filter((mentioned) => !isManagerNameAllowed(mentioned, ctx, corpus))
+    .map((mentioned) =>
+      verifiedCoach
+        ? `manager "${mentioned}" conflicts with verified head coach "${verifiedCoach}"`
+        : `manager "${mentioned}" not verified in extraction`,
+    );
 }
 
 /**
@@ -291,8 +336,8 @@ export function scrubUnverifiedManagerText(
 ): string {
   if (!text) return text;
 
-  // 1. First, scrub any known stale / sacked managers across major clubs
-  let out = scrubKnownStaleManagers(text);
+  // 1. Rewrite a club's previous coach to its verified current coach.
+  let out = scrubFormerCoaches(text, ctx.clubManagers ?? []);
 
   const corpus = verificationCorpus(ctx);
   const verifiedCoach = ctx.currentHeadCoach?.trim() ?? null;
@@ -300,14 +345,7 @@ export function scrubUnverifiedManagerText(
   const isAllowed = (mentioned: string): boolean => {
     const cleaned = cleanCandidateName(mentioned);
     if (!isLikelyPersonName(cleaned)) return true;
-    if (verifiedCoach) {
-      const verifiedLower = verifiedCoach.toLowerCase();
-      const mentionedLower = cleaned.toLowerCase();
-      if (mentionedLower === verifiedLower || verifiedLower.includes(mentionedLower)) {
-        return true;
-      }
-    }
-    return isNameVerified(cleaned, corpus);
+    return isManagerNameAllowed(cleaned, ctx, corpus);
   };
 
   out = out.replace(
@@ -315,13 +353,15 @@ export function scrubUnverifiedManagerText(
     (fullMatch, prefix: string, name: string) => {
       const cleaned = cleanCandidateName(name);
       if (isAllowed(cleaned)) return fullMatch;
+      // Keep any lowercase words the case-insensitive capture swallowed after the name.
+      const tail = cleaned ? name.slice(name.indexOf(cleaned) + cleaned.length) : '';
       const isCapital = prefix[0] === prefix[0].toUpperCase();
       const isUnder = prefix.toLowerCase() === 'under';
       if (isUnder) {
         const p = isCapital ? 'Under' : 'under';
-        return verifiedCoach ? `${p} ${verifiedCoach}` : (isCapital ? 'In the current tactical setup' : 'in the current tactical setup');
+        return (verifiedCoach ? `${p} ${verifiedCoach}` : (isCapital ? 'In the current tactical setup' : 'in the current tactical setup')) + tail;
       }
-      return verifiedCoach ? `${prefix} ${verifiedCoach}` : 'in the current tactical setup';
+      return (verifiedCoach ? `${prefix} ${verifiedCoach}` : 'in the current tactical setup') + tail;
     },
   );
 
@@ -330,7 +370,9 @@ export function scrubUnverifiedManagerText(
     (fullMatch, name: string, rest: string) => {
       const cleaned = cleanCandidateName(name);
       if (isAllowed(cleaned)) return fullMatch;
-      return verifiedCoach ? `${verifiedCoach}'s ${rest}` : `the team's ${rest}`;
+      // Keep a leading word the case-insensitive capture swallowed ("in Maresca's system").
+      const lead = cleaned ? name.slice(0, name.indexOf(cleaned)) : '';
+      return lead + (verifiedCoach ? `${verifiedCoach}'s ${rest}` : `the team's ${rest}`);
     },
   );
 

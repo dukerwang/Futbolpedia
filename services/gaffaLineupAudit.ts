@@ -6,29 +6,82 @@ import type {
   GaffaRosterPlayer,
   PlayerProfile,
 } from '../types';
-import { getDossierEvaluationDate, isPrimeCard, toBasePlayerSlug } from './dossierStore';
+import {
+  foldPlayerName,
+  getDossierEvaluationDate,
+  isPrimeCard,
+  toBasePlayerSlug,
+} from './dossierStore';
 
 export const DEFENSIVE_SLOTS = new Set(['CB', 'LB', 'RB', 'LWB', 'RWB']);
-export const MID_ATT_SLOTS = new Set(['DM', 'CM', 'AM', 'LW', 'RW', 'ST']);
-export const ALL_GAFFA_SLOTS = [
-  'GK',
-  'CB',
-  'LB',
-  'RB',
-  'LWB',
-  'RWB',
-  'DM',
-  'CM',
-  'AM',
-  'LW',
-  'RW',
-  'ST',
-] as const;
+const MID_ATT_SLOTS = new Set(['DM', 'CM', 'AM', 'LW', 'RW', 'ST']);
+const ALL_GAFFA_SLOTS = ['GK', 'CB', 'LB', 'RB', 'LWB', 'RWB', 'DM', 'CM', 'AM', 'LW', 'RW', 'ST'];
+
+/** Football words for a slot, checked after explicit slot tokens when inferring trade slots. */
+const SLOT_ALIASES: ReadonlyArray<readonly [RegExp, string[]]> = [
+  [/\b(striker|centre-?forward|center-?forward|#9)\b/i, ['ST']],
+  [/\b(winger|wide forward)\b/i, ['LW', 'RW']],
+  [/\b(centre-?back|center-?back)\b/i, ['CB']],
+  [/\b(full-?back)\b/i, ['LB', 'RB']],
+  [/\b(wing-?back)\b/i, ['LWB', 'RWB']],
+  [/\b(keeper|goalkeeper)\b/i, ['GK']],
+];
+
+/** Roster statuses: held players freeze the market; squad statuses count toward the roster cap. */
+const HELD_STATUSES = new Set(['held', 'pending_activation']);
+export const SQUAD_STATUSES = new Set(['active', 'bench', 'loan_out']);
+const FIELDABLE_STATUSES = new Set(['active', 'bench', 'loan_in']);
+export const ACADEMY_STATUSES = new Set(['taxi', 'academy']);
+
+const DEFAULT_ROSTER_CAP = 22;
+const DEFAULT_FA_BID_FLOOR = 0.6;
+
+export function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Whole-word match on accent-folded text, so "Rice" never matches inside "price". */
+const containsWord = (foldedText: string, foldedWord: string): boolean =>
+  new RegExp(`(?<![a-z0-9])${escapeRegExp(foldedWord)}(?![a-z0-9])`).test(foldedText);
+
+const foldedSurname = (name: string): string => foldPlayerName(name.trim()).split(/\s+/).pop() ?? '';
 
 /**
- * The 12 legal Gaffa formations mapped to their 11 strict positional slots.
+ * How a player name appears in a message folded with `foldPlayerName`: as the full name, as a
+ * surname of at least 4 letters, or not at all. Accent-insensitive ("odegaard" finds Ødegaard).
  */
-export const GAFFA_FORMATIONS: Record<string, string[]> = {
+type NameMatch = 'full' | 'surname' | null;
+
+function matchPlayerName(name: string | undefined, foldedMessage: string): NameMatch {
+  if (!name || name.trim().length < 3) return null;
+  const full = foldPlayerName(name.trim()).replace(/\s+/g, ' ');
+  if (containsWord(foldedMessage, full)) return 'full';
+  const surname = foldedSurname(name);
+  return surname !== full && surname.length >= 4 && containsWord(foldedMessage, surname)
+    ? 'surname'
+    : null;
+}
+
+function heldPlayersOf(roster: GaffaRosterPlayer[]): GaffaRosterPlayer[] {
+  return roster.filter((p) => HELD_STATUSES.has(p.status));
+}
+
+function squadCountOf(roster: GaffaRosterPlayer[]): number {
+  return roster.filter((p) => SQUAD_STATUSES.has(p.status)).length;
+}
+
+/** League FA bid floor as a fraction of market value. */
+export function faBidFloorRate(bag: GaffaContextBag | undefined): number {
+  return bag?.settings?.free_agent_bid_floor ?? DEFAULT_FA_BID_FLOOR;
+}
+
+/** Opening FA nomination bid: floor share of MV, rounded down, never below €1m. */
+export function openingFaFloor(marketValueEurM: number, floorRate: number): number {
+  return marketValueEurM > 0 ? Math.max(1, Math.floor(marketValueEurM * floorRate)) : 1;
+}
+
+/** The 12 legal Gaffa formations mapped to their 11 strict positional slots. */
+const GAFFA_FORMATIONS: Record<string, string[]> = {
   '4-3-3': ['GK', 'LB', 'CB', 'CB', 'RB', 'DM', 'CM', 'CM', 'LW', 'RW', 'ST'],
   '4-2-1-3': ['GK', 'LB', 'CB', 'CB', 'RB', 'DM', 'DM', 'AM', 'LW', 'RW', 'ST'],
   '4-2-2-2': ['GK', 'LB', 'CB', 'CB', 'RB', 'DM', 'DM', 'AM', 'AM', 'ST', 'ST'],
@@ -50,7 +103,7 @@ const BENCH_PRIORITY: Record<string, number> = {
   FLEX: 3,
 };
 
-export function isPlayerEligibleForSlot(player: GaffaRosterPlayer, slot: string): boolean {
+function isPlayerEligibleForSlot(player: GaffaRosterPlayer, slot: string): boolean {
   const target = slot.trim().toUpperCase();
   if (player.primary_position.toUpperCase() === target) return true;
   return (player.secondary_positions ?? []).some((s) => s.toUpperCase() === target);
@@ -61,7 +114,7 @@ export function isPlayerEligibleForSlot(player: GaffaRosterPlayer, slot: string)
  * and he is fielded in a DEFENSIVE slot (CB, LB, RB, LWB, RWB), he takes a 20% penalty
  * to rating and points — even if also listed defensively. Does NOT apply in reverse.
  */
-export function hasOopPenalty(primaryPosition: string, targetSlot: string): boolean {
+function hasOopPenalty(primaryPosition: string, targetSlot: string): boolean {
   const prim = primaryPosition.trim().toUpperCase();
   const slot = targetSlot.trim().toUpperCase();
   return MID_ATT_SLOTS.has(prim) && DEFENSIVE_SLOTS.has(slot);
@@ -97,7 +150,7 @@ export function lookupPlayerDossier(
   return undefined;
 }
 
-export interface AuditedStarterSlot {
+interface AuditedStarterSlot {
   player_id: string;
   name: string;
   slot: string;
@@ -116,7 +169,7 @@ export interface AuditedStarterSlot {
   scoutPot?: number;
 }
 
-export interface AuditedBenchSlot {
+interface AuditedBenchSlot {
   player_id: string;
   name: string;
   benchSlot: string;
@@ -128,13 +181,13 @@ export interface AuditedBenchSlot {
   scoutPot?: number;
 }
 
-export interface FormationFeasibility {
+interface FormationFeasibility {
   formation: string;
   canFillCleanly: boolean;
   missingSlots: string[];
 }
 
-export interface GaffaLineupAuditResult {
+interface GaffaLineupAuditResult {
   formation: string | null;
   gameweek: number | null;
   starters: AuditedStarterSlot[];
@@ -235,20 +288,17 @@ export function auditGaffaLineup(
   const oopStarters = auditedStarters.filter((s) => s.oopPenalty);
   const ineligibleStarters = auditedStarters.filter((s) => !s.eligible);
 
-  // Check which of the 12 formations can be filled cleanly without OOP penalty using active/bench players
-  const fieldablePool = roster.filter(
-    (p) => p.status === 'active' || p.status === 'bench' || p.status === 'loan_in',
-  );
+  // Greedy check of which formations the fieldable squad can fill with no OOP penalty.
+  const fieldablePool = roster.filter((p) => FIELDABLE_STATUSES.has(p.status));
 
   const feasibleFormations: FormationFeasibility[] = Object.entries(GAFFA_FORMATIONS).map(
     ([formation, requiredSlots]) => {
       const usedIds = new Set<string>();
       const missingSlots: string[] = [];
 
-      // Sort slots from most scarce (fewer eligible players) to most flexible
-      const slotsWithCandidates = requiredSlots.map((slot, idx) => ({
+      // Fill the scarcest slots (fewest eligible players) first.
+      const slotsWithCandidates = requiredSlots.map((slot) => ({
         slot,
-        idx,
         candidates: fieldablePool.filter(
           (p) => isPlayerEligibleForSlot(p, slot) && !hasOopPenalty(p.primary_position, slot),
         ),
@@ -272,14 +322,10 @@ export function auditGaffaLineup(
     },
   );
 
-  const heldPlayers = roster.filter(
-    (p) => p.status === 'held' || p.status === 'pending_activation',
-  );
-  const activeBenchCount = roster.filter(
-    (p) => p.status === 'active' || p.status === 'bench' || p.status === 'loan_out',
-  ).length;
+  const heldPlayers = heldPlayersOf(roster);
+  const activeBenchCount = squadCountOf(roster);
   const irPlayers = roster.filter((p) => p.status === 'ir');
-  const academyPlayers = roster.filter((p) => p.status === 'taxi' || p.status === 'academy');
+  const academyPlayers = roster.filter((p) => ACADEMY_STATUSES.has(p.status));
 
   return {
     formation: bag.lineup?.formation ?? null,
@@ -292,7 +338,7 @@ export function auditGaffaLineup(
     feasibleFormations,
     heldPlayers,
     activeBenchCount,
-    rosterCap: bag.settings?.roster_size ?? 22,
+    rosterCap: bag.settings?.roster_size ?? DEFAULT_ROSTER_CAP,
     irPlayers,
     irCap: bag.settings?.ir_size ?? 2,
     academyPlayers,
@@ -300,7 +346,7 @@ export function auditGaffaLineup(
   };
 }
 
-export interface GaffaClubAlert {
+interface GaffaClubAlert {
   id: string;
   severity: 'critical' | 'warning' | 'info';
   text: string;
@@ -365,11 +411,15 @@ export function formatLineupAuditPromptBlock(
   if (!bag.connected) return '';
   const audit = auditGaffaLineup(bag, calibratedDossiers);
 
+  const secondarySuffix = (positions: string[]) => (positions.length ? `/${positions.join(',')}` : '');
+  const scoutTag = (slot: { scoutOvr?: number; scoutPot?: number }) =>
+    slot.scoutOvr ? ` [Scout: ${slot.scoutOvr} OVR / ${slot.scoutPot} POT]` : '';
+
   const starterLines = audit.starters.map((s) => {
-    const sec = s.secondary_positions.length ? `/${s.secondary_positions.join(',')}` : '';
+    const sec = secondarySuffix(s.secondary_positions);
     const oop = s.oopPenalty ? ' [20% OOP PENALTY — primary MID/ATT in defensive slot]' : '';
     const inelig = !s.eligible ? ' [INELIGIBLE FOR SLOT]' : '';
-    const scout = s.scoutOvr ? ` [Scout: ${s.scoutOvr} OVR / ${s.scoutPot} POT]` : '';
+    const scout = scoutTag(s);
     const cover =
       s.coveringBench.length > 0
         ? `Auto-sub cover (in DEF→MID→ATT→FLEX order): ${s.coveringBench
@@ -380,8 +430,8 @@ export function formatLineupAuditPromptBlock(
   });
 
   const benchLines = audit.bench.map((b) => {
-    const sec = b.secondary_positions.length ? `/${b.secondary_positions.join(',')}` : '';
-    const scout = b.scoutOvr ? ` [Scout: ${b.scoutOvr} OVR / ${b.scoutPot} POT]` : '';
+    const sec = secondarySuffix(b.secondary_positions);
+    const scout = scoutTag(b);
     return `  - [${b.benchSlot}] ${b.name} (${b.primary_position}${sec}, ${b.pl_team ?? '?'})${scout} → eligible for: ${b.coversStarterSlots.join(', ')}`;
   });
 
@@ -411,18 +461,11 @@ ${benchLines.join('\n') || '  (empty)'}
  */
 export function inferInvolvedGaffaSlots(message: string, bag: GaffaContextBag): string[] {
   const slots = new Set<string>();
-  const lower = message.toLowerCase();
+  const folded = foldPlayerName(message);
 
   // 1. Check any player from roster, listings, auctions, or free agents mentioned in the message
   const checkName = (name: string | undefined, pos: string, sec?: string[]) => {
-    if (!name || name.trim().length < 3) return;
-    const fullLower = name.trim().toLowerCase();
-    const parts = fullLower.split(/\s+/);
-    const last = parts[parts.length - 1];
-    if (
-      lower.includes(fullLower) ||
-      (last.length >= 4 && new RegExp(`\\b${last.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(message))
-    ) {
+    if (matchPlayerName(name, folded)) {
       if (pos) {
         pos
           .split(/[/,\s]+/)
@@ -451,27 +494,15 @@ export function inferInvolvedGaffaSlots(message: string, bag: GaffaContextBag): 
     checkName(fa.display_name, fa.position);
   }
 
-  // 2. Check explicit slot tokens in message
+  // 2. Explicit slot tokens, then football words for a slot
   for (const slot of ALL_GAFFA_SLOTS) {
     if (new RegExp(`\\b${slot}\\b`, 'i').test(message)) {
       slots.add(slot);
     }
   }
-  if (/\b(striker|centre-?forward|center-?forward|#9)\b/i.test(message)) slots.add('ST');
-  if (/\b(winger|wide forward)\b/i.test(message)) {
-    slots.add('LW');
-    slots.add('RW');
+  for (const [pattern, aliasSlots] of SLOT_ALIASES) {
+    if (pattern.test(message)) aliasSlots.forEach((s) => slots.add(s));
   }
-  if (/\b(centre-?back|center-?back)\b/i.test(message)) slots.add('CB');
-  if (/\b(full-?back)\b/i.test(message)) {
-    slots.add('LB');
-    slots.add('RB');
-  }
-  if (/\b(wing-?back)\b/i.test(message)) {
-    slots.add('LWB');
-    slots.add('RWB');
-  }
-  if (/\b(keeper|goalkeeper)\b/i.test(message)) slots.add('GK');
 
   if (slots.size === 0) {
     slots.add('ST');
@@ -483,11 +514,9 @@ export function inferInvolvedGaffaSlots(message: string, bag: GaffaContextBag): 
 export function buildRosterCapacityNote(bag: GaffaContextBag): string {
   if (!bag.connected) return '';
   const roster = bag.roster ?? [];
-  const held = roster.filter((p) => p.status === 'held' || p.status === 'pending_activation');
-  const activeCount = roster.filter(
-    (p) => p.status === 'active' || p.status === 'bench' || p.status === 'loan_out',
-  ).length;
-  const maxRoster = bag.settings?.roster_size ?? 22;
+  const held = heldPlayersOf(roster);
+  const activeCount = squadCountOf(roster);
+  const maxRoster = bag.settings?.roster_size ?? DEFAULT_ROSTER_CAP;
 
   if (held.length > 0) {
     return `Held lock active (${held.map((p) => p.name).join(', ')}) — net-in multi-player trades and bids are blocked until resolved.`;
@@ -513,26 +542,38 @@ export function buildGaffaBidValuationBlock(
     );
   if (!wantsBidMath) return '';
 
-  const floorRate = bag.settings?.free_agent_bid_floor ?? 0.6;
+  const floorRate = faBidFloorRate(bag);
   const dossierMap = buildDossierLookupMap(calibratedDossiers);
-  const lower = message.toLowerCase();
+  const folded = foldPlayerName(message);
 
-  const matchesMessage = (name?: string) => {
-    if (!name || name.trim().length < 3) return false;
-    const n = name.trim().toLowerCase();
-    const last = n.split(/\s+/).pop() || '';
-    return lower.includes(n) || (last.length >= 4 && lower.includes(last));
+  type Candidate<T> = { item: T; name: string; level: NameMatch };
+  const candidate = <T,>(item: T, name: string, ...aliases: Array<string | undefined>): Candidate<T> => {
+    const levels = [name, ...aliases].map((n) => matchPlayerName(n, folded));
+    const level = levels.includes('full') ? 'full' : levels.includes('surname') ? 'surname' : null;
+    return { item, name, level };
   };
+  const fa = (bag.free_agents ?? []).map((p) => candidate(p, p.name, p.display_name));
+  const auctions = (bag.open_auctions ?? []).map((a) => candidate(a, a.name));
+  const listings = (bag.open_listings ?? []).map((l) => candidate(l, l.name));
 
-  const matchedFa: GaffaFreeAgent[] = (bag.free_agents ?? []).filter(
-    (p) => matchesMessage(p.name) || matchesMessage(p.display_name),
+  // A full-name hit ("Reece James") outranks surname-only hits on other players ("Daniel James").
+  const fullSurnames = new Set(
+    [...fa, ...auctions, ...listings]
+      .filter((m) => m.level === 'full')
+      .map((m) => foldedSurname(m.name)),
   );
-  const matchedAuctions: GaffaOpenAuction[] = (bag.open_auctions ?? []).filter((a) =>
-    matchesMessage(a.name),
-  );
-  const matchedListings: GaffaOpenListing[] = (bag.open_listings ?? []).filter((l) =>
-    matchesMessage(l.name),
-  );
+  const keep = <T,>(matches: Candidate<T>[]): T[] =>
+    matches
+      .filter(
+        (m) =>
+          m.level === 'full' ||
+          (m.level === 'surname' && !fullSurnames.has(foldedSurname(m.name))),
+      )
+      .map((m) => m.item);
+
+  const matchedFa: GaffaFreeAgent[] = keep(fa);
+  const matchedAuctions: GaffaOpenAuction[] = keep(auctions);
+  const matchedListings: GaffaOpenListing[] = keep(listings);
 
   if (
     matchedFa.length === 0 &&
@@ -551,7 +592,7 @@ export function buildGaffaBidValuationBlock(
 
   for (const fa of matchedFa.slice(0, 4)) {
     const mv = fa.market_value_eur_m ?? 0;
-    const openingFloor = mv > 0 ? Math.max(1, Math.floor(mv * floorRate)) : 1;
+    const openingFloor = openingFaFloor(mv, floorRate);
     const netAtFloor = Number((openingFloor * 0.9).toFixed(1));
     const dossier = lookupPlayerDossier(fa.name, fa.display_name, dossierMap);
     const scoutBit = dossier

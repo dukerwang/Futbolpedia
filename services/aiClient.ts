@@ -3,20 +3,14 @@ import type { GaffaContextBag, PlayerProfile } from '../types';
 import {
   AITask,
   DEFAULT_FAST_MODEL,
-  DEFAULT_SYNTHESIS_MODEL,
   resolveTaskModelConfig,
   ThinkingTier,
 } from '../constants/modelProfiles';
 import { GaffaMarketGrepParams, grepGaffaBag } from '../constants/gaffaRules';
-import {
-  SIMULATION_SEASON,
-  SIMULATION_YEAR,
-  getRealWorldFootballSeason,
-} from '../prompts/scoutCore';
+import { getRealWorldFootballSeason } from '../prompts/scoutCore';
 import { DossierGrepParams, grepDossiers } from './dossierStore';
 
 export const FLASH_MODEL = DEFAULT_FAST_MODEL;
-export const SYNTHESIS_MODEL = DEFAULT_SYNTHESIS_MODEL;
 
 let _ai: GoogleGenAI | null = null;
 export const getAi = (): GoogleGenAI =>
@@ -30,9 +24,23 @@ const THINKING_LEVEL_MAP: Record<ThinkingTier, ThinkingLevel> = {
   high: ThinkingLevel.HIGH,
 };
 
-export const getCurrentSeasonInfo = (refDate: Date = new Date()) => {
-  return getRealWorldFootballSeason(refDate);
+export const getCurrentSeasonInfo = getRealWorldFootballSeason;
+
+/** Splits a `data:<mime>;base64,<data>` URL into a Gemini inline-data part. */
+export const dataUrlToInlinePart = (dataUrl: string) => {
+  const [mimeType, base64Data] = dataUrl.split(';base64,');
+  return { inlineData: { data: base64Data, mimeType: mimeType.replace('data:', '') } };
 };
+
+const blockedOrEmptyResponseError = (finishReason: string | undefined): Error =>
+  finishReason && finishReason !== 'STOP'
+    ? new Error(
+        `The model's response was blocked due to: ${finishReason}. Please modify your prompt and try again.`,
+      )
+    : new Error('The AI model failed to return a valid text response. Please try again.');
+
+/** Max tool-call round trips per prose turn before the model must answer in text. */
+const MAX_TOOL_ROUNDS = 3;
 
 export interface GenerateStructuredParams {
   task: AITask;
@@ -151,6 +159,185 @@ export async function runGroundedSearch(
   }
 }
 
+const GREP_SAVED_DOSSIERS_DECLARATION = {
+  name: 'grep_saved_dossiers',
+  description:
+    'Instant (<1ms) structured grep and attribute filter across the user’s saved and in-conversation player dossiers. Use this whenever the user asks about their scouted players, compares against saved profiles, filters by position/rating/attribute thresholds, or asks who ranks highest in a specific attribute.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: {
+        type: Type.STRING,
+        description:
+          'Optional keyword search across player name, club, nationality, archetype, bestRoles, strengths, weaknesses, and shortBio.',
+      },
+      position: {
+        type: Type.STRING,
+        description:
+          'Optional positional filter (e.g. "Centre-Back", "CB", "Midfielder", "Winger", "Centre Forward", "Full-Back", "Goalkeeper").',
+      },
+      club: {
+        type: Type.STRING,
+        description: 'Optional club filter: a club name or common short name.',
+      },
+      minOverall: {
+        type: Type.NUMBER,
+        description: 'Minimum Overall rating filter (1-99).',
+      },
+      maxOverall: {
+        type: Type.NUMBER,
+        description: 'Maximum Overall rating filter (1-99).',
+      },
+      minPotential: {
+        type: Type.NUMBER,
+        description: 'Minimum Potential rating filter (1-99).',
+      },
+      attributeKey: {
+        type: Type.STRING,
+        description:
+          'Optional specific outfield attribute key to filter or inspect (e.g. "defensivePositioning", "progressivePassing", "finishing", "speed", "dribbling", "tackling", "footballIQ", "composure").',
+      },
+      minAttributeValue: {
+        type: Type.NUMBER,
+        description: 'Minimum value (1-99) required for attributeKey.',
+      },
+      sortBy: {
+        type: Type.STRING,
+        description:
+          'Field to sort descending by: "overall" (default), "potential", "age", or any of the 25 attribute keys (e.g. "progressivePassing", "speed").',
+      },
+      limit: {
+        type: Type.NUMBER,
+        description: 'Max dossiers to return (default 10, max 25).',
+      },
+    },
+  },
+};
+
+const GREP_GAFFA_MARKET_DECLARATION = {
+  name: 'grep_gaffa_market',
+  description:
+    'Instant (<1ms) structured grep and filter over the connected Gaffa league bag (unowned FA pool, club roster, open listings, and live auctions), cross-linked with calibrated Futbolpedia dossiers (scout_ovr, scout_pot, scout_archetype). Use this to find free agents or roster players by position, age (e.g. maxAge: 21 for Academy), market value, calibrated Scout OVR/POT, PL club, or name.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      pool: {
+        type: Type.STRING,
+        enum: ['free_agents', 'roster', 'listings', 'auctions', 'all'],
+        description: 'Which pool to filter (default "all").',
+      },
+      position: {
+        type: Type.STRING,
+        description: 'Exact Gaffa slot filter (GK, CB, LB, RB, LWB, RWB, DM, CM, AM, LW, RW, ST).',
+      },
+      plTeam: {
+        type: Type.STRING,
+        description: 'Optional Premier League club filter.',
+      },
+      maxAge: {
+        type: Type.NUMBER,
+        description: 'Maximum age (e.g. 21 for U21 Academy prospects).',
+      },
+      minAge: {
+        type: Type.NUMBER,
+        description: 'Minimum age.',
+      },
+      minMarketValue: {
+        type: Type.NUMBER,
+        description: 'Minimum market value in €m.',
+      },
+      maxMarketValue: {
+        type: Type.NUMBER,
+        description: 'Maximum market value in €m.',
+      },
+      minOverall: {
+        type: Type.NUMBER,
+        description: 'Minimum calibrated Futbolpedia Overall rating (1-99).',
+      },
+      minPotential: {
+        type: Type.NUMBER,
+        description: 'Minimum calibrated Futbolpedia Potential rating (1-99).',
+      },
+      query: {
+        type: Type.STRING,
+        description: 'Optional name, archetype, or keyword search.',
+      },
+      sortBy: {
+        type: Type.STRING,
+        enum: ['market_value', 'age', 'overall', 'potential'],
+        description: 'Sort order (default "market_value").',
+      },
+      limit: {
+        type: Type.NUMBER,
+        description: 'Maximum results to return (default 25, max 50).',
+      },
+    },
+  },
+};
+
+const NETWORK_FUNCTION_DECLARATIONS = [
+  {
+    name: 'get_player_fact_sheet',
+    description:
+      'Fetches a player’s deterministic API-Football fact sheet (registered club, age, height, weight, injury flag, and current season appearances/goals/assists/tackles/key passes).',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: {
+          type: Type.STRING,
+          description: 'Full name of the footballer.',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'get_football_squad',
+    description:
+      'Gets the current active roster/squad of a football team using API-Football. Use this to verify current players for a club.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        team: {
+          type: Type.STRING,
+          description: 'The name of the football club.',
+        },
+      },
+      required: ['team'],
+    },
+  },
+  {
+    name: 'get_team_fixtures',
+    description:
+      'Gets the last 5 completed match results, next 3 upcoming fixtures, and registered head coach for a football club using API-Football.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        team: {
+          type: Type.STRING,
+          description: 'The name of the football club.',
+        },
+      },
+      required: ['team'],
+    },
+  },
+];
+
+/** Server routes behind the API-Football tools, keyed by tool name. */
+const NETWORK_TOOL_ROUTES: Record<string, { arg: 'name' | 'team'; path: string; label: string }> = {
+  get_player_fact_sheet: { arg: 'name', path: '/api/football/player', label: 'Player' },
+  get_football_squad: { arg: 'team', path: '/api/football/squad', label: 'Squad' },
+  get_team_fixtures: { arg: 'team', path: '/api/football/fixtures', label: 'Fixtures' },
+};
+
+async function callNetworkTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  const route = NETWORK_TOOL_ROUTES[name];
+  const value = args[route.arg];
+  if (!value) return { error: `Missing ${route.arg} argument` };
+  const res = await fetch(`${route.path}?${route.arg}=${encodeURIComponent(String(value))}`);
+  return res.ok ? res.json() : { error: `${route.label} lookup returned status ${res.status}` };
+}
+
 export type ProseToolMode = 'full' | 'local_only' | 'none';
 
 export interface GenerateProseTurnParams {
@@ -179,172 +366,8 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
     params.toolMode ?? (params.enableTools === false ? 'none' : 'full');
 
   const localFunctionDeclarations: any[] = [
-    {
-      name: 'grep_saved_dossiers',
-      description:
-        'Instant (<1ms) structured grep and attribute filter across the user’s saved and in-conversation player dossiers. Use this whenever the user asks about their scouted players, compares against saved profiles, filters by position/rating/attribute thresholds, or asks who ranks highest in a specific attribute.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          query: {
-            type: Type.STRING,
-            description:
-              'Optional keyword search across player name, club, nationality, archetype, bestRoles, strengths, weaknesses, and shortBio.',
-          },
-          position: {
-            type: Type.STRING,
-            description:
-              'Optional positional filter (e.g. "Centre-Back", "CB", "Midfielder", "Winger", "Striker", "Full-Back", "Goalkeeper").',
-          },
-          club: {
-            type: Type.STRING,
-            description: 'Optional club filter (e.g. "PSG", "Chelsea", "Arsenal").',
-          },
-          minOverall: {
-            type: Type.NUMBER,
-            description: 'Minimum Overall rating filter (1-99).',
-          },
-          maxOverall: {
-            type: Type.NUMBER,
-            description: 'Maximum Overall rating filter (1-99).',
-          },
-          minPotential: {
-            type: Type.NUMBER,
-            description: 'Minimum Potential rating filter (1-99).',
-          },
-          attributeKey: {
-            type: Type.STRING,
-            description:
-              'Optional specific outfield attribute key to filter or inspect (e.g. "defensivePositioning", "progressivePassing", "finishing", "speed", "dribbling", "tackling", "footballIQ", "composure").',
-          },
-          minAttributeValue: {
-            type: Type.NUMBER,
-            description: 'Minimum value (1-99) required for attributeKey.',
-          },
-          sortBy: {
-            type: Type.STRING,
-            description:
-              'Field to sort descending by: "overall" (default), "potential", "age", or any of the 25 attribute keys (e.g. "progressivePassing", "speed").',
-          },
-          limit: {
-            type: Type.NUMBER,
-            description: 'Max dossiers to return (default 10, max 25).',
-          },
-        },
-      },
-    },
-    ...(params.gaffaBag?.connected
-      ? [
-          {
-            name: 'grep_gaffa_market',
-            description:
-              'Instant (<1ms) structured grep and filter over the connected Gaffa league bag (unowned FA pool, club roster, open listings, and live auctions), cross-linked with calibrated Futbolpedia dossiers (scout_ovr, scout_pot, scout_archetype). Use this to find free agents or roster players by position, age (e.g. maxAge: 21 for Academy), market value, calibrated Scout OVR/POT, PL club, or name.',
-            parameters: {
-              type: Type.OBJECT,
-              properties: {
-                pool: {
-                  type: Type.STRING,
-                  enum: ['free_agents', 'roster', 'listings', 'auctions', 'all'],
-                  description: 'Which pool to filter (default "all").',
-                },
-                position: {
-                  type: Type.STRING,
-                  description: 'Exact Gaffa slot filter (GK, CB, LB, RB, LWB, RWB, DM, CM, AM, LW, RW, ST).',
-                },
-                plTeam: {
-                  type: Type.STRING,
-                  description: 'Optional Premier League club filter.',
-                },
-                maxAge: {
-                  type: Type.NUMBER,
-                  description: 'Maximum age (e.g. 21 for U21 Academy prospects).',
-                },
-                minAge: {
-                  type: Type.NUMBER,
-                  description: 'Minimum age.',
-                },
-                minMarketValue: {
-                  type: Type.NUMBER,
-                  description: 'Minimum market value in €m.',
-                },
-                maxMarketValue: {
-                  type: Type.NUMBER,
-                  description: 'Maximum market value in €m.',
-                },
-                minOverall: {
-                  type: Type.NUMBER,
-                  description: 'Minimum calibrated Futbolpedia Overall rating (1-99).',
-                },
-                minPotential: {
-                  type: Type.NUMBER,
-                  description: 'Minimum calibrated Futbolpedia Potential rating (1-99).',
-                },
-                query: {
-                  type: Type.STRING,
-                  description: 'Optional name, archetype, or keyword search.',
-                },
-                sortBy: {
-                  type: Type.STRING,
-                  enum: ['market_value', 'age', 'overall', 'potential'],
-                  description: 'Sort order (default "market_value").',
-                },
-                limit: {
-                  type: Type.NUMBER,
-                  description: 'Maximum results to return (default 25, max 50).',
-                },
-              },
-            },
-          },
-        ]
-      : []),
-  ];
-
-  const networkFunctionDeclarations: any[] = [
-    {
-      name: 'get_player_fact_sheet',
-      description:
-        'Fetches a player’s deterministic API-Football fact sheet (registered club, age, height, weight, injury flag, and current season appearances/goals/assists/tackles/key passes).',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          name: {
-            type: Type.STRING,
-            description: 'Full name of the footballer (e.g. "Willian Pacho", "Ousmane Dembélé").',
-          },
-        },
-        required: ['name'],
-      },
-    },
-    {
-      name: 'get_football_squad',
-      description:
-        'Gets the current active roster/squad of a football team using API-Football. Use this to verify current players for a club.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          team: {
-            type: Type.STRING,
-            description: 'The name of the football club (e.g. Real Madrid, Arsenal, PSG)',
-          },
-        },
-        required: ['team'],
-      },
-    },
-    {
-      name: 'get_team_fixtures',
-      description:
-        'Gets the last 5 completed match results, next 3 upcoming fixtures, and registered head coach for a football club using API-Football.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          team: {
-            type: Type.STRING,
-            description: 'The name of the football club (e.g. PSG, Chelsea, Barcelona)',
-          },
-        },
-        required: ['team'],
-      },
-    },
+    GREP_SAVED_DOSSIERS_DECLARATION,
+    ...(params.gaffaBag?.connected ? [GREP_GAFFA_MARKET_DECLARATION] : []),
   ];
 
   const tools: any[] =
@@ -354,7 +377,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
         ? [{ functionDeclarations: localFunctionDeclarations }]
         : [
             { googleSearch: {} },
-            { functionDeclarations: [...localFunctionDeclarations, ...networkFunctionDeclarations] },
+            { functionDeclarations: [...localFunctionDeclarations, ...NETWORK_FUNCTION_DECLARATIONS] },
           ];
 
   const chatSession = getAi().chats.create({
@@ -380,15 +403,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
   });
 
   const parts: any[] = [{ text: params.message }];
-  if (params.imageData) {
-    const [mimeType, base64Data] = params.imageData.split(';base64,');
-    parts.push({
-      inlineData: {
-        data: base64Data,
-        mimeType: mimeType.replace('data:', ''),
-      },
-    });
-  }
+  if (params.imageData) parts.push(dataUrlToInlinePart(params.imageData));
 
   const executeToolCalls = async (calls: any[]) =>
     Promise.all(
@@ -404,39 +419,8 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
               args as GaffaMarketGrepParams,
               params.dossiersPool ?? [],
             );
-          } else if (functionCall.name === 'get_player_fact_sheet') {
-            if (args.name) {
-              const fetchRes = await fetch(
-                `/api/football/player?name=${encodeURIComponent(String(args.name))}`,
-              );
-              apiResult = fetchRes.ok
-                ? await fetchRes.json()
-                : { error: `Player lookup returned status ${fetchRes.status}` };
-            } else {
-              apiResult = { error: 'Missing name argument' };
-            }
-          } else if (functionCall.name === 'get_football_squad') {
-            if (args.team) {
-              const fetchRes = await fetch(
-                `/api/football/squad?team=${encodeURIComponent(String(args.team))}`,
-              );
-              apiResult = fetchRes.ok
-                ? await fetchRes.json()
-                : { error: `Squad lookup returned status ${fetchRes.status}` };
-            } else {
-              apiResult = { error: 'Missing team argument' };
-            }
-          } else if (functionCall.name === 'get_team_fixtures') {
-            if (args.team) {
-              const fetchRes = await fetch(
-                `/api/football/fixtures?team=${encodeURIComponent(String(args.team))}`,
-              );
-              apiResult = fetchRes.ok
-                ? await fetchRes.json()
-                : { error: `Fixtures lookup returned status ${fetchRes.status}` };
-            } else {
-              apiResult = { error: 'Missing team argument' };
-            }
+          } else if (Object.hasOwn(NETWORK_TOOL_ROUTES, functionCall.name)) {
+            apiResult = await callNetworkTool(functionCall.name, args);
           } else {
             apiResult = { error: `Unknown tool: ${functionCall.name}` };
           }
@@ -479,46 +463,26 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
 
     await consumeStream(parts);
 
-    let safetyLoopCount = 0;
-    while (pendingCalls.length > 0 && safetyLoopCount < 3) {
-      safetyLoopCount++;
-      const toolResponses = await executeToolCalls(pendingCalls);
-      await consumeStream(toolResponses);
+    for (let round = 0; pendingCalls.length > 0 && round < MAX_TOOL_ROUNDS; round++) {
+      await consumeStream(await executeToolCalls(pendingCalls));
     }
 
-    if (!accumulatedText.trim()) {
-      if (lastFinishReason && lastFinishReason !== 'STOP') {
-        throw new Error(
-          `The model's response was blocked due to: ${lastFinishReason}. Please modify your prompt and try again.`,
-        );
-      }
-      throw new Error('The AI model failed to return a valid text response. Please try again.');
-    }
+    if (!accumulatedText.trim()) throw blockedOrEmptyResponseError(lastFinishReason);
 
     return accumulatedText;
   }
 
   let response = await chatSession.sendMessage({ message: parts });
 
-  let safetyLoopCount = 0;
-  while (response.functionCalls && response.functionCalls.length > 0 && safetyLoopCount < 3) {
-    safetyLoopCount++;
-    const toolResponses = await executeToolCalls(response.functionCalls);
+  for (let round = 0; response.functionCalls?.length && round < MAX_TOOL_ROUNDS; round++) {
     response = await chatSession.sendMessage({
-      message: toolResponses,
+      message: await executeToolCalls(response.functionCalls),
     });
   }
 
   const text = response.text;
   if (typeof text !== 'string') {
-    const finishReason = response.candidates?.[0]?.finishReason;
-    if (finishReason && finishReason !== 'STOP') {
-      throw new Error(
-        `The model's response was blocked due to: ${finishReason}. Please modify your prompt and try again.`,
-      );
-    }
-    throw new Error('The AI model failed to return a valid text response. Please try again.');
+    throw blockedOrEmptyResponseError(response.candidates?.[0]?.finishReason);
   }
-
   return text;
 }
