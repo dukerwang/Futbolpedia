@@ -121,7 +121,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-[20px] text-emerald-600 dark:text-emerald-400">forum</span>
             <h3 className="text-sm font-serif font-bold text-charcoal dark:text-white uppercase tracking-widest">
-              Saved Briefs
+              Chats
             </h3>
           </div>
           <button

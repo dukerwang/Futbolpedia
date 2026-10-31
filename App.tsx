@@ -665,6 +665,7 @@ const App: React.FC = () => {
       const streamingMessageId = generateId();
       let streamStarted = false;
       let lastStreamFlushAt = 0;
+      let revisedProfile: PlayerProfile | null = null;
 
       if (activeDomain === 'gaffa') {
         const contextBag = await resolveContextBagForSend(gaffaLink);
@@ -768,7 +769,7 @@ const App: React.FC = () => {
         {
           onDossierUpdated: (updatedProfile) => {
             saveAndSetActiveProfile(updatedProfile);
-            setIsPanelOpen(true);
+            revisedProfile = updatedProfile;
           },
           onStageChange: (label) => setLoadingMessage(label),
           onStreamChunk: (accumulatedText) => {
@@ -804,8 +805,8 @@ const App: React.FC = () => {
 
       if (typeof aiResponse === 'object' && 'basicInfo' in aiResponse) {
         const profile = aiResponse as PlayerProfile;
+        // The in-chat card opens the panel, so the reply doesn't cover the chat on phones.
         saveAndSetActiveProfile(profile);
-        setIsPanelOpen(true);
 
         newAiMessage = {
           id: streamingMessageId,
@@ -821,6 +822,8 @@ const App: React.FC = () => {
           sender: 'ai',
           content: aiResponse,
           timestamp: Date.now(),
+          // A challenge that revised the card shows the new numbers in the thread.
+          ...(revisedProfile ? { dossier: toChatDossierRef(revisedProfile) } : {}),
         };
       }
 
