@@ -642,6 +642,24 @@ await test('a question that looks like it is about the past starts its brief ear
   assert.equal(used.verdict, 'Zinedine Zidane');
 });
 
+await test('a slow web search is left out of the answer instead of holding it back', async () => {
+  const slowBrief = readDebateBrief(
+    { ...rawBrief, calls: [{ tool: 'player_career', subject: 'Kaká', purpose: 'p' }, { tool: 'web_search', subject: 'Kaká contemporary reports', purpose: 'p' }] },
+    { message: '' },
+  );
+  const tools = {
+    ...fakeTools([]),
+    webSearch: () => new Promise<ToolOutcome>((resolve) => setTimeout(() => resolve({ status: 'found', result: { kind: 'web', label: 'late', content: 'late' }, missing: [] }), 200)),
+  } as unknown as ResearchToolset;
+  const { ledger } = await runDebateResearch(
+    { message: 'Prime Zidane or prime Kaká?', thread: '', cards: [zidane, kaka], hints: { clubs: [], players: [] } },
+    tools,
+    { model: { writeBrief: async () => slowBrief }, searchBudgetMs: 20 },
+  );
+  assert.deepEqual(ledger.entries.map((e) => e.kind), ['career_record']);
+  assert.ok(ledger.gaps.some((g) => g.label.includes('took too long') && g.status === 'empty'));
+});
+
 // --- The historical eval's pure parts ---------------------------------------------------------
 
 await test('the eval reads its question set, paraphrase pairs and the grader replies', async () => {

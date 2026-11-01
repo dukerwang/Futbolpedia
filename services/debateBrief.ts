@@ -100,6 +100,12 @@ export const MAX_ERA_BUILDS = 3;
 export const SETTLED_PEEK_MS = 600;
 /** How long, once the facts are in, a turn waits for stored era snapshots. */
 export const ERA_PEEK_MS = 400;
+/**
+ * How long a web search may run past the record lookups. A grounded search takes 9 to 13 s, which
+ * held the first token back by that much in the evals; one that misses the budget is left out of
+ * this turn, and the era snapshots built in the background carry that kind of analysis next time.
+ */
+export const SEARCH_BUDGET_MS = 4_000;
 
 const KINDS: DebateKind[] = ['head_to_head', 'ranking', 'single', 'other'];
 
@@ -311,6 +317,7 @@ export async function runDebateResearch(
     debates?: DebateStore | null;
     /** A brief started before routing (`startDebateBrief`), used unless a settled one exists. */
     early?: Promise<DebateBrief | null> | null;
+    searchBudgetMs?: number;
     onStage?: (label: string) => void;
     perf?: (label: string) => void;
   } = {},
@@ -369,7 +376,17 @@ export async function runDebateResearch(
       return hit;
     });
   });
-  const outcomes: ToolOutcome[] = await Promise.all(runs);
+  // Records first; a search gets the budget beyond them, then is left out.
+  const isSearch = (i: number) => brief.calls[i].tool === 'web_search';
+  await Promise.all(runs.filter((_, i) => !isSearch(i)));
+  const budget = options.searchBudgetMs ?? SEARCH_BUDGET_MS;
+  const outcomes: ToolOutcome[] = await Promise.all(
+    runs.map((r, i) =>
+      isSearch(i)
+        ? within(r, budget).then((o) => o ?? { status: 'empty' as const, result: null, missing: [], note: 'took too long, left out of this answer' })
+        : r,
+    ),
+  );
   let ledger = fileOutcomes(emptyLedger(), brief.calls, outcomes);
   const snapshots = (await Promise.all(eraRuns.map((r) => within(r, ERA_PEEK_MS)))).filter((s): s is EraSnapshot => s !== null);
   for (const s of snapshots) ledger = addEvidence(ledger, eraEntry(s));
