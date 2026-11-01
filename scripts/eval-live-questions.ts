@@ -84,6 +84,19 @@ const live = createLiveFootball(async (url) => {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 });
+// The history routes too, kept in memory for the run (the server also keeps them on disk).
+const { createHistoryFootball } = await import('../services/historyFootball');
+const { getRealWorldFootballSeason } = await import('../prompts/scoutCore');
+const historyStore = new Map<string, any>();
+const pastSeasons = createHistoryFootball({
+  getJson: async (url) => {
+    const res = await realFetch(url, { headers: { 'User-Agent': 'Futbolpedia-eval/3.6 (https://github.com/dukerwang/Futbolpedia)', Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+  store: { get: async (k) => historyStore.get(k), set: async (k, v) => void historyStore.set(k, v) },
+  currentSeasonStart: () => getRealWorldFootballSeason().seasonStartYear,
+});
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input);
@@ -93,6 +106,11 @@ globalThis.fetch = (async (input: any, init?: any) => {
     if (u.pathname === '/api/live/club') return json(await live.club(name));
     if (u.pathname === '/api/live/player') return json(await live.player(name));
     if (u.pathname === '/api/live/table') return json(await live.table(u.searchParams.get('league') ?? '', u.searchParams.get('country') ?? undefined));
+  }
+  if (url.startsWith('/api/history/')) {
+    const u = new URL(url, 'http://local');
+    if (u.pathname === '/api/history/club-season') return json(await pastSeasons.clubSeason(u.searchParams.get('club') ?? '', u.searchParams.get('season') ?? ''));
+    if (u.pathname === '/api/history/player') return json(await pastSeasons.playerCareer(u.searchParams.get('name') ?? ''));
   }
   // API-Football's free plan can't read the current season; the app treats a refusal as no data.
   if (url.startsWith('/api/')) return json({ error: 'not available in the eval runner' }, 404);

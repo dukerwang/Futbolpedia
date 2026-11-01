@@ -51,6 +51,8 @@ import {
 } from '../services/eraSnapshots';
 import { executeCall, historyOutcome, sanitizeCalls, type ResearchToolset, type ToolOutcome } from '../services/researchTools';
 import {
+  looksLikePastQuestion,
+  startDebateBrief,
   buildDebateBriefPrompt,
   checkBriefAgainstCards,
   formatDebateBriefForWriter,
@@ -574,7 +576,7 @@ await test('debate research runs the lookups, attaches stored era snapshots and 
     get: async (req: any) => (built.push(`${req.kind} ${req.period}`), null),
   };
   const writes: any[] = [];
-  const debates = { read: async () => null, write: async (r: any) => void writes.push(r) };
+  const debates = { read: async () => null, settledAny: async () => false, write: async (r: any) => void writes.push(r) };
   let briefs = 0;
   const { brief, ledger } = await runDebateResearch(
     { message: 'Prime Zidane or prime Kaká?', thread: '', cards: [zidane, kaka], hints: { clubs: [], players: [] } },
@@ -594,7 +596,7 @@ await test('debate research runs the lookups, attaches stored era snapshots and 
 
 await test('a settled debate is reused without a brief call; a follow-up never is', async () => {
   const settled = { signature: 's', cards: 'c', brief: { ...rawBrief, verdict: 'Zinedine Zidane', calls: [] }, settledAt: '2026-11-01T00:00:00Z', version: 1 };
-  const debates = { read: async () => settled, write: async () => assert.fail('rewrote a settled debate') };
+  const debates = { read: async () => settled, settledAny: async () => true, write: async () => assert.fail('rewrote a settled debate') };
   const model = { writeBrief: async () => assert.fail('wrote a new brief') };
   const { brief } = await runDebateResearch(
     { message: 'Prime Zidane or prime Kaká?', thread: '', cards: [zidane, kaka], hints: { clubs: [], players: [] } },
@@ -607,9 +609,36 @@ await test('a settled debate is reused without a brief call; a follow-up never i
   await runDebateResearch(
     { message: 'and at Madrid?', thread: '<ongoing_thread>…</ongoing_thread>', cards: [], hints: { clubs: [], players: [] } },
     fakeTools([]),
-    { model: { writeBrief: async () => (wrote++, readDebateBrief({ verdict: 'x' }, { message: '' })) }, debates: { read: async () => assert.fail('read'), write: async () => assert.fail('wrote') } },
+    {
+      model: { writeBrief: async () => (wrote++, readDebateBrief({ verdict: 'x' }, { message: '' })) },
+      debates: { read: async () => assert.fail('read'), settledAny: async () => assert.fail('read'), write: async () => assert.fail('wrote') },
+    },
   );
   assert.equal(wrote, 1);
+});
+
+await test('a question that looks like it is about the past starts its brief early, without the cards', async () => {
+  assert.ok(looksLikePastQuestion('Prime Zidane or prime Kaká?'));
+  assert.ok(looksLikePastQuestion('Rank the best centre-backs of the 2000s'));
+  assert.ok(looksLikePastQuestion('How did Barcelona play in 2008-09?'));
+  assert.ok(!looksLikePastQuestion('How is Barcelona pressing this season?'));
+  assert.ok(!looksLikePastQuestion('rate prime Kaká'));
+  const seen: any[] = [];
+  const model = { writeBrief: async (ctx: any) => (seen.push(ctx), readDebateBrief(rawBrief, ctx)) };
+  const brief = await startDebateBrief('Prime Zidane or prime Kaká?', { model, debates: { read: async () => null, settledAny: async () => false, write: async () => {} } });
+  assert.equal(brief?.verdict, 'Kaká, narrowly');
+  assert.equal(seen[0].cardsPending, true);
+  assert.ok(buildDebateBriefPrompt(seen[0]).includes('checked against your verdict separately'));
+  // Settled before: no brief at all.
+  assert.equal(await startDebateBrief('Prime Zidane or prime Kaká?', { model, debates: { read: async () => null, settledAny: async () => true, write: async () => {} } }), null);
+  assert.equal(startDebateBrief('Who is injured at Arsenal right now?', { model }), null);
+  // The early brief is used, and still held to the cards.
+  const { brief: used } = await runDebateResearch(
+    { message: 'Prime Zidane or prime Kaká?', thread: '', cards: [zidane, kaka], hints: { clubs: [], players: [] } },
+    fakeTools([]),
+    { model: { writeBrief: async () => assert.fail('wrote a second brief') }, early: Promise.resolve(readDebateBrief(rawBrief, { message: '' })) },
+  );
+  assert.equal(used.verdict, 'Zinedine Zidane');
 });
 
 console.log(`${passes} passed, ${failures} failed`);

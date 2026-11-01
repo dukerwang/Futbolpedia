@@ -390,12 +390,23 @@ export const debateKey = (signature: string, cards: string): string => {
 
 export interface DebateStore {
   read(signature: string, cards: string): Promise<DebateRecord | null>;
+  /** Whether the question has been settled under any cards, so an early brief can be skipped. */
+  settledAny(signature: string): Promise<boolean>;
   write(record: DebateRecord): Promise<void>;
 }
 
-export function createDebateStore(deps: { read(key: string): Promise<EraRow | null>; write(row: EraRow): Promise<void> }): DebateStore {
+export function createDebateStore(deps: {
+  read(key: string): Promise<EraRow | null>;
+  write(row: EraRow): Promise<void>;
+  /** Whether any debate row has this signature. */
+  anyWithSubject?(subject: string): Promise<boolean>;
+}): DebateStore {
   const memory = new Map<string, DebateRecord>();
   return {
+    async settledAny(signature) {
+      if ([...memory.values()].some((r) => r.signature === signature)) return true;
+      return deps.anyWithSubject ? deps.anyWithSubject(signature.slice(0, 200)).catch(() => false) : false;
+    },
     async read(signature, cards) {
       const key = debateKey(signature, cards);
       const hit = memory.get(key);
@@ -438,4 +449,12 @@ export const liveEraSnapshots: EraSnapshotSource = createEraSnapshotStore({
   build: (req, facts) => buildEraSnapshot(req, facts, liveToolset([])),
 });
 
-export const liveDebateRecords: DebateStore = createDebateStore({ read: readRow, write: writeRow });
+export const liveDebateRecords: DebateStore = createDebateStore({
+  read: readRow,
+  write: writeRow,
+  async anyWithSubject(subject) {
+    if (!supabase) return false;
+    const { data } = await supabase.from('era_snapshots').select('snapshot_key').eq('kind', 'debate').eq('subject', subject).limit(1);
+    return Array.isArray(data) && data.length > 0;
+  },
+});

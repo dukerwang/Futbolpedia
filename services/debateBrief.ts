@@ -89,6 +89,8 @@ export interface DebateContext {
   hints: { clubs: string[]; players: string[] };
   /** A past season the message names, from the router. */
   season?: string | null;
+  /** The brief is being written before the cards are known; code holds it to them afterwards. */
+  cardsPending?: boolean;
 }
 
 /** Lookups the brief may plan, and how many era snapshots one turn may start building. */
@@ -119,7 +121,6 @@ const BRIEF_SCHEMA: Record<string, unknown> = {
     counterCase: { type: Type.STRING },
     verdict: { type: Type.STRING },
     ranking: { type: Type.ARRAY, items: { type: Type.STRING } },
-    outline: { type: Type.ARRAY, items: { type: Type.STRING } },
     calls: {
       type: Type.ARRAY,
       items: {
@@ -135,7 +136,7 @@ const BRIEF_SCHEMA: Record<string, unknown> = {
       },
     },
   },
-  required: ['understanding', 'kind', 'criterion', 'criteria', 'versions', 'disagreement', 'counterCase', 'verdict', 'ranking', 'outline', 'calls'],
+  required: ['understanding', 'kind', 'criterion', 'criteria', 'versions', 'disagreement', 'counterCase', 'verdict', 'ranking', 'calls'],
 };
 
 const placementText = (s: CardStanding): string => {
@@ -153,7 +154,7 @@ export const buildDebateBriefPrompt = (ctx: DebateContext): string => {
   const { month, year } = getCurrentSeasonInfo();
   return `You are planning a football analyst's answer to a question about the past. Today is ${month} ${year}. Your memory of football history is broad, but it fails in particular ways: precise figures (a season's goals, appearances, points, trophies), which season or spell something happened in, and anecdotes that are retold more often than they are true. Plan so that the answer never depends on one of those without a source, and so that it argues from criteria rather than reputation.
 
-Work out:
+Keep every field short: a sentence or two at most. Work out:
 1. understanding: what the user wants settled, read in the light of the conversation.
 2. kind: "head_to_head" for two sides compared, "ranking" for an order of several, "single" for one season, player or team examined, "other" for anything else.
 3. criterion: what the question turns on. "peak_level" is how good a version was at its best; "sustained_level" is how long it held a high level; "output" is goals, assists and numbers; "influence" is its effect on results and on the team; "versatility" is range of roles; "mixed" when the question is how good overall and no one of these decides it. Read it from the words the user chose.
@@ -162,8 +163,7 @@ Work out:
 6. disagreement: where reasonable people disagree about this question and why, in a sentence or two.
 7. counterCase: the strongest case against the verdict you propose, stated as its best advocate would put it.
 8. verdict and ranking: for a head-to-head or single question, the verdict in a few words, starting with the winning side's name as it appears in versions; for a ranking, the order best first, one name per entry, and leave verdict empty. Commit to one. When the question turns on how good the players were, the stored cards below have already rated them: agree with their order, and where cards are level, let the criteria decide.
-9. outline: the points the answer makes, in order, as short phrases, one per criterion and one for the counter-case.
-10. calls: lookups, at most ${DEBATE_CALL_LIMIT}, only for facts the verdict depends on: a season's record and personnel, a player's numbers and honours in the window being compared. Prefer club_season and player_career, which read stored records; use web_search only for an analytical point those can't give, and ask for contemporary accounts. Don't fetch cards that are already in play. A question the cards and a season's record already answer may need one or two calls.
+9. calls: lookups, at most ${DEBATE_CALL_LIMIT}, only for facts the verdict depends on: a season's record and personnel, a player's numbers and honours in the window being compared. Prefer club_season and player_career, which read stored records; use web_search only for an analytical point those can't give, and ask for contemporary accounts. Don't fetch cards that are already in play. A question the cards and a season's record already answer may need one or two calls.
 
 Tools:
 ${RESEARCH_TOOL_GUIDE}
@@ -171,7 +171,9 @@ ${RESEARCH_TOOL_GUIDE}
 ${HISTORY_COVERAGE_NOTE}
 
 ${
-  ctx.cards.length
+  ctx.cardsPending
+    ? 'The stored cards in play are checked against your verdict separately.\n'
+    : ctx.cards.length
     ? `Stored cards in play, in the order their ratings put them (each rates one version of the player across its window):
 ${formatCardOrder(ctx.cards)}
 ${ctx.cards.map((s) => (placementText(s) ? `- ${s.name}${placementText(s)}` : '')).filter(Boolean).join('\n')}
@@ -236,11 +238,40 @@ export const liveDebateModel: DebateModel = {
       task: 'routing',
       prompt: buildDebateBriefPrompt(ctx),
       schema: BRIEF_SCHEMA,
-      thinkingLevelOverride: 'medium',
+      // Medium thinking took about 15 s here, which put the first token well behind a card debate's
+      // before this brief existed; the structure of the brief does most of the thinking.
+      thinkingLevelOverride: 'low',
       temperatureOverride: 0,
     });
     return readDebateBrief(raw, ctx);
   },
+};
+
+/** Words that suggest a question about the past; the router decides, this only starts the brief early. */
+const PAST_CUES =
+  /\b(?:prime|peak|at (?:his|their) (?:best|peak)|all[- ]time|greatest|best ever|era|treble|invincibles|(?:19|20)\d0s|(?:19|20)\d{2}\s*[-/–]\s*\d{2,4}|19\d{2}|20(?:0\d|1\d|2[0-3]))\b/i;
+const PRESENT_CUES = /\b(?:this season|right now|currently|at the moment|these days|so far|now)\b/i;
+/** A rating request names a prime too, but it's rated, not debated. */
+const RATING_REQUEST = /^\s*(?:please\s+)?(?:re-?rate|rate|scout|dossier)\b/i;
+export const looksLikePastQuestion = (message: string): boolean =>
+  PAST_CUES.test(message) && !PRESENT_CUES.test(message) && !RATING_REQUEST.test(message);
+
+/**
+ * Starts the debate brief before routing, for a new chat whose message looks like it's about the
+ * past, so the routing and card lookups aren't on its critical path. It's written without the
+ * cards; `runDebateResearch` holds it to them. A wrong guess costs one call, never time.
+ */
+export const startDebateBrief = (
+  message: string,
+  options: { model?: DebateModel; debates?: DebateStore | null } = {},
+): Promise<DebateBrief | null> | null => {
+  if (!looksLikePastQuestion(message)) return null;
+  const model = options.model ?? liveDebateModel;
+  return (async () => {
+    // A question settled before needs no brief at all.
+    if (options.debates && (await within(options.debates.settledAny(debateSignature(message)), SETTLED_PEEK_MS))) return null;
+    return model.writeBrief({ message, thread: '', cards: [], hints: { clubs: [], players: [] }, cardsPending: true });
+  })().catch(() => null);
 };
 
 /** Resolves to the promise's value, or null if it hasn't settled within `ms`. Never rejects. */
@@ -266,7 +297,8 @@ export function eraFor(call: ResearchCall, brief: DebateBrief, cards: CardStandi
   // The window comes from the call, else the brief's version of that player, else his card.
   const surname = (name: string) => name.replace(/\(.*?\)/g, '').trim().toLowerCase().split(/\s+/).pop() ?? '';
   const version = brief.versions.find((v) => surname(v.subject) && surname(v.subject) === surname(call.subject));
-  const period = call.season || version?.period || matchStanding(call.subject, cards)?.period || '';
+  // A card's window comes first, so a snapshot covers the version the card rates.
+  const period = call.season || matchStanding(call.subject, cards)?.period || version?.period || '';
   return /\d{4}/.test(period) ? { kind: 'player_window', period } : null;
 }
 
@@ -277,6 +309,8 @@ export async function runDebateResearch(
     model?: DebateModel;
     eras?: EraSnapshotSource | null;
     debates?: DebateStore | null;
+    /** A brief started before routing (`startDebateBrief`), used unless a settled one exists. */
+    early?: Promise<DebateBrief | null> | null;
     onStage?: (label: string) => void;
     perf?: (label: string) => void;
   } = {},
@@ -296,13 +330,16 @@ export async function runDebateResearch(
     options.perf?.(`debate brief (settled ${settled.settledAt.slice(0, 10)}, ${brief.kind}, ${brief.calls.length} lookups)`);
   } else {
     options.onStage?.('Working out what settles the question...');
+    const early = options.early && !ctx.thread ? await options.early.catch(() => null) : null;
     try {
-      brief = checkBriefAgainstCards(await model.writeBrief(ctx), ctx.cards);
+      brief = checkBriefAgainstCards(early ?? (await model.writeBrief(ctx)), ctx.cards);
     } catch (e) {
       console.warn('[Research] Debate brief failed, writing from the cards:', e);
       brief = readDebateBrief({}, ctx);
     }
-    options.perf?.(`debate brief (${brief.kind}, ${brief.criterion}, ${brief.calls.length} lookups${brief.cardNotes.length ? `, ${brief.cardNotes.length} card notes` : ''})`);
+    options.perf?.(
+      `debate brief (${early ? 'started early, ' : ''}${brief.kind}, ${brief.criterion}, ${brief.calls.length} lookups${brief.cardNotes.length ? `, ${brief.cardNotes.length} card notes` : ''})`,
+    );
     if (!ctx.thread && debates && signature && (brief.verdict || brief.ranking.length)) {
       void debates.write({
         signature,

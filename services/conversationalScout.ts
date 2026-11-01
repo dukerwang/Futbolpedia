@@ -249,6 +249,8 @@ export interface ConversationalScoutParams {
   perf?: (label: string) => void;
   /** The question's web search, when it started during routing. */
   questionSearch?: Promise<ToolOutcome> | null;
+  /** A debate brief started before routing (`startDebateBrief`), for a question about the past. */
+  debateBrief?: Promise<DebateBrief | null> | null;
 }
 
 /**
@@ -508,7 +510,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
             season: route.requestedSeason ?? null,
           },
           liveToolset([...lockedCards, ...allCalibrated]),
-          { onStage: onStageChange, perf, eras: liveEraSnapshots, debates: liveDebateRecords },
+          { onStage: onStageChange, perf, eras: liveEraSnapshots, debates: liveDebateRecords, early: params.debateBrief },
         );
         debate = research.brief;
         if (research.ledger.entries.length || research.ledger.gaps.length) ledger = research.ledger;
