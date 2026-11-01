@@ -646,10 +646,10 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squ
       ? 'full'
       : 'local_only'
     : proseToolMode({
-    researched,
-    isArchive: route.intent === 'archive_inventory',
-    cardsLocked: route.targetPlayers.length > 0 && Boolean(effectiveLockedBlock),
-  });
+        researched,
+        isArchive: route.intent === 'archive_inventory',
+        cardsLocked: route.targetPlayers.length > 0 && Boolean(effectiveLockedBlock),
+      });
 
   onStageChange?.('Writing scouting analysis...');
 
