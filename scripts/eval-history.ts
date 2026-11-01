@@ -151,7 +151,7 @@ export interface HistoricalRunDeps {
  * paraphrase pairs for the same verdict, and returns the report's Markdown and JSON.
  */
 export async function runHistoricalSet(deps: HistoricalRunDeps): Promise<{ markdown: string; json: unknown }> {
-  const runs: { q: EvalQuestion; attempt: number; run: AskResult; grade: HistoryGrade | null }[] = [];
+  const runs: HistoricalRun[] = [];
   for (const q of deps.questions) {
     for (let attempt = 1; attempt <= deps.repeat; attempt++) {
       process.stdout.write(`Q${q.n}${deps.repeat > 1 ? ` (run ${attempt})` : ''}: ${q.text} ... `);
@@ -162,12 +162,13 @@ export async function runHistoricalSet(deps: HistoricalRunDeps): Promise<{ markd
             .catch(() => '')
         : '';
       const grade = parseHistoryGrade(raw);
-      runs.push({ q, attempt, run, grade });
+      const figures = run.answer ? await checkFigures(run.answer, deps.grade) : null;
+      runs.push({ q, attempt, run, grade, figures });
       console.log(
         run.error
           ? `failed: ${run.error}`
           : `${((run.firstTokenMs ?? run.totalMs) / 1000).toFixed(1)}s first token, ${(run.totalMs / 1000).toFixed(1)}s total${
-              grade ? `; wrong figures ${grade.wrongFigures.length}, blended ${grade.blendedSeasons.length}, criteria ${grade.criteria}/5` : '; grading failed'
+              grade ? `; figures ${figures ? `${figures.wrong.length} wrong of ${figures.stated}` : 'unchecked'}, blended ${grade.blendedSeasons.length}, criteria ${grade.criteria}/5` : '; grading failed'
             }`,
       );
     }
@@ -191,7 +192,41 @@ export async function runHistoricalSet(deps: HistoricalRunDeps): Promise<{ markd
     paraphrases.push({ pair, agreement: r?.agreement ?? null, why: r?.why ?? 'comparison failed' });
   }
 
+  return buildHistoricalReport(runs, repeats, paraphrases, deps);
+}
+
+export interface HistoricalRun {
+  q: EvalQuestion;
+  attempt: number;
+  run: AskResult;
+  grade: HistoryGrade | null;
+  figures?: FigureCheck | null;
+}
+type Compared = { n: number; agreement: Agreement | null; why: string };
+type PairCompared = { pair: [number, number]; agreement: Agreement | null; why: string };
+
+/** Runs a saved report's answers through the figure check again, keeping its grades and comparisons. */
+export async function regradeFigures(
+  saved: { runs: HistoricalRun[]; repeats: Compared[]; paraphrases: PairCompared[] },
+  deps: Pick<HistoricalRunDeps, 'grade' | 'today' | 'label' | 'model' | 'repeat' | 'questions'>,
+): Promise<{ markdown: string; json: unknown }> {
+  for (const r of saved.runs) {
+    process.stdout.write(`Q${r.q.n} (run ${r.attempt}) ... `);
+    r.figures = r.run.answer ? await checkFigures(r.run.answer, deps.grade) : null;
+    console.log(r.figures ? `${r.figures.wrong.length} wrong, ${r.figures.unconfirmed.length} unconfirmed of ${r.figures.stated}` : 'unchecked');
+  }
+  return buildHistoricalReport(saved.runs, saved.repeats, saved.paraphrases, deps);
+}
+
+function buildHistoricalReport(
+  runs: HistoricalRun[],
+  repeats: Compared[],
+  paraphrases: PairCompared[],
+  deps: Pick<HistoricalRunDeps, 'today' | 'label' | 'model' | 'repeat' | 'questions'>,
+): { markdown: string; json: unknown } {
   const graded = runs.filter((r) => r.grade);
+  const checked = runs.filter((r) => r.figures);
+  const figureSum = (f: (c: FigureCheck) => number) => checked.reduce((n, r) => n + f(r.figures!), 0);
   const sum = (f: (g: HistoryGrade) => number) => graded.reduce((n, r) => n + f(r.grade!), 0);
   const mean = (f: (g: HistoryGrade) => number) => (graded.length ? (sum(f) / graded.length).toFixed(1) : '–');
   const median = (xs: number[]) => (xs.length ? [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)] : null);
@@ -205,7 +240,8 @@ Ran ${deps.questions.length} questions ${deps.repeat} time${deps.repeat === 1 ? 
 
 The grader is the same model that writes the answers, so it can share their blind spots. Compare runs with each other rather than reading any score as absolute.
 
-- Wrong figures: ${sum((g) => g.wrongFigures.length)} in total (${mean((g) => g.wrongFigures.length)} per answer)
+- Precise figures stated: ${figureSum((c) => c.stated)} in ${checked.length} checked answers; wrong: ${figureSum((c) => c.wrong.length)}; unconfirmed: ${figureSum((c) => c.unconfirmed.length)} (listed, then each checked with search)
+- Wrong figures in the one-pass grade: ${sum((g) => g.wrongFigures.length)} in total
 - Blended seasons: ${sum((g) => g.blendedSeasons.length)} in total
 - Myths repeated: ${sum((g) => g.myths.length)} in total
 - Mean use of criteria: ${mean((g) => g.criteria)} / 5
@@ -215,13 +251,13 @@ The grader is the same model that writes the answers, so it can share their blin
 - Same verdict across paraphrases: ${count(paraphrases, 'same')} same, ${count(paraphrases, 'partly')} partly, ${count(paraphrases, 'different')} different, of ${paraphrases.length}
 - Median first token: ${secs(median(runs.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s; median total: ${secs(median(runs.map((r) => r.run.totalMs)))} s
 
-| # | Run | Wrong figures | Blended | Myths | Criteria | Counter-case | Decisive | First token (s) | Total (s) | Verdict |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| # | Run | Figures | Wrong | Unconfirmed | Blended | Myths | Criteria | Counter-case | Decisive | First token (s) | Total (s) | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${runs
   .map((r) =>
     r.grade
-      ? `| ${r.q.n} | ${r.attempt} | ${r.grade.wrongFigures.length} | ${r.grade.blendedSeasons.length} | ${r.grade.myths.length} | ${r.grade.criteria} | ${r.grade.counterCase} | ${r.grade.decisiveness} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${cell(r.grade.verdict)} |`
-      : `| ${r.q.n} | ${r.attempt} | – | – | – | – | – | – | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${cell(r.run.error)}` : 'Grading failed'} |`,
+      ? `| ${r.q.n} | ${r.attempt} | ${r.figures?.stated ?? '–'} | ${r.figures?.wrong.length ?? '–'} | ${r.figures?.unconfirmed.length ?? '–'} | ${r.grade.blendedSeasons.length} | ${r.grade.myths.length} | ${r.grade.criteria} | ${r.grade.counterCase} | ${r.grade.decisiveness} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${cell(r.grade.verdict)} |`
+      : `| ${r.q.n} | ${r.attempt} | – | – | – | – | – | – | – | – | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${cell(r.run.error)}` : 'Grading failed'} |`,
   )
   .join('\n')}
 
@@ -240,7 +276,9 @@ ${runs
 
 ${r.q.tests}
 
-${r.grade?.wrongFigures.length ? `Wrong figures:\n${r.grade.wrongFigures.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${
+${r.figures?.wrong.length ? `Wrong figures:\n${r.figures.wrong.map((f) => `- ${f.claim}: ${f.note}`).join('\n')}\n\n` : ''}${
+      r.figures?.unconfirmed.length ? `Unconfirmed figures:\n${r.figures.unconfirmed.map((f) => `- ${f.claim}: ${f.note}`).join('\n')}\n\n` : ''
+    }${r.grade?.wrongFigures.length ? `Wrong figures (one-pass grade):\n${r.grade.wrongFigures.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${
       r.grade?.blendedSeasons.length ? `Blended seasons:\n${r.grade.blendedSeasons.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''
     }${r.grade?.myths.length ? `Myths:\n${r.grade.myths.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${r.grade?.notes ? `${r.grade.notes}\n\n` : ''}<details><summary>Answer</summary>
 
@@ -257,4 +295,43 @@ ${r.run.perf.map((l) => `    ${l}`).join('\n') || '    (no perf lines)'}
   )
   .join('\n')}`;
   return { markdown, json: { runs, repeats, paraphrases } };
+}
+
+// --- Figure check -----------------------------------------------------------------------------
+
+/**
+ * A stricter look at precise figures than the one-pass grade: one call lists every figure the
+ * answer states as fact, and a second, with Google Search, checks each one. Lenient graders pass
+ * figures they don't look up, so this is what the report's figure columns count.
+ */
+export interface FigureCheck {
+  stated: number;
+  wrong: { claim: string; note: string }[];
+  unconfirmed: { claim: string; note: string }[];
+}
+
+export const FIGURE_LIST_INSTRUCTIONS = `List every precise figure this football answer states as fact about the past: numbers of goals, assists, appearances, matches, points, wins, draws, defeats, trophies, titles, records, league positions, fees, and dates tied to events. Write each as one short self-contained claim naming who, the number, and the season or competition it belongs to. Leave out Futbolpedia's own ratings (an Overall, attribute scores, tiers), and figures the answer presents as estimates or ranges. Reply with one JSON object: {"claims": ["<claim>", ...]} with at most 15 claims, the most important first.`;
+
+export const FIGURE_VERIFY_INSTRUCTIONS = `Check each numbered football claim below with Google Search against reliable sources (Wikipedia, club and competition records, contemporary reports). For each, decide "correct" (sources agree, allowing a difference of one in appearance counts where sources disagree), "wrong" (sources give a different number, season or competition), or "unconfirmed" (you can't find it either way). Reply with one JSON object: {"results": [{"n": <number>, "verdict": "correct" | "wrong" | "unconfirmed", "note": "<a few words>"}]}.`;
+
+const jsonIn = (raw: string): any => {
+  try {
+    return JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] ?? '');
+  } catch {
+    return null;
+  }
+};
+
+export async function checkFigures(answer: string, grade: (prompt: string, withSearch: boolean) => Promise<string>): Promise<FigureCheck | null> {
+  const listed = jsonIn(await grade(`${FIGURE_LIST_INSTRUCTIONS}\n\nAnswer:\n${answer}`, false).catch(() => ''));
+  if (!listed || !Array.isArray(listed.claims)) return null;
+  const claims: string[] = listed.claims.filter((c: unknown) => typeof c === 'string' && c.trim()).slice(0, 15);
+  if (!claims.length) return { stated: 0, wrong: [], unconfirmed: [] };
+  const checked = jsonIn(await grade(`${FIGURE_VERIFY_INSTRUCTIONS}\n\n${claims.map((c, i) => `${i + 1}. ${c}`).join('\n')}`, true).catch(() => ''));
+  if (!checked || !Array.isArray(checked.results)) return null;
+  const pick = (verdict: string) =>
+    checked.results
+      .filter((r: any) => r?.verdict === verdict && claims[Number(r.n) - 1])
+      .map((r: any) => ({ claim: claims[Number(r.n) - 1], note: String(r.note ?? '') }));
+  return { stated: claims.length, wrong: pick('wrong'), unconfirmed: pick('unconfirmed') };
 }

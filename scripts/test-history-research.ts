@@ -49,6 +49,7 @@ import {
   type EraRow,
   type EraSnapshot,
 } from '../services/eraSnapshots';
+import { checkFigures, paraphrasePairs, parseAgreement, parseHistoryGrade, readQuestionTable } from './eval-history';
 import { executeCall, historyOutcome, sanitizeCalls, type ResearchToolset, type ToolOutcome } from '../services/researchTools';
 import {
   looksLikePastQuestion,
@@ -639,6 +640,31 @@ await test('a question that looks like it is about the past starts its brief ear
     { model: { writeBrief: async () => assert.fail('wrote a second brief') }, early: Promise.resolve(readDebateBrief(rawBrief, { message: '' })) },
   );
   assert.equal(used.verdict, 'Zinedine Zidane');
+});
+
+// --- The historical eval's pure parts ---------------------------------------------------------
+
+await test('the eval reads its question set, paraphrase pairs and the grader replies', async () => {
+  const questions = readQuestionTable(new URL('../docs/superpowers/evals/historical-questions.md', import.meta.url).pathname);
+  assert.equal(questions.length, 14);
+  assert.deepEqual(paraphrasePairs(questions), [[1, 13], [5, 14]]);
+  const grade = parseHistoryGrade('```json\n{"wrongFigures":[{"claim":"x","why":"y"}],"blendedSeasons":[],"myths":[],"criteria":4,"counterCase":"yes","decisiveness":5,"verdict":"A","notes":"n"}\n```');
+  assert.equal(grade?.wrongFigures.length, 1);
+  assert.equal(grade?.counterCase, 'yes');
+  assert.equal(parseHistoryGrade('not json'), null);
+  assert.equal(parseAgreement('{"agreement":"partly","why":"order"}')?.agreement, 'partly');
+  assert.equal(parseAgreement('{"agreement":"maybe"}'), null);
+  // The figure check lists the figures, then checks each with search.
+  const prompts: boolean[] = [];
+  const check = await checkFigures('He scored 30 league goals and won 5 titles.', async (_p, withSearch) => {
+    prompts.push(withSearch);
+    return withSearch
+      ? '{"results":[{"n":1,"verdict":"correct"},{"n":2,"verdict":"wrong","note":"two titles"}]}'
+      : '{"claims":["Henry scored 30 league goals in 2003-04","Henry won 5 titles in 2003-04"]}';
+  });
+  assert.deepEqual(prompts, [false, true]);
+  assert.equal(check?.stated, 2);
+  assert.deepEqual(check?.wrong, [{ claim: 'Henry won 5 titles in 2003-04', note: 'two titles' }]);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

@@ -248,6 +248,35 @@ const today = new Date().toISOString().slice(0, 10);
 const dir = join(root, 'docs/superpowers/evals/reports');
 const stampOf = (prefix: string) => `${today}-${new Date().toISOString().slice(11, 16).replace(':', '')}-${prefix}${label}`;
 
+const graderCall = async (prompt: string, withSearch: boolean) => {
+  const res = await getAi().models.generateContent({
+    model: FLASH_MODEL,
+    contents: prompt,
+    config: { temperature: 0, ...(withSearch ? { tools: [{ googleSearch: {} }] } : {}), thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM } },
+  });
+  return res.text ?? '';
+};
+
+// `--regrade <report.json>`: run a saved historical report's answers through the figure check again.
+const regrade = argValue('--regrade');
+if (set === 'historical' && regrade) {
+  const saved = JSON.parse(readFileSync(regrade, 'utf8'));
+  const { markdown, json } = await history.regradeFigures(saved, {
+    grade: graderCall,
+    today,
+    label: `${label}-regraded`,
+    model: FLASH_MODEL,
+    repeat: Math.max(...saved.runs.map((r: any) => r.attempt)),
+    questions: [...new Map(saved.runs.map((r: any) => [r.q.n, r.q])).values()] as any,
+  });
+  mkdirSync(dir, { recursive: true });
+  const stamp = stampOf('historical-regraded-');
+  writeFileSync(join(dir, `${stamp}.md`), markdown);
+  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(json, null, 2));
+  console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
+  process.exit(0);
+}
+
 if (set === 'historical') {
   const all = history.readQuestionTable(join(root, 'docs/superpowers/evals/historical-questions.md'));
   const picked = all.filter((q) => !only || only.includes(q.n));
@@ -256,14 +285,7 @@ if (set === 'historical') {
     pairs: history.paraphrasePairs(all).filter(([a, b]) => picked.some((q) => q.n === a) && picked.some((q) => q.n === b)),
     repeat,
     ask,
-    grade: async (prompt, withSearch) => {
-      const res = await getAi().models.generateContent({
-        model: FLASH_MODEL,
-        contents: prompt,
-        config: { temperature: 0, ...(withSearch ? { tools: [{ googleSearch: {} }] } : {}), thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM } },
-      });
-      return res.text ?? '';
-    },
+    grade: graderCall,
     today,
     label,
     model: FLASH_MODEL,
