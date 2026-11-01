@@ -102,7 +102,7 @@ export interface DebateContext {
 
 /** Lookups the brief may plan, and how many era snapshots one turn may start building. */
 export const DEBATE_CALL_LIMIT = 6;
-export const MAX_ERA_BUILDS = 3;
+export const MAX_ERA_BUILDS = 1;
 /** Players whose career records are fetched before the brief is written. */
 export const PREFETCH_LIMIT = 3;
 /** The longest player window that gets an era snapshot: a card's window is at most three seasons. */

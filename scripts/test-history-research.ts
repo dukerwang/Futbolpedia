@@ -45,6 +45,7 @@ import {
   debateSignature,
   ERA_SNAPSHOT_VERSION,
   eraEntry,
+  isMissingTable,
   normalizePeriod,
   subjectFromTitle,
   type EraRow,
@@ -723,6 +724,13 @@ await test('a late or failed brief gives way to the cards order, and is never se
   assert.equal(cardBrief({ ...ctx, cards: [zidane, level] }).verdict, '');
   const nesta = toStanding(card('Alessandro Nesta', 97));
   assert.deepEqual(cardBrief({ ...ctx, cards: [kaka, zidane, nesta] }).ranking, ['Alessandro Nesta', 'Zinedine Zidane', 'Kaká']);
+});
+
+await test('a missing era_snapshots table is recognised, so builds wait for the migration', () => {
+  assert.ok(isMissingTable({ code: 'PGRST205', message: "Could not find the table 'public.era_snapshots' in the schema cache" }));
+  assert.ok(isMissingTable({ code: '42P01', message: 'relation "public.era_snapshots" does not exist' }));
+  assert.ok(!isMissingTable({ code: '42501', message: 'permission denied' }));
+  assert.ok(!isMissingTable(null));
 });
 
 // --- The historical eval's pure parts ---------------------------------------------------------

@@ -431,9 +431,28 @@ export function createDebateStore(deps: {
 // ---------------------------------------------------------------------------------------------
 // The live stores
 
+/** Whether a Supabase error says the table doesn't exist (the migration hasn't been applied). */
+export const isMissingTable = (error: { code?: string; message?: string } | null | undefined): boolean =>
+  Boolean(error && (error.code === 'PGRST205' || error.code === '42P01' || /does not exist|could not find the table/i.test(error.message ?? '')));
+
+/**
+ * Whether snapshots can be stored. Until the `era_snapshots` migration is applied a build has
+ * nowhere to go and every new browser session would pay for it again, so builds wait for the table.
+ */
+let tableReady: Promise<boolean> | null = null;
+const eraTableReady = (): Promise<boolean> => {
+  if (!supabase) return Promise.resolve(false);
+  tableReady ??= Promise.resolve(supabase.from('era_snapshots').select('snapshot_key').limit(1)).then(
+    ({ error }: { error: any }) => !error,
+    () => false,
+  );
+  return tableReady;
+};
+
 const readRow = async (key: string): Promise<EraRow | null> => {
   if (!supabase) return null;
-  const { data } = await supabase.from('era_snapshots').select('*').eq('snapshot_key', key).maybeSingle();
+  const { data, error } = await supabase.from('era_snapshots').select('*').eq('snapshot_key', key).maybeSingle();
+  if (isMissingTable(error)) tableReady = Promise.resolve(false);
   return data ?? null;
 };
 const writeRow = async (row: EraRow): Promise<void> => {
@@ -446,7 +465,7 @@ const writeRow = async (row: EraRow): Promise<void> => {
 export const liveEraSnapshots: EraSnapshotSource = createEraSnapshotStore({
   read: readRow,
   write: writeRow,
-  build: (req, facts) => buildEraSnapshot(req, facts, liveToolset([])),
+  build: async (req, facts) => ((await eraTableReady()) ? buildEraSnapshot(req, facts, liveToolset([])) : null),
 });
 
 export const liveDebateRecords: DebateStore = createDebateStore({
