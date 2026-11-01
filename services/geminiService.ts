@@ -79,6 +79,8 @@ import {
 import { withFreshLatestUpdate } from './latestUpdateRefresh';
 import { ratingTask, routeForRating } from './ratingCommand';
 import { classifyTurn, extractCandidateSlug, type TurnRoute } from './turnRouter';
+import { startQuestionSearch } from './researchAgent';
+import { liveToolset } from './researchTools';
 
 export {
   supabase,
@@ -716,8 +718,10 @@ export const sendMessageToAI = async (
   const isEAFCRequest = /\b(playstyle\+?|fc\s*card|eafc|ea\s*fc)\b/i.test(message);
   const conversationDossiers = mergeConversationDossiers(history, conversationProfiles);
 
-  // 1. Classify turn via Structured Turn Router (warm Supabase pool in background without blocking routing)
+  // 1. Classify turn via Structured Turn Router (warm Supabase pool in background without blocking routing).
+  // A question that looks like it's about the present starts its web search now, while routing runs.
   void fetchSupabaseCalibratedPool();
+  const questionSearch = imageData ? null : startQuestionSearch(message, liveToolset([]));
   const route = await classifyTurn({
     message,
     history,
@@ -768,6 +772,7 @@ export const sendMessageToAI = async (
     message,
     route,
     history,
+    questionSearch,
     imageData,
     isEAFCRequest,
     conversationDossiers,

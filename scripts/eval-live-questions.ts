@@ -13,6 +13,7 @@
  *
  *   npm run eval:live
  *   npm run eval:live -- --only 1,3,8 --label after-snapshots
+ *   npm run eval:live -- --warm      # answer each question once first, so the graded run reuses today's club snapshots
  *
  * The live routes run in-process, so no server is needed. Supabase isn't loaded outside the
  * browser, so club snapshots are built fresh in memory for each run rather than read from the
@@ -49,7 +50,8 @@ const argValue = (flag: string) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const only = argValue('--only')?.split(',').map((n) => Number(n.trim()));
-const label = (argValue('--label') ?? 'run').replace(/[^a-z0-9-]+/gi, '-');
+const warm = args.includes('--warm');
+const label = (argValue('--label') ?? (warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
 
 interface Question {
   n: number;
@@ -59,7 +61,9 @@ interface Question {
 
 /** The questions table from the set's Markdown. Question 15 needs a card mention, so it's skipped. */
 function readQuestions(): Question[] {
-  const md = readFileSync(join(root, 'docs/superpowers/evals/live-questions.md'), 'utf8');
+  const full = readFileSync(join(root, 'docs/superpowers/evals/live-questions.md'), 'utf8');
+  // Only the questions table: the results tables further down have numbered rows too.
+  const md = full.slice(full.indexOf('## Questions'), full.indexOf('## Scoring'));
   return [...md.matchAll(/^\|\s*(\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*$/gm)]
     .map((m) => ({ n: Number(m[1]), text: m[2], tests: m[3] }))
     .filter((q) => !q.text.startsWith('@'));
@@ -181,6 +185,8 @@ const GRADE_INSTRUCTIONS = `You are grading a football analyst's answer for accu
 - gapsAdmitted: "yes" when the answer says plainly what it couldn't verify, "no" when it fills gaps with guesses, "not_needed" when it had no gaps.
 - notes: one or two sentences on the answer's biggest strength and weakness.
 
+Futbolpedia's dossier ratings (an Overall and attribute scores on a 1 to 99 scale, and rating tiers) are the app's own judgments, not facts: don't count them as stale or invented. A fact you can't confirm is invented only when your search finds nothing like it or finds it false; when sources are thin, say so in notes instead.
+
 Reply with one JSON object with exactly these keys and nothing else.`;
 
 async function grade(question: string, answer: string, today: string): Promise<{ grade: Grade | null; raw: string }> {
@@ -217,6 +223,16 @@ const today = new Date().toISOString().slice(0, 10);
 const questions = readQuestions().filter((q) => !only || only.includes(q.n));
 const results: { q: Question; run: RunResult; grade: Grade | null; graderRaw: string }[] = [];
 
+if (warm) {
+  // Snapshots live in memory here, so a first pass stands in for the shared table's daily rows.
+  for (const q of questions) {
+    process.stdout.write(`Warming Q${q.n} ... `);
+    const run = await ask(q.text);
+    console.log(run.error ? `failed: ${run.error}` : `${(run.totalMs / 1000).toFixed(1)}s`);
+  }
+  await new Promise((r) => setTimeout(r, 20_000));
+}
+
 for (const q of questions) {
   process.stdout.write(`Q${q.n}: ${q.text} ... `);
   const run = await ask(q.text);
@@ -238,7 +254,9 @@ const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math
 
 const report = `# Live question eval: ${today}, ${label}
 
-Ran ${results.length} questions through the chat pipeline; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
+Ran ${results.length} questions through the chat pipeline${warm ? ', each answered once beforehand so club snapshots were already built' : ', cold: every club snapshot built during the run'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
+
+The grader is the same model that writes the answers, so it can share their blind spots and misjudge facts its own search doesn't reach. Compare runs with each other rather than reading any score as absolute.
 
 - Stale facts: ${sum((g) => g.staleFacts.length)} in total
 - Invented facts: ${sum((g) => g.inventedFacts.length)} in total

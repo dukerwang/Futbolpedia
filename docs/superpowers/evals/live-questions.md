@@ -67,6 +67,20 @@ Score each answer on four measures:
 
 Add one table per run.
 
+### Run: 2026-11-01, automated (`npm run eval:live`), before and after the precision and speed pass
+
+Graded by the same Flash model that writes the answers, so compare the rows with each other. Cold
+runs build every club snapshot during the run; warm runs (`--warm`) reuse them, as a user does after
+the first question about a club each day. Reports are in `reports/`.
+
+| Run | Invented facts | Stale facts | Hedged roles (Q1–12) | Says what changed | Median first token, Q1–12 |
+| --- | --- | --- | --- | --- | --- |
+| 3.5 as merged, cold (`0842-3-5-baseline`) | 21 | 1 | 5 | 12 of 12 | 26.1 s |
+| Before this pass, cold (`0928-speed-pass-2-cold`) | 15 | 0 | 10 | 10 of 12 | 18.2 s |
+| Before this pass, warm (`0948-speed-pass-2-warm`) | 11 | 0 | 2 | 11 of 12 | 11.2 s |
+| After, cold (`1008-precision-speed-cold`) | 3 | 1 | 2 | 9 of 12 | 16.7 s |
+| After, warm (`1025-precision-speed-warm`) | 2 | 0 | 0 | 12 of 12 | 9.7 s |
+
 ### Run: (date), (phase or commit)
 
 | # | Wrong facts | Unnamed roles | Gaps admitted | First token (s) | Total (s) | Notes |

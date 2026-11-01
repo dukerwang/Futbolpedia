@@ -22,6 +22,8 @@ export interface EvidenceEntry {
   stage?: ResearchStage;
   /** The structured report behind a club entry, for the situation snapshot. Never printed. */
   club?: LiveClubReport;
+  /** The club a player record says he plays for, so research can look at that club too. */
+  team?: string;
 }
 
 /**
