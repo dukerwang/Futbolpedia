@@ -58,7 +58,7 @@ const ROUTE = {
   wantsRegeneration: false,
   needsSearch: false,
 };
-const BRIEF = {
+let BRIEF: Record<string, unknown> = {
   understanding: 'Which prime was better',
   kind: 'head_to_head',
   criterion: 'peak_level',
@@ -73,9 +73,9 @@ const BRIEF = {
 };
 const CAREER = `Wikipedia, "Kaká".
 Club appearances and goals by season (Wikipedia career statistics):
-Club | Season | League Apps | League Goals
-Milan | 2006–07 | 31 | 8`;
-const WRITER =
+Club | Season | League Apps | League Goals | Total Apps | Total Goals
+Milan | 2006–07 | 31 | 8 | 50 | 18`;
+let WRITER =
   'Under Ancelotti, Kaká scored 8 league goals in 2006-07. He won 5 titles that season. Zidane still controlled the biggest matches better, so he edges it.';
 
 const calls: { prompt: string; structured: boolean }[] = [];
@@ -141,6 +141,31 @@ await test('the same question asked again keeps its settled verdict without a ne
   assert.equal(briefCalls(), before);
   const writer = calls.filter((c) => !c.structured && c.prompt.includes('<task>')).at(-1)?.prompt ?? '';
   assert.ok(writer.includes('The verdict, settled before writing (keep it): Zinedine Zidane'));
+});
+
+await test('an answer quotes the figures its brief chose: a mislabelled total is cut, decoration over budget trimmed', async () => {
+  BRIEF = {
+    ...BRIEF,
+    understanding: 'How good was Kaká in 2006-07',
+    kind: 'single',
+    criteria: [{ name: 'Goal threat from midfield', why: 'It defined his season', figure: "Kaká's league goals in 2006-07" }],
+    verdict: 'His best season',
+  };
+  WRITER = [
+    'Kaká scored 8 league goals in 2006-07.',
+    'He made 31 league appearances.',
+    'He scored 18 goals in all competitions.',
+    'He made 50 appearances in all competitions.',
+    'He scored 18 league goals in 2006-07.',
+    'His runs from deep decided the big nights.',
+  ].join(' ');
+  const reply = await quietly(() => sendMessageToAI('How good was Kaká in 2006-07?', [], undefined, [], [ZIDANE, KAKA]));
+  const writer = calls.filter((c) => !c.structured && c.prompt.includes('<task>')).at(-1)?.prompt ?? '';
+  assert.ok(writer.includes("The only precise figures to quote, each where it decides its criterion, as <factual_foundation> or a card gives it: Kaká's league goals in 2006-07"));
+  assert.equal(
+    reply,
+    'Kaká scored 8 league goals in 2006-07. He made 31 league appearances. He scored 18 goals in all competitions. His runs from deep decided the big nights.',
+  );
 });
 
 console.log(`${passes} passed, ${failures} failed`);

@@ -259,6 +259,38 @@ export function infoboxLines(html: string): string[] {
   return lines.filter((l) => !/^(Home colours|Away colours|Third colours|Kit|Website|Signature)\b/i.test(l));
 }
 
+/**
+ * A player infobox's career rows with what each number counts: "1996–2001: Juventus, 151, (24)"
+ * under "Senior career" becomes "1996–2001: Juventus, 151 league appearances, 24 league goals", and
+ * a national-team row gives caps and international goals. The bare numbers read as anything to a
+ * writer, and the figure gate can only vouch for a number beside its noun.
+ */
+export function labelCareerLines(lines: string[]): string[] {
+  let section = '';
+  const out: string[] = [];
+  for (const line of lines) {
+    if (/^[^:]+:$/.test(line)) {
+      section = line.toLowerCase();
+      out.push(line);
+      continue;
+    }
+    if (/^Years: Team/i.test(line)) continue;
+    const m = line.match(/^(.+?): (?:(.+?), )?(\d+), \((\d+)\)$/);
+    if (m && /senior career/.test(section)) {
+      const [, years, team, apps, goals] = m;
+      out.push(
+        /^total$/i.test(years)
+          ? `Career total: ${apps} league appearances, ${goals} league goals`
+          : `${years}: ${team ?? ''}, ${apps} league appearances, ${goals} league goals`,
+      );
+    } else if (m && /international career/.test(section)) {
+      const [, years, team, apps, goals] = m;
+      out.push(`${years}: ${team ?? ''}, ${apps} caps, ${goals} international goals`);
+    } else out.push(line);
+  }
+  return out;
+}
+
 /** List items in an HTML fragment, as text. */
 export const listItems = (html: string, max: number): string[] =>
   [...html.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)].map((m) => cellText(m[1])).filter(Boolean).slice(0, max);
@@ -336,8 +368,8 @@ export function formatPlayerPage(page: WikiPage): string {
   const parts = [`Wikipedia, "${page.title}" (${pageUrl(page.title)}).`];
   const lead = leadText(page.html, 700);
   if (lead) parts.push(`Summary: ${lead}`);
-  const box = infoboxLines(page.html).filter((l) => !PLAYER_BOX_SKIP.test(l));
-  if (box.length) parts.push(`Career (infobox; league appearances and goals in brackets):\n${box.map((l) => `- ${l}`).join('\n')}`);
+  const box = labelCareerLines(infoboxLines(page.html).filter((l) => !PLAYER_BOX_SKIP.test(l)));
+  if (box.length) parts.push(`Career (infobox):\n${box.map((l) => `- ${l}`).join('\n')}`);
   const sections = pageSections(page.html);
   const statsAt = sections.findIndex((s) => /career statistics|statistics/i.test(s.title) && s.level === 2);
   if (statsAt >= 0) {

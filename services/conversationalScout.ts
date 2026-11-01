@@ -48,8 +48,8 @@ import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubMana
 import { reconcileDossierNumbers } from './dossierNumberGate';
 import { toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
-import { expandTables, gateUnsupportedFigures, type FigureClaim } from './figureGate';
-import { formatDebateBriefForWriter, runDebateResearch, type DebateBrief } from './debateBrief';
+import { expandTables, gateUnsupportedFigures, type FigureClaim, type FigureGateOptions } from './figureGate';
+import { figureBudget, formatDebateBriefForWriter, runDebateResearch, type DebateBrief } from './debateBrief';
 import { standingsFor, type CardStanding } from './debateConsistency';
 import { liveDebateRecords, liveEraSnapshots } from './eraSnapshots';
 
@@ -125,8 +125,8 @@ export function sanitizeScoutProse(
       });
   const reconciled = reconcileDossierNumbers(scrubbed, cardsInPlay).text;
   if (!figures) return reconciled;
-  const gated = gateUnsupportedFigures(reconciled, figures.evidence(), figures.grounded);
-  figures.onRemoved?.(gated.removed);
+  const gated = gateUnsupportedFigures(reconciled, figures.evidence(), figures.grounded, figures.options);
+  figures.onRemoved?.([...gated.removed, ...gated.trimmed]);
   return gated.text;
 }
 
@@ -138,6 +138,8 @@ export function sanitizeScoutProse(
 export interface FigureCheck {
   evidence: () => string;
   grounded: string[];
+  /** On a turn about the past: check each figure's qualifier and span, and hold the reply to its figure budget. */
+  options?: FigureGateOptions;
   onRemoved?: (removed: FigureClaim[]) => void;
 }
 
@@ -279,7 +281,7 @@ const PAST_DEBATE_RULES =
 
 /** What a question about the past may state as fact. */
 const PAST_FACT_RULES =
-  "Precise figures (goals, appearances, points, trophies, records, dates, fees) go in only when <factual_foundation> or a stored card gives them, for that season or window; otherwise describe the pattern in words. Keep every fact to the season or spell it belongs to: never move a player, a coach, a trophy or a number into a season or side it wasn't part of, and name the season when a fact from outside the compared window matters. Don't repeat a claim that an era snapshot lists as often misstated, or an anecdote no source here supports. Name a past season's coach only as <factual_foundation> gives him; otherwise describe the side's setup without naming its coach.";
+  "Quote a precise figure (goals, appearances, points, trophies, records, dates, fees) only where it decides a criterion, as <debate_brief> lists it, and only as <factual_foundation> or a stored card gives it; make every other point in words. A quoted figure keeps the competition and span its source gives: a league figure stays a league figure, a total across all competitions stays a total, and a count for named seasons is never a career total. Keep every fact to the season or spell it belongs to: never move a player, a coach, a trophy or a number into a season or side it wasn't part of, and name the season when a fact from outside the compared window matters. Don't repeat a claim that an era snapshot lists as often misstated, or an anecdote no source here supports. Name a past season's coach only as <factual_foundation> gives him; otherwise describe the side's setup without naming its coach.";
 
 export async function runConversationalScout(
   params: ConversationalScoutParams,
@@ -677,6 +679,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squ
             ...toolResults,
           ].join('\n'),
         grounded: [],
+        ...(debate ? { options: { scoped: true, budget: figureBudget(debate) } } : {}),
       }
     : undefined;
   if (cardsInPlay.length === 0) {
@@ -747,7 +750,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squ
     figureCheck && {
       ...figureCheck,
       onRemoved: (removed) => {
-        if (removed.length) console.info(`[FigureGate] Removed ${removed.length} unsupported figures: ${removed.map((r) => r.text).join('; ')}`);
+        if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures (unsupported, or over a debate's budget): ${removed.map((r) => r.text).join('; ')}`);
       },
     },
   );

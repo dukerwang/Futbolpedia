@@ -17,6 +17,7 @@ import {
   formatPlayerPage,
   formatTable,
   infoboxLines,
+  labelCareerLines,
   leadText,
   parseSeason,
   parseTableGrid,
@@ -57,6 +58,7 @@ import {
   startDebateBrief,
   buildDebateBriefPrompt,
   checkBriefAgainstCards,
+  figureBudget,
   formatDebateBriefForWriter,
   readDebateBrief,
   runDebateResearch,
@@ -242,6 +244,16 @@ await test('the infobox reads as labelled lines with career rows', () => {
   assert.ok(lines.includes('Date of birth: 23 June 1972'));
   assert.ok(lines.includes('Senior career:'));
   assert.ok(lines.includes('1996–2001: Juve, 151, (24)'));
+  assert.deepEqual(
+    labelCareerLines(['Senior career:', 'Years: Team, Apps, (Gls)', '1996–2001: Juve, 151, (24)', 'Total: 506, (95)', 'International career:', '1994–2006: France, 108, (31)']),
+    [
+      'Senior career:',
+      '1996–2001: Juve, 151 league appearances, 24 league goals',
+      'Career total: 506 league appearances, 95 league goals',
+      'International career:',
+      '1994–2006: France, 108 caps, 31 international goals',
+    ],
+  );
   assert.ok(leadText(SEASON_HTML).startsWith('The 2003–04 season was Testville'));
 });
 
@@ -553,6 +565,11 @@ await test('a brief is read defensively and its verdict held to the cards', () =
   const ranking = checkBriefAgainstCards({ ...brief, kind: 'ranking', verdict: '', ranking: ['Kaká', 'Zidane'] }, [zidane, kaka]);
   assert.deepEqual(ranking.ranking, ['Zidane', 'Kaká']);
   const text = formatDebateBriefForWriter(ranking, [zidane, kaka]);
+  assert.ok(text.includes('The argument needs no precise figures: make it in words.'));
+  const withFigure = readDebateBrief({ ...rawBrief, criteria: [{ name: 'Output', why: 'w', figure: 'his Champions League goals in 2006-07' }, { name: 'Control', why: 'w', figure: '' }] }, { message: '' });
+  assert.deepEqual(figureBudget(withFigure), { max: 3, slots: ['his Champions League goals in 2006-07'] });
+  assert.ok(formatDebateBriefForWriter(withFigure).includes('The only precise figures to quote'));
+  assert.deepEqual(figureBudget(brief), { max: 2, slots: [] });
   assert.ok(text.includes('The order, settled before writing (keep it): 1. Zidane 2. Kaká'));
   assert.ok(text.includes('The strongest case against the verdict'));
 });

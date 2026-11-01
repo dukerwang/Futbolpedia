@@ -62,8 +62,11 @@ export interface DebateBrief {
   kind: DebateKind;
   /** What the question turns on. */
   criterion: DebateCriterion;
-  /** The criteria that settle it, most important first, each with why it matters here. */
-  criteria: { name: string; why: string }[];
+  /**
+   * The criteria that settle it, most important first, each with why it matters here and the one
+   * precise figure, if any, that decides it (described, not given: what it counts and its span).
+   */
+  criteria: { name: string; why: string; figure?: string }[];
   /** The versions being compared: a player's window, a club's season. */
   versions: { subject: string; period: string }[];
   /** Where reasonable people disagree, and why. */
@@ -121,7 +124,11 @@ const BRIEF_SCHEMA: Record<string, unknown> = {
     criterion: { type: Type.STRING, enum: [...DEBATE_CRITERIA] },
     criteria: {
       type: Type.ARRAY,
-      items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, why: { type: Type.STRING } }, required: ['name', 'why'] },
+      items: {
+        type: Type.OBJECT,
+        properties: { name: { type: Type.STRING }, why: { type: Type.STRING }, figure: { type: Type.STRING } },
+        required: ['name', 'why'],
+      },
     },
     versions: {
       type: Type.ARRAY,
@@ -168,7 +175,7 @@ Keep every field short: a sentence or two at most. Work out:
 1. understanding: what the user wants settled, read in the light of the conversation.
 2. kind: "head_to_head" for two sides compared, "ranking" for an order of several, "single" for one season, player or team examined, "other" for anything else.
 3. criterion: what the question turns on. "peak_level" is how good a version was at its best; "sustained_level" is how long it held a high level; "output" is goals, assists and numbers; "influence" is its effect on results and on the team; "versatility" is range of roles; "mixed" when the question is how good overall and no one of these decides it. Read it from the words the user chose.
-4. criteria: two to four criteria that settle this question, most important first, each with why it matters here. They should be things evidence can speak to.
+4. criteria: two to four criteria that settle this question, most important first, each with why it matters here. They should be things evidence can speak to. For each, figure: the one precise figure, if any, that decides it, described by what it counts, its competition (league, all competitions, a named cup or European competition, international) and its span (a named season, the window, a career), without the number itself. Leave it empty when the criterion is judged without numbers; most are. The answer quotes no other figures.
 5. versions: what is being compared, each with its period: a player's window (use the window on his card when he has one) or a club's season (YYYY-YY).
 6. disagreement: where reasonable people disagree about this question and why, in a sentence or two.
 7. counterCase: the strongest case against the verdict you propose, stated as its best advocate would put it.
@@ -204,7 +211,10 @@ export function readDebateBrief(raw: any, ctx: Pick<DebateContext, 'message'>): 
     kind: KINDS.includes(raw?.kind) ? raw.kind : 'other',
     criterion: (DEBATE_CRITERIA as readonly string[]).includes(raw?.criterion) ? raw.criterion : 'mixed',
     criteria: Array.isArray(raw?.criteria)
-      ? raw.criteria.filter((c: any) => str(c?.name)).map((c: any) => ({ name: str(c.name, 80), why: str(c.why, 300) })).slice(0, 4)
+      ? raw.criteria
+          .filter((c: any) => str(c?.name))
+          .map((c: any) => ({ name: str(c.name, 80), why: str(c.why, 300), ...(str(c.figure, 160) ? { figure: str(c.figure, 160) } : {}) }))
+          .slice(0, 4)
       : [],
     versions: Array.isArray(raw?.versions)
       ? raw.versions.filter((v: any) => str(v?.subject)).map((v: any) => ({ subject: str(v.subject, 120), period: str(v.period, 40) })).slice(0, 10)
@@ -404,10 +414,25 @@ export async function runDebateResearch(
   return { brief, ledger };
 }
 
+/** The figures the brief chose, one per criterion at most: the writer quotes only these. */
+export const debateFigures = (brief: DebateBrief): string[] => brief.criteria.map((c) => c.figure ?? '').filter(Boolean);
+
+/** How many figures a debate answer may quote: its chosen figures, with room for each one's counterpart. */
+export const figureBudget = (brief: DebateBrief): { max: number; slots: string[] } => {
+  const slots = debateFigures(brief);
+  return { max: Math.max(2, slots.length * 2 + 1), slots };
+};
+
 /** The brief as the writer reads it. */
 export const formatDebateBriefForWriter = (brief: DebateBrief, cards: CardStanding[] = []): string => {
   const lines = [`What the user wants settled: ${brief.understanding}`, `What it turns on: ${brief.criterion.replace('_', ' ')}`];
   if (brief.criteria.length) lines.push(`The criteria that settle it, in order:\n${brief.criteria.map((c, i) => `${i + 1}. ${c.name}: ${c.why}`).join('\n')}`);
+  const figures = debateFigures(brief);
+  lines.push(
+    figures.length
+      ? `The only precise figures to quote, each where it decides its criterion, as <factual_foundation> or a card gives it: ${figures.join('; ')}`
+      : 'The argument needs no precise figures: make it in words.',
+  );
   if (brief.versions.length) lines.push(`The versions compared: ${brief.versions.map((v) => `${v.subject}${v.period ? ` (${v.period})` : ''}`).join('; ')}`);
   if (brief.disagreement) lines.push(`Where the honest disagreement lies: ${brief.disagreement}`);
   if (brief.counterCase) lines.push(`The strongest case against the verdict, to answer directly: ${brief.counterCase}`);
