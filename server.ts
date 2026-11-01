@@ -562,20 +562,6 @@ async function startServer() {
     }
   });
 
-  app.get("/api/football/proxy/*endpoint", async (req, res) => {
-      try {
-          const endpoint = Array.isArray(req.params.endpoint) ? req.params.endpoint.join('/') : req.params.endpoint;
-          const query = req.query;
-
-          const response = await apiFootballGet(endpoint, query);
-          
-          res.json(response.data);
-      } catch (error: any) {
-          console.error(error?.response?.data || error);
-          res.status(500).json({ error: "Failed to fetch from API-Football proxy" });
-      }
-  });
-
   // AI Studio's service worker intercepts browser requests to generativelanguage.googleapis.com
   // and redirects them here. This route forwards them back to Google using the server-side
   // GEMINI_API_KEY. We ignore the incoming x-goog-api-key header because AI Studio's service
