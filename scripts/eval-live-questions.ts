@@ -15,6 +15,7 @@
  *   npm run eval:live -- --only 1,3,8 --label after-snapshots
  *   npm run eval:live -- --warm      # answer each question once first, so the graded run reuses today's club snapshots
  *   npm run eval:live -- --set historical   # the historical set, each question twice (--repeat 1 to run once)
+ *   npm run eval:live -- --set historical --only 2,3 --repeat 1 --no-builds   # a small, cheap subset
  *
  * The live routes run in-process, so no server is needed. Supabase isn't loaded outside the
  * browser, so club snapshots are built fresh in memory for each run rather than read from the
@@ -118,6 +119,12 @@ globalThis.fetch = (async (input: any, init?: any) => {
 }) as typeof fetch;
 
 const { sendMessageToAI } = await import('../services/geminiService');
+// `--no-builds`: read era snapshots but never build one, so a small run doesn't pay for background
+// builds (two searches and a call each) that only later turns would use.
+if (args.includes('--no-builds')) {
+  const { liveEraSnapshots } = await import('../services/eraSnapshots');
+  liveEraSnapshots.get = liveEraSnapshots.stored;
+}
 const { FLASH_MODEL, generateStructured, getAi } = await import('../services/aiClient');
 
 // --- Running a question -----------------------------------------------------------------------
