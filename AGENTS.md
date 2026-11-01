@@ -23,7 +23,7 @@ Supabase credentials are hardcoded in `geminiService.ts` (publishable key, safe 
 
 ### Server (`server.ts`)
 A single Express server handles everything:
-- `/api/football/squad` and `/api/football/proxy/*` — Backend proxy to API-Football (hides `API_FOOTBALL_KEY` from the client)
+- `/api/football/squad` — Backend lookup against API-Football (hides `API_FOOTBALL_KEY` from the client); there is no general pass-through route
 - In dev: Vite is mounted as Express middleware (`middlewareMode: true`)
 - In prod: serves the built `/dist` directory
 

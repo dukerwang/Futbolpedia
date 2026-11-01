@@ -40,7 +40,7 @@ Supabase publishable keys are hardcoded (safe for client exposure): Futbolpedia'
 
 ### Server (`server.ts`)
 A single Express server handles everything:
-- `/api/football/player`, `/api/football/squad`, `/api/football/fixtures`, `/api/football/proxy/*` — API-Football proxy (hides `API_FOOTBALL_KEY`), with in-memory caches for player facts and team context
+- `/api/football/player`, `/api/football/squad`, `/api/football/fixtures`, `/api/football/standings` — API-Football lookups (hide `API_FOOTBALL_KEY`), with in-memory caches for player facts, team context and tables. There is deliberately no general pass-through route: the app is public, so one would let anyone spend the key
 - `/api/gaffa/context`, `/api/gaffa/chat` — Gaffa integration behind `FUTBOLPEDIA_READ_SECRET`
 - `/gemini-api-proxy/*` — forwards AI Studio's redirected Gemini calls with the server-side key
 - In dev: Vite is mounted as Express middleware (`middlewareMode: true`); in prod: serves `/dist`
