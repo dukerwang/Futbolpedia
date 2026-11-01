@@ -135,10 +135,15 @@ export function checkVerdictAgainstCards(
   };
 }
 
+/** The cards in play, best first: by Overall, then peer placement. */
+export const cardOrder = (standings: CardStanding[]): CardStanding[] =>
+  [...standings].sort((x, y) => (cardAbove(x, y) ? -1 : cardAbove(y, x) ? 1 : 0));
+
 /** The stored cards' order of the players in play, for the writer and the brief. */
 export function formatCardOrder(standings: CardStanding[]): string {
-  const sorted = [...standings].sort((x, y) => (cardAbove(x, y) ? -1 : cardAbove(y, x) ? 1 : 0));
-  return sorted.map((s, i) => `${i + 1}. ${describeStanding(s)}`).join('\n');
+  return cardOrder(standings)
+    .map((s, i) => `${i + 1}. ${describeStanding(s)}`)
+    .join('\n');
 }
 
 /**

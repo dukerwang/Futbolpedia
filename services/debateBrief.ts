@@ -2,6 +2,8 @@ import { Type } from '@google/genai';
 import { generateStructured, getCurrentSeasonInfo } from './aiClient';
 import { seasonSpan, toBasePlayerSlug } from './dossierCards';
 import {
+  cardAbove,
+  cardOrder,
   cardsSettle,
   checkOrderAgainstCards,
   checkVerdictAgainstCards,
@@ -107,6 +109,8 @@ export const PREFETCH_LIMIT = 3;
 export const MAX_WINDOW_SEASONS = 4;
 /** How long a turn waits for a stored settled debate before writing its own brief. */
 export const SETTLED_PEEK_MS = 600;
+/** How long a turn waits for its brief before arguing from the cards' order instead. */
+export const BRIEF_WAIT_MS = 10_000;
 /** How long, once the facts are in, a turn waits for stored era snapshots. */
 export const ERA_PEEK_MS = 400;
 /**
@@ -357,6 +361,7 @@ export async function runDebateResearch(
     /** A brief started before routing (`startDebateBrief`), used unless a settled one exists. */
     early?: Promise<DebateBrief | null> | null;
     searchBudgetMs?: number;
+    briefWaitMs?: number;
     onStage?: (label: string) => void;
     perf?: (label: string) => void;
   } = {},
@@ -380,17 +385,21 @@ export async function runDebateResearch(
     options.perf?.(`debate brief (settled ${settled.settledAt.slice(0, 10)}, ${brief.kind}, ${brief.calls.length} lookups)`);
   } else {
     options.onStage?.('Working out what settles the question...');
-    const early = options.early && !ctx.thread ? await options.early.catch(() => null) : null;
-    try {
-      brief = checkBriefAgainstCards(early ?? (await model.writeBrief(ctx)), ctx.cards);
-    } catch (e) {
-      console.warn('[Research] Debate brief failed, writing from the cards:', e);
-      brief = readDebateBrief({}, ctx);
-    }
+    const early = options.early && !ctx.thread ? options.early.catch(() => null) : null;
+    let startedEarly = false;
+    const writing = (early ?? Promise.resolve(null)).then((b) => {
+      startedEarly = b !== null;
+      return b ?? model.writeBrief(ctx);
+    });
+    writing.catch((e) => console.warn('[Research] Debate brief failed, writing from the cards:', e));
+    // A brief that hasn't come back in time gives way to the cards' order; an outlier took 28 s.
+    const written = await within(writing, options.briefWaitMs ?? BRIEF_WAIT_MS);
+    brief = written ? checkBriefAgainstCards(written, ctx.cards) : cardBrief(ctx);
     options.perf?.(
-      `debate brief (${early ? 'started early, ' : ''}${brief.kind}, ${brief.criterion}, ${brief.calls.length} lookups${brief.cardNotes.length ? `, ${brief.cardNotes.length} card notes` : ''})`,
+      `debate brief (${written ? '' : 'timed out, from the cards, '}${startedEarly ? 'started early, ' : ''}${brief.kind}, ${brief.criterion}, ${brief.calls.length} lookups${brief.cardNotes.length ? `, ${brief.cardNotes.length} card notes` : ''})`,
     );
-    if (!ctx.thread && debates && signature && (brief.verdict || brief.ranking.length)) {
+    // Only a brief that weighed the question is settled for next time.
+    if (written && !ctx.thread && debates && signature && (brief.verdict || brief.ranking.length)) {
       void debates.write({
         signature,
         cards: fingerprint,
@@ -437,6 +446,27 @@ export async function runDebateResearch(
     `debate research (${ledger.entries.length} found, ${ledger.gaps.length} missing; ${snapshots.length} era snapshots, ${builds} building)`,
   );
   return { brief, ledger };
+}
+
+/**
+ * A brief from the stored cards alone, for when the model's brief is late or fails: the cards'
+ * order is the verdict (level cards leave it open), the versions are the cards' windows, and the
+ * lookups are the named players' career records, already fetched. It quotes no figures.
+ */
+export function cardBrief(ctx: DebateContext): DebateBrief {
+  const order = cardOrder(ctx.cards);
+  const kind: DebateKind = order.length === 2 ? 'head_to_head' : order.length > 2 ? 'ranking' : 'other';
+  const decided = kind === 'head_to_head' && cardAbove(order[0], order[1]);
+  return {
+    ...readDebateBrief({}, ctx),
+    kind,
+    criterion: 'mixed',
+    versions: order.map((s) => ({ subject: s.name, period: s.period ?? '' })),
+    verdict: decided ? order[0].name : '',
+    ranking: kind === 'ranking' ? order.map((s) => s.name) : [],
+    calls: sanitizeCalls(ctx.hints.players.map((p) => ({ tool: 'player_career', subject: p })), DEBATE_CALL_LIMIT),
+    cardNotes: order.length >= 2 ? ["The verdict follows the stored cards' order."] : [],
+  };
 }
 
 /** The figures the brief chose, one per criterion at most: the writer quotes only these. */

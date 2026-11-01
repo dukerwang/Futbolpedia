@@ -22,6 +22,8 @@ export interface FigureClaim {
   near: string[];
   /** Compact forms that must follow the number directly ("6g" for goals), as pattern sources. */
   suffix?: string[];
+  /** The number as a word, when the reply wrote it that way ("three" for 3). */
+  word?: string;
 }
 
 /** Stat nouns and how each one appears in evidence (FPL lines, ESPN tables, digests). */
@@ -38,6 +40,9 @@ const STAT_NOUNS: [RegExp, string[], string[]][] = [
   [/^(?:defeats|losses)$/, ['defeat', 'loss', 'lost', '\\bl$'], []],
   [/^caps$/, ['cap'], []],
   [/^(?:titles|trophies|honours)$/, ['title', 'trophies', 'trophy', 'honour', 'winner', 'won'], []],
+  [/^(?:awards|ballon d'ors)$/, ['award', 'ballon', 'winner', 'won'], []],
+  [/^selections$/, ['selection', 'selected', 'team of the year', 'team of the season'], []],
+  [/^finals$/, ['final'], []],
 ];
 const statWords = (noun: string): { near: string[]; suffix: string[] } => {
   const hit = STAT_NOUNS.find(([re]) => re.test(noun));
@@ -45,13 +50,21 @@ const statWords = (noun: string): { near: string[]; suffix: string[] } => {
 };
 
 const STAT_NOUN_SOURCE =
-  "goals?|assists?|appearances|apps|starts|minutes|clean sheets?|points|pts|shots(?: on target)?|dribbles|tackles|interceptions|key passes|passes|chances(?: created)?|big chances|saves|offsides|pressures|recoveries|duels|touches|crosses|blocks|clearances|fouls|wins|victories|draws|defeats|losses|caps|hat-tricks?|titles|trophies|honours";
+  "goals?|assists?|appearances|apps|starts|minutes|clean sheets?|points|pts|shots(?: on target)?|dribbles|tackles|interceptions|key passes|passes|chances(?: created)?|big chances|saves|offsides|pressures|recoveries|duels|touches|crosses|blocks|clearances|fouls|wins|victories|draws|defeats|losses|caps|hat-tricks?|titles|trophies|honours|awards|ballon d'ors|selections|finals";
+
+/** Honours are counted with longer phrases between number and noun ("three consecutive Serie A titles"). */
+const HONOUR_NOUN_SOURCE = "titles|trophies|honours|awards|ballon d'ors|selections|finals|caps";
+const NUMBER_WORDS = ['two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const NUMBER_WORD_SOURCE = NUMBER_WORDS.join('|');
+const wordValue = (w: string) => String(NUMBER_WORDS.indexOf(w.toLowerCase()) + 2);
 
 interface Pattern {
   kind: FigureKind;
   re: RegExp;
   /** The number (or quote) and the words it must sit near in the evidence. */
-  read: (m: RegExpMatchArray) => { value: string; near: string[]; suffix?: string[] } | null;
+  read: (m: RegExpMatchArray) => { value: string; near: string[]; suffix?: string[]; word?: string } | null;
+  /** Only for answers about the past (`scoped`): honour counts and numbers written as words. */
+  pastOnly?: boolean;
 }
 
 const PATTERNS: Pattern[] = [
@@ -75,6 +88,25 @@ const PATTERNS: Pattern[] = [
       if (n < 2) return null;
       return { value: m[1], ...statWords(m[2].toLowerCase()) };
     },
+  },
+  {
+    kind: 'stat',
+    pastOnly: true,
+    re: new RegExp(`\\b(\\d{1,3})\\s+(?:[A-Za-z'-]+\\s+){3,8}?(${HONOUR_NOUN_SOURCE})\\b`, 'gi'),
+    read: (m) => (Number(m[1]) < 2 ? null : { value: m[1], ...statWords(m[2].toLowerCase()) }),
+  },
+  // A count written as a word: "three goals", "four consecutive Defender of the Year awards".
+  {
+    kind: 'stat',
+    pastOnly: true,
+    re: new RegExp(`\\b(${NUMBER_WORD_SOURCE})\\s+(?:[A-Za-z-]+\\s+){0,2}?(${STAT_NOUN_SOURCE})\\b`, 'gi'),
+    read: (m) => ({ value: wordValue(m[1]), word: m[1].toLowerCase(), ...statWords(m[2].toLowerCase()) }),
+  },
+  {
+    kind: 'stat',
+    pastOnly: true,
+    re: new RegExp(`\\b(${NUMBER_WORD_SOURCE})\\s+(?:[A-Za-z'-]+\\s+){3,8}?(${HONOUR_NOUN_SOURCE})\\b`, 'gi'),
+    read: (m) => ({ value: wordValue(m[1]), word: m[1].toLowerCase(), ...statWords(m[2].toLowerCase()) }),
   },
   {
     kind: 'position',
@@ -112,16 +144,17 @@ const fold = (s: string) =>
     .replace(/[^\S\n]+/g, ' ');
 
 /** The precise figures in one piece of text, each kept once (a decimal inside a stat isn't counted twice). */
-export function findFigures(text: string): FigureClaim[] {
+export function findFigures(text: string, options: { past?: boolean } = {}): FigureClaim[] {
   const claims: (FigureClaim & { at: number; end: number })[] = [];
   for (const p of PATTERNS) {
+    if (p.pastOnly && !options.past) continue;
     for (const m of text.matchAll(p.re)) {
       const read = p.read(m);
       if (!read?.value) continue;
       const at = m.index ?? 0;
       const end = at + m[0].length;
       if (claims.some((c) => at < c.end && end > c.at)) continue;
-      claims.push({ kind: p.kind, text: m[0].trim(), value: read.value, near: read.near, ...(read.suffix ? { suffix: read.suffix } : {}), at, end });
+      claims.push({ kind: p.kind, text: m[0].trim(), value: read.value, near: read.near, ...(read.suffix ? { suffix: read.suffix } : {}), ...(read.word ? { word: read.word } : {}), at, end });
     }
   }
   return claims.sort((a, b) => a.at - b.at).map(({ at: _a, end: _e, ...c }) => c);
@@ -283,7 +316,8 @@ export function isSupported(claim: FigureClaim, evidence: string, scope?: Figure
   }
   // A decimal may be written rounded ("2.3" for 2.34); anything else must match exactly.
   const tail = claim.kind === 'decimal' ? '\\d*(?![\\d.])' : '(?![\\d]|\\.\\d)';
-  const num = new RegExp(`(?<![\\d.])${escape(claim.value)}${tail}`, 'g');
+  // A count the reply wrote as a word may be written either way in the evidence.
+  const num = new RegExp(`(?<![\\d.])${escape(claim.value)}${tail}${claim.word ? `|\\b${claim.word}\\b` : ''}`, 'g');
   for (const m of corpus.matchAll(num)) {
     const at = m.index ?? 0;
     const end = at + m[0].length;
@@ -315,13 +349,26 @@ export interface FigureGateOptions {
   budget?: { max: number; slots: string[] };
 }
 
-/** Whether a figure is one a slot asked for: the slot names its noun and, if it has one, its qualifier. */
-export function matchesSlot(claim: FigureClaim, slots: string[]): boolean {
+/** A tally from one match, or one tie, rather than a season or a span. */
+const MATCH_LEVEL = /\b(?:against|versus|vs\.?|in the final|in a single match|in one match|in the (?:first|second) leg|hat-?tricks?)\b/;
+
+/**
+ * Whether a figure is one a slot asked for: the slot names its noun, its competition doesn't
+ * conflict with the slot's, the season it's given for is one the slot names (when the slot names
+ * any), and a tally from one match only counts when the slot is about a match.
+ */
+export function matchesSlot(claim: FigureClaim, slots: string[], chunk: string = claim.text): boolean {
+  const scope = scopeOf(claim, chunk);
+  const matchLevel = MATCH_LEVEL.test(fold(chunk));
   return slots.some((slot) => {
     const f = fold(slot);
     if (!claim.near.some((w) => new RegExp(w, 'i').test(f))) return false;
-    const q = claim.kind === 'stat' ? qualifierNear(fold(claim.text), 0) : null;
-    return !q || qualifierNear(f, 0) === q || qualifierNear(f, 0) === null;
+    const slotQualifier = qualifierNear(f, 0);
+    if (scope.qualifier && slotQualifier && slotQualifier !== scope.qualifier) return false;
+    const slotSeasons = seasonsIn(slot);
+    if (scope.season !== null && slotSeasons.length && !slotSeasons.includes(scope.season)) return false;
+    if (matchLevel && !MATCH_LEVEL.test(f) && !/\bmatch\b/.test(f)) return false;
+    return true;
   });
 }
 
@@ -351,7 +398,7 @@ export function gateUnsupportedFigures(text: string, evidence: string, grounded:
   };
   const units: Unit[] = [];
   const check = (chunk: string, line: number, cell: number | null): Unit => {
-    const figures = findFigures(chunk);
+    const figures = findFigures(chunk, { past: options.scoped });
     const bad = isGrounded(chunk) ? [] : figures.filter((c) => !isSupported(c, evidence, options.scoped ? scopeOf(c, chunk) : undefined));
     removed.push(...bad);
     const unit = { text: chunk, line, cell, kept: bad.length ? [] : figures, gone: bad.length > 0 };
@@ -370,7 +417,7 @@ export function gateUnsupportedFigures(text: string, evidence: string, grounded:
   // Over budget: the figures nobody chose go first, from the end of the reply back.
   if (options.budget) {
     let count = units.filter((u) => !u.gone).reduce((n, u) => n + u.kept.length, 0);
-    const extra = (u: Unit) => u.kept.some((c) => !matchesSlot(c, options.budget!.slots));
+    const extra = (u: Unit) => u.kept.some((c) => !matchesSlot(c, options.budget!.slots, u.text));
     const order = units
       .filter((u) => !u.gone && u.kept.length > 0)
       .sort((a, b) => Number(extra(b)) - Number(extra(a)) || units.indexOf(b) - units.indexOf(a));

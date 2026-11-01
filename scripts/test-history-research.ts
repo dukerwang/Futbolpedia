@@ -53,6 +53,7 @@ import {
 import { checkFigures, paraphrasePairs, parseAgreement, parseHistoryGrade, readQuestionTable } from './eval-history';
 import { executeCall, historyOutcome, sanitizeCalls, type ResearchToolset, type ToolOutcome } from '../services/researchTools';
 import {
+  cardBrief,
   eraFor,
   looksLikePastQuestion,
   startDebateBrief,
@@ -701,6 +702,27 @@ await test('the named players career records start before the brief and are hand
   // Both were fetched before the brief; the brief's call for Kaká reused his, nothing was fetched twice.
   assert.deepEqual(log.filter((l) => l.startsWith('career')), ['career Kaká before the brief', 'career Zinedine Zidane before the brief']);
   assert.equal(ledger.entries.filter((e) => e.kind === 'career_record').length, 1);
+});
+
+await test('a late or failed brief gives way to the cards order, and is never settled', async () => {
+  const writes: any[] = [];
+  const debates = { read: async () => null, settledAny: async () => false, write: async (r: any) => void writes.push(r) };
+  const slow = { writeBrief: () => new Promise<DebateBrief>((resolve) => setTimeout(() => resolve(readDebateBrief(rawBrief, { message: '' })), 200)) };
+  const ctx = { message: 'Prime Zidane or prime Kaká?', thread: '', cards: [kaka, zidane], hints: { clubs: [], players: ['Kaká'] } };
+  const { brief, ledger } = await runDebateResearch(ctx, fakeTools([]), { model: slow, debates, briefWaitMs: 20 });
+  assert.equal(brief.kind, 'head_to_head');
+  assert.equal(brief.verdict, 'Zinedine Zidane');
+  assert.deepEqual(brief.criteria, []);
+  assert.ok(brief.cardNotes[0].includes("stored cards' order"));
+  assert.deepEqual(ledger.entries.map((e) => e.kind), ['career_record']);
+  assert.equal(writes.length, 0);
+  const failed = await runDebateResearch(ctx, fakeTools([]), { model: { writeBrief: async () => assert.fail('down') }, debates });
+  assert.equal(failed.brief.verdict, 'Zinedine Zidane');
+  // Level cards leave a head-to-head open; three or more make a ranking.
+  const level = toStanding(card('Kaká', 96));
+  assert.equal(cardBrief({ ...ctx, cards: [zidane, level] }).verdict, '');
+  const nesta = toStanding(card('Alessandro Nesta', 97));
+  assert.deepEqual(cardBrief({ ...ctx, cards: [kaka, zidane, nesta] }).ranking, ['Alessandro Nesta', 'Zinedine Zidane', 'Kaká']);
 });
 
 // --- The historical eval's pure parts ---------------------------------------------------------

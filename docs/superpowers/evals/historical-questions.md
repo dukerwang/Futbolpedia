@@ -11,7 +11,9 @@ in-process, each run in a new chat, and has a grader model with Google Search sc
 A second grader call compares the two runs of each question, and the answers to each pair of
 paraphrases below, for whether they reach the same verdict. It needs the network and
 `GEMINI_API_KEY`. Use `--only 1,4` for a subset, `--repeat 1` to skip the second run, and
-`--label <name>` to name the run. `--regrade <report.json>` runs a saved report's answers through
+`--label <name>` to name the run. `--no-builds` reads era snapshots without building any, which
+keeps a small run cheap. Every run spends the project's Gemini budget, which the live app shares,
+so run the smallest subset that answers the question. `--regrade <report.json>` runs a saved report's answers through
 the figure check again without re-asking the questions. Reports go to
 `docs/superpowers/evals/reports/`.
 

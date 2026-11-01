@@ -157,10 +157,38 @@ test('figure-light: a reply within its budget is untouched; beyond it, figures n
   const heavy =
     'Bo Striker scored 30 league goals in 2003-04. He made 37 Premier League appearances. He scored 39 goals in all competitions. He made 50 appearances in all.';
   const out = gateUnsupportedFigures(heavy, CAREER, [], { scoped: true, budget });
-  assert.equal(out.text, 'Bo Striker scored 30 league goals in 2003-04. He scored 39 goals in all competitions.');
-  assert.deepEqual(out.trimmed.map((t) => t.text), ['50 appearances', '37 Premier League appearances']);
+  // The chosen figure is league goals, so the all-competitions total isn't it either.
+  assert.equal(out.text, 'Bo Striker scored 30 league goals in 2003-04. He made 37 Premier League appearances.');
+  assert.deepEqual(out.trimmed.map((t) => t.text), ['50 appearances', '39 goals']);
   assert.ok(matchesSlot(findFigures('30 league goals')[0], budget.slots));
   assert.ok(!matchesSlot(findFigures('37 Premier League appearances')[0], budget.slots));
+});
+
+test('a chosen figure matches on competition, season and match level, not just its noun', () => {
+  const slots = ["his league goals in 2003-04"];
+  const [league] = findFigures('He scored 30 league goals in 2003-04.');
+  assert.ok(matchesSlot(league, slots, 'He scored 30 league goals in 2003-04.'));
+  const [cup] = findFigures('He scored 5 FA Cup goals in 2003-04.');
+  assert.ok(!matchesSlot(cup, slots, 'He scored 5 FA Cup goals in 2003-04.'));
+  const [other] = findFigures('He scored 24 league goals in 2004-05.');
+  assert.ok(!matchesSlot(other, slots, 'He scored 24 league goals in 2004-05.'));
+  const [tally] = findFigures('He scored 2 goals against Athletic Bilbao.');
+  assert.ok(!matchesSlot(tally, slots, 'He scored 2 goals against Athletic Bilbao.'));
+  assert.ok(matchesSlot(tally, ['his goals in the final'], 'He scored 2 goals in the final.'));
+});
+
+test('on answers about the past, honour counts and numbers written as words are figures too', () => {
+  const evidence = expandTables(`Honours:
+- Serie A Defender of the Year: 2000, 2001, 2002, 2003 (four awards)
+Rio Ferdinand PFA Team of the Year selections: 6`);
+  const past = (t: string) => findFigures(t, { past: true }).map((c) => `${c.text}=${c.value}`);
+  assert.deepEqual(past('He won three consecutive Serie A Defender of the Year awards.'), ['three consecutive Serie A Defender of the Year awards=3']);
+  assert.deepEqual(past('He earned 6 PFA Premier League Team of the Year selections.'), ['6 PFA Premier League Team of the Year selections=6']);
+  // The live gate leaves words alone, as before.
+  assert.deepEqual(findFigures('They have won two games in a row.'), []);
+  const reply = 'He won three consecutive Serie A Defender of the Year awards. He won four Defender of the Year awards. He read the game early.';
+  const out = gateUnsupportedFigures(reply, evidence, [], { scoped: true });
+  assert.equal(out.text, 'He won four Defender of the Year awards. He read the game early.');
 });
 
 console.log(`${passes} passed, ${failures} failed`);
