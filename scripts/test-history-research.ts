@@ -52,6 +52,7 @@ import {
 import { checkFigures, paraphrasePairs, parseAgreement, parseHistoryGrade, readQuestionTable } from './eval-history';
 import { executeCall, historyOutcome, sanitizeCalls, type ResearchToolset, type ToolOutcome } from '../services/researchTools';
 import {
+  eraFor,
   looksLikePastQuestion,
   startDebateBrief,
   buildDebateBriefPrompt,
@@ -658,6 +659,14 @@ await test('a slow web search is left out of the answer instead of holding it ba
   );
   assert.deepEqual(ledger.entries.map((e) => e.kind), ['career_record']);
   assert.ok(ledger.gaps.some((g) => g.label.includes('took too long') && g.status === 'empty'));
+});
+
+await test('a player window gets an era snapshot only when it is the size of a card window', () => {
+  const b = readDebateBrief({ ...rawBrief, versions: [{ subject: 'Alessandro Nesta', period: '2000-09' }] }, { message: '' });
+  assert.deepEqual(eraFor({ tool: 'player_career', subject: 'Kaká', season: '2005-07' }, b, []), { kind: 'player_window', period: '2005-07' });
+  assert.deepEqual(eraFor({ tool: 'player_career', subject: 'Paolo Maldini', season: '1998-99 to 2000-01' }, b, []), { kind: 'player_window', period: '1998-01' });
+  assert.equal(eraFor({ tool: 'player_career', subject: 'Alessandro Nesta' }, b, []), null);
+  assert.deepEqual(eraFor({ tool: 'club_season', subject: 'Arsenal', season: '2003-04' }, b, []), { kind: 'club_season', period: '2003-04' });
 });
 
 // --- The historical eval's pure parts ---------------------------------------------------------

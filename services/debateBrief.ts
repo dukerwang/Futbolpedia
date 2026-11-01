@@ -1,5 +1,6 @@
 import { Type } from '@google/genai';
 import { generateStructured, getCurrentSeasonInfo } from './aiClient';
+import { seasonSpan } from './dossierCards';
 import {
   cardsSettle,
   checkOrderAgainstCards,
@@ -16,6 +17,7 @@ import {
   debateSignature,
   ERA_SNAPSHOT_VERSION,
   eraEntry,
+  normalizePeriod,
   type DebateStore,
   type EraKind,
   type EraSnapshot,
@@ -96,6 +98,8 @@ export interface DebateContext {
 /** Lookups the brief may plan, and how many era snapshots one turn may start building. */
 export const DEBATE_CALL_LIMIT = 6;
 export const MAX_ERA_BUILDS = 3;
+/** The longest player window that gets an era snapshot: a card's window is at most three seasons. */
+export const MAX_WINDOW_SEASONS = 4;
 /** How long a turn waits for a stored settled debate before writing its own brief. */
 export const SETTLED_PEEK_MS = 600;
 /** How long, once the facts are in, a turn waits for stored era snapshots. */
@@ -305,7 +309,11 @@ export function eraFor(call: ResearchCall, brief: DebateBrief, cards: CardStandi
   const version = brief.versions.find((v) => surname(v.subject) && surname(v.subject) === surname(call.subject));
   // A card's window comes first, so a snapshot covers the version the card rates.
   const period = call.season || matchStanding(call.subject, cards)?.period || version?.period || '';
-  return /\d{4}/.test(period) ? { kind: 'player_window', period } : null;
+  // Only a window the size of a card's is worth a permanent snapshot; a decade-long span named for
+  // a ranking would rarely be asked about again and costs a build (two searches and a call).
+  const window = normalizePeriod(period);
+  const span = window ? seasonSpan(window) : null;
+  return window && span && span[1] - span[0] + 1 <= MAX_WINDOW_SEASONS ? { kind: 'player_window', period: window } : null;
 }
 
 export async function runDebateResearch(
