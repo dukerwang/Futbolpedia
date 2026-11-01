@@ -8,6 +8,18 @@ compare.
 
 ## How to run
 
+### Automated
+
+`npm run eval:live` runs questions 1 to 14 through the chat pipeline in-process (no server
+needed) and has a grader model, with Google Search and the live feeds, score each answer for stale
+facts, invented facts, whether it says what changed this season, decisiveness, hedged roles and
+gaps admitted. It writes a Markdown report and its JSON to `docs/superpowers/evals/reports/`. It
+needs the network and `GEMINI_API_KEY` in `.env.local` or the environment. Use `--only 1,3,8` for
+a subset and `--label <name>` to name the run. Club snapshots are built fresh in memory each run,
+since Supabase isn't loaded outside the browser.
+
+### By hand
+
 1. Open the published app in a desktop browser with the developer console open.
 2. Start a new chat for each question and send it exactly as written.
 3. From the console, note the `[Perf]` lines for the turn: `research`, `first answer token`, any

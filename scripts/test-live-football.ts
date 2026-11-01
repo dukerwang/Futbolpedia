@@ -261,17 +261,19 @@ await test("a club outside the Premier League says its injury list isn't covered
   const result = await live.club('Rivals');
   assert.ok(result.found);
   assert.doesNotMatch(result.text, /Fantasy Premier League/);
-  assert.deepEqual(result.missing, ['Injury list for Rivals FC (no free source outside the Premier League)']);
+  assert.deepEqual(result.missing, [{ item: 'Injury list for Rivals FC (no free source outside the Premier League)', status: 'not_covered' }]);
 });
 
 await test("an unknown club, a failed feed and a non-Premier League player report what's missing", async () => {
   const log: string[] = [];
   const live = createLiveFootball(fakeFeeds({ [FPL_BOOTSTRAP]: new Error('blocked') }, log));
-  assert.equal((await live.club('Nowhere Rovers')).found, false);
+  const nowhere = await live.club('Nowhere Rovers');
+  assert.equal(nowhere.found, false);
+  assert.equal('status' in nowhere && nowhere.status, 'not_covered');
   const club = await live.club('Club United');
   assert.ok(club.found);
-  assert.deepEqual(club.missing, ["Season starts and injury list for Club United (Fantasy Premier League feed didn't answer)"]);
-  assert.deepEqual(await live.player('Someone'), { found: false, reason: "the Fantasy Premier League feed didn't answer" });
+  assert.deepEqual(club.missing, [{ item: "Season starts and injury list for Club United (Fantasy Premier League feed didn't answer)", status: 'failed' }]);
+  assert.deepEqual(await live.player('Someone'), { found: false, status: 'failed', reason: "the Fantasy Premier League feed didn't answer" });
   // A failed feed isn't cached: the next lookup asks again.
   const asked = log.filter((u) => u === FPL_BOOTSTRAP).length;
   await live.player('Someone');
@@ -287,22 +289,61 @@ await test('player seasons use the name asked for, and tables read from ESPN sta
   const table = await live.table('Premier League');
   assert.ok(table.found);
   assert.equal(table.text, '1. Club United — 21 pts, P8 W7 D0 L1, GD +8');
-  assert.equal((await live.table('Sunday League')).found, false);
+  assert.deepEqual(await live.table('Sunday League'), { found: false, status: 'not_covered', reason: 'no table source for "Sunday League"' });
+  assert.deepEqual(await live.player('Lionel Nobody'), {
+    found: false,
+    status: 'not_covered',
+    reason: 'not a Premier League player (only Premier League players are covered)',
+  });
+});
+
+await test("a club lookup fails, rather than saying it isn't covered, when ESPN's club lists don't answer", async () => {
+  const down = Object.fromEntries(Object.keys(LEAGUE_TEAMS).map((slug) => [`${ESPN_SITE}/${slug}/teams`, new Error('down')]));
+  const live = createLiveFootball(fakeFeeds(down));
+  const result = await live.club('Club United');
+  assert.equal(result.found, false);
+  assert.equal('status' in result && result.status, 'failed');
+});
+
+await test('a found club carries its structured report for the situation snapshot', async () => {
+  const live = createLiveFootball(fakeFeeds(), () => Date.parse('2026-11-01T12:00:00Z'));
+  const result = await live.club('Club United');
+  assert.ok(result.found && 'report' in result);
+  assert.equal(result.report.team, 'Club United');
+  assert.equal(result.report.lineups.length, 2);
+  assert.ok(result.report.fplPlayers?.length);
 });
 
 await test("a lookup that says what it couldn't get files that, not a second generic gap", async () => {
   const tools: ResearchToolset = {
-    clubRecentTeam: async () => ({ result: null, missing: ['Live match data for Nowhere (no club by that name)'] }),
-    playerSeason: async () => null,
-    leagueTable: async () => null,
-    webSearch: async () => null,
-    card: async () => null,
+    clubRecentTeam: async () => ({
+      status: 'not_covered',
+      result: null,
+      missing: [{ item: 'Live match data for Nowhere (no club by that name)', status: 'not_covered' }],
+    }),
+    playerSeason: async () => ({ status: 'not_covered', result: null, missing: [], note: 'not a Premier League player' }),
+    leagueTable: async () => ({ status: 'empty', result: null, missing: [] }),
+    webSearch: async () => ({ status: 'failed', result: null, missing: [], note: 'refused (rate limited)' }),
+    card: async () => ({ status: 'empty', result: null, missing: [] }),
   };
-  const ledger = await runCalls([{ tool: 'club_recent_team', subject: 'Nowhere' }, { tool: 'player_season', subject: 'Someone' }], tools, emptyLedger());
+  const ledger = await runCalls(
+    [
+      { tool: 'club_recent_team', subject: 'Nowhere' },
+      { tool: 'player_season', subject: 'Someone' },
+      { tool: 'web_search', subject: 'Someone news' },
+    ],
+    tools,
+    emptyLedger(),
+  );
   assert.deepEqual(ledger.gaps, [
-    'Live match data for Nowhere (no club by that name)',
-    'Season record for Someone (covered for Premier League players only)',
+    { label: 'Live match data for Nowhere (no club by that name)', status: 'not_covered' },
+    { label: 'Season record for Someone (covered for Premier League players only): not a Premier League player', status: 'not_covered' },
+    { label: 'Web search: Someone news: refused (rate limited)', status: 'failed' },
   ]);
+  assert.deepEqual(
+    ledger.lookups.map((l) => l.status),
+    ['not_covered', 'not_covered', 'failed'],
+  );
 });
 
 console.log(`${passes} passed, ${failures} failed`);

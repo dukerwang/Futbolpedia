@@ -519,11 +519,11 @@ async function startServer() {
     const start = Date.now();
     try {
       const result = await live.club(name);
-      console.log(`[live] club "${name}": ${result.found ? `${result.team}, ${result.league}` : "not found"} (${Date.now() - start}ms)${result.missing.length ? `; missing: ${result.missing.join("; ")}` : ""}`);
+      console.log(`[live] club "${name}": ${result.found ? `${result.team}, ${result.league}` : "not found"} (${Date.now() - start}ms)${result.missing.length ? `; missing: ${result.missing.map((m) => `${m.item} [${m.status}]`).join("; ")}` : ""}`);
       return res.json(result);
     } catch (error: any) {
       console.warn(`[live] club "${name}" failed:`, error?.message || error);
-      return res.json({ found: false, missing: [`Live match data for ${name} (lookup failed)`] });
+      return res.json({ found: false, status: "failed", missing: [{ item: `Live match data for ${name} (lookup failed)`, status: "failed" }] });
     }
   });
 
@@ -536,7 +536,7 @@ async function startServer() {
       return res.json(result);
     } catch (error: any) {
       console.warn(`[live] player "${name}" failed:`, error?.message || error);
-      return res.json({ found: false, reason: "lookup failed" });
+      return res.json({ found: false, status: "failed", reason: "lookup failed" });
     }
   });
 
@@ -549,7 +549,7 @@ async function startServer() {
       return res.json(result);
     } catch (error: any) {
       console.warn(`[live] table "${league}" failed:`, error?.message || error);
-      return res.json({ found: false, reason: "lookup failed" });
+      return res.json({ found: false, status: "failed", reason: "lookup failed" });
     }
   });
 

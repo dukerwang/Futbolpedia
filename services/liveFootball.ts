@@ -254,7 +254,7 @@ export function parseMatchLineup(json: any, teamId: string, match: ClubMatch): L
 }
 
 /** Rows of a formation from the goalkeeper forward; columns left to right. */
-const roleRow = (role: string): number => {
+export const roleRow = (role: string): number => {
   const r = role.toUpperCase();
   if (r === 'G' || r === 'GK') return 0;
   if (/^(CD|CB|LB|RB|LWB|RWB|SW|D)(-|$)/.test(r)) return 1;
@@ -263,7 +263,7 @@ const roleRow = (role: string): number => {
   if (/^AM/.test(r)) return 4;
   return 5;
 };
-const roleCol = (role: string): number => {
+export const roleCol = (role: string): number => {
   const r = role.toUpperCase();
   if (r.endsWith('-L')) return 1;
   if (r.endsWith('-R')) return 3;
@@ -360,7 +360,7 @@ export function findFplTeam(club: EspnTeam, fpl: FplData): { id: number; name: s
 }
 
 /** "Thigh injury - Unknown return date", or the status when FPL gave no note. */
-const absenceNote = (p: FplPlayer): string => p.news || (p.status === 's' ? 'suspended' : p.status === 'i' ? 'injured' : 'doubtful');
+export const absenceNote = (p: FplPlayer): string => p.news || (p.status === 's' ? 'suspended' : p.status === 'i' ? 'injured' : 'doubtful');
 
 /** Players FPL lists as injured, suspended or doubtful (not those who left the club). */
 export const fplAbsences = (players: FplPlayer[]): FplPlayer[] => players.filter((p) => ['i', 's', 'd', 'n'].includes(p.status));
@@ -478,7 +478,7 @@ export interface LiveClubReport {
  * FPL keeps formal full names ("Gabriel dos Santos Magalhães"); when the same player appears in an
  * ESPN lineup, use the name football coverage uses.
  */
-const commonName = (p: FplPlayer, espnNames: string[]): string => {
+export const commonName = (p: FplPlayer, espnNames: string[]): string => {
   const full = nameTokens(p.fullName);
   return (
     espnNames.find((n) => inOrder(full, nameTokens(n))) ??
@@ -543,11 +543,26 @@ export function formatClubReport(r: LiveClubReport): string {
 
 export type GetJson = (url: string) => Promise<any>;
 
+/**
+ * Why a lookup, or part of one, has no data: the source answered with nothing (`empty`), no free
+ * source covers it (`not_covered`, so asking again won't help), or the feed failed (`failed`).
+ */
+export type LiveStatus = 'empty' | 'not_covered' | 'failed';
+
+export interface LiveMissing {
+  item: string;
+  status: LiveStatus;
+}
+
 export type LiveClubResult =
-  | { found: true; team: string; league: string; text: string; missing: string[] }
-  | { found: false; missing: string[] };
-export type LivePlayerResult = { found: true; name: string; team: string; text: string } | { found: false; reason: string };
-export type LiveTableResult = { found: true; league: string; season: string | null; text: string } | { found: false; reason: string };
+  | { found: true; team: string; league: string; text: string; missing: LiveMissing[]; report: LiveClubReport }
+  | { found: false; status: LiveStatus; missing: LiveMissing[] };
+export type LivePlayerResult =
+  | { found: true; name: string; team: string; text: string }
+  | { found: false; status: LiveStatus; reason: string };
+export type LiveTableResult =
+  | { found: true; league: string; season: string | null; text: string }
+  | { found: false; status: LiveStatus; reason: string };
 
 const MINUTE = 60_000;
 
@@ -576,8 +591,18 @@ export function createLiveFootball(getJson: GetJson, now: () => number = Date.no
   const today = () => new Date(now()).toISOString().slice(0, 10);
 
   async function club(name: string): Promise<LiveClubResult> {
-    const team = findClub(name, await teamIndex());
-    if (!team) return { found: false, missing: [`Live match data for ${name} (no club by that name in the leagues ESPN covers here)`] };
+    const index = await teamIndex();
+    if (index.length === 0) {
+      return { found: false, status: 'failed', missing: [{ item: `Live match data for ${name} (ESPN's club lists didn't answer)`, status: 'failed' }] };
+    }
+    const team = findClub(name, index);
+    if (!team) {
+      return {
+        found: false,
+        status: 'not_covered',
+        missing: [{ item: `Live match data for ${name} (no club by that name in the leagues ESPN covers here)`, status: 'not_covered' }],
+      };
+    }
     const league = LIVE_LEAGUES.find((l) => l.slug === team.league)?.name ?? team.league;
     const isPremierLeague = team.league === 'eng.1';
     const [schedule, upcoming, fplData] = await Promise.all([
@@ -593,14 +618,16 @@ export function createLiveFootball(getJson: GetJson, now: () => number = Date.no
       )
     ).filter((l): l is LiveLineup => l !== null);
     const fplTeam = fplData ? findFplTeam(team, fplData) : null;
-    const missing = [
-      ...(schedule ? [] : [`Recent matches for ${team.name} (ESPN didn't answer)`]),
-      ...(played.length && !lineups.length ? [`Starting XIs for ${team.name} (ESPN had none for its recent matches)`] : []),
-      ...(isPremierLeague && !fplTeam ? [`Season starts and injury list for ${team.name} (Fantasy Premier League feed didn't answer)`] : []),
-      ...(!isPremierLeague ? [`Injury list for ${team.name} (no free source outside the Premier League)`] : []),
+    const missing: LiveMissing[] = [
+      ...(schedule ? [] : [{ item: `Recent matches for ${team.name} (ESPN didn't answer)`, status: 'failed' as const }]),
+      ...(played.length && !lineups.length ? [{ item: `Starting XIs for ${team.name} (ESPN had none for its recent matches)`, status: 'empty' as const }] : []),
+      ...(isPremierLeague && !fplTeam
+        ? [{ item: `Season starts and injury list for ${team.name} (Fantasy Premier League feed didn't answer)`, status: 'failed' as const }]
+        : []),
+      ...(!isPremierLeague ? [{ item: `Injury list for ${team.name} (no free source outside the Premier League)`, status: 'not_covered' as const }] : []),
     ];
-    if (!played.length && !fixtures.length && !fplTeam) return { found: false, missing };
-    const text = formatClubReport({
+    if (!played.length && !fixtures.length && !fplTeam) return { found: false, status: schedule ? 'empty' : 'failed', missing };
+    const report: LiveClubReport = {
       team: team.name,
       league,
       lineups,
@@ -608,25 +635,25 @@ export function createLiveFootball(getJson: GetJson, now: () => number = Date.no
       fixtures,
       fplPlayers: fplTeam ? fplData!.players.filter((p) => p.teamId === fplTeam.id && p.status !== 'u') : null,
       asOf: today(),
-    });
-    return { found: true, team: team.name, league, text, missing };
+    };
+    return { found: true, team: team.name, league, text: formatClubReport(report), missing, report };
   }
 
   async function player(name: string): Promise<LivePlayerResult> {
     const data = await fpl();
-    if (!data) return { found: false, reason: "the Fantasy Premier League feed didn't answer" };
+    if (!data) return { found: false, status: 'failed', reason: "the Fantasy Premier League feed didn't answer" };
     const match = findFplPlayer(name, data);
-    if (!match) return { found: false, reason: 'not a Premier League player (only Premier League players are covered)' };
+    if (!match) return { found: false, status: 'not_covered', reason: 'not a Premier League player (only Premier League players are covered)' };
     const text = formatFplPlayer(match, name);
     return { found: true, name: text.slice(0, text.indexOf(' — ')), team: match.team, text };
   }
 
   async function table(leagueName: string, country?: string): Promise<LiveTableResult> {
     const league = findLeague(leagueName, country);
-    if (!league) return { found: false, reason: `no table source for "${leagueName}"` };
+    if (!league) return { found: false, status: 'not_covered', reason: `no table source for "${leagueName}"` };
     const json = await settle(cached(`${ESPN_STANDINGS}/${league.slug}/standings`, 60 * MINUTE));
     const { season, rows } = parseEspnStandings(json);
-    if (!rows.length) return { found: false, reason: `ESPN returned no table for ${league.name}` };
+    if (!rows.length) return { found: false, status: json ? 'empty' : 'failed', reason: `ESPN returned no table for ${league.name}` };
     return { found: true, league: league.name, season, text: formatLeagueTable(rows) };
   }
 

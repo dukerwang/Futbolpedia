@@ -187,6 +187,13 @@ writer runs at low thinking once a brief exists. The verify gate and the evidenc
 but parked on `feat/evidence-and-name-check`, unmerged: the focus is the quality of the research
 and the answer, not checks after the fact.
 
+**Status, Futbolpedia 3.5:** research reports each lookup's status and plans around what no
+source covers, runs facts before analysis with dated sources, discards earlier-season sources
+that contradict the live facts, and builds a situation snapshot (first-choice XI, absences, form,
+what changed) that the writer argues from. Each club's snapshot is shared through the Supabase
+`club_snapshots` table and rebuilt at most once a day. `npm run eval:live` scores the question set
+with a grader model.
+
 1. **Unblock and ledger.** Keep the writer's tools on live turns, and stop the fallback string from
    counting as context. Ship the recent-lineups and injury grounding (branch
    `fix/tactics-grounding`). Replace `factualFoundation` with a ledger with ids and longer digests,

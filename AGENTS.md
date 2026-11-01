@@ -10,7 +10,11 @@ npm run build    # Vite production build to /dist
 npm start        # Run production server (serves /dist statically)
 ```
 
-No test runner is configured. TypeScript type-check: `npx tsc --noEmit`.
+```bash
+npm run typecheck   # tsc --noEmit
+npm test            # offline checks, feeds and Gemini faked (see package.json for the list)
+npm run eval:live   # scores the live question set with a grader model; needs the network and GEMINI_API_KEY
+```
 
 ## Environment Variables
 
@@ -24,6 +28,10 @@ Supabase credentials are hardcoded in `geminiService.ts` (publishable key, safe 
 ### Server (`server.ts`)
 A single Express server handles everything:
 - `/api/football/squad` — Backend lookup against API-Football (hides `API_FOOTBALL_KEY` from the client); there is no general pass-through route
+- `/api/live/club`, `/api/live/player`, `/api/live/table` — current-season facts from the keyless ESPN and Fantasy Premier League feeds (`services/liveFootball.ts`). Each reports what it couldn't get with a status: `empty`, `not_covered` or `failed`
+
+### Chat research (`services/researchAgent.ts`)
+A chat turn about live facts plans its research in a brief (what's distinctive or changed this season, lookups tagged facts or analysis), runs the facts first and the analysis searches against them, reads each club's shared daily snapshot (`services/clubSnapshots.ts`, Supabase `club_snapshots`), then runs reflect (discards earlier-season sources, may add a round) alongside the situation snapshot (`services/situationSnapshot.ts`: first-choice XI, absences, form, what changed). The writer argues from `<situation_snapshot>`. `CLAUDE.md` has the full description.
 - In dev: Vite is mounted as Express middleware (`middlewareMode: true`)
 - In prod: serves the built `/dist` directory
 
