@@ -243,16 +243,17 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
           type="button"
           onClick={jumpToLatest}
           aria-label={isLive ? 'Jump to live output' : 'Jump to latest message'}
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 min-h-9 px-3.5 rounded-full bg-charcoal dark:bg-cream-200 text-cream-50 dark:text-charcoal shadow-float dark:shadow-dark-float text-[11px] font-sans font-bold uppercase tracking-widest animate-fade-in"
+          title={isLive ? 'Jump to live output' : 'Jump to latest message'}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 size-9 flex items-center justify-center rounded-full border border-charcoal/20 dark:border-cream-400/35 bg-cream-50 dark:bg-charcoal-light text-charcoal dark:text-cream-50 shadow-float dark:shadow-dark-float hover:border-charcoal/40 dark:hover:border-cream-400/60 transition-colors animate-fade-in"
         >
+          <span className="material-symbols-outlined text-[20px]" aria-hidden="true">arrow_downward</span>
+          {/* Output is still arriving below the reader. */}
           {isLive ? (
-            <span className="relative flex size-2 mr-0.5" aria-hidden="true">
+            <span className="absolute -top-0.5 -right-0.5 flex size-2.5" aria-hidden="true">
               <span className="absolute inline-flex size-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
-              <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+              <span className="relative inline-flex size-2.5 rounded-full bg-emerald-500" />
             </span>
           ) : null}
-          <span className="material-symbols-outlined text-[18px]">arrow_downward</span>
-          {isLive ? 'Live' : 'Latest'}
         </button>
       )}
     </div>

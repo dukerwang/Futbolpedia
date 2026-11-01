@@ -8,11 +8,11 @@ import {
   shareDossierCard,
 } from '../services/geminiService';
 import { cardEdition, compareVersions, formatEraQualifier } from '../services/dossierStore';
-import { getAttributeLabel, getShortTierLabel } from '../constants/ratingTiers';
+import { getAttributeLabel, getShortTierLabel, positionCodes } from '../constants/ratingTiers';
 import { describeCardEdition, pillClass, PILL_ICON_CLASS, shortEditionLabel } from './pills';
 
-/** "mine" is the user's own dossiers (localStorage); "global" is every shared card in Supabase. */
-export type HubTab = 'mine' | 'global';
+/** "global" is every shared card in Supabase; "mine" is the user's own dossiers (localStorage). */
+export type HubTab = 'global' | 'mine';
 
 interface DossierHubProps {
   /** The hub is the visible view; the global tab only fetches while it's on screen. */
@@ -27,7 +27,8 @@ interface DossierHubProps {
   onAskAbout: (profile: PlayerProfile, from: HubTab) => void;
   onRenameDossier: (cardKey: string, newName: string) => void;
   onDeleteDossier: (cardKey: string) => void;
-  onStartChat: () => void;
+  /** Opens Scout, with a name to rate when the search found no card for it. */
+  onScout: (name?: string) => void;
 }
 
 type EditionFilter = 'all' | 'current' | 'prime' | 'era' | 'season';
@@ -75,11 +76,6 @@ const POSITION_FILTER_KEYWORDS: Record<Exclude<PositionFilter, 'all'>, string[]>
 
 const SELECT_CLASS =
   'shrink-0 px-2.5 py-1.5 text-xs font-sans rounded-lg bg-cream-100 dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border text-charcoal dark:text-cream-50 focus:outline-none focus:ring-1 focus:ring-emerald-500';
-
-const formatPosition = (pos: string): string => {
-  if (!pos) return 'N/A';
-  return pos.split('/')[0].trim();
-};
 
 const playerKey = (p: PlayerProfile) => getCardKey(p).split(':')[0];
 
@@ -239,7 +235,7 @@ const DossierCard: React.FC<DossierCardProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-charcoal/60 dark:text-cream-400 mb-3">
-          <span className="font-semibold text-charcoal dark:text-cream-200">{formatPosition(profile.basicInfo.position)}</span>
+          <span className="font-semibold text-charcoal dark:text-cream-200">{positionCodes(profile.basicInfo.position) || 'N/A'}</span>
           <Dot />
           <span className="truncate max-w-[140px]">{profile.basicInfo.club}</span>
           <Dot />
@@ -384,8 +380,8 @@ const DossierCard: React.FC<DossierCardProps> = ({
 };
 
 /**
- * The dossier library as a main view: "Your dossiers" (cards this browser has generated or
- * opened) and the global hub (every shared card) as tabs over one card grid and one set of filters.
+ * The dossier library as a main view: the global hub (every shared card) and "Your dossiers"
+ * (cards this browser has scouted or opened) as tabs over one card grid and one set of filters.
  */
 export const DossierHub: React.FC<DossierHubProps> = ({
   isActive,
@@ -397,7 +393,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   onAskAbout,
   onRenameDossier,
   onDeleteDossier,
-  onStartChat,
+  onScout,
 }) => {
   const [globalItems, setGlobalItems] = useState<GlobalHubDossierItem[]>([]);
   const [globalStatus, setGlobalStatus] = useState<'idle' | 'loading' | 'ready'>('idle');
@@ -551,9 +547,11 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   }, [items, tab, searchQuery, editionFilter, positionFilter, minTierFilter, sortOption]);
 
   const tabs: Array<{ id: HubTab; label: string; icon: string; count?: number }> = [
-    { id: 'mine', label: 'Your dossiers', icon: 'folder_shared', count: savedProfiles.length },
     { id: 'global', label: 'Global hub', icon: 'public', count: globalStatus === 'ready' ? globalItems.length : undefined },
+    { id: 'mine', label: 'Your dossiers', icon: 'folder_shared', count: savedProfiles.length },
   ];
+  // A search that found nothing is usually a player nobody has rated yet.
+  const scoutQuery = searchQuery.trim().length >= 2 ? searchQuery.trim() : '';
 
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden">
@@ -733,14 +731,14 @@ export const DossierHub: React.FC<DossierHubProps> = ({
             <span className="material-symbols-outlined text-[44px] text-charcoal/25 dark:text-cream-400/30 mb-3">folder_open</span>
             <h3 className="text-base font-serif font-bold text-charcoal dark:text-cream-50">No dossiers yet</h3>
             <p className="text-xs text-charcoal/60 dark:text-cream-400 mt-1 max-w-sm leading-relaxed">
-              Ask Futbolpedia to rate or scout a player and the dossier lands here. Any card you open from the global hub is kept here too.
+              Scout a player and the dossier lands here. Any card you open from the global hub is kept here too.
             </p>
             <div className="flex flex-wrap justify-center gap-2 mt-5">
               <button
-                onClick={onStartChat}
+                onClick={() => onScout()}
                 className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
               >
-                <span className="material-symbols-outlined text-[16px]">chat</span>
+                <span className="material-symbols-outlined text-[16px]">person_search</span>
                 Scout a player
               </button>
               <button
@@ -760,17 +758,30 @@ export const DossierHub: React.FC<DossierHubProps> = ({
             </h3>
             <p className="text-xs text-charcoal/60 dark:text-cream-400 mt-1 max-w-sm">
               {items.length === 0
-                ? 'Cards appear here once players are rated in chat.'
-                : 'Try a broader search or clear the filters.'}
+                ? 'Cards appear here once players are scouted.'
+                : scoutQuery
+                  ? `No card matches “${scoutQuery}”. Scout him and the card lands here.`
+                  : 'Try a broader search or clear the filters.'}
             </p>
-            {filtersActive && (
-              <button
-                onClick={resetFilters}
-                className="mt-4 px-3 py-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 rounded-lg hover:bg-emerald-500/20 transition-colors"
-              >
-                Clear filters
-              </button>
-            )}
+            <div className="flex flex-wrap justify-center gap-2 mt-4">
+              {scoutQuery && (
+                <button
+                  onClick={() => onScout(scoutQuery)}
+                  className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[16px]">person_search</span>
+                  Scout “{scoutQuery}”
+                </button>
+              )}
+              {filtersActive && (
+                <button
+                  onClick={resetFilters}
+                  className="px-3 py-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 rounded-lg hover:bg-emerald-500/20 transition-colors"
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,19rem),1fr))] gap-4">

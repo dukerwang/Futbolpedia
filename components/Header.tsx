@@ -75,7 +75,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
                 onClick={() => onViewChange(view === 'hub' ? 'chat' : 'hub')}
                 aria-pressed={view === 'hub'}
-                className={`relative p-2 rounded-full transition-colors ${
+                className={`relative flex items-center gap-1.5 p-2 md:pl-2.5 md:pr-3.5 rounded-full transition-colors ${
                     view === 'hub'
                     ? 'bg-emerald-500 text-white hover:bg-emerald-600'
                     : 'text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light'
@@ -84,6 +84,7 @@ export const Header: React.FC<HeaderProps> = ({
                 aria-label={dossierCount > 0 ? `Dossiers (${dossierCount})` : 'Dossiers'}
             >
                 <span aria-hidden="true" className="material-symbols-outlined text-[20px] block">folder_shared</span>
+                <span aria-hidden="true" className="hidden md:inline text-[11px] font-sans font-bold uppercase tracking-widest">Dossiers</span>
                 {dossierCount > 0 && (
                     <span className={`absolute -top-1 -right-1 flex h-4 min-w-4 px-1 items-center justify-center rounded-full text-[9px] font-mono font-bold shadow-sm transition-colors ${
                         view === 'hub'
@@ -97,15 +98,16 @@ export const Header: React.FC<HeaderProps> = ({
 
             <button
                 onClick={onToggleConversations}
-                className={`p-2 rounded-full transition-colors ${
+                className={`flex items-center gap-1.5 p-2 md:pl-2.5 md:pr-3.5 rounded-full transition-colors ${
                     isConversationsOpen 
                     ? 'bg-emerald-500 text-white hover:bg-emerald-600' 
                     : 'text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light'
                 }`}
-                title={isConversationsOpen ? "Close Saved Briefings" : "Open Saved Briefings"}
-                aria-label={isConversationsOpen ? "Close Saved Briefings" : "Open Saved Briefings"}
+                title={isConversationsOpen ? "Close past chats" : "Past chats"}
+                aria-label={isConversationsOpen ? "Close past chats" : "Past chats"}
             >
-                <span className="material-symbols-outlined text-[20px] block">forum</span>
+                <span aria-hidden="true" className="material-symbols-outlined text-[20px] block">forum</span>
+                <span aria-hidden="true" className="hidden md:inline text-[11px] font-sans font-bold uppercase tracking-widest">Chats</span>
             </button>
 
             <button 
@@ -119,11 +121,12 @@ export const Header: React.FC<HeaderProps> = ({
 
             <button 
                 onClick={onNewChat} 
-                className="btn-new-chat p-2 text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light rounded-full"
-                title="New Chat"
-                aria-label="New Chat"
+                className="btn-new-chat flex items-center gap-1.5 p-2 md:pl-2.5 md:pr-3.5 text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light rounded-full"
+                title="New chat"
+                aria-label="New chat"
             >
-                <span className="material-symbols-outlined text-[20px] block btn-new-chat-icon">add_comment</span>
+                <span aria-hidden="true" className="material-symbols-outlined text-[20px] block btn-new-chat-icon">add_comment</span>
+                <span aria-hidden="true" className="hidden md:inline text-[11px] font-sans font-bold uppercase tracking-widest">New chat</span>
             </button>
         </div>
     </header>

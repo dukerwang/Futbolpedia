@@ -1,7 +1,7 @@
 import React from 'react';
 import type { ChatDossierRef, PlayerProfile } from '../types';
 import { getCardKey } from '../services/dossierStore';
-import { getShortTierLabel } from '../constants/ratingTiers';
+import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
 
 export const toChatDossierRef = (p: PlayerProfile): ChatDossierRef => ({
   cardKey: getCardKey(p),
@@ -43,7 +43,7 @@ export const DossierChatCard: React.FC<{
   onOpen?: (dossier: ChatDossierRef) => void;
 }> = ({ dossier, onOpen }) => {
   const hasRatings = typeof dossier.overall === 'number' && dossier.overall > 0;
-  const meta = [dossier.position, dossier.club, dossier.nationality, dossier.age ? `${dossier.age} yrs` : null]
+  const meta = [positionCodes(dossier.position ?? ''), dossier.club, dossier.nationality, dossier.age ? `${dossier.age} yrs` : null]
     .filter(Boolean)
     .join(' · ');
 

@@ -511,6 +511,29 @@ export const getSharedConversation = async (code: string): Promise<Conversation 
   }
 };
 
+/**
+ * Every player and edition the shared store holds a card for, as `<base slug>:<edition>`, whatever
+ * the card's date. Null when the store can't be read, so callers never mistake an outage for an
+ * empty store.
+ */
+export const fetchSharedEditions = async (): Promise<Set<string> | null> => {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from('player_profiles')
+      .select('name:player_data->basicInfo->>name, edition:player_data->version->>type')
+      .limit(5000);
+    if (error || !Array.isArray(data)) return null;
+    const editions = new Set<string>();
+    for (const row of data as Array<{ name?: string | null; edition?: string | null }>) {
+      if (row.name && row.edition) editions.add(`${toBasePlayerSlug(row.name)}:${row.edition}`);
+    }
+    return editions;
+  } catch {
+    return null;
+  }
+};
+
 let cardIndex: PlayerProfile[] = [];
 let cardIndexFetchedAt = 0;
 let cardIndexRequest: Promise<PlayerProfile[]> | null = null;
