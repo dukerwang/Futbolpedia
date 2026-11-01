@@ -388,8 +388,15 @@ export function pickPlayerTitle(hits: { title: string; snippet: string }[], name
     const t = nameTokens(h.title.replace(/\(.*?\)/g, ''));
     return wanted.every((w) => t.includes(w)) || t.every((w) => wanted.includes(w)) || nameScore(name, [h.title.replace(/\(.*?\)/g, '')]) > 0;
   });
-  const footballer = candidates.find((h) => /footballer|football|soccer/i.test(h.title) || /football|soccer|midfielder|forward|striker|defender|goalkeeper|winger/i.test(h.snippet));
-  return (footballer ?? candidates[0])?.title ?? null;
+  const isFootballer = (h: { title: string; snippet: string }) =>
+    /footballer|football|soccer/i.test(h.title) || /football|soccer|midfielder|forward|striker|defender|goalkeeper|winger/i.test(h.snippet);
+  // An article titled with just his name beats one about something named after him.
+  const exact = candidates.filter((h) => {
+    const t = nameTokens(h.title.replace(/\(.*?\)/g, ''));
+    return t.length === wanted.length && t.every((w) => wanted.includes(w));
+  });
+  const pick = exact.find((h) => /\((?:[^)]*\s)?footballer\)/i.test(h.title)) ?? exact.find(isFootballer) ?? candidates.find(isFootballer) ?? exact[0] ?? candidates[0];
+  return pick?.title ?? null;
 }
 
 // ---------------------------------------------------------------------------------------------

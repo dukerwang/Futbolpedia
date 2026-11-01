@@ -274,6 +274,17 @@ await test('search hits resolve to the right article', () => {
     ),
     'Ronaldo (Brazilian footballer)',
   );
+  // An article named after him isn't his.
+  assert.equal(
+    pickPlayerTitle(
+      [
+        { title: 'Franz Beckenbauer Supercup', snippet: 'football match' },
+        { title: 'Franz Beckenbauer', snippet: 'German footballer and manager' },
+      ],
+      'Franz Beckenbauer',
+    ),
+    'Franz Beckenbauer',
+  );
 });
 
 // --- ESPN past seasons ------------------------------------------------------------------------
