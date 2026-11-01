@@ -28,7 +28,17 @@ import {
 import { gatherSearchFoundation } from './groundingService';
 import { formatBriefForWriter, runResearch, type ResearchBrief } from './researchAgent';
 import { liveToolset } from './researchTools';
-import { addEvidence, addGap, emptyLedger, formatLedger, hasEvidence, type EvidenceLedger } from './evidenceLedger';
+import { liveClubSnapshots } from './clubSnapshots';
+import { formatSituation, type Situation } from './situationSnapshot';
+import {
+  addEvidence,
+  addGap,
+  emptyLedger,
+  formatLedger,
+  hasEvidence,
+  seasonStartDate,
+  type EvidenceLedger,
+} from './evidenceLedger';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
 import {
   scrubUnverifiedManagerText,
@@ -46,11 +56,18 @@ import { lookUpDossier } from './dossierLookup';
  */
 let lastThreadSignature = '';
 let lastThreadGrounding = '';
+/** The last situation snapshot and its thread, for a follow-up in the same thread that didn't build one. */
+let lastThreadSituation = '';
+let lastSituationSignature = '';
 
-function getThreadSignature(history: ChatMessage[]): string {
-  if (history.length === 0) return '';
+/**
+ * The thread's opening message, so a follow-up can tell it's in the same thread. On the opening
+ * turn the history is empty and the message itself opens the thread.
+ */
+function getThreadSignature(history: ChatMessage[], message: string): string {
   const first = history[0];
-  return `${first.id ?? ''}:${typeof first.content === 'string' ? first.content.slice(0, 60) : 'dossier'}`;
+  if (!first) return message.slice(0, 60);
+  return typeof first.content === 'string' ? first.content.slice(0, 60) : 'dossier';
 }
 
 /** Recent string turns of the thread, for finding which players and edition it is about. */
@@ -88,7 +105,7 @@ export function sanitizeScoutProse(
     )
     // Evidence ledger ids ("[E3]", "[E1, E4]") are for tracing, not for the reader.
     .replace(/\s*\[E\d+(?:\s*[,&]\s*E\d+)*\]/g, '')
-    .replace(/<\/?(?:factual_foundation|locked_dossiers|calibrated_peer_ledger|saved_dossiers)>/gi, '')
+    .replace(/<\/?(?:situation_snapshot|research_brief|factual_foundation|locked_dossiers|calibrated_peer_ledger|saved_dossiers)>/gi, '')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
 
@@ -223,7 +240,7 @@ export function proseToolMode(turn: { researched: boolean; isArchive: boolean; c
  * only recent lineups and the injury list say who plays, so the answer starts there.
  */
 const RECENT_TEAM_RULES =
-  'Build the team from the "Recent Starting XIs" and the injury list in <factual_foundation>, not from the registered squad or memory: the regular starters are the players who started most of those matches, in the lines they started in. A player on the injury list is out and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes the XIs show override what you remember of the club. If <factual_foundation> has no recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
+  'Build the team from the first-choice XI in <situation_snapshot>, and otherwise from the recent starting XIs and the injury list in <factual_foundation>, never from the registered squad or memory. Name one player for each role; name a second only where the snapshot says they rotate. A player listed as out is unavailable and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes override what you remember of the club. If neither block has recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
 
 export async function runConversationalScout(
   params: ConversationalScoutParams,
@@ -358,6 +375,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   // 2. Universal Calibrated Ledger Matching & Pre-Grounding across Comparisons, Debates, Rankings & Tactical Chat
   let ledger: EvidenceLedger | null = null;
   let brief: ResearchBrief | null = null;
+  let situation: Situation | null = null;
   let researched = false;
   let effectiveLockedBlock = lockedDossiersBlock;
   let verifiedManagers: VerifiedClubManager[] = [];
@@ -442,11 +460,13 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
             thread: ongoingThread.slice(-3000),
             cardsInPlay: lockedCards.map((c) => `${c.basicInfo.name} (${isPrimeCard(c) ? 'prime' : 'current form'})`),
             hints: { clubs: targetClubs, players: playerNamesForGrounding },
+            present: !isHistoricalThread,
           },
           liveToolset([...lockedCards, ...allCalibrated]),
-          { onStage: onStageChange, perf },
+          { onStage: onStageChange, perf, snapshots: liveClubSnapshots },
         );
         brief = research.brief;
+        situation = research.situation;
         researched = research.brief.calls.length > 0;
         if (researched) ledger = research.ledger;
       } catch (e) {
@@ -459,20 +479,32 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     verifiedManagers = await managersPromise;
 
     // A follow-up in the same thread keeps what the last turn found, as a lower-priority entry.
-    const currentSig = getThreadSignature(history);
+    const currentSig = getThreadSignature(history, message);
     const sameThread = Boolean(currentSig && currentSig === lastThreadSignature && lastThreadGrounding);
     if (hasEvidence(ledger)) {
       const thisTurn = formatLedger(ledger!);
       if (sameThread && !thisTurn.includes(lastThreadGrounding.slice(0, 120))) {
         ledger = addEvidence(ledger!, { kind: 'prior_turn', label: 'Research from the previous turn', content: lastThreadGrounding.slice(0, 1400) });
       }
-      lastThreadSignature = currentSig || `turn:${message.slice(0, 60)}`;
+      lastThreadSignature = currentSig;
       lastThreadGrounding = thisTurn;
     } else if (sameThread) {
       ledger = addEvidence(ledger ?? emptyLedger(), { kind: 'prior_turn', label: 'Research from the previous turn', content: lastThreadGrounding });
     }
   }
-  const factualFoundation = ledger && (ledger.entries.length > 0 || ledger.gaps.length > 0) ? formatLedger(ledger) : '';
+  const { seasonStartYear } = getCurrentSeasonInfo();
+  const factualFoundation =
+    ledger && (ledger.entries.length > 0 || ledger.gaps.length > 0)
+      ? formatLedger(ledger, { seasonStart: seasonStartDate(seasonStartYear) })
+      : '';
+  let situationBlock = formatSituation(situation);
+  const threadSig = getThreadSignature(history, message);
+  if (situationBlock) {
+    lastThreadSituation = situationBlock;
+    lastSituationSignature = threadSig;
+  } else if (threadSig && threadSig === lastSituationSignature && !isHistoricalThread) {
+    situationBlock = lastThreadSituation;
+  }
 
   const analyticalMode =
     route.analyticalMode ??
@@ -500,7 +532,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   } else if (analyticalMode === 'debate_or_verdict') {
     modeGuidance = `Engage the football debate with dialectical depth: (1) steelman the strongest tactical and statistical case for each side, (2) decouple intrinsic player quality from system/environment tax (how role, surrounding talent, or league tempo inflates or suppresses box-score output), (3) evaluate through the 25-attribute framework, big-game knockout translation, and Section III tiers, and (4) finish with a clear, non-fence-sitting verdict. If the user is challenging a prior factual or tactical claim, verify the facts against <factual_foundation> first, correct any prior slip concisely in one sentence without theatrical self-flagellation, and deliver the grounded analysis. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
   } else {
-    modeGuidance = `Respond conversationally in Markdown prose as the Chief Scout and Senior Tactical Columnist. Match the depth and structure of your answer to the user's question, and tie every tactical claim to specific named players and their actual traits rather than generic tactical buzzwords. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_player_fact_sheet\` / \`get_football_squad\` / \`get_team_fixtures\` for deterministic API-Football records, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
+    modeGuidance = `Respond conversationally in Markdown prose as the Chief Scout and Senior Tactical Columnist. Match the depth and structure of your answer to the user's question, and tie every tactical claim to specific named players and their actual traits rather than generic tactical buzzwords. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_club_recent_team\` for a club's live results, starting XIs and availability, \`get_player_season\` for a Premier League player's season, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
   }
 
   const shownNames = (attachments?.cards ?? []).map((c) => c.basicInfo.name);
@@ -509,6 +541,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     : '';
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
+${situationBlock}
 ${factualFoundation ? `<factual_foundation>\n${factualFoundation}\n</factual_foundation>` : ''}
 ${brief && researched ? formatBriefForWriter(brief) : ''}
 ${formatVerifiedManagersBlock(verifiedManagers)}
@@ -517,7 +550,7 @@ ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}${shownNote}
-2. Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from the numbered entries in <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, \`get_team_fixtures\`, Google Search), or existing dossiers, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach.
+2. Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from <situation_snapshot>, the numbered entries in <factual_foundation>, tool calls (\`get_club_recent_team\`, \`get_player_season\`, Google Search), or existing dossiers, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach.
 3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.
 4. ${CONTINUITY_REMINDER}
 </instructions>

@@ -94,6 +94,8 @@ export interface GroundedSearchResult {
   text: string;
   sources: string[];
   formattedBlock: string;
+  /** Set when the search call failed or was refused, as opposed to finding nothing. */
+  error?: string;
 }
 
 const SEARCH_DIGEST_SYSTEM_INSTRUCTION =
@@ -104,23 +106,36 @@ const SEARCH_DIGEST_SYSTEM_INSTRUCTION =
  * state current facts, and marks what's old, instead of compressing everything into a summary.
  */
 const SEARCH_EVIDENCE_SYSTEM_INSTRUCTION =
-  'You are a football research assistant collecting evidence for an analyst. From the search results, write a factual digest of up to 350 words that answers the query. Keep every specific the results give: player names, the positions and roles they played, dates, opponents, scores, lineups, injuries with expected return dates, transfers with their window, and statistics with the competition and season they cover. Give the date of each fact or the date of the report it comes from. Mark anything from before the current season as older. When results disagree, give both versions and their dates. Do not add anything the results do not say, and do not fill gaps from general knowledge; when the results do not answer part of the query, say which part.';
+  'You are a football research assistant collecting evidence for an analyst. From the search results, write a factual digest of up to 350 words that answers the query, as short points. Start each point with the publication date of the report it comes from in square brackets: [YYYY-MM-DD] when the result shows the day, otherwise [Month YYYY], or [undated]. Keep every specific the results give: player names, the positions and roles they played, dates, opponents, scores, lineups, injuries with expected return dates, transfers with their window, and statistics with the competition and season they cover. Mark anything from before the current season as older. When results disagree, give both versions and their dates. Do not add anything the results do not say, and do not fill gaps from general knowledge; when the results do not answer part of the query, say which part.';
+
+/**
+ * For analysis searches, the query comes with current facts from the live feeds. Sources that
+ * describe a different team (players who have left, another coach, another shape) are flagged, so
+ * a tactical piece from an earlier season can't pass for this one.
+ */
+const SEARCH_ANALYSIS_ADDENDUM =
+  ' The query may come with current facts from live match data. Read every source against them: when a source describes players, a coach or a shape those facts contradict, say in its point that it describes an earlier team, and keep only what it says about the present or about what changed.';
 
 export type SearchDigest = 'brief' | 'evidence';
 
 export async function runGroundedSearch(
   query: string,
-  options?: { datePrefix?: string; attempt?: number; digest?: SearchDigest },
+  options?: { datePrefix?: string; attempt?: number; digest?: SearchDigest; context?: string },
 ): Promise<GroundedSearchResult> {
   const attempt = options?.attempt ?? 0;
-  const fullQuery = options?.datePrefix ? `${options.datePrefix} ${query}` : query;
+  const searchQuery = options?.datePrefix ? `${options.datePrefix} ${query}` : query;
+  const fullQuery = options?.context
+    ? `${searchQuery}\n\nCurrent facts from live match data, to read the sources against:\n${options.context}`
+    : searchQuery;
   try {
     const res = await getAi().models.generateContent({
       model: FLASH_MODEL,
       contents: fullQuery,
       config: {
         systemInstruction:
-          options?.digest === 'evidence' ? SEARCH_EVIDENCE_SYSTEM_INSTRUCTION : SEARCH_DIGEST_SYSTEM_INSTRUCTION,
+          options?.digest === 'evidence'
+            ? SEARCH_EVIDENCE_SYSTEM_INSTRUCTION + (options.context ? SEARCH_ANALYSIS_ADDENDUM : '')
+            : SEARCH_DIGEST_SYSTEM_INSTRUCTION,
         temperature: 0.1,
         maxOutputTokens: options?.digest === 'evidence' ? 800 : 420,
         tools: [{ googleSearch: {} }],
@@ -165,6 +180,7 @@ export async function runGroundedSearch(
       text: '',
       sources: [],
       formattedBlock: `[QUERY: ${query}]\nData unavailable.`,
+      error: is429 ? 'refused (rate limited)' : String(e?.message ?? e).slice(0, 120),
     };
   }
 }
@@ -331,9 +347,24 @@ export interface DossierToolHandlers {
 
 const NETWORK_FUNCTION_DECLARATIONS = [
   {
-    name: 'get_player_fact_sheet',
+    name: 'get_club_recent_team',
     description:
-      'Fetches a player’s deterministic API-Football fact sheet (registered club, age, height, weight, injury flag, and current season appearances/goals/assists/tackles/key passes).',
+      "Gets a club's live current-season data from ESPN match records: results in all competitions, the starting XI and formation of each of its last four competitive matches with every starter's position and the subs used, and next fixtures. For Premier League clubs it adds each player's starts, minutes, goals and assists this season and the injury and suspension list. Use it to establish who is actually playing and where.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        team: {
+          type: Type.STRING,
+          description: 'The name of the football club.',
+        },
+      },
+      required: ['team'],
+    },
+  },
+  {
+    name: 'get_player_season',
+    description:
+      "Gets a Premier League player's current season from the Fantasy Premier League feed: club, position, starts, minutes, goals, assists, expected goals and assists, and injury status. Covers Premier League players only.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -345,51 +376,23 @@ const NETWORK_FUNCTION_DECLARATIONS = [
       required: ['name'],
     },
   },
-  {
-    name: 'get_football_squad',
-    description:
-      'Gets the current active roster/squad of a football team using API-Football. Use this to verify current players for a club.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        team: {
-          type: Type.STRING,
-          description: 'The name of the football club.',
-        },
-      },
-      required: ['team'],
-    },
-  },
-  {
-    name: 'get_team_fixtures',
-    description:
-      'Gets the last 5 completed match results, next 3 upcoming fixtures, and registered head coach for a football club using API-Football.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        team: {
-          type: Type.STRING,
-          description: 'The name of the football club.',
-        },
-      },
-      required: ['team'],
-    },
-  },
 ];
 
-/** Server routes behind the API-Football tools, keyed by tool name. */
-const NETWORK_TOOL_ROUTES: Record<string, { arg: 'name' | 'team'; path: string; label: string }> = {
-  get_player_fact_sheet: { arg: 'name', path: '/api/football/player', label: 'Player' },
-  get_football_squad: { arg: 'team', path: '/api/football/squad', label: 'Squad' },
-  get_team_fixtures: { arg: 'team', path: '/api/football/fixtures', label: 'Fixtures' },
+/** Server routes behind the live data tools, keyed by tool name. */
+const NETWORK_TOOL_ROUTES: Record<string, { arg: 'name' | 'team'; param: string; path: string; label: string }> = {
+  get_club_recent_team: { arg: 'team', param: 'name', path: '/api/live/club', label: 'Club' },
+  get_player_season: { arg: 'name', param: 'name', path: '/api/live/player', label: 'Player' },
 };
 
 async function callNetworkTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   const route = NETWORK_TOOL_ROUTES[name];
   const value = args[route.arg];
   if (!value) return { error: `Missing ${route.arg} argument` };
-  const res = await fetch(`${route.path}?${route.arg}=${encodeURIComponent(String(value))}`);
-  return res.ok ? res.json() : { error: `${route.label} lookup returned status ${res.status}` };
+  const res = await fetch(`${route.path}?${route.param}=${encodeURIComponent(String(value))}`);
+  if (!res.ok) return { error: `${route.label} lookup returned status ${res.status}` };
+  // The structured club report is for research code; the model reads its text.
+  const { report: _report, ...rest } = await res.json();
+  return rest;
 }
 
 export type ProseToolMode = 'full' | 'local_only' | 'none';

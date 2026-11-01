@@ -5,7 +5,7 @@ interface WhatsNewPopupProps {
 }
 
 /** Bump when the popup describes a new release, so everyone sees it once more. */
-const SEEN_KEY = 'futbolpedia-whats-new-seen-fp3';
+const SEEN_KEY = 'futbolpedia-whats-new-seen-fp35';
 
 interface FeatureGroup {
   id: string;
@@ -13,13 +13,40 @@ interface FeatureGroup {
   title: string;
   kicker: string;
   items: Array<{ title: string; body: string }>;
+  /** The release's headline group, shown full width above the rest. */
+  featured?: boolean;
 }
 
 const scoutShortcut = (): string =>
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl+K';
 
-/** Everything major since Futbolpedia 2, grouped by what you do with it. */
+/** What's new in 3.5 first, then everything major since Futbolpedia 2, grouped by what you do with it. */
 const featureGroups = (): FeatureGroup[] => [
+  {
+    id: 'present',
+    icon: 'update',
+    title: 'Answers About Right Now',
+    kicker: 'New in 3.5',
+    featured: true,
+    items: [
+      {
+        title: "Today's team, not last season's",
+        body: 'Questions about a club start from who has actually been playing and who is out, so answers name the current starters.',
+      },
+      {
+        title: 'What changed, and why',
+        body: 'Answers lead with what is different this season, such as arrivals, departures, a new shape or new roles, instead of a general essay on the system.',
+      },
+      {
+        title: 'One starter per role',
+        body: 'The analyst commits to a first-choice player for each position and mentions rotation only where a team really rotates.',
+      },
+      {
+        title: 'Quicker, consistent club facts',
+        body: "Each club's current picture is worked out once a day and shared, so repeat questions are faster and everyone gets the same facts.",
+      },
+    ],
+  },
   {
     id: 'ratings',
     icon: 'workspace_premium',
@@ -165,15 +192,15 @@ export const WhatsNewPopup: React.FC<WhatsNewPopupProps> = ({ onClose }) => {
               <span className="material-symbols-outlined text-[18px]">sports_soccer</span>
             </div>
             <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-emerald-600 dark:text-emerald-400 font-bold">
-              Update Briefing • v3.0
+              Update Briefing • v3.5
             </span>
           </div>
 
           <h2 id="whats-new-title" className="text-2xl md:text-4xl font-serif font-bold text-charcoal dark:text-cream-100 tracking-tight leading-tight">
-            Welcome to Futbolpedia 3
+            Welcome to Futbolpedia 3.5
           </h2>
           <p className="text-xs md:text-sm text-cream-800 dark:text-cream-400 mt-1 md:mt-2 font-sans font-light">
-            Every player version rated on one all-era scale, a Scout that rates while you chat, a shared hub of cards, and a chat that argues from them.
+            Answers about the current season now start from who is actually playing, lead with what changed, and commit to a view. Everything from Futbolpedia 3 is below.
           </p>
         </div>
 
@@ -183,7 +210,11 @@ export const WhatsNewPopup: React.FC<WhatsNewPopupProps> = ({ onClose }) => {
             {featureGroups().map((group) => (
               <div
                 key={group.id}
-                className="flex flex-col space-y-4 p-5 rounded-xl bg-cream-200/50 dark:bg-charcoal/40 border border-cream-300/30 dark:border-charcoal-border/30"
+                className={`flex flex-col space-y-4 p-5 rounded-xl bg-cream-200/50 dark:bg-charcoal/40 border ${
+                  group.featured
+                    ? 'md:col-span-2 xl:col-span-4 border-emerald-500/30 dark:border-emerald-500/25'
+                    : 'border-cream-300/30 dark:border-charcoal-border/30'
+                }`}
                 id={`feature-group-${group.id}`}
               >
                 <div className="flex items-center gap-3 pb-3 border-b border-cream-300/40 dark:border-charcoal-border/40">
@@ -196,7 +227,7 @@ export const WhatsNewPopup: React.FC<WhatsNewPopupProps> = ({ onClose }) => {
                   </div>
                 </div>
 
-                <div className="space-y-4">
+                <div className={group.featured ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4' : 'space-y-4'}>
                   {group.items.map((item) => (
                     <div key={item.title} className="flex gap-3">
                       <span className="text-emerald-500 font-serif text-sm mt-0.5 shrink-0 select-none">✦</span>

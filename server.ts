@@ -13,6 +13,7 @@ import {
   type TeamAbsence,
   type TeamLineup,
 } from "./services/teamLineups";
+import { createLiveFootball } from "./services/liveFootball";
 
 async function startServer() {
   const app = express();
@@ -500,65 +501,55 @@ async function startServer() {
     }
   });
 
-  // League tables for chat research. A league is found by name; several countries share names
-  // like "Premier League", so the major European leagues win a tie unless a country is given.
-  const LEAGUE_COUNTRY_PRIORITY = ["England", "Spain", "Italy", "Germany", "France", "Portugal", "Netherlands"];
-  const leagueCache = new Map<string, { id: number; name: string; country: string | null; season: number }>();
-  const standingsCache = new Map<string, { expiresAt: number; payload: any }>();
-  const STANDINGS_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
+  // Current-season facts for chat research and the writer's tools, from ESPN's public match data
+  // and the Fantasy Premier League feed (services/liveFootball.ts). Both are free and keyless;
+  // API-Football's free plan can't read the current season. Lookups are cached for every user.
+  const live = createLiveFootball(async (url) => {
+    const res = await axios.get(url, {
+      timeout: 6000,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; Futbolpedia/3.0)", Accept: "application/json" },
+    });
+    return res.data;
+  });
+  const liveQuery = (v: unknown) => (typeof v === "string" ? v.trim().slice(0, 80) : "");
 
-  app.get("/api/football/standings", async (req, res) => {
+  app.get("/api/live/club", async (req, res) => {
+    const name = liveQuery(req.query.name);
+    if (!name) return res.status(400).json({ error: "Missing club name" });
+    const start = Date.now();
     try {
-      const rawLeague = typeof req.query.league === "string" ? req.query.league.trim() : "";
-      const country = typeof req.query.country === "string" ? req.query.country.trim() : "";
-      if (rawLeague.length < 3) return res.status(400).json({ error: "Missing league name" });
-      if (!API_KEY) return res.json({ available: false, league: rawLeague, table: [] });
-
-      const leagueKey = `${rawLeague.toLowerCase()}|${country.toLowerCase()}`;
-      let league = leagueCache.get(leagueKey);
-      if (!league) {
-        const leaguesRes = await apiFootballGet(
-          "leagues",
-          { search: rawLeague, current: "true", ...(country ? { country } : {}) },
-          5000,
-        );
-        const rank = (c: string | null) => {
-          const i = LEAGUE_COUNTRY_PRIORITY.indexOf(c ?? "");
-          return i === -1 ? LEAGUE_COUNTRY_PRIORITY.length : i;
-        };
-        const best = (leaguesRes.data?.response ?? [])
-          .filter((l: any) => l?.league?.id && l.league.type === "League")
-          .sort((a: any, b: any) => rank(a.country?.name) - rank(b.country?.name))[0];
-        const season = best?.seasons?.find((s: any) => s.current)?.year;
-        if (!best || !season) return res.status(404).json({ error: "League not found" });
-        league = { id: best.league.id, name: best.league.name, country: best.country?.name ?? null, season };
-        leagueCache.set(leagueKey, league);
-      }
-
-      const cacheKey = `${league.id}:${league.season}`;
-      const cached = standingsCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) return res.json(cached.payload);
-
-      const standingsRes = await apiFootballGet("standings", { league: league.id, season: league.season }, 5000);
-      const groups: any[][] = standingsRes.data?.response?.[0]?.league?.standings ?? [];
-      const table = groups.flat().map((row: any) => ({
-        rank: row.rank ?? null,
-        team: row.team?.name ?? null,
-        group: row.group ?? null,
-        played: row.all?.played ?? null,
-        won: row.all?.win ?? null,
-        drawn: row.all?.draw ?? null,
-        lost: row.all?.lose ?? null,
-        goalDiff: row.goalsDiff ?? null,
-        points: row.points ?? null,
-        form: row.form ?? null,
-      }));
-      const payload = { available: table.length > 0, league: league.name, country: league.country, season: league.season, table };
-      standingsCache.set(cacheKey, { expiresAt: Date.now() + STANDINGS_CACHE_TTL_MS, payload });
-      return res.json(payload);
+      const result = await live.club(name);
+      console.log(`[live] club "${name}": ${result.found ? `${result.team}, ${result.league}` : "not found"} (${Date.now() - start}ms)${result.missing.length ? `; missing: ${result.missing.map((m) => `${m.item} [${m.status}]`).join("; ")}` : ""}`);
+      return res.json(result);
     } catch (error: any) {
-      console.warn("[api/football/standings] lookup failed:", error?.message || error);
-      return res.status(500).json({ error: "Failed to fetch standings from API-Football" });
+      console.warn(`[live] club "${name}" failed:`, error?.message || error);
+      return res.json({ found: false, status: "failed", missing: [{ item: `Live match data for ${name} (lookup failed)`, status: "failed" }] });
+    }
+  });
+
+  app.get("/api/live/player", async (req, res) => {
+    const name = liveQuery(req.query.name);
+    if (!name) return res.status(400).json({ error: "Missing player name" });
+    try {
+      const result = await live.player(name);
+      console.log(`[live] player "${name}": ${"reason" in result ? result.reason : `${result.name}, ${result.team}`}`);
+      return res.json(result);
+    } catch (error: any) {
+      console.warn(`[live] player "${name}" failed:`, error?.message || error);
+      return res.json({ found: false, status: "failed", reason: "lookup failed" });
+    }
+  });
+
+  app.get("/api/live/table", async (req, res) => {
+    const league = liveQuery(req.query.league);
+    if (!league) return res.status(400).json({ error: "Missing league name" });
+    try {
+      const result = await live.table(league, liveQuery(req.query.country) || undefined);
+      console.log(`[live] table "${league}": ${"reason" in result ? result.reason : `${result.league}, ${result.season}`}`);
+      return res.json(result);
+    } catch (error: any) {
+      console.warn(`[live] table "${league}" failed:`, error?.message || error);
+      return res.json({ found: false, status: "failed", reason: "lookup failed" });
     }
   });
 

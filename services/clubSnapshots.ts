@@ -1,0 +1,221 @@
+import { getCurrentSeasonInfo } from './aiClient';
+import { toClubKey } from './clubManagers';
+import { supabase } from './dossierCache';
+import { emptyLedger, seasonStartDate } from './evidenceLedger';
+import { executeCall, fileOutcomes, liveToolset, type ResearchCall, type ResearchToolset, type ToolOutcome } from './researchTools';
+import {
+  buildSituation,
+  deriveClubCore,
+  formatFactContext,
+  liveSituationModel,
+  type ClubSnapshot,
+  type SituationModel,
+} from './situationSnapshot';
+
+/**
+ * Shared daily club snapshots. Each club's situation (first-choice XI, absences, form, what
+ * changed since last season, what's distinctive this season) is built at most once a day across
+ * all users, from the live club data plus a research pass, and kept in the Supabase
+ * `club_snapshots` table, like `club_managers`. Chat reads the stored snapshot first and only
+ * builds one when it's missing or stale, so answers are faster and every user and turn works from
+ * the same facts.
+ */
+
+/** Bump when the snapshot's shape or how it's built changes, so older rows are rebuilt. */
+export const SNAPSHOT_VERSION = 1;
+export const SNAPSHOT_REFRESH_MS = 24 * 60 * 60 * 1000;
+
+export interface SnapshotRow {
+  club_key: string;
+  club_name: string;
+  league: string;
+  snapshot: { core: ClubSnapshot['core']; story: ClubSnapshot['story']; sources: string[] };
+  version: number;
+  built_at: string;
+}
+
+/** Whether a stored snapshot can be reused: built under this version, less than a day ago. */
+export const isSnapshotFresh = (builtAtMs: number, version: number, nowMs: number = Date.now()): boolean =>
+  version === SNAPSHOT_VERSION && Number.isFinite(builtAtMs) && nowMs - builtAtMs < SNAPSHOT_REFRESH_MS;
+
+export const snapshotToRow = (s: ClubSnapshot): SnapshotRow => ({
+  club_key: toClubKey(s.club),
+  club_name: s.club,
+  league: s.league,
+  snapshot: { core: s.core, story: s.story, sources: s.sources },
+  version: s.version,
+  built_at: s.builtAt,
+});
+
+export const rowToSnapshot = (row: SnapshotRow): ClubSnapshot | null =>
+  row?.snapshot?.core && row.snapshot.story
+    ? {
+        club: row.club_name,
+        league: row.league,
+        core: row.snapshot.core,
+        story: row.snapshot.story,
+        sources: row.snapshot.sources ?? [],
+        builtAt: row.built_at,
+        version: row.version,
+      }
+    : null;
+
+/** How research reaches the snapshots: the stored one only, or the stored one else a new build. */
+export interface SnapshotSource {
+  stored(club: string, live: Promise<ToolOutcome>): Promise<ClubSnapshot | null>;
+  get(club: string, live: Promise<ToolOutcome>): Promise<ClubSnapshot | null>;
+}
+
+export interface SnapshotStoreDeps {
+  read(key: string): Promise<SnapshotRow | null>;
+  write(row: SnapshotRow): Promise<void>;
+  build(club: string, live: ToolOutcome): Promise<ClubSnapshot | null>;
+  now?: () => number;
+}
+
+/** A failed build is retried this soon, and never stored. */
+const FAILED_RETRY_MS = 10 * 60 * 1000;
+
+/**
+ * The store: memory, then the shared row, then a build. A club is keyed by the name the live data
+ * resolves it to, so "Spurs" and "Tottenham Hotspur" share a snapshot. Concurrent requests for a
+ * club share one read and one build.
+ */
+export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource {
+  const now = deps.now ?? Date.now;
+  const memory = new Map<string, { snapshot: ClubSnapshot | null; expiresAt: number }>();
+  const reads = new Map<string, Promise<ClubSnapshot | null>>();
+  const builds = new Map<string, Promise<ClubSnapshot | null>>();
+
+  const fromMemory = (key: string): ClubSnapshot | null | undefined => {
+    const hit = memory.get(key);
+    return hit && hit.expiresAt > now() ? hit.snapshot : undefined;
+  };
+  const readKey = (key: string): Promise<ClubSnapshot | null> => {
+    const cached = fromMemory(key);
+    if (cached !== undefined) return Promise.resolve(cached);
+    const pending = reads.get(key);
+    if (pending) return pending;
+    const job = deps
+      .read(key)
+      .then((row) => {
+        const snapshot = row && isSnapshotFresh(Date.parse(row.built_at), row.version, now()) ? rowToSnapshot(row) : null;
+        if (snapshot) memory.set(key, { snapshot, expiresAt: Date.parse(snapshot.builtAt) + SNAPSHOT_REFRESH_MS });
+        return snapshot;
+      })
+      .catch((e) => {
+        console.warn('[ClubSnapshots] Read failed:', e);
+        return null;
+      })
+      .finally(() => reads.delete(key));
+    reads.set(key, job);
+    return job;
+  };
+  const canonicalKey = async (club: string, live: Promise<ToolOutcome>): Promise<string> => {
+    const outcome = await live.catch(() => null);
+    return toClubKey(outcome?.result?.club?.team ?? club);
+  };
+
+  async function stored(club: string, live: Promise<ToolOutcome>): Promise<ClubSnapshot | null> {
+    // The typed name usually is the key; when it isn't, the live data's name is.
+    const typedKey = toClubKey(club);
+    const typed = typedKey ? await readKey(typedKey) : null;
+    if (typed) return typed;
+    const key = await canonicalKey(club, live);
+    return key && key !== typedKey ? readKey(key) : null;
+  }
+
+  async function get(club: string, live: Promise<ToolOutcome>): Promise<ClubSnapshot | null> {
+    const hit = await stored(club, live);
+    if (hit) return hit;
+    const key = await canonicalKey(club, live);
+    if (!key) return null;
+    const cached = fromMemory(key);
+    if (cached !== undefined) return cached;
+    const pending = builds.get(key);
+    if (pending) return pending;
+    const job = (async () => {
+      const outcome = await live.catch(() => null);
+      const snapshot = outcome ? await deps.build(club, outcome).catch((e) => {
+        console.warn(`[ClubSnapshots] Build failed for ${club}:`, e);
+        return null;
+      }) : null;
+      memory.set(key, { snapshot, expiresAt: now() + (snapshot ? SNAPSHOT_REFRESH_MS : FAILED_RETRY_MS) });
+      if (snapshot) {
+        await deps.write(snapshotToRow(snapshot)).catch((e) => console.warn('[ClubSnapshots] Write failed:', e));
+      }
+      return snapshot;
+    })().finally(() => builds.delete(key));
+    builds.set(key, job);
+    return job;
+  }
+
+  return { stored, get };
+}
+
+/**
+ * A club's snapshot from its live data and a research pass: what changed since last season, an
+ * analysis search read against the live facts, and team news where no injury list covers the
+ * club, then the situation call. It stays at low thinking so a build started with the turn can
+ * finish before the writer starts.
+ */
+export async function buildClubSnapshot(
+  club: string,
+  live: ToolOutcome,
+  tools: ResearchToolset,
+  model: SituationModel = liveSituationModel,
+  now: () => number = Date.now,
+): Promise<ClubSnapshot | null> {
+  const report = live.result?.club;
+  if (!report) return null;
+  const start = now();
+  const core = deriveClubCore(report);
+  const { currentSeason, month, year, seasonStartYear } = getCurrentSeasonInfo(new Date(now()));
+  const searches: ResearchCall[] = [
+    { tool: 'web_search', subject: `${report.team} transfers in and out and coaching changes since last season, ${currentSeason}`, stage: 'facts' },
+    { tool: 'web_search', subject: `${report.team} tactical analysis ${currentSeason}: shape, build-up, pressing and key roles`, stage: 'analysis' },
+    ...(core.outCovered ? [] : [{ tool: 'web_search' as const, subject: `${report.team} team news, injuries and suspensions, ${month} ${year}`, stage: 'facts' as const }]),
+  ];
+  const context = formatFactContext([core]);
+  const outcomes = await Promise.all(searches.map((c) => executeCall(c, tools, c.stage === 'analysis' ? context : undefined)));
+  const ledger = fileOutcomes(emptyLedger(), [{ tool: 'club_recent_team', subject: club }, ...searches], [live, ...outcomes]);
+  const { situation, usedModel } = await buildSituation({
+    ledger,
+    stored: [],
+    players: [],
+    question: `What is the current state of ${report.team}?`,
+    focus: `What is distinctive about ${report.team} this season compared with last, and why`,
+    today: new Date(now()).toISOString().slice(0, 10),
+    season: currentSeason,
+    seasonStart: seasonStartDate(seasonStartYear),
+    allowModel: true,
+    model,
+  });
+  const built = situation.clubs[0];
+  if (!usedModel || !built) return null;
+  console.log(`[Perf] club snapshot build "${report.team}": ${now() - start}ms`);
+  return {
+    club: report.team,
+    league: report.league,
+    core,
+    story: { changes: built.changes ?? [], distinctive: built.distinctive ?? '', newsAbsences: built.newsAbsences ?? [], unknowns: built.unknowns ?? [] },
+    sources: ledger.entries.flatMap((e) => e.sources ?? []).slice(0, 8),
+    builtAt: new Date(now()).toISOString(),
+    version: SNAPSHOT_VERSION,
+  };
+}
+
+/** The live store, shared through Supabase when it's available and kept in memory otherwise. */
+export const liveClubSnapshots: SnapshotSource = createClubSnapshotStore({
+  async read(key) {
+    if (!supabase) return null;
+    const { data } = await supabase.from('club_snapshots').select('*').eq('club_key', key).maybeSingle();
+    return data ?? null;
+  },
+  async write(row) {
+    if (!supabase) return;
+    const { error } = await supabase.from('club_snapshots').upsert(row, { onConflict: 'club_key' });
+    if (error) console.warn('[ClubSnapshots] Upsert failed:', error);
+  },
+  build: (club, live) => buildClubSnapshot(club, live, liveToolset([])),
+});

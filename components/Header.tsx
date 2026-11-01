@@ -44,7 +44,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="material-symbols-outlined text-[22px]">sports_soccer</span>
             </div>
             <div className="hidden sm:flex flex-col">
-                <h1 className="text-charcoal dark:text-cream-50 text-xl font-serif font-bold tracking-tight leading-none">Futbolpedia AI 3</h1>
+                <h1 className="text-charcoal dark:text-cream-50 text-xl font-serif font-bold tracking-tight leading-none">Futbolpedia AI 3.5</h1>
                 <span className="text-[10px] text-cream-800 dark:text-cream-400 uppercase tracking-[0.2em] mt-0.5">Analysis Tool</span>
             </div>
         </button>

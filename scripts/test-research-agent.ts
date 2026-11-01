@@ -20,8 +20,19 @@ import {
   type ResearchContext,
   type ResearchModel,
 } from '../services/researchAgent';
-import { formatLeagueTable, runCalls, sanitizeCalls, type ResearchToolset } from '../services/researchTools';
-import { emptyLedger } from '../services/evidenceLedger';
+import {
+  formatLeagueTable,
+  RESEARCH_COVERAGE_NOTE,
+  runCalls,
+  sanitizeCalls,
+  type ResearchToolset,
+  type ToolOutcome,
+} from '../services/researchTools';
+import { addEvidence, emptyLedger } from '../services/evidenceLedger';
+import { buildReflectPrompt } from '../services/researchAgent';
+import type { SnapshotSource } from '../services/clubSnapshots';
+import type { ClubSnapshot, SituationInput, SituationModel } from '../services/situationSnapshot';
+import type { LiveClubReport } from '../services/liveFootball';
 
 let passes = 0;
 let failures = 0;
@@ -44,29 +55,39 @@ const ctx: ResearchContext = {
 };
 
 /** Tools that record what was asked and answer from a fixed table; anything else finds nothing. */
-const fakeTools = (found: Record<string, string>, calls: string[] = []): ResearchToolset => {
-  const answer = (key: string, kind: 'web' | 'player_record' | 'league_table' | 'card') => {
+const fakeTools = (found: Record<string, string>, calls: string[] = [], contexts: Record<string, string | undefined> = {}): ResearchToolset => {
+  const answer = (key: string, kind: 'web' | 'player_record' | 'league_table' | 'card'): Promise<ToolOutcome> => {
     calls.push(key);
-    return Promise.resolve(found[key] ? { kind, label: key, content: found[key] } : null);
+    return Promise.resolve(
+      found[key] ? { status: 'found', result: { kind, label: key, content: found[key] }, missing: [] } : { status: 'empty', result: null, missing: [] },
+    );
   };
   return {
     clubRecentTeam: (club) => {
       calls.push(`club:${club}`);
       return Promise.resolve(
         found[`club:${club}`]
-          ? { result: { kind: 'club_context', label: `${club}: recent team`, content: found[`club:${club}`] }, missing: [`Injury list for ${club} (API-Football returned none)`] }
-          : { result: null, missing: [] },
+          ? {
+              status: 'found',
+              result: { kind: 'club_context', label: `${club}: recent team`, content: found[`club:${club}`] },
+              missing: [{ item: `Injury list for ${club} (no free source outside the Premier League)`, status: 'not_covered' }],
+            }
+          : { status: 'empty', result: null, missing: [] },
       );
     },
     playerSeason: (name) => answer(`player:${name}`, 'player_record'),
     leagueTable: (league) => answer(`table:${league}`, 'league_table'),
-    webSearch: (query) => answer(`web:${query}`, 'web'),
+    webSearch: (query, options) => {
+      contexts[query] = options?.context;
+      return answer(`web:${query}`, 'web');
+    },
     card: (name) => answer(`card:${name}`, 'card'),
   };
 };
 
 const brief = (calls: ResearchBrief['calls']): ResearchBrief => ({
   understanding: 'Who plays and how the team builds up',
+  focus: 'What is new in the build-up this season, and why',
   timeframe: 'live',
   outline: ['Who has been starting', 'First phase', 'Trade-offs'],
   calls,
@@ -106,7 +127,15 @@ await test('a round runs every call and files findings and gaps', async () => {
   );
   assert.deepEqual(asked, ['club:Club', 'web:Club build-up analysis', 'web:Club transfers']);
   assert.deepEqual(ledger.entries.map((e) => e.id), ['E1', 'E2']);
-  assert.deepEqual(ledger.gaps, ['Injury list for Club (API-Football returned none)', 'Web search: Club transfers']);
+  assert.deepEqual(ledger.gaps, [
+    { label: 'Injury list for Club (no free source outside the Premier League)', status: 'not_covered' },
+    { label: 'Web search: Club transfers', status: 'empty' },
+  ]);
+  assert.deepEqual(
+    ledger.lookups.map((l) => `${l.tool}:${l.status}`),
+    ['club_recent_team:found', 'web_search:found', 'web_search:empty'],
+  );
+  assert.match(ledger.lookups[0].note ?? '', /Injury list for Club .*\[not covered\]/);
 });
 
 await test('reflect adds a second round only when the first left a gap', async () => {
@@ -117,6 +146,7 @@ await test('reflect adds a second round only when the first left a gap', async (
       enough: false,
       calls: [{ tool: 'web_search', subject: 'Club injury news' }],
       unresolved: ['How long the injured centre-back is out'],
+      discard: [],
     }),
   };
   const stages: string[] = [];
@@ -164,7 +194,7 @@ await test('a failed brief plans from the names in the message', async () => {
     writeBrief: async () => {
       throw new Error('model unavailable');
     },
-    reflect: async () => ({ enough: true, calls: [], unresolved: [] }),
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
   };
   await runResearch(ctx, fakeTools({}, asked), { model });
   assert.deepEqual(asked, ['club:Club', `web:${ctx.message}`]);
@@ -174,6 +204,7 @@ await test('a failed brief plans from the names in the message', async () => {
 await test("the writer's brief carries the outline and what couldn't be established", () => {
   const text = formatBriefForWriter({ ...brief([]), unresolved: ['Who starts on the left'] });
   assert.match(text, /What the user is asking: Who plays and how the team builds up/);
+  assert.match(text, /What's distinctive this season, for the answer to lead with: What is new in the build-up/);
   assert.match(text, /- First phase/);
   assert.match(text, /couldn't establish: Who starts on the left/);
   assert.doesNotMatch(formatBriefForWriter(brief([])), /couldn't establish/);
@@ -187,6 +218,13 @@ await test('the brief prompt lists the tools and the names spotted, and asks for
   assert.match(prompt, /Names spotted in the message: Club/);
   assert.match(prompt, /Cards already in play: Some Player \(prime\)/);
   assert.match(prompt, /Each call needs a purpose/);
+  // Change leads, in two stages, with the sources' limits spelled out.
+  assert.match(prompt, /what is distinctive about this team or player this season/);
+  assert.match(prompt, /stage "facts"/);
+  assert.match(prompt, /stage "analysis"/);
+  assert.ok(prompt.includes(RESEARCH_COVERAGE_NOTE));
+  assert.doesNotMatch(prompt, /Already loaded/);
+  assert.match(buildBriefPrompt({ ...ctx, storedSnapshots: [{ club: 'Club', asOf: '2026-11-01' }] }), /Already loaded: today's stored snapshot for Club \(as of 2026-11-01\)/);
 });
 
 await test('progress lines and league tables read plainly', () => {
@@ -206,6 +244,168 @@ await test('progress lines and league tables read plainly', () => {
     ]),
     '1. Club — 25 pts, P10 W8 D1 L1, GD +15, form WWDWL\n2. Other — 22 pts, P10 W7 D1 L2, GD -2',
   );
+});
+
+
+// --- Two stages, snapshots and the situation step ---------------------------------------------
+
+/** A club report with one XI repeated, enough for the snapshot to work out a core. */
+const clubReport = (team: string): LiveClubReport => {
+  const match = { id: 'm1', date: '2026-10-25', competition: 'Premier League', leagueSlug: 'eng.1', home: true, opponent: 'Rivals', completed: true, goalsFor: 2, goalsAgainst: 0, penaltiesFor: null, penaltiesAgainst: null };
+  const roles = ['G', 'LB', 'CD-L', 'CD-R', 'RB', 'DM', 'CM-L', 'CM-R', 'LF', 'F', 'RF'];
+  return {
+    team,
+    league: 'Premier League',
+    lineups: [{ match, formation: '4-3-3', starters: roles.map((role, i) => ({ name: `${team} Player ${i + 1}`, role })), subsUsed: [] }],
+    results: [match],
+    fixtures: [],
+    fplPlayers: null,
+    asOf: '2026-11-01',
+  };
+};
+
+/** Tools whose club lookups carry a structured report. */
+const reportTools = (asked: string[], contexts: Record<string, string | undefined>): ResearchToolset => ({
+  ...fakeTools({ 'web:Club tactical analysis 2026-27': 'Analysis', 'web:Club transfers 2026-27': 'Transfers' }, asked, contexts),
+  clubRecentTeam: async (club) => {
+    asked.push(`club:${club}`);
+    return { status: 'found', result: { kind: 'club_context', label: club, content: 'XIs', club: clubReport(club) }, missing: [] };
+  },
+});
+
+const noModel: SituationModel = { enrich: async () => assert.fail('the situation call should not run') };
+
+await test('analysis searches start after the live facts and read their sources against them; fact searches do not', async () => {
+  const asked: string[] = [];
+  const contexts: Record<string, string | undefined> = {};
+  const model: ResearchModel = {
+    writeBrief: async () =>
+      brief([
+        { tool: 'web_search', subject: 'Club tactical analysis 2026-27', stage: 'analysis' },
+        { tool: 'web_search', subject: 'Club transfers 2026-27', stage: 'facts' },
+      ]),
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
+  };
+  const inputs: SituationInput[] = [];
+  const situationModel: SituationModel = {
+    enrich: async (input) => {
+      inputs.push(input);
+      return { clubs: [{ club: 'Club', changes: ['A new left-back arrived in August'], distinctive: 'Builds through a back three.', newsAbsences: [], unknowns: [] }], players: [], unknowns: [] };
+    },
+  };
+  const { ledger, situation } = await runResearch(ctx, reportTools(asked, contexts), { model, situationModel });
+  assert.match(contexts['Club tactical analysis 2026-27'] ?? '', /^Club, as of 2026-11-01: regular starters Club Player 1, .*\(4-3-3\); last results W\./);
+  assert.equal(contexts['Club transfers 2026-27'], undefined);
+  // Club first, then facts, then analysis; the analysis entry is marked as such.
+  assert.deepEqual(ledger.entries.map((e) => [e.id, e.kind, e.stage ?? '']), [
+    ['E1', 'club_context', 'facts'],
+    ['E2', 'web', 'facts'],
+    ['E3', 'web', 'analysis'],
+  ]);
+  assert.equal(inputs.length, 1);
+  assert.deepEqual(inputs[0].clubs.map((c) => c.club), ['Club']);
+  assert.equal(situation?.clubs[0].distinctive, 'Builds through a back three.');
+  assert.equal(situation?.clubs[0].xi.length, 11);
+});
+
+/** A snapshot source that serves `stored` and records what it was asked to build. */
+const fakeSnapshots = (stored: Record<string, ClubSnapshot>, builds: string[] = []): SnapshotSource => ({
+  stored: async (club) => stored[club] ?? null,
+  get: async (club) => {
+    if (stored[club]) return stored[club];
+    builds.push(club);
+    return null;
+  },
+});
+
+const snapshotOf = (club: string): ClubSnapshot => ({
+  club,
+  league: 'Premier League',
+  core: { club, league: 'Premier League', asOf: '2026-11-01', formation: '4-3-3', matchesRead: 1, xi: [], xiBasis: 'lineups', out: [], outCovered: true, form: [], record: 'W', nextFixture: null },
+  story: { changes: ['A new coach since the summer'], distinctive: 'Presses far higher than last season.', newsAbsences: [], unknowns: [] },
+  sources: [],
+  builtAt: '2026-11-01T08:00:00Z',
+  version: 1,
+});
+
+await test("a stored snapshot reaches the brief and stands in for the situation call", async () => {
+  const asked: string[] = [];
+  const seen: ResearchContext[] = [];
+  const model: ResearchModel = {
+    writeBrief: async (c) => {
+      seen.push(c);
+      return brief([]);
+    },
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
+  };
+  const { situation, ledger } = await runResearch({ ...ctx, present: true }, reportTools(asked, {}), {
+    model,
+    situationModel: noModel,
+    snapshots: fakeSnapshots({ Club: snapshotOf('Club') }),
+  });
+  assert.deepEqual(seen[0].storedSnapshots, [{ club: 'Club', asOf: '2026-11-01' }]);
+  // The brief planned nothing, but a question about the present still gets the club's live data.
+  assert.deepEqual(asked, ['club:Club']);
+  assert.equal(ledger.entries.length, 1);
+  assert.equal(situation?.clubs[0].distinctive, 'Presses far higher than last season.');
+  // The live core wins over the stored one: today's XI, the stored story.
+  assert.equal(situation?.clubs[0].xi.length, 11);
+});
+
+await test('a missing snapshot is built for a question about the present, and never for one about the past', async () => {
+  const builds: string[] = [];
+  const asked: string[] = [];
+  const live: ResearchModel = {
+    writeBrief: async () => brief([]),
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
+  };
+  const situationModel: SituationModel = { enrich: async () => ({ clubs: [], players: [], unknowns: [] }) };
+  await runResearch({ ...ctx, present: true }, reportTools(asked, {}), { model: live, situationModel, snapshots: fakeSnapshots({}, builds) });
+  assert.deepEqual(builds, ['Club']);
+
+  const pastBuilds: string[] = [];
+  const pastAsked: string[] = [];
+  const past: ResearchModel = { writeBrief: async () => ({ ...brief([]), timeframe: 'historical' }), reflect: async () => assert.fail('no reflect') };
+  const result = await runResearch({ ...ctx, present: false }, reportTools(pastAsked, {}), { model: past, snapshots: fakeSnapshots({}, pastBuilds) });
+  assert.deepEqual(pastBuilds, []);
+  assert.deepEqual(pastAsked, []);
+  assert.equal(result.situation, null);
+});
+
+await test('reflect sets aside stale web sources and reads the lookup log and coverage note', async () => {
+  const model: ResearchModel = {
+    writeBrief: async () =>
+      brief([
+        { tool: 'club_recent_team', subject: 'Club' },
+        { tool: 'web_search', subject: 'Club tactical analysis 2026-27', stage: 'analysis' },
+      ]),
+    reflect: async (_b, l) => ({ enough: true, calls: [], unresolved: [], discard: l.entries.filter((e) => e.kind === 'web').map((e) => ({ id: e.id, reason: 'describes last season' })) }),
+  };
+  const { ledger } = await runResearch(ctx, reportTools([], {}), { model, situationModel: { enrich: async () => ({ clubs: [], players: [], unknowns: [] }) } });
+  assert.deepEqual(ledger.entries.map((e) => e.kind), ['club_context']);
+  assert.deepEqual(ledger.discarded.map((d) => d.reason), ['describes last season']);
+
+  let l = addEvidence(emptyLedger(), { kind: 'web', label: 'Club tactics', content: '[2025-03-01] A back three.' });
+  l = { ...l, lookups: [{ tool: 'player_season', subject: 'Someone', status: 'not_covered' }] };
+  const prompt = buildReflectPrompt(brief([]), l);
+  assert.match(prompt, /player_season "Someone": not covered by any source/);
+  assert.match(prompt, /Club tactics \(every source here predates this season/);
+  assert.match(prompt, /What it should settle about this season: What is new in the build-up/);
+  assert.ok(prompt.includes(RESEARCH_COVERAGE_NOTE));
+});
+
+await test('past the cutoff, the situation snapshot is what code worked out, without the model', async () => {
+  let clock = 0;
+  const model: ResearchModel = {
+    writeBrief: async () => {
+      clock += 20_000;
+      return brief([{ tool: 'club_recent_team', subject: 'Club' }]);
+    },
+    reflect: async () => assert.fail('reflect should be skipped'),
+  };
+  const { situation } = await runResearch(ctx, reportTools([], {}), { model, situationModel: noModel, now: () => clock });
+  assert.equal(situation?.clubs[0].club, 'Club');
+  assert.equal(situation?.clubs[0].distinctive, undefined);
 });
 
 console.log(`${passes} passed, ${failures} failed`);
