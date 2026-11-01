@@ -1,5 +1,5 @@
-import type { RatingRequest } from '../types';
-import { formatEraQualifier } from './dossierCards';
+import type { PlayerProfile, RatingRequest } from '../types';
+import { cardEdition, formatEraQualifier } from './dossierCards';
 import type { TurnRoute } from './turnRouter';
 
 /** The version a request asks for, for the command line in the chat; null for `auto`. */
@@ -58,3 +58,21 @@ export const routeForRating = (request: RatingRequest): TurnRoute => {
     needsSearch: true,
   };
 };
+
+/** The request that serves this card: its edition, and its season or era for those editions. */
+export const requestForCard = (card: PlayerProfile): RatingRequest => {
+  const name = card.basicInfo.name;
+  switch (cardEdition(card)) {
+    case 'current':
+      return { name, edition: 'current' };
+    case 'season_snapshot':
+      return card.version?.seasonOrEra ? { name, edition: 'season', season: card.version.seasonOrEra } : { name, edition: 'prime' };
+    case 'era':
+      return card.version?.qualifier ? { name, edition: 'era', era: card.version.qualifier } : { name, edition: 'prime' };
+    default:
+      return { name, edition: 'prime' };
+  }
+};
+
+/** A shared-index outline carries only what a suggestion shows; the full card has attributes. */
+export const isFullCard = (card: PlayerProfile): boolean => Boolean(card.attributes && card.shortBio);

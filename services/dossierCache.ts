@@ -565,3 +565,23 @@ export const fetchCardIndex = async (): Promise<PlayerProfile[]> => {
   })();
   return cardIndexRequest;
 };
+
+/**
+ * The full published card behind a card-index outline, or null when it is no longer served
+ * (a current card past its refresh window, a re-rated prime). Never rates anything.
+ */
+export const fetchPublishedCard = async (outline: PlayerProfile): Promise<PlayerProfile | null> => {
+  const name = outline.basicInfo?.name;
+  if (!name) return null;
+  const window = outline.version?.seasonOrEra ?? null;
+  switch (cardEdition(outline)) {
+    case 'current':
+      return getCachedDossier(toDossierCardSlug(name, false));
+    case 'season_snapshot':
+      return window ? getCachedSeasonCard(name, window) : null;
+    case 'era':
+      return getCachedEraCard(name, { qualifier: outline.version?.qualifier ?? null, window });
+    default:
+      return getCachedDossier(toDossierCardSlug(name, true));
+  }
+};

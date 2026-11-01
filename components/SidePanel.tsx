@@ -19,6 +19,11 @@ interface SidePanelProps {
   onSelectProfile: (profile: PlayerProfile) => void;
   /** Shows the dossier hub; omitted while the hub is already the main view. */
   onOpenHub?: () => void;
+  /** The panel shows the Scout desk instead of a dossier. */
+  mode?: 'scout' | 'dossier';
+  scout?: React.ReactNode;
+  /** Goes back from a dossier to the Scout desk. */
+  onBack?: () => void;
 }
 
 const getTierColorClass = (rating: number) => {
@@ -85,6 +90,9 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   allProfiles = [],
   onSelectProfile,
   onOpenHub,
+  mode = 'dossier',
+  scout,
+  onBack,
 }) => {
   const [shareStatus, setShareStatus] = useState<'idle' | 'saving' | 'copied'>('idle');
   const [isDesktop, setIsDesktop] = useState(false);
@@ -191,13 +199,9 @@ export const SidePanel: React.FC<SidePanelProps> = ({
       }
   };
 
-  // Prevent render if not open and not visible. The dossier list lives in the hub, so the
-  // panel only ever shows one dossier.
-  if ((!isOpen && !isVisible) || !profile) return null;
-
-  const edition = describeCardEdition(profile);
-  const categories = profile.goalkeeperAttributes ? GK_ATTRIBUTE_CATEGORIES : ATTRIBUTE_CATEGORIES;
-  const attrSource = profile.goalkeeperAttributes ? profile.goalkeeperAttributes : profile.attributes;
+  // Prevent render if not open and not visible. The panel shows the Scout desk or one dossier.
+  const showScout = mode === 'scout' && Boolean(scout);
+  if ((!isOpen && !isVisible) || (!showScout && !profile)) return null;
 
   return (
     <>
@@ -215,19 +219,30 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 md:inset-y-0 md:left-0 md:h-full md:w-[450px] md:rounded-none
             `}
         >
-            {/* Header Area */}
-            <div 
-                className="flex flex-col border-b border-cream-300 dark:border-charcoal-border bg-cream-50 dark:bg-charcoal-surface rounded-t-2xl md:rounded-none sticky top-0 z-50 touch-none"
+            {/* Visual Handle: drag the sheet down to close it on phones */}
+            <div
+                className="w-full h-8 shrink-0 flex items-center justify-center md:hidden cursor-grab active:cursor-grabbing bg-cream-50 dark:bg-charcoal-surface rounded-t-2xl touch-none"
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
             >
-                {/* Visual Handle */}
-                <div className="w-full h-8 flex items-center justify-center md:hidden cursor-grab active:cursor-grabbing">
-                    <div className="w-16 h-1.5 bg-charcoal/20 dark:bg-cream-400/20 rounded-full"></div>
-                </div>
+                <div className="w-16 h-1.5 bg-charcoal/20 dark:bg-cream-400/20 rounded-full"></div>
+            </div>
 
-                <div className="flex justify-between items-start px-8 pt-6 pb-4">
+            {showScout ? scout : profile && (() => {
+            const edition = describeCardEdition(profile);
+            const categories = profile.goalkeeperAttributes ? GK_ATTRIBUTE_CATEGORIES : ATTRIBUTE_CATEGORIES;
+            const attrSource = profile.goalkeeperAttributes ? profile.goalkeeperAttributes : profile.attributes;
+            return (<>
+            {/* Header Area */}
+            <div 
+                className="flex flex-col border-b border-cream-300 dark:border-charcoal-border bg-cream-50 dark:bg-charcoal-surface sticky top-0 z-50 touch-none"
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+            >
+
+                <div className="flex justify-between items-start px-8 pt-2 md:pt-6 pb-4">
                     <div className="flex-1 pr-4">
                         <div className="flex flex-wrap items-center gap-1.5 mb-2">
                             <span className={pillClass(edition.tone, 'sm')} title={edition.title}>
@@ -317,7 +332,18 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 {/* Toolbar / All dossiers, Share and Close */}
                 <div className="flex justify-between items-center px-8 pb-5">
                     <div className="flex items-center">
-                        <span className="text-[10px] uppercase tracking-widest text-charcoal/40 dark:text-cream-400/40 font-bold">Confidential Dossier</span>
+                        {onBack ? (
+                            <button
+                                onClick={onBack}
+                                className="-ml-2 flex items-center gap-1 px-2 py-1 rounded-lg text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 transition-colors"
+                                title="Back to Scout"
+                            >
+                                <span className="material-symbols-outlined text-[18px] block">arrow_back</span>
+                                <span className="text-[10px] font-sans font-bold uppercase tracking-wider">Scout</span>
+                            </button>
+                        ) : (
+                            <span className="text-[10px] uppercase tracking-widest text-charcoal/40 dark:text-cream-400/40 font-bold">Confidential Dossier</span>
+                        )}
                     </div>
                     
                     <div className="flex items-center gap-2">
@@ -458,6 +484,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 {/* Bottom Spacer */}
                 <div className="h-10"></div>
             </div>
+            </>);
+            })()}
         </div>
     </>
   );
