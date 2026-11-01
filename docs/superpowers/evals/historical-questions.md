@@ -89,3 +89,25 @@ counts that are right for the decade or window named but not for the whole caree
 real, mostly a total across competitions given as a league figure, or a tally that includes a
 lower division. With the scope-aware checker, the baseline had 2 wrong of 132; the after run
 couldn't be regraded that way because the Gemini project reached its monthly spending cap.
+
+### Run: 2026-11-01, figure fixes, small subset
+
+After the brief started choosing the figures and the figure gate began checking scope, a subset
+ran once each with `--no-builds`: the seven historical questions that had wrong figures (2, 3, 5,
+9, 10, 11 and 14) and the live set's historical control. Reports:
+`reports/2026-11-01-1842-historical-figures-subset.md` and `reports/2026-11-01-1843-control-subset.md`.
+The first runs of the same questions are compared below.
+
+| Measure | Before (`main`) | First after run | After the figure fixes |
+| --- | --- | --- | --- |
+| Precise figures stated | 38 in 6 answers | 100 in 7 | 69 in 7 |
+| Figures marked wrong | 1 | 12 | 4 |
+| Median first token | 6.5 s | 11.0 s | 11.1 s |
+
+The before and the figure-fix columns used the scope-aware checker; the first after run used the
+stricter one, which overcounts. One of the four is the checker treating card ratings as
+fabricated figures. The other three are a count for a decade one short, and a match tally and a
+selection count that weren't among the figures the brief chose, so the budget should have trimmed
+them. The paraphrase pair (5 and 14) put Nesta and Cannavaro in a different order. The live
+control question took 9.3 s to its first token (3.6 s before, 10.6 s in the first after run), with
+no stale or invented facts.
