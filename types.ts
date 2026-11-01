@@ -232,6 +232,10 @@ export interface ChatMessage {
   rating?: RatingRequest;
   /** The @ mentions in a user message ("@Florian Wirtz"), each naming a card in the conversation. */
   mentions?: string[];
+  /** Cards a chat reply shows under its prose. */
+  cards?: ChatDossierRef[];
+  /** Players a chat reply discussed who have no card yet, offered to Scout. */
+  scoutOffers?: string[];
 }
 
 /**

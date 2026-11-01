@@ -275,6 +275,50 @@ const GREP_GAFFA_MARKET_DECLARATION = {
   },
 };
 
+const LOOK_UP_DOSSIER_DECLARATION = {
+  name: 'look_up_dossier',
+  description:
+    'Reads the published Futbolpedia dossier card for one player from the user’s dossiers and every shared card: Overall, Potential, all attributes, archetype, strengths and weaknesses. Call it before judging, ranking or describing a player who is not already in <locked_dossiers>, and answer from the card’s numbers. Returns found: false when nobody has rated him yet; then answer from grounding without inventing card numbers, and Futbolpedia offers the user a rating.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      name: {
+        type: Type.STRING,
+        description: 'The player’s name.',
+      },
+      edition: {
+        type: Type.STRING,
+        enum: ['current', 'prime'],
+        description:
+          'Which version of him: "prime" for his best seasons, "current" for his form now. Defaults to the version the conversation is about.',
+      },
+    },
+    required: ['name'],
+  },
+};
+
+const SHOW_DOSSIER_DECLARATION = {
+  name: 'show_dossier',
+  description:
+    'Shows a player’s dossier card to the user under your reply. Use it when the user asks to see a player or his card, or when the card itself answers what they asked. Only for players whose card you have, in <locked_dossiers> or from look_up_dossier. Never repeat the whole card in prose after showing it.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      name: {
+        type: Type.STRING,
+        description: 'The player’s name, as it appears on his card.',
+      },
+    },
+    required: ['name'],
+  },
+};
+
+/** Handlers for the dossier tools; a turn that passes them lets the model read and show cards. */
+export interface DossierToolHandlers {
+  lookUp: (args: { name?: string; edition?: string }) => Promise<unknown>;
+  show: (args: { name?: string }) => Promise<unknown>;
+}
+
 const NETWORK_FUNCTION_DECLARATIONS = [
   {
     name: 'get_player_fact_sheet',
@@ -352,6 +396,7 @@ export interface GenerateProseTurnParams {
   toolMode?: ProseToolMode;
   dossiersPool?: PlayerProfile[];
   gaffaBag?: GaffaContextBag;
+  dossierTools?: DossierToolHandlers;
   onStreamChunk?: (accumulatedText: string) => void;
 }
 
@@ -368,6 +413,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
   const localFunctionDeclarations: any[] = [
     GREP_SAVED_DOSSIERS_DECLARATION,
     ...(params.gaffaBag?.connected ? [GREP_GAFFA_MARKET_DECLARATION] : []),
+    ...(params.dossierTools ? [LOOK_UP_DOSSIER_DECLARATION, SHOW_DOSSIER_DECLARATION] : []),
   ];
 
   const tools: any[] =
@@ -419,6 +465,10 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
               args as GaffaMarketGrepParams,
               params.dossiersPool ?? [],
             );
+          } else if (functionCall.name === 'look_up_dossier' && params.dossierTools) {
+            apiResult = await params.dossierTools.lookUp(args);
+          } else if (functionCall.name === 'show_dossier' && params.dossierTools) {
+            apiResult = await params.dossierTools.show(args);
           } else if (Object.hasOwn(NETWORK_TOOL_ROUTES, functionCall.name)) {
             apiResult = await callNetworkTool(functionCall.name, args);
           } else {

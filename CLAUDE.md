@@ -12,7 +12,7 @@ npm start        # Run production server (serves /dist statically)
 
 ```bash
 npm run typecheck   # tsc --noEmit (run `npm ci` in packages/engine first for its vitest types)
-npm test            # offline app checks: scripts/test-dossier-cards.ts, test-dossier-pipeline.ts (end-to-end with Gemini faked at fetch), test-dossier-cache-hit.ts (published cards served without re-rating, Supabase faked in memory), test-rating-command.ts (the Rate command serves the same cards without routing), test-player-search.ts (Rate suggestions), test-chat-consistency.ts (chat vs stored cards), test-gaffa-name-matching.ts, test-club-managers.ts
+npm test            # offline app checks: scripts/test-dossier-cards.ts, test-dossier-pipeline.ts (end-to-end with Gemini faked at fetch), test-dossier-cache-hit.ts (published cards served without re-rating, Supabase faked in memory), test-rating-command.ts (the Rate command serves the same cards without routing), test-player-search.ts (Rate suggestions), test-chat-dossiers.ts (chat reading and showing cards), test-chat-consistency.ts (chat vs stored cards), test-gaffa-name-matching.ts, test-club-managers.ts
 cd packages/engine && npm ci && npm test   # outlook engine + manager-fidelity vitest suite
 ```
 
@@ -55,6 +55,8 @@ A single Express server handles everything:
 3. **Everything else** — `conversationalScout.ts` handles live dossier challenges (structured patch → `applyDossierPatch`) and prose turns (comparisons, debates, rankings, tactics), pre-grounding with search when needed.
 
 **Chat stays on the stored cards.** A new dossier shows in chat as a one-line stub carrying `dossierKey`; `buildHistoryContents` swaps each stub for the full card, so the model sees cards where the user saw them. Challenge turns get the challenged card plus the full card of every other player in the thread (in the same edition), and the thread's earlier replies keep their closing verdicts. A follow-up with no timeframe in a prime debate stays on prime cards. After generation, `dossierNumberGate.ts` puts any misquoted attribute of a card in play back to its stored value; it never touches Overall/Potential, which debate prose may propose on purpose.
+
+**Chat reads cards on its own.** "How good is <player>" is a question, not a rating: `playerQuestionSubject` routes it to chat as `player_qa`. For chat and compare turns, `sendMessageToAI` looks up each target player's card in your dossiers and the shared card index (`dossierLookup.ts`, which never rates anyone), so the model answers from it. A question about one player shows his card under the reply; a player nobody has rated gets a Scout offer that queues him in the Scout panel. The prose model also has `look_up_dossier` and `show_dossier` tools, and the turn returns what it showed or found missing through `onAttachments`. A message that only mentions cards, or only asks to see them ("let me see @…", `chatIntent.ts`), posts the cards without a model turn.
 
 `aiClient.ts` wraps `@google/genai`: `generateStructured` (schema JSON), `runGroundedSearch`, and `generateProseTurn` (streaming chat with local tools `grep_saved_dossiers` / `grep_gaffa_market` and network tools backed by the API-Football routes). Per-task model, thinking level and temperature come from `constants/modelProfiles.ts`.
 

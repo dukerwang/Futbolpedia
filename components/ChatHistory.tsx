@@ -11,6 +11,7 @@ interface ChatHistoryProps {
   onSuggestion?: (prompt: string) => void;
   /** The "Build a dossier" starter opens Scout rather than sending a chat message. */
   onOpenScout?: () => void;
+  onScoutName?: (name: string) => void;
   onOpenDossier?: (dossier: ChatDossierRef) => void;
   onRetry?: (messageId: string) => void;
 }
@@ -43,6 +44,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   domain = 'default',
   onSuggestion,
   onOpenScout,
+  onScoutName,
   onOpenDossier,
   onRetry,
 }) => {
@@ -200,6 +202,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               key={msg.id}
               message={msg}
               onOpenDossier={onOpenDossier}
+              onScoutName={onScoutName}
               // Only the latest failure is retryable; older ones would replay stale context.
               onRetry={onRetry && !isLoading && i > lastUserIndex ? onRetry : undefined}
             />

@@ -3,7 +3,12 @@ import type { ChatMessage, PlayerProfile } from '../types';
 import type { ThinkingTier } from '../constants/modelProfiles';
 import { ATTRIBUTE_KEYS } from '../constants/ratingTiers';
 import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
-import { generateProseTurn, generateStructured, getCurrentSeasonInfo } from './aiClient';
+import {
+  generateProseTurn,
+  generateStructured,
+  getCurrentSeasonInfo,
+  type DossierToolHandlers,
+} from './aiClient';
 import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
 import {
   applyDossierPatch,
@@ -11,6 +16,7 @@ import {
   buildLockedDossiersBlock,
   DossierPatch,
   findReferencedDossiers,
+  getCardKey,
   isPrimeCard,
   mergeAllCalibratedDossiers,
   mostRecentlyShownCard,
@@ -27,6 +33,7 @@ import {
 import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubManagers';
 import { reconcileDossierNumbers } from './dossierNumberGate';
 import { toBasePlayerSlug } from './dossierCards';
+import { lookUpDossier } from './dossierLookup';
 
 /**
  * Retains the most recent verified `<factual_foundation>` for the active conversation thread
@@ -148,6 +155,33 @@ const CHALLENGE_TURN_SCHEMA: Record<string, unknown> = {
   required: ['replyProse', 'revisedDossier'],
 };
 
+/** What a chat reply carries besides its prose: cards to show under it, players to offer to rate. */
+export interface ReplyAttachments {
+  cards: PlayerProfile[];
+  /** Players the reply discussed who have no card yet. */
+  scoutOffers: string[];
+}
+
+/** Adds a scout offer unless the player is already offered or carded in this reply. */
+export const offerScout = (attachments: ReplyAttachments, name: string): void => {
+  const slug = toBasePlayerSlug(name);
+  if (!slug) return;
+  const known = [
+    ...attachments.scoutOffers,
+    ...attachments.cards.map((c) => c.basicInfo.name),
+  ].some((n) => toBasePlayerSlug(n) === slug);
+  if (!known) attachments.scoutOffers.push(name);
+};
+
+/** Adds a card to show under the reply, once. */
+export const showCard = (attachments: ReplyAttachments, card: PlayerProfile): void => {
+  const key = getCardKey(card);
+  if (attachments.cards.some((c) => getCardKey(c) === key)) return;
+  attachments.cards.push(card);
+  const slug = toBasePlayerSlug(card.basicInfo.name);
+  attachments.scoutOffers = attachments.scoutOffers.filter((n) => toBasePlayerSlug(n) !== slug);
+};
+
 export interface ConversationalScoutParams {
   message: string;
   route: TurnRoute;
@@ -159,6 +193,8 @@ export interface ConversationalScoutParams {
   lockedDossiersBlock: string;
   savedDossiersBlock: string;
   peerLedgerBlock?: string;
+  /** Filled with the cards the model shows and the players it found no card for. */
+  attachments?: ReplyAttachments;
   onDossierUpdated?: (updatedProfile: PlayerProfile) => void;
   onStreamChunk?: (accumulatedText: string) => void;
   onStageChange?: (stageLabel: string) => void;
@@ -178,6 +214,7 @@ export async function runConversationalScout(
     lockedDossiersBlock,
     savedDossiersBlock,
     peerLedgerBlock,
+    attachments,
     onDossierUpdated,
     onStreamChunk,
     onStageChange,
@@ -459,6 +496,10 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     modeGuidance = `Respond conversationally in Markdown prose as the Chief Scout and Senior Tactical Columnist. Match the depth and structure of your answer to the user's question, and tie every tactical claim to specific named players and their actual traits rather than generic tactical buzzwords. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_player_fact_sheet\` / \`get_football_squad\` / \`get_team_fixtures\` for deterministic API-Football records, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
   }
 
+  const shownNames = (attachments?.cards ?? []).map((c) => c.basicInfo.name);
+  const shownNote = shownNames.length
+    ? ` The user sees the dossier card of ${shownNames.join(' and ')} under your reply, so answer from it without reciting its attributes.`
+    : '';
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
 ${factualFoundation ? `<factual_foundation>\n${factualFoundation}\n</factual_foundation>` : ''}
@@ -467,7 +508,7 @@ ${peerLedgerBlock ?? ''}
 ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
-1. ${modeGuidance}
+1. ${modeGuidance}${shownNote}
 2. Current-state facts (club, manager, squad membership, injuries, ${currentSeason} stats) must come from <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, \`get_team_fixtures\`, Google Search), or existing dossiers — never stale training memory. Never name an unverified head coach.
 3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.
 4. ${CONTINUITY_REMINDER}
@@ -503,6 +544,36 @@ ${savedDossiersBlock}
     );
   }
 
+  // The model reads any player's card, yours or shared, and shows the ones that answer the user.
+  const localCards = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+  const readCards = new Map<string, PlayerProfile>();
+  const dossierTools: DossierToolHandlers = {
+    lookUp: async ({ name, edition }) => {
+      if (!name) return { error: 'Missing name' };
+      const historical = edition ? edition === 'prime' : isHistoricalThread;
+      const result = await lookUpDossier(name, [...cardsInPlay, ...localCards], historical);
+      if (result.status === 'ambiguous') return { found: false, matchingPlayers: result.names };
+      if (result.status === 'missing') {
+        if (attachments) offerScout(attachments, name);
+        return { found: false };
+      }
+      readCards.set(toBasePlayerSlug(name), result.card);
+      readCards.set(toBasePlayerSlug(result.card.basicInfo.name), result.card);
+      if (!cardsInPlay.some((c) => getCardKey(c) === getCardKey(result.card))) {
+        cardsInPlay.push(result.card);
+      }
+      return { found: true, card: serializeProfileForHistory(result.card) };
+    },
+    show: async ({ name }) => {
+      if (!name) return { error: 'Missing name' };
+      const card =
+        readCards.get(toBasePlayerSlug(name)) ??
+        pickCardPerPlayer(findReferencedDossiers(name, cardsInPlay, [name]), isHistoricalThread)[0];
+      if (!card) return { shown: false, reason: 'No card in this turn for that player; look it up first.' };
+      if (attachments) showCard(attachments, card);
+      return { shown: true };
+    },
+  };
   const rawReply = await generateProseTurn({
     message: fullPrompt,
     historyContents,
@@ -511,6 +582,7 @@ ${savedDossiersBlock}
     thinkingLevelOverride,
     toolMode: hasCompleteContext ? 'local_only' : 'full',
     dossiersPool,
+    dossierTools,
     onStreamChunk: onStreamChunk
       ? (partial) => onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay))
       : undefined,

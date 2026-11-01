@@ -7,7 +7,13 @@ import {
   generateStructured,
   type ProseToolMode,
 } from './aiClient';
-import { runConversationalScout } from './conversationalScout';
+import {
+  offerScout,
+  runConversationalScout,
+  showCard,
+  type ReplyAttachments,
+} from './conversationalScout';
+import { lookUpDossier } from './dossierLookup';
 import {
   CALIBRATION_EPOCH_MS,
   buildHistoryContents,
@@ -161,8 +167,12 @@ export const sendProseChatMessage = async (
   });
 };
 
+export type { ReplyAttachments } from './conversationalScout';
+
 export interface SendMessageOptions {
   onDossierUpdated?: (updatedProfile: PlayerProfile) => void;
+  /** Called before a chat reply returns when it shows cards or offers to rate players. */
+  onAttachments?: (attachments: ReplyAttachments) => void;
   onStreamChunk?: (accumulatedText: string) => void;
   onStageChange?: (stageLabel: string) => void;
 }
@@ -716,16 +726,44 @@ export const sendMessageToAI = async (
   });
   perf(`turn router (${route.intent})`);
 
-  // 2. Resolve conversation-locked and saved-archive dossiers
-  const context = buildTurnContext(message, route, conversationDossiers, savedDossiers);
-  const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock } = context;
-
-  // 3. Single-Player Dossier Pipeline
+  // 2. Single-Player Dossier Pipeline
   if (route.intent === 'single_dossier') {
+    const context = buildTurnContext(message, route, conversationDossiers, savedDossiers);
     return rateDossier({ message, route, context, savedDossiers, imageData, options, perf });
   }
 
-  // 4. Conversational Scout Pipeline (Comparisons, Live Dossier Revisions, Tactical Q&A, Archive)
+  // 3. Chat reads the cards of the players it is asked about, yours or shared. A question about
+  // one player shows his card; a player nobody has rated is offered to Scout.
+  const attachments: ReplyAttachments = { cards: [], scoutOffers: [] };
+  let turnDossiers = savedDossiers;
+  if (
+    !imageData &&
+    route.targetPlayers.length > 0 &&
+    (route.intent === 'tactical_chat' || route.intent === 'compare')
+  ) {
+    const localCards = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+    const lookups = await Promise.all(
+      route.targetPlayers
+        .slice(0, 4)
+        .map((name) => lookUpDossier(name, localCards, route.isHistorical).catch(() => null)),
+    );
+    const asksAboutOne = route.analyticalMode === 'player_qa' && route.targetPlayers.length === 1;
+    lookups.forEach((lookup, i) => {
+      if (lookup?.status === 'found') {
+        if (!localCards.includes(lookup.card)) turnDossiers = [...turnDossiers, lookup.card];
+        if (asksAboutOne) showCard(attachments, lookup.card);
+      } else if (lookup?.status === 'missing') {
+        offerScout(attachments, route.targetPlayers[i]);
+      }
+    });
+    perf('dossier lookup');
+  }
+
+  // 4. Resolve conversation-locked and saved-archive dossiers
+  const context = buildTurnContext(message, route, conversationDossiers, turnDossiers);
+  const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock } = context;
+
+  // 5. Conversational Scout Pipeline (Comparisons, Live Dossier Revisions, Tactical Q&A, Archive)
   const reply = await runConversationalScout({
     message,
     route,
@@ -733,15 +771,19 @@ export const sendMessageToAI = async (
     imageData,
     isEAFCRequest,
     conversationDossiers,
-    savedDossiers,
+    savedDossiers: turnDossiers,
     lockedDossiersBlock,
     savedDossiersBlock,
     peerLedgerBlock,
+    attachments,
     onDossierUpdated: options?.onDossierUpdated,
     onStreamChunk: options?.onStreamChunk,
     onStageChange: options?.onStageChange,
   });
   perf('conversational scout');
+  if (attachments.cards.length > 0 || attachments.scoutOffers.length > 0) {
+    options?.onAttachments?.(attachments);
+  }
   return reply;
 };
 

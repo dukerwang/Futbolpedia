@@ -497,9 +497,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 </svg>
               </div>
             </button>
-            <span className={`hidden sm:inline text-[10px] font-sans font-bold uppercase tracking-widest ${gaffaOn ? 'text-emerald-700 dark:text-emerald-400' : 'text-charcoal/40 dark:text-cream-400/50'}`}>
-              {gaffaOn ? 'Gaffa' : 'Scouting'}
-            </span>
+            {gaffaOn && (
+              <span className="hidden sm:inline text-[10px] font-sans font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-400">
+                Gaffa
+              </span>
+            )}
           </div>
 
           <button

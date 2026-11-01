@@ -29,8 +29,10 @@ import {
   getCardKey,
   renameDossierCard,
   stampDossier,
+  type ReplyAttachments,
 } from './services/geminiService';
 import { isFullCard, ratingTask, requestForCard } from './services/ratingCommand';
+import { asksToSeeMentions } from './services/chatIntent';
 import { sendGaffaMessage } from './services/gaffaChatService';
 import { looksLikeGaffaQuestion } from './services/gaffaDetect';
 import {
@@ -680,9 +682,10 @@ const App: React.FC = () => {
     const conversationCards = mentionedCards.reduce(upsertCard, allProfiles);
     const mentionLabels = mentions.map(m => m.label);
 
-    // A message that is only mentions pulls those cards up: no question, so no turn for the model.
+    // A message that only mentions cards, or only asks to see them, pulls those cards up: no
+    // question, so no turn for the model.
     const leftover = mentions.reduce((text, m) => text.split(m.label).join(' '), userMessageText).trim();
-    if (mentions.length > 0 && !leftover && !imageData) {
+    if (mentionedCards.length > 0 && asksToSeeMentions(leftover) && !imageData) {
       const now = Date.now();
       setMessages(prev => [
         ...prev,
@@ -848,6 +851,7 @@ const App: React.FC = () => {
         return;
       }
 
+      let attachments: ReplyAttachments | null = null;
       const aiResponse = await sendMessageToAI(
         modelText,
         messages,
@@ -855,6 +859,7 @@ const App: React.FC = () => {
         conversationCards,
         globalDossiers,
         {
+          onAttachments: (a) => { attachments = a; },
           onDossierUpdated: (updatedProfile) => {
             saveAndSetActiveProfile(updatedProfile);
             setIsPanelOpen(true);
@@ -894,11 +899,24 @@ const App: React.FC = () => {
       if (typeof aiResponse === 'object' && 'basicInfo' in aiResponse) {
         newAiMessage = dossierReply(aiResponse as PlayerProfile, streamingMessageId);
       } else {
+        const { cards = [], scoutOffers = [] } = (attachments ?? {}) as Partial<ReplyAttachments>;
+        // Cards chat showed join the conversation and your dossiers, as mentioned ones do.
+        if (cards.length > 0) {
+          const stamped = cards.map(card => stampDossier(card, Date.now()));
+          setGlobalDossiers(prev => {
+            const updated = stamped.reduce(upsertCard, prev);
+            saveGlobalDossiers(updated);
+            return updated;
+          });
+          setAllProfiles(prev => stamped.reduce(upsertCard, prev));
+        }
         newAiMessage = {
           id: streamingMessageId,
           sender: 'ai',
           content: aiResponse,
           timestamp: Date.now(),
+          ...(cards.length > 0 ? { cards: cards.map(toChatDossierRef) } : {}),
+          ...(scoutOffers.length > 0 ? { scoutOffers } : {}),
         };
       }
 
@@ -1342,6 +1360,7 @@ const App: React.FC = () => {
                 domain={domain}
                 onSuggestion={(prompt) => handleSendMessage(prompt)}
                 onOpenScout={openScout}
+                onScoutName={handleScoutName}
                 onOpenDossier={handleOpenDossier}
                 onRetry={handleRetry}
             />

@@ -220,10 +220,14 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
           )}
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-          <div role="radiogroup" aria-label="Version to rate" className="flex items-center gap-1 text-[11px] font-sans font-bold uppercase tracking-widest">
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <div
+            role="radiogroup"
+            aria-label="Version to rate"
+            className="flex shrink-0 border border-charcoal/25 dark:border-cream-400/30 text-[10px] font-sans font-bold uppercase tracking-[0.18em]"
+          >
             {[
-              { value: false, label: 'Current form' },
+              { value: false, label: 'Current' },
               { value: true, label: 'Prime' },
             ].map((option) => (
               <button
@@ -232,7 +236,7 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
                 role="radio"
                 aria-checked={prime === option.value}
                 onClick={() => setPrime(option.value)}
-                className={`px-2.5 py-1.5 rounded-full whitespace-nowrap transition-colors ${
+                className={`px-3 py-1.5 transition-colors ${
                   prime === option.value
                     ? 'bg-charcoal text-cream-50 dark:bg-cream-200 dark:text-charcoal'
                     : 'text-charcoal/50 dark:text-cream-400/60 hover:text-charcoal dark:hover:text-cream-100'
@@ -242,8 +246,8 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
               </button>
             ))}
           </div>
-          <span className="text-[11px] font-sans text-charcoal/50 dark:text-cream-400/55 sm:text-right">
-            {prime ? 'His best stretch, up to three seasons' : 'Retired players get their prime'}
+          <span className="truncate text-[12px] font-serif italic text-charcoal/50 dark:text-cream-400/55">
+            {prime ? 'His best three seasons' : 'Prime, if retired'}
           </span>
         </div>
       </div>
