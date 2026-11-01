@@ -11,7 +11,9 @@ in-process, each run in a new chat, and has a grader model with Google Search sc
 A second grader call compares the two runs of each question, and the answers to each pair of
 paraphrases below, for whether they reach the same verdict. It needs the network and
 `GEMINI_API_KEY`. Use `--only 1,4` for a subset, `--repeat 1` to skip the second run, and
-`--label <name>` to name the run. Reports go to `docs/superpowers/evals/reports/`.
+`--label <name>` to name the run. `--regrade <report.json>` runs a saved report's answers through
+the figure check again without re-asking the questions. Reports go to
+`docs/superpowers/evals/reports/`.
 
 The runner reads the shared dossier cards from Supabase, as the app does, and never writes to it,
 so answers see the same cards a user would.
@@ -42,8 +44,11 @@ the same verdict.
 
 The grader scores each answer on:
 
-- **Wrong figures:** precise numbers (goals, appearances, points, trophies, dates, fees) that are
-  false or that no source supports. Lower is better; the goal is zero.
+- **Figures:** one grader call lists every precise figure the answer states as fact (goals,
+  appearances, points, trophies, records, dates, fees), and a second checks each with Google
+  Search: correct, wrong, or unconfirmed. The report counts figures stated, wrong and unconfirmed.
+  Fewer wrong is better; the goal is zero. The one-pass grade also lists wrong figures, but it
+  passed every figure in the first baseline, so it isn't the measure.
 - **Blended seasons:** facts from one season or spell presented as another (a player in a side he
   joined later, two seasons' numbers merged, a coach from another year).
 - **Myths:** popular anecdotes or claims repeated as fact that sources dispute.
