@@ -400,9 +400,24 @@ const hasCurrentFormCue = (msg: string): boolean =>
   /\b(current(?:ly)?|right now|nowadays|today|this season|these days|at the moment)\b/i.test(msg);
 
 const hasDossierTriggerCue = (msg: string): boolean =>
-  /\b(rate|rating|profile|scout|evaluate|scouting|dossier|how good is|rank|tier|analyze|breakdown)\b/i.test(
+  /\b(rate|rating|profile|scout|evaluate|scouting|dossier|rank|tier|analyze|breakdown)\b/i.test(
     msg,
   ) || /\b(analysis on|report on|break down)\b/i.test(msg);
+
+/**
+ * The player a "how good is he" question names ("how good is Wirtz", "is Wirtz any good"), or
+ * null. Chat answers it from his card instead of rating him.
+ */
+export const playerQuestionSubject = (msg: string): string | null => {
+  const m =
+    msg.match(/^(?:so\s+|and\s+)?how\s+good\s+(?:is|was)\s+(.+?)[?.!\s]*$/i) ??
+    msg.match(
+      /^(?:so\s+|and\s+)?(?:is|was)\s+(.+?)\s+(?:(?:actually|really|even)\s+)?(?:any\s+good|good|that\s+good|world[- ]class|elite)[?.!\s]*$/i,
+    );
+  if (!m || /\b(and|or|vs|versus|than)\b/i.test(m[1])) return null;
+  const name = extractCandidatePlayerName(m[1]);
+  return name && !/\b(he|him|his|she|her|they|them|their|it|this|that)\b/i.test(name) ? name : null;
+};
 
 const isBarePlayerQuery = (msg: string): boolean => {
   if (/[?!]/.test(msg)) return false;
@@ -560,7 +575,19 @@ async function classifyTurnBase(params: {
   const isNonPlayerSubject = isNonSinglePlayerSubject(trimmed);
   const referencedClubs = extractReferencedClubs(trimmed);
 
-  // 2. 0ms local fast-path for unambiguous single-player dossier requests
+  // 2. 0ms local fast-path for "how good is <player>": a question chat answers from his card.
+  const questionSubject = !hasImage && !hasCompare ? playerQuestionSubject(trimmed) : null;
+  if (questionSubject) {
+    return buildRoute({
+      intent: 'tactical_chat',
+      analyticalMode: 'player_qa',
+      targetPlayers: [questionSubject],
+      targetClubs: referencedClubs,
+      isHistorical,
+    });
+  }
+
+  // 3. 0ms local fast-path for unambiguous single-player dossier requests
   // ("Rate Cole Palmer", "Rate Chelsea's Cole Palmer", "Rate Prime John Terry", or bare player names)
   if (
     !hasImage &&
@@ -583,7 +610,7 @@ async function classifyTurnBase(params: {
     }
   }
 
-  // 3. 0ms local fast-path for head-to-head player comparisons ("Wharton vs Baleba", "Compare Saka and Salah")
+  // 4. 0ms local fast-path for head-to-head player comparisons ("Wharton vs Baleba", "Compare Saka and Salah")
   if (!hasImage && hasCompare && !hasChallenge) {
     const comparedPlayers = extractComparedPlayersFast(trimmed, conversationDossiers);
     if (comparedPlayers && comparedPlayers.length >= 2) {
@@ -597,7 +624,7 @@ async function classifyTurnBase(params: {
     }
   }
 
-  // 4. 0ms local fast-path for dossier rating/attribute challenges & live revisions
+  // 5. 0ms local fast-path for dossier rating/attribute challenges & live revisions
   if (
     !hasImage &&
     conversationDossiers.length > 0 &&
@@ -624,7 +651,7 @@ async function classifyTurnBase(params: {
     }
   }
 
-  // 5. 0ms local fast-path for explicit positional rankings / tier lists ("Rank the top 5 CBs", "Best strikers right now")
+  // 6. 0ms local fast-path for explicit positional rankings / tier lists ("Rank the top 5 CBs", "Best strikers right now")
   if (
     !hasImage &&
     !hasChallenge &&
@@ -643,7 +670,7 @@ async function classifyTurnBase(params: {
     });
   }
 
-  // 6. 0ms local fast-path for explicit club tactical / squad breakdowns ("Analyze Arsenal's midfield", "Break down Barcelona's high line")
+  // 7. 0ms local fast-path for explicit club tactical / squad breakdowns ("Analyze Arsenal's midfield", "Break down Barcelona's high line")
   if (
     !hasImage &&
     !hasChallenge &&
@@ -672,7 +699,7 @@ async function classifyTurnBase(params: {
     });
   }
 
-  // 7. Schema-enforced LLM turn classifier for nuanced/conversational/pronoun-bearing messages
+  // 8. Schema-enforced LLM turn classifier for nuanced/conversational/pronoun-bearing messages
   const activeDossierNames = conversationDossiers.map(
     (d) => `${d.basicInfo.name} (${d.ratings.overall} OVR, ${d.basicInfo.position}, ${d.basicInfo.club})`,
   );

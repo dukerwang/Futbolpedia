@@ -64,9 +64,17 @@
             },
             keyframes: {
                 'fade-in': { from: { opacity: '0', transform: 'translateY(4px)' }, to: { opacity: '1', transform: 'translateY(0)' } },
+                'picker-in': { from: { opacity: '0', transform: 'scale(0.985)' }, to: { opacity: '1', transform: 'scale(1)' } },
+                // A scout's sweep: a short bar crossing the row while the card is built.
+                'scout-sweep': { from: { transform: 'translateX(-100%)' }, to: { transform: 'translateX(250%)' } },
+                // A card that just landed on the desk settles from emerald to the row's own colour.
+                'scout-landed': { from: { backgroundColor: 'rgba(16, 185, 129, 0.16)' }, to: { backgroundColor: 'rgba(16, 185, 129, 0)' } },
             },
             animation: {
                 'fade-in': 'fade-in 220ms cubic-bezier(0.23, 1, 0.32, 1) both',
+                'picker-in': 'picker-in 160ms cubic-bezier(0.23, 1, 0.32, 1) both',
+                'scout-sweep': 'scout-sweep 1.6s cubic-bezier(0.77, 0, 0.175, 1) infinite',
+                'scout-landed': 'scout-landed 2.4s cubic-bezier(0.23, 1, 0.32, 1) both',
             },
             transitionTimingFunction: {
                 'ios-ease': 'cubic-bezier(0.16, 1, 0.3, 1)',

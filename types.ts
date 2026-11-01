@@ -228,6 +228,28 @@ export interface ChatMessage {
   dossier?: ChatDossierRef;
   /** Marks a failed reply so the UI renders it as an error with a retry action. */
   isError?: boolean;
+  /** Present on a user message sent with the Rate command: the rating it asked for. */
+  rating?: RatingRequest;
+  /** The @ mentions in a user message ("@Florian Wirtz"), each naming a card in the conversation. */
+  mentions?: string[];
+  /** Cards a chat reply shows under its prose. */
+  cards?: ChatDossierRef[];
+  /** Players a chat reply discussed who have no card yet, offered to Scout. */
+  scoutOffers?: string[];
+}
+
+/**
+ * A rating asked for with the Rate command rather than typed as a chat turn. `auto` rates his
+ * current form, or his prime when he has retired; `current` is his current form either way (a
+ * current card picked from the suggestions). Season and era requests name the version.
+ */
+export interface RatingRequest {
+  name: string;
+  edition: 'auto' | 'current' | 'prime' | 'season' | 'era';
+  /** YYYY-YY, for `season`. */
+  season?: string;
+  /** The era's name as the card stores it (`version.qualifier`), for `era`. */
+  era?: string;
 }
 
 /** Lightweight dossier pointer stored on chat messages (the full profile lives in the dossier store). */

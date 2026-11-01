@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Header, type AppView } from './components/Header';
 import { ChatHistory } from './components/ChatHistory';
-import { ChatInput } from './components/ChatInput';
+import { ChatInput, type Mention } from './components/ChatInput';
+import { ScoutDesk, type ScoutJob } from './components/ScoutDesk';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import { WhatsNewPopup } from './components/WhatsNewPopup';
@@ -15,10 +16,12 @@ import type {
   GaffaAuthUser,
   GaffaUserClub,
   ChatDossierRef,
+  RatingRequest,
 } from './types';
 import { toChatDossierRef } from './components/DossierChatCard';
 import {
   sendMessageToAI,
+  ratePlayer,
   resetChat,
   getCachedDossier,
   getSharedConversation,
@@ -26,7 +29,10 @@ import {
   getCardKey,
   renameDossierCard,
   stampDossier,
+  type ReplyAttachments,
 } from './services/geminiService';
+import { isFullCard, ratingTask, requestForCard } from './services/ratingCommand';
+import { asksToSeeMentions } from './services/chatIntent';
 import { sendGaffaMessage } from './services/gaffaChatService';
 import { looksLikeGaffaQuestion } from './services/gaffaDetect';
 import {
@@ -109,6 +115,14 @@ const App: React.FC = () => {
   const [hubTab, setHubTab] = useState<HubTab>('mine');
   // Text the hub's "Ask" puts in the chat box
   const [chatDraft, setChatDraft] = useState<{ id: number; text: string } | null>(null);
+  // The left panel is the Scout desk or one open dossier.
+  const [panelMode, setPanelMode] = useState<'scout' | 'dossier'>('dossier');
+  const [scoutJobs, setScoutJobs] = useState<ScoutJob[]>([]);
+  // Cards Scout rated this session, newest first.
+  const [freshKeys, setFreshKeys] = useState<string[]>([]);
+  const [scoutFocus, setScoutFocus] = useState(0);
+  // Puts a mention of a card in the chat box (Scout's Ask).
+  const [mentionRequest, setMentionRequest] = useState<{ id: number; card: PlayerProfile } | null>(null);
 
   // Chat domain (Futbolpedia default vs Gaffa Q&A) — persisted per conversation
   const [domain, setDomain] = useState<ChatDomain>('default');
@@ -610,12 +624,89 @@ const App: React.FC = () => {
     setGaffaSyncError(null);
   }, []);
 
+  // A reply that filed a dossier: the card is saved and shown, and the chat gets its card.
+  const dossierReply = useCallback((profile: PlayerProfile, id: string): ChatMessage => {
+    // The in-chat card opens the panel, so the reply doesn't cover the chat on phones.
+    saveAndSetActiveProfile(profile);
+    return {
+      id,
+      sender: 'ai',
+      content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
+      timestamp: Date.now(),
+      dossier: toChatDossierRef(profile),
+      dossierKey: getCardKey(profile),
+    };
+  }, [saveAndSetActiveProfile]);
+
+  const errorReply = (err: unknown): ChatMessage => ({
+    id: generateId(),
+    sender: 'ai',
+    content: `Editor's Note: I encountered an issue. ${err instanceof Error ? err.message : 'An unknown error occurred.'}`,
+    timestamp: Date.now(),
+    isError: true,
+  });
+
   const handleSendMessage = useCallback(async (
     userMessageText: string,
     imageData?: string,
     messageDomain: ChatDomain = domain,
+    mentions: Mention[] = [],
   ) => {
     if (!userMessageText.trim() && !imageData) return;
+
+    // Mentioned cards join the conversation, so the model reads them in full. A shared card picked
+    // from the suggestions is only an outline until the pipeline serves it (a cache hit).
+    let mentionedCards: PlayerProfile[];
+    try {
+      mentionedCards = await Promise.all(mentions.map(async (m) => {
+        if (isFullCard(m.card)) return stampDossier(m.card, Date.now());
+        const local = globalDossiers.find(d => getCardKey(d) === getCardKey(m.card));
+        if (local) return local;
+        const served = await ratePlayer(requestForCard(m.card), [], [], globalDossiers);
+        if (typeof served === 'string') throw new Error(served);
+        return stampDossier(served, Date.now());
+      }));
+    } catch {
+      mentionedCards = mentions.map(m => m.card).filter(isFullCard);
+    }
+    if (mentionedCards.length > 0) {
+      setGlobalDossiers(prev => {
+        const updated = mentionedCards.reduce(upsertCard, prev);
+        saveGlobalDossiers(updated);
+        return updated;
+      });
+    }
+    if (mentionedCards.length > 0) {
+      setAllProfiles(prev => mentionedCards.reduce(upsertCard, prev));
+    }
+    const conversationCards = mentionedCards.reduce(upsertCard, allProfiles);
+    const mentionLabels = mentions.map(m => m.label);
+
+    // A message that only mentions cards, or only asks to see them, pulls those cards up: no
+    // question, so no turn for the model.
+    const leftover = mentions.reduce((text, m) => text.split(m.label).join(' '), userMessageText).trim();
+    if (mentionedCards.length > 0 && asksToSeeMentions(leftover) && !imageData) {
+      const now = Date.now();
+      setMessages(prev => [
+        ...prev,
+        { id: generateId(), sender: 'user', content: userMessageText.trim(), timestamp: now, mentions: mentionLabels },
+        ...mentionedCards.map((card, i): ChatMessage => ({
+          id: generateId(),
+          sender: 'ai',
+          // The card is the reply; history reads the card itself through dossierKey.
+          content: '',
+          timestamp: now + i + 1,
+          dossier: toChatDossierRef(card),
+          dossierKey: getCardKey(card),
+        })),
+      ]);
+      return;
+    }
+    // The model reads each mention as the exact card it names, edition included.
+    const modelText = mentions.reduce(
+      (text, m) => text.split(m.label).join(cardReference(m.card)),
+      userMessageText,
+    );
 
     const activeDomain = messageDomain;
     const lowerCaseMessage = userMessageText.toLowerCase();
@@ -657,6 +748,7 @@ const App: React.FC = () => {
       content: userMessageText || 'Image uploaded',
       image: imageData,
       timestamp: Date.now(),
+      ...(mentionLabels.length > 0 ? { mentions: mentionLabels } : {}),
     };
 
     setMessages(prev => [...prev, newUserMessage]);
@@ -760,13 +852,15 @@ const App: React.FC = () => {
         return;
       }
 
+      let attachments: ReplyAttachments | null = null;
       const aiResponse = await sendMessageToAI(
-        userMessageText,
+        modelText,
         messages,
         imageData,
-        allProfiles,
+        conversationCards,
         globalDossiers,
         {
+          onAttachments: (a) => { attachments = a; },
           onDossierUpdated: (updatedProfile) => {
             saveAndSetActiveProfile(updatedProfile);
             revisedProfile = updatedProfile;
@@ -804,19 +898,19 @@ const App: React.FC = () => {
       let newAiMessage: ChatMessage;
 
       if (typeof aiResponse === 'object' && 'basicInfo' in aiResponse) {
-        const profile = aiResponse as PlayerProfile;
-        // The in-chat card opens the panel, so the reply doesn't cover the chat on phones.
-        saveAndSetActiveProfile(profile);
-
-        newAiMessage = {
-          id: streamingMessageId,
-          sender: 'ai',
-          content: `Dossier generated for **${profile.basicInfo.name}**. See the side panel for full analysis.`,
-          timestamp: Date.now(),
-          dossier: toChatDossierRef(profile),
-          dossierKey: getCardKey(profile),
-        };
+        newAiMessage = dossierReply(aiResponse as PlayerProfile, streamingMessageId);
       } else {
+        const { cards = [], scoutOffers = [] } = (attachments ?? {}) as Partial<ReplyAttachments>;
+        // Cards chat showed join the conversation and your dossiers, as mentioned ones do.
+        if (cards.length > 0) {
+          const stamped = cards.map(card => stampDossier(card, Date.now()));
+          setGlobalDossiers(prev => {
+            const updated = stamped.reduce(upsertCard, prev);
+            saveGlobalDossiers(updated);
+            return updated;
+          });
+          setAllProfiles(prev => stamped.reduce(upsertCard, prev));
+        }
         newAiMessage = {
           id: streamingMessageId,
           sender: 'ai',
@@ -824,6 +918,8 @@ const App: React.FC = () => {
           timestamp: Date.now(),
           // A challenge that revised the card shows the new numbers in the thread.
           ...(revisedProfile ? { dossier: toChatDossierRef(revisedProfile) } : {}),
+          ...(cards.length > 0 ? { cards: cards.map(toChatDossierRef) } : {}),
+          ...(scoutOffers.length > 0 ? { scoutOffers } : {}),
         };
       }
 
@@ -835,18 +931,132 @@ const App: React.FC = () => {
         return [...prev, newAiMessage];
       });
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setMessages(prev => [...prev, {
-        id: generateId(),
-        sender: 'ai',
-        content: `Editor's Note: I encountered an issue. ${errorMessage}`,
-        timestamp: Date.now(),
-        isError: true,
-      }]);
+      setMessages(prev => [...prev, errorReply(err)]);
     } finally {
       setIsLoading(false);
     }
-  }, [messages, allProfiles, globalDossiers, domain, gaffaLink, saveAndSetActiveProfile]);
+  }, [messages, allProfiles, globalDossiers, domain, gaffaLink, saveAndSetActiveProfile, dossierReply]);
+
+  // The Rate command: a rating without a chat turn to route. It lands in the chat like a typed one.
+  const handleRate = useCallback(async (request: RatingRequest) => {
+    if (isLoading) return;
+    if (domain === 'gaffa') handleDomainChange('default');
+    setGaffaNudge(null);
+    setLoadingMessage(`Scouting ${request.name}...`);
+    setIsLoading(true);
+    setMessages(prev => [...prev, {
+      id: generateId(),
+      sender: 'user',
+      content: ratingTask(request),
+      timestamp: Date.now(),
+      rating: request,
+    }]);
+    try {
+      const reply = await ratePlayer(request, messages, allProfiles, globalDossiers, {
+        onStageChange: (label) => setLoadingMessage(label),
+      });
+      const id = generateId();
+      const aiMessage: ChatMessage =
+        typeof reply === 'object' && 'basicInfo' in reply
+          ? dossierReply(reply, id)
+          : { id, sender: 'ai', content: reply, timestamp: Date.now() };
+      setMessages(prev => [...prev, aiMessage]);
+    } catch (err) {
+      setMessages(prev => [...prev, errorReply(err)]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isLoading, domain, handleDomainChange, messages, allProfiles, globalDossiers, dossierReply]);
+
+  const openScout = useCallback(() => {
+    setPanelMode('scout');
+    setIsPanelOpen(true);
+    setIsConversationsOpen(false);
+    setScoutFocus(Date.now());
+  }, []);
+
+  // Cmd/Ctrl+K opens Scout from anywhere.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'k') return;
+      e.preventDefault();
+      openScout();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [openScout]);
+
+  // Scout rates in the background, two players at a time, while you keep chatting.
+  const globalDossiersRef = useRef(globalDossiers);
+  globalDossiersRef.current = globalDossiers;
+  const updateJob = useCallback((id: string, patch: Partial<ScoutJob>) => {
+    setScoutJobs(prev => prev.map(j => (j.id === id ? { ...j, ...patch } : j)));
+  }, []);
+
+  const runScoutJob = useCallback(async (job: ScoutJob) => {
+    try {
+      const reply = await ratePlayer(job.request, [], [], globalDossiersRef.current, {
+        onStageChange: (stage) => updateJob(job.id, { stage }),
+      });
+      if (typeof reply === 'string') {
+        updateJob(job.id, { status: 'error', error: reply });
+        return;
+      }
+      const card = stampDossier(reply, Date.now());
+      setGlobalDossiers(prev => {
+        const updated = upsertCard(prev, card);
+        saveGlobalDossiers(updated);
+        return updated;
+      });
+      setFreshKeys(prev => [getCardKey(card), ...prev.filter(k => k !== getCardKey(card))]);
+      setScoutJobs(prev => prev.filter(j => j.id !== job.id));
+    } catch (err) {
+      updateJob(job.id, {
+        status: 'error',
+        error: err instanceof Error ? err.message : 'Something went wrong while rating him.',
+      });
+    }
+  }, [updateJob]);
+
+  useEffect(() => {
+    const running = scoutJobs.filter(j => j.status === 'running').length;
+    const next = scoutJobs.find(j => j.status === 'queued');
+    if (running >= 2 || !next) return;
+    const started = { ...next, status: 'running' as const, startedAt: Date.now(), stage: undefined };
+    setScoutJobs(prev => prev.map(j => (j.id === next.id ? started : j)));
+    void runScoutJob(started);
+  }, [scoutJobs, runScoutJob]);
+
+  const handleScout = useCallback((requests: RatingRequest[]) => {
+    setScoutJobs(prev => [
+      ...prev,
+      ...requests.map((request): ScoutJob => ({ id: generateId(), request, status: 'queued' })),
+    ]);
+  }, []);
+
+  const handleScoutName = useCallback((name: string) => {
+    openScout();
+    handleScout([{ name, edition: 'auto' }]);
+  }, [openScout, handleScout]);
+
+  const isPhone = () => !window.matchMedia('(min-width: 768px)').matches;
+
+  // Scout's Ask: the card goes into the chat box as a mention. On a phone the sheet steps aside.
+  const handleScoutAsk = useCallback((profile: PlayerProfile) => {
+    setMentionRequest({ id: Date.now(), card: profile });
+    setView('chat');
+    if (isPhone()) setIsPanelOpen(false);
+  }, []);
+
+  const handleScoutOpenCard = useCallback((profile: PlayerProfile) => {
+    // A shared card from the suggestions joins your dossiers through the pipeline (a cache hit).
+    if (!isFullCard(profile)) {
+      handleScout([requestForCard(profile)]);
+      return;
+    }
+    handleSelectProfile(profile);
+    setPanelMode('dossier');
+  }, [handleScout]);
 
   const handleSelectProfile = useCallback((profile: PlayerProfile | null) => {
     setActiveProfile(profile);
@@ -869,11 +1079,12 @@ const App: React.FC = () => {
       return;
     }
     handleSelectProfile(match);
+    setPanelMode('dossier');
     setIsPanelOpen(true);
   }, [globalDossiers, handleSelectProfile]);
 
   // Retry drops the failed exchange first, then resends once state (and the history closure) has caught up.
-  const [pendingRetry, setPendingRetry] = useState<{ text: string; image?: string } | null>(null);
+  const [pendingRetry, setPendingRetry] = useState<{ text: string; image?: string; rating?: RatingRequest } | null>(null);
 
   const handleRetry = useCallback((errorMessageId: string) => {
     const errorIndex = messages.findIndex(m => m.id === errorMessageId);
@@ -884,14 +1095,15 @@ const App: React.FC = () => {
     if (!userMessage || typeof userMessage.content !== 'string') return;
     const dropIds = new Set(messages.slice(userIndex, errorIndex + 1).map(m => m.id));
     setMessages(prev => prev.filter(m => !dropIds.has(m.id)));
-    setPendingRetry({ text: userMessage.content, image: userMessage.image });
+    setPendingRetry({ text: userMessage.content, image: userMessage.image, rating: userMessage.rating });
   }, [messages]);
 
   useEffect(() => {
     if (!pendingRetry || isLoading) return;
     setPendingRetry(null);
-    handleSendMessage(pendingRetry.text, pendingRetry.image);
-  }, [pendingRetry, isLoading, handleSendMessage]);
+    if (pendingRetry.rating) handleRate(pendingRetry.rating);
+    else handleSendMessage(pendingRetry.text, pendingRetry.image);
+  }, [pendingRetry, isLoading, handleSendMessage, handleRate]);
 
   const handleRenameDossier = useCallback((cardKey: string, newName: string) => {
     const rename = (d: PlayerProfile): PlayerProfile => renameDossierCard(d, newName);
@@ -1030,6 +1242,7 @@ const App: React.FC = () => {
     // A global card opened from the hub joins your dossiers, as before.
     if (from === 'global') saveAndSetActiveProfile(profile);
     else handleSelectProfile(profile);
+    setPanelMode('dossier');
     setIsPanelOpen(true);
   }, [saveAndSetActiveProfile, handleSelectProfile]);
 
@@ -1056,8 +1269,8 @@ const App: React.FC = () => {
     setView('chat');
   }, [saveAndSetActiveProfile, domain, handleDomainChange]);
 
-  // The panel only ever shows one dossier, so it's closed whenever none is active.
-  const showPanel = isPanelOpen && activeProfile !== null;
+  // The panel shows the Scout desk, or one dossier (and is closed when none is active).
+  const showPanel = isPanelOpen && (panelMode === 'scout' || activeProfile !== null);
 
   const toggleConversations = () => {
     setIsConversationsOpen(!isConversationsOpen);
@@ -1068,6 +1281,9 @@ const App: React.FC = () => {
       <WhatsNewPopup />
       
       <Header 
+        onOpenScout={() => (showPanel && panelMode === 'scout' ? setIsPanelOpen(false) : openScout())}
+        isScoutOpen={showPanel && panelMode === 'scout'}
+        scoutBusy={scoutJobs.filter(j => j.status !== 'error').length}
         onNewChat={handleNewConversation} 
         toggleTheme={toggleTheme} 
         isDarkMode={isDarkMode} 
@@ -1086,6 +1302,23 @@ const App: React.FC = () => {
           allProfiles={globalDossiers}
           onSelectProfile={handleSelectProfile}
           onOpenHub={view === 'hub' ? undefined : () => setView('hub')}
+          mode={panelMode}
+          onBack={() => setPanelMode('scout')}
+          scout={
+            <ScoutDesk
+              jobs={scoutJobs}
+              dossiers={globalDossiers}
+              freshKeys={freshKeys}
+              onScout={handleScout}
+              onOpenCard={handleScoutOpenCard}
+              onAsk={handleScoutAsk}
+              onRetry={(id) => updateJob(id, { status: 'queued', error: undefined, stage: undefined })}
+              onDismiss={(id) => setScoutJobs(prev => prev.filter(j => j.id !== id))}
+              onOpenHub={() => { setView('hub'); if (isPhone()) setIsPanelOpen(false); }}
+              onClose={() => setIsPanelOpen(false)}
+              focusToken={scoutFocus}
+            />
+          }
       />
 
       {/* Slide-out Conversations Panel - RIGHT SIDED */}
@@ -1129,6 +1362,8 @@ const App: React.FC = () => {
                 conversationKey={`${activeConversationId ?? 'init'}-${newChatRevision}`}
                 domain={domain}
                 onSuggestion={(prompt) => handleSendMessage(prompt)}
+                onOpenScout={openScout}
+                onScoutName={handleScoutName}
                 onOpenDossier={handleOpenDossier}
                 onRetry={handleRetry}
             />
@@ -1184,6 +1419,9 @@ const App: React.FC = () => {
                         onAcceptGaffaNudge={() => handleDomainChange('gaffa')}
                         onDismissGaffaNudge={() => setGaffaNudge(null)}
                         draft={chatDraft}
+                        localCards={globalDossiers}
+                        mentionRequest={mentionRequest}
+                        onScoutName={handleScoutName}
                     />
                 </div>
             </div>

@@ -3,6 +3,11 @@ import React from 'react';
 export type AppView = 'chat' | 'hub';
 
 interface HeaderProps {
+    /** Opens or closes the Scout desk. */
+    onOpenScout: () => void;
+    isScoutOpen: boolean;
+    /** Ratings Scout is working on. */
+    scoutBusy: number;
     onNewChat: () => void;
     toggleTheme: () => void;
     isDarkMode: boolean;
@@ -14,6 +19,9 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
+    onOpenScout,
+    isScoutOpen,
+    scoutBusy,
     onNewChat, 
     toggleTheme, 
     isDarkMode,
@@ -42,6 +50,28 @@ export const Header: React.FC<HeaderProps> = ({
         </button>
         
         <div className="flex items-center gap-0.5 sm:gap-3 shrink-0">
+            <button
+                onClick={onOpenScout}
+                aria-pressed={isScoutOpen}
+                className={`relative mr-1 sm:mr-0 flex items-center gap-1.5 h-9 pl-2.5 pr-3.5 rounded-full border transition-colors ${
+                    isScoutOpen
+                    ? 'bg-emerald-500 border-emerald-500 text-white hover:bg-emerald-600'
+                    : 'border-charcoal/80 dark:border-cream-300/70 text-charcoal dark:text-cream-100 hover:bg-charcoal hover:text-cream-50 dark:hover:bg-cream-100 dark:hover:text-charcoal'
+                }`}
+                title={`Scout: rate a player (${typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'}K)`}
+                aria-label={scoutBusy > 0 ? `Scout, rating ${scoutBusy}` : 'Scout: rate a player'}
+            >
+                <span aria-hidden="true" className="material-symbols-outlined text-[19px] block">person_search</span>
+                <span aria-hidden="true" className="text-[11px] font-sans font-bold uppercase tracking-widest">Scout</span>
+                {scoutBusy > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 flex size-[18px] items-center justify-center">
+                        <span aria-hidden="true" className="absolute inset-0 rounded-full border-2 border-emerald-500/30 border-t-emerald-500 motion-safe:animate-spin" />
+                        <span className="relative text-[9px] font-mono font-bold text-emerald-700 dark:text-emerald-300 bg-cream-200 dark:bg-charcoal rounded-full size-[14px] flex items-center justify-center">
+                            {scoutBusy}
+                        </span>
+                    </span>
+                )}
+            </button>
             <button
                 onClick={() => onViewChange(view === 'hub' ? 'chat' : 'hub')}
                 aria-pressed={view === 'hub'}

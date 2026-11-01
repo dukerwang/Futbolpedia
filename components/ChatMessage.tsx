@@ -5,6 +5,8 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { GaffaTradeScorecardView, formatScorecardCopy } from './GaffaTradeScorecard';
 import { DossierChatCard, getLegacyDossierRef } from './DossierChatCard';
+import { pillClass, type PillTone } from './pills';
+import { ratingVersionLabel } from '../services/ratingCommand';
 
 // External links in model prose should never navigate away from an in-progress chat.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -66,13 +68,51 @@ const ActionButton: React.FC<{ icon: string; label: string; onClick: () => void 
     </button>
 );
 
+/** A user message's text with its @ mentions tinted, as they were in the chat box. */
+const withMentions = (text: string, mentions?: string[]): React.ReactNode => {
+    if (!mentions?.length) return text;
+    const pattern = new RegExp(`(${[...mentions].sort((a, b) => b.length - a.length).map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`);
+    return text.split(pattern).map((part, i) =>
+        mentions.includes(part) ? (
+            <span key={i} className="not-italic font-semibold text-emerald-700 dark:text-emerald-400">{part}</span>
+        ) : (
+            part
+        ),
+    );
+};
+
 interface ChatMessageProps {
     message: ChatMessageType;
     onOpenDossier?: (dossier: ChatDossierRef) => void;
+    onScoutName?: (name: string) => void;
     onRetry?: (messageId: string) => void;
 }
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier, onRetry }) => {
+/** A player the reply discussed who has no card yet: one tap sends him to Scout. */
+const ScoutOffer: React.FC<{ name: string; onScout: (name: string) => void }> = ({ name, onScout }) => {
+    const [sent, setSent] = useState(false);
+    return (
+        <button
+            type="button"
+            disabled={sent}
+            onClick={() => { setSent(true); onScout(name); }}
+            className="group/offer flex items-center gap-3 min-h-11 pl-3 pr-3.5 border border-cream-300 dark:border-charcoal-border bg-cream-50/60 dark:bg-charcoal-surface/60 hover:border-emerald-600 dark:hover:border-emerald-500 disabled:hover:border-cream-300 dark:disabled:hover:border-charcoal-border transition-colors text-left"
+        >
+            <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-emerald-600 dark:text-emerald-400">
+                {sent ? 'check' : 'person_search'}
+            </span>
+            <span className="min-w-0 text-[13px] font-sans text-charcoal/60 dark:text-cream-400/70">
+                No dossier on <span className="font-serif font-bold text-[15px] text-charcoal dark:text-cream-50">{name}</span>
+            </span>
+            <span className="ml-auto shrink-0 flex items-center gap-1 text-[11px] font-sans font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-400">
+                {sent ? 'On the desk' : 'Scout'}
+                {!sent && <span aria-hidden="true" className="material-symbols-outlined text-[16px] group-hover/offer:translate-x-0.5 transition-transform">arrow_forward</span>}
+            </span>
+        </button>
+    );
+};
+
+export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier, onScoutName, onRetry }) => {
     const { sender, content, timestamp } = message;
     const isUser = sender === 'user';
     const [copied, setCopied] = useState(false);
@@ -125,6 +165,28 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
         navigator.share({ title: 'Futbolpedia analysis', text: getCopyText() }).catch(() => {});
     };
 
+    // A Rate command: a compact command line rather than a speech bubble.
+    if (isUser && message.rating) {
+        const version = ratingVersionLabel(message.rating);
+        const { edition } = message.rating;
+        const versionTone: PillTone = edition === 'prime' ? 'amber' : edition === 'era' ? 'blue' : 'neutral';
+        return (
+            <div className="flex justify-end w-full py-2 sm:py-4 animate-fade-in">
+                <div className="flex flex-col items-end gap-1 max-w-[88%] md:max-w-[70%]">
+                    <div className="flex items-center gap-2 min-w-0 px-3 py-1.5 rounded-full border border-cream-300 dark:border-charcoal-border bg-cream-50/70 dark:bg-charcoal-surface/70 text-charcoal dark:text-cream-100">
+                        <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-emerald-600 dark:text-emerald-400">star</span>
+                        <span className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/55 dark:text-cream-400/60">Rate</span>
+                        <span className="min-w-0 truncate font-serif font-bold text-[15px]">{message.rating.name}</span>
+                        {version && <span className={pillClass(versionTone, 'xs')}>{version}</span>}
+                    </div>
+                    <span className="text-[10px] text-cream-800 dark:text-cream-400 tracking-wider uppercase font-medium">
+                        You{timestamp ? ` · ${formatTime(timestamp)}` : ''}
+                    </span>
+                </div>
+            </div>
+        );
+    }
+
     // User Message
     if (isUser) {
         return (
@@ -133,7 +195,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
                     <div className="bg-[#EBE8DE] dark:bg-charcoal-light text-charcoal dark:text-cream-50 px-4 py-3 sm:px-6 sm:py-4 rounded-tl-xl rounded-bl-xl rounded-br-xl shadow-sm relative border border-transparent dark:border-charcoal-border">
                         {message.image && <img src={message.image} alt="Attached image" className="max-w-[180px] max-h-[180px] object-cover mb-2 rounded border border-charcoal/10 dark:border-cream-100/10" />}
                         <p className="text-[16px] sm:text-[17px] font-serif italic leading-relaxed break-words whitespace-pre-wrap">
-                           {typeof content === 'string' ? content : ''}
+                           {typeof content === 'string' ? withMentions(content, message.mentions) : ''}
                         </p>
                     </div>
                     <span className="text-[10px] text-cream-800 dark:text-cream-400 tracking-wider uppercase font-medium">
@@ -193,6 +255,17 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
                         className={`chat-prose prose max-w-none text-charcoal dark:text-cream-100 text-[16px] font-light font-sans ${isTyping ? 'is-typing' : ''}`}
                         dangerouslySetInnerHTML={renderMarkdown(typedText)}
                     />
+                ) : null}
+
+                {!isError && !isTyping && (message.cards?.length || (onScoutName && message.scoutOffers?.length)) ? (
+                    <div className="flex flex-col gap-2 animate-fade-in">
+                        {message.cards?.map(card => (
+                            <DossierChatCard key={card.cardKey || card.name} dossier={card} onOpen={onOpenDossier} />
+                        ))}
+                        {onScoutName && message.scoutOffers?.map(name => (
+                            <ScoutOffer key={name} name={name} onScout={onScoutName} />
+                        ))}
+                    </div>
                 ) : null}
 
                 {!isError && (
