@@ -17,6 +17,9 @@ import {
 } from "./services/teamLineups";
 import { createLiveFootball } from "./services/liveFootball";
 import { createHistoryFootball, type PermanentStore } from "./services/historyFootball";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { supabaseUrl } from "./services/dossierCache";
+import { createSnapshotServer, inProcessGet, supabaseSnapshotDb } from "./services/snapshotServer";
 
 async function startServer() {
   const app = express();
@@ -615,6 +618,49 @@ async function startServer() {
       console.warn(`[history] player "${name}" failed:`, error?.message || error);
       return res.json({ found: false, status: "failed", reason: "lookup failed", missing: [] });
     }
+  });
+
+  // Shared club and era snapshots (services/snapshotServer.ts). Browsers read the tables but can't
+  // write them; these routes build a snapshot from the server's own lookups and searches and store
+  // it with the Supabase secret key. Without the key, builds are kept in this process's memory and
+  // era snapshots aren't built at all.
+  if (GEMINI_API_KEY) process.env.API_KEY = GEMINI_API_KEY; // services/aiClient.ts reads API_KEY
+  const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+  console.log(`[startup] SUPABASE_SECRET_KEY set: ${!!SUPABASE_SECRET_KEY}`);
+  const snapshots = createSnapshotServer({
+    get: inProcessGet({ live, history }),
+    db: SUPABASE_SECRET_KEY
+      ? supabaseSnapshotDb(createSupabaseClient(supabaseUrl, SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } }))
+      : null,
+  });
+
+  app.get("/api/snapshots/club/research", async (req, res) => {
+    const club = liveQuery(req.query.club);
+    if (!club) return res.status(400).json({ error: "Missing club" });
+    const start = Date.now();
+    const research = await snapshots.clubResearch(club).catch(() => null);
+    console.log(`[snapshots] club research "${club}": ${research ? `${research.calls.length} searches` : "none"} (${Date.now() - start}ms)`);
+    return res.json({ research });
+  });
+
+  app.get("/api/snapshots/club", async (req, res) => {
+    const club = liveQuery(req.query.club);
+    if (!club) return res.status(400).json({ error: "Missing club" });
+    const start = Date.now();
+    const snapshot = await snapshots.club(club).catch(() => null);
+    console.log(`[snapshots] club "${club}": ${snapshot ? `${snapshot.club}, built ${snapshot.builtAt}` : "none"} (${Date.now() - start}ms)`);
+    return res.json({ snapshot });
+  });
+
+  app.get("/api/snapshots/era", async (req, res) => {
+    const kind = req.query.kind;
+    const subject = liveQuery(req.query.subject);
+    const period = liveQuery(req.query.period).slice(0, 20);
+    if ((kind !== "club_season" && kind !== "player_window") || !subject || !period) return res.status(400).json({ error: "Missing kind, subject or period" });
+    const start = Date.now();
+    const snapshot = await snapshots.era(kind, subject, period).catch(() => null);
+    console.log(`[snapshots] era ${kind} "${subject}" ${period}: ${snapshot ? snapshot.key : "none"} (${Date.now() - start}ms)`);
+    return res.json({ snapshot });
   });
 
   // AI Studio's service worker intercepts browser requests to generativelanguage.googleapis.com

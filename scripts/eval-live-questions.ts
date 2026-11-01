@@ -98,6 +98,9 @@ const pastSeasons = createHistoryFootball({
   store: { get: async (k) => historyStore.get(k), set: async (k, v) => void historyStore.set(k, v) },
   currentSeasonStart: () => getRealWorldFootballSeason().seasonStartYear,
 });
+// Snapshot builds, which the app runs on its server; here they stay in memory for the run.
+const { createSnapshotServer, inProcessGet } = await import('../services/snapshotServer');
+const snapshots = createSnapshotServer({ get: inProcessGet({ live, history: pastSeasons }), db: null });
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input);
@@ -112,6 +115,13 @@ globalThis.fetch = (async (input: any, init?: any) => {
     const u = new URL(url, 'http://local');
     if (u.pathname === '/api/history/club-season') return json(await pastSeasons.clubSeason(u.searchParams.get('club') ?? '', u.searchParams.get('season') ?? ''));
     if (u.pathname === '/api/history/player') return json(await pastSeasons.playerCareer(u.searchParams.get('name') ?? ''));
+  }
+  if (url.startsWith('/api/snapshots/')) {
+    const u = new URL(url, 'http://local');
+    const q = (k: string) => u.searchParams.get(k) ?? '';
+    if (u.pathname === '/api/snapshots/club/research') return json({ research: await snapshots.clubResearch(q('club')) });
+    if (u.pathname === '/api/snapshots/club') return json({ snapshot: await snapshots.club(q('club')) });
+    if (u.pathname === '/api/snapshots/era') return json({ snapshot: await snapshots.era(q('kind') as 'club_season' | 'player_window', q('subject'), q('period')) });
   }
   // API-Football's free plan can't read the current season; the app treats a refusal as no data.
   if (url.startsWith('/api/')) return json({ error: 'not available in the eval runner' }, 404);
