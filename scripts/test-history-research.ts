@@ -1,0 +1,493 @@
+#!/usr/bin/env npx tsx
+/**
+ * Offline checks for research about the past: Wikipedia articles and ESPN's past seasons read
+ * into evidence (with both sources faked), lookups kept for good, permanent era snapshots and
+ * settled debates, and the check that keeps a ranking or verdict in line with the stored cards.
+ *
+ * Usage:
+ *   npx tsx scripts/test-history-research.ts
+ */
+import assert from 'node:assert/strict';
+import type { PlayerProfile } from '../types';
+import {
+  cellText,
+  competitionRecords,
+  createHistoryFootball,
+  formatClubSeasonPage,
+  formatPlayerPage,
+  formatTable,
+  infoboxLines,
+  leadText,
+  parseSeason,
+  parseTableGrid,
+  pickPlayerTitle,
+  pickSeasonTitle,
+  spreadSample,
+  usualStarters,
+  WIKI_API,
+  type PermanentStore,
+} from '../services/historyFootball';
+import { ESPN_SITE, ESPN_STANDINGS, type ClubMatch } from '../services/liveFootball';
+import {
+  cardAbove,
+  checkOrderAgainstCards,
+  checkVerdictAgainstCards,
+  matchStanding,
+  standingsFor,
+  toStanding,
+} from '../services/debateConsistency';
+import {
+  buildEraSnapshot,
+  cardFingerprint,
+  createDebateStore,
+  createEraSnapshotStore,
+  debateSignature,
+  ERA_SNAPSHOT_VERSION,
+  eraEntry,
+  normalizePeriod,
+  subjectFromTitle,
+  type EraRow,
+  type EraSnapshot,
+} from '../services/eraSnapshots';
+import { executeCall, historyOutcome, sanitizeCalls, type ResearchToolset, type ToolOutcome } from '../services/researchTools';
+
+let passes = 0;
+let failures = 0;
+async function test(name: string, fn: () => void | Promise<void>): Promise<void> {
+  try {
+    await fn();
+    passes++;
+    console.log(`✓ ${name}`);
+  } catch (err) {
+    failures++;
+    console.error(`✗ ${name}\n  ${(err as Error).stack ?? err}`);
+  }
+}
+
+// --- Fixtures ---------------------------------------------------------------------------------
+
+const SEASON_HTML = `<table class="infobox vcard"><tbody>
+<tr><th colspan="2" class="infobox-above">Testville season</th></tr>
+<tr><th class="infobox-label">Manager</th><td class="infobox-data"><a href="/wiki/A">Ada Coach</a></td></tr>
+<tr><th class="infobox-label">Stadium</th><td class="infobox-data">Old Ground</td></tr>
+<tr><th class="infobox-label">League</th><td class="infobox-data">Winners<sup class="reference">[1]</sup></td></tr>
+<tr><th class="infobox-label">Top goalscorer</th><td class="infobox-data">League: Bo Striker (30)<br>All: Bo Striker (39)</td></tr>
+</tbody></table>
+<p>The <b>2003–04 season</b> was Testville's best, ending unbeaten in the league with 26 wins and 12 draws.<sup class="reference">[2]</sup></p>
+<div class="mw-heading mw-heading2"><h2 id="Player_statistics">Player statistics</h2></div>
+<table class="wikitable"><tbody>
+<tr><th rowspan="2">No.</th><th rowspan="2">Pos.</th><th rowspan="2">Name</th><th colspan="2">League</th><th colspan="2">Total</th></tr>
+<tr><th>Apps</th><th>Goals</th><th>Apps</th><th>Goals</th></tr>
+<tr><td>1</td><td>GK</td><td>Cy Keeper</td><td>38</td><td>0</td><td>54</td><td>0</td></tr>
+<tr><td>14</td><td>FW</td><td>Bo Striker</td><td>37</td><td>30</td><td>50 (1)</td><td>39</td></tr>
+</tbody></table>
+<div class="mw-heading mw-heading3"><h3 id="League_table">League table</h3></div>
+<table class="wikitable"><tbody>
+<tr><th>Pos</th><th>Team<span class="navbar">v t e</span></th><th>Pld</th><th>W</th><th>D</th><th>L</th><th>Pts</th></tr>
+<tr><td>1</td><td>Testville (C)</td><td>38</td><td>26</td><td>12</td><td>0</td><td>90</td></tr>
+<tr><td>2</td><td>Rival Town</td><td>38</td><td>24</td><td>7</td><td>7</td><td>79</td></tr>
+</tbody></table>`;
+
+const PLAYER_HTML = `<table class="infobox biography vcard"><tbody>
+<tr><th colspan="3" class="infobox-header">Personal information</th></tr>
+<tr><th class="infobox-label">Date of birth</th><td class="infobox-data"><span style="display:none"> (<span class="bday">1972-06-23</span>) </span>23 June 1972</td></tr>
+<tr><th class="infobox-label">Position</th><td class="infobox-data">Attacking midfielder</td></tr>
+<tr><th colspan="3" class="infobox-header">Senior career*</th></tr>
+<tr><th class="infobox-label">1996–2001</th><td class="infobox-data">Juve</td><td>151</td><td>(24)</td></tr>
+</tbody></table>
+<p>Zed Player is a retired footballer who played as an attacking midfielder for Juve and Madrid.</p>
+<div class="mw-heading mw-heading2"><h2 id="Career_statistics">Career statistics</h2></div>
+<div class="mw-heading mw-heading3"><h3 id="Club">Club</h3></div>
+<table class="wikitable"><tbody>
+<tr><th rowspan="2">Club</th><th rowspan="2">Season</th><th colspan="2">League</th></tr>
+<tr><th>Apps</th><th>Goals</th></tr>
+<tr><td rowspan="2">Juve</td><td>1996–97</td><td>29</td><td>5</td></tr>
+<tr><td>1997–98</td><td>32</td><td>7</td></tr>
+</tbody></table>
+<div class="mw-heading mw-heading2"><h2 id="Honours">Honours</h2></div>
+<div class="mw-heading mw-heading3"><h3 id="Player">Player</h3></div>
+<div class="mw-heading mw-heading4"><h4 id="Juve">Juve</h4></div>
+<ul><li>Serie A: 1996–97, 1997–98</li></ul>`;
+
+const event = (id: string, date: string, home: boolean, us: number, them: number, slug = 'eng.1') => ({
+  id,
+  date: `${date}T15:00Z`,
+  league: { slug, abbreviation: slug === 'eng.1' ? 'Premier League' : 'Champions League' },
+  competitions: [
+    {
+      status: { type: { completed: true } },
+      competitors: [
+        { team: { id: '359', displayName: 'Testville' }, homeAway: home ? 'home' : 'away', score: { value: us } },
+        { team: { id: '9', displayName: 'Other' }, homeAway: home ? 'away' : 'home', score: { value: them } },
+      ],
+    },
+  ],
+});
+const lineup = (eventId: string, keeper: string) => ({
+  rosters: [
+    {
+      team: { id: '359' },
+      formation: '4-4-2',
+      roster: [keeper, 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'].map((n, i) => ({
+        starter: true,
+        athlete: { displayName: n },
+        position: { abbreviation: i === 0 ? 'G' : 'M' },
+      })),
+    },
+  ],
+  eventId,
+});
+
+function fakeSources() {
+  const calls: string[] = [];
+  const getJson = async (url: string) => {
+    calls.push(url);
+    if (url.startsWith(WIKI_API)) {
+      const u = new URL(url);
+      if (u.searchParams.get('list') === 'search') {
+        const q = u.searchParams.get('srsearch') ?? '';
+        if (q.includes('footballer')) return { query: { search: [{ title: 'Zed Player', snippet: 'retired footballer' }] } };
+        return { query: { search: [{ title: '2003–04 Testville Women season', snippet: '' }, { title: `${q.slice(0, 7)} Testville F.C. season`, snippet: '' }] } };
+      }
+      const page = u.searchParams.get('page') ?? '';
+      return { parse: { title: page, text: page.includes('season') ? SEASON_HTML : PLAYER_HTML } };
+    }
+    if (url === `${ESPN_SITE}/eng.1/teams`) return { sports: [{ leagues: [{ teams: [{ team: { id: '359', displayName: 'Testville' } }] }] }] };
+    if (url.endsWith('/teams')) return { sports: [{ leagues: [{ teams: [] }] }] };
+    if (url.startsWith(`${ESPN_SITE}/all/teams/359/schedule?season=`)) {
+      return {
+        events: [
+          event('1', '2003-08-16', true, 2, 1),
+          event('2', '2003-09-01', false, 1, 1),
+          event('3', '2004-04-06', true, 1, 2, 'uefa.champions'),
+          event('4', '2004-05-15', true, 2, 1),
+        ],
+      };
+    }
+    if (url.startsWith(`${ESPN_STANDINGS}/eng.1/standings?season=`)) {
+      return {
+        children: [
+          {
+            standings: {
+              entries: [
+                { team: { displayName: 'Testville' }, stats: [{ name: 'rank', value: 1 }, { name: 'points', value: 90 }] },
+                { team: { displayName: 'Rival Town' }, stats: [{ name: 'rank', value: 2 }, { name: 'points', value: 79 }] },
+              ],
+            },
+          },
+        ],
+      };
+    }
+    const summary = url.match(/summary\?event=(\d+)/);
+    if (summary) return lineup(summary[1], summary[1] === '2' ? 'Backup' : 'Cy Keeper');
+    throw new Error(`unexpected ${url}`);
+  };
+  return { calls, getJson };
+}
+
+const memoryStore = (): PermanentStore & { data: Map<string, any> } => {
+  const data = new Map<string, any>();
+  return { data, get: async (k) => data.get(k), set: async (k, v) => void data.set(k, v) };
+};
+
+const card = (name: string, overall: number, extra: Partial<PlayerProfile> = {}): PlayerProfile =>
+  ({
+    basicInfo: { name, club: 'Club', position: 'Centre-Back', age: 30, nationality: 'X' },
+    ratings: { overall, potential: overall },
+    version: { id: 'v', type: 'prime', label: 'Prime', evaluationDate: '2026-10-20', seasonOrEra: '2003-06' },
+    ...extra,
+  }) as unknown as PlayerProfile;
+
+// --- Seasons and HTML -------------------------------------------------------------------------
+
+await test('seasons parse from the ways people write them', () => {
+  assert.equal(parseSeason('2003-04')?.label, '2003-04');
+  assert.equal(parseSeason('2003/04')?.wikiLabel, '2003–04');
+  assert.equal(parseSeason('1999–2000')?.label, '1999-00');
+  assert.equal(parseSeason('the 88-89 side')?.start, 1988);
+  // One year is the season that ends in it.
+  assert.equal(parseSeason('Liverpool 2005')?.label, '2004-05');
+  assert.equal(parseSeason('no season here'), null);
+});
+
+await test('cell text drops footnotes, hidden spans and table navigation', () => {
+  assert.equal(cellText('Winners<sup class="reference">[1]</sup>'), 'Winners');
+  assert.equal(cellText('<span style="display:none"> (<span class="bday">1972-06-23</span>) </span>23 June 1972'), '23 June 1972');
+  assert.equal(cellText('Team<span class="navbar">v t e</span>'.replace('v t e', 'v, t, e')), 'Team');
+  assert.equal(cellText('League: A (30)<br>All: A (39)'), 'League: A (30), All: A (39)');
+});
+
+await test('a table grid fills rowspans and colspans so rows line up with the header', () => {
+  const grid = parseTableGrid(PLAYER_HTML.slice(PLAYER_HTML.indexOf('<table class="wikitable">'), PLAYER_HTML.indexOf('</table>', PLAYER_HTML.indexOf('wikitable')) + 8));
+  assert.deepEqual(grid[3].map((c) => c.text), ['Juve', '1997–98', '32', '7']);
+  const text = formatTable(grid);
+  assert.equal(text.split('\n')[0], 'Club | Season | League Apps | League Goals');
+  assert.ok(text.includes('Juve | 1996–97 | 29 | 5'));
+});
+
+await test('the infobox reads as labelled lines with career rows', () => {
+  const lines = infoboxLines(PLAYER_HTML);
+  assert.ok(lines.includes('Date of birth: 23 June 1972'));
+  assert.ok(lines.includes('Senior career:'));
+  assert.ok(lines.includes('1996–2001: Juve, 151, (24)'));
+  assert.ok(leadText(SEASON_HTML).startsWith('The 2003–04 season was Testville'));
+});
+
+await test("a season article's digest keeps the facts, the squad table and the club's table row", () => {
+  const text = formatClubSeasonPage({ title: '2003–04 Testville F.C. season', html: SEASON_HTML }, 'Testville');
+  assert.ok(text.includes('- Manager: Ada Coach'));
+  assert.ok(!text.includes('Stadium'));
+  assert.ok(text.includes('14 | FW | Bo Striker | 37 | 30 | 50 (1) | 39'));
+  assert.ok(text.includes('1 | Testville (C) | 38 | 26 | 12 | 0 | 90'));
+  assert.ok(text.includes('Pos | Team | Pld'));
+});
+
+await test("a player article's digest keeps his career table and honours under their club", () => {
+  const text = formatPlayerPage({ title: 'Zed Player', html: PLAYER_HTML });
+  assert.ok(text.includes('Club appearances and goals by season'));
+  assert.ok(text.includes('Juve | 1997–98 | 32 | 7'));
+  assert.ok(text.includes('- Juve: Serie A: 1996–97, 1997–98'));
+});
+
+await test('search hits resolve to the right article', () => {
+  const season = parseSeason('2003-04')!;
+  assert.equal(
+    pickSeasonTitle(['2003–04 Arsenal W.F.C. season', '2004–05 Arsenal F.C. season', '2003–04 Arsenal F.C. season'], 'Arsenal', season),
+    '2003–04 Arsenal F.C. season',
+  );
+  assert.equal(pickSeasonTitle(['2003–04 Chelsea F.C. season'], 'Arsenal', season), null);
+  assert.equal(
+    pickPlayerTitle(
+      [
+        { title: 'List of Ronaldo awards', snippet: '' },
+        { title: 'Ronaldo (Brazilian footballer)', snippet: 'Brazilian striker' },
+      ],
+      'Ronaldo',
+    ),
+    'Ronaldo (Brazilian footballer)',
+  );
+});
+
+// --- ESPN past seasons ------------------------------------------------------------------------
+
+await test('competition records and the usual starters come from the sampled matches', () => {
+  const m = (date: string, gf: number, ga: number, competition = 'Premier League'): ClubMatch => ({
+    id: date, date, competition, leagueSlug: null, home: true, opponent: 'X', completed: true, goalsFor: gf, goalsAgainst: ga, penaltiesFor: null, penaltiesAgainst: null,
+  });
+  const records = competitionRecords([m('a', 2, 1), m('b', 1, 1), m('c', 0, 1, 'FA Cup (Semi-finals)')]);
+  assert.deepEqual(records.map((r) => [r.competition, r.won, r.drawn, r.lost]), [['Premier League', 1, 1, 0], ['FA Cup', 0, 0, 1]]);
+  assert.deepEqual(spreadSample([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4), [1, 4, 7, 10]);
+  const starters = usualStarters([
+    { match: m('a', 1, 0), formation: '4-4-2', starters: [{ name: 'A', role: 'G' }, { name: 'B', role: 'F' }], subsUsed: [] },
+    { match: m('b', 1, 0), formation: '4-4-2', starters: [{ name: 'A', role: 'G' }, { name: 'C', role: 'F' }], subsUsed: [] },
+  ]);
+  assert.deepEqual(starters[0], { name: 'A', starts: 2, role: 'G' });
+});
+
+await test('a club season combines Wikipedia and ESPN, and is kept for good', async () => {
+  const { calls, getJson } = fakeSources();
+  const store = memoryStore();
+  const history = createHistoryFootball({ getJson, store, currentSeasonStart: () => 2026 });
+  const r = await history.clubSeason('Testville', '2003-04');
+  assert.ok('text' in r);
+  assert.ok(r.text.includes('Manager: Ada Coach'));
+  assert.ok(r.text.includes('Premier League: finished 1 of 2 with 90 points.'));
+  assert.ok(r.text.includes('Premier League: P3 W2 D1 L0, goals 5-3.'));
+  assert.ok(r.text.includes('Champions League: P1 W0 D0 L1, goals 1-2; last match 2004-04-06'));
+  assert.ok(r.text.includes('Cy Keeper (GK) 2/3'));
+  assert.ok(r.text.includes("read the slots loosely"));
+  assert.equal(r.title, '2003–04 Testville F.C. season');
+  assert.equal(store.data.size, 1);
+  assert.equal([...store.data.values()][0].expiresAt, null);
+  // A second lookup, even from a new process reading the same store, fetches nothing.
+  const fetched = calls.length;
+  await history.clubSeason('Testville', '2003/04');
+  const fresh = createHistoryFootball({ getJson, store, currentSeasonStart: () => 2026 });
+  await fresh.clubSeason('Testville', '2003-04');
+  assert.equal(calls.length, fetched);
+});
+
+await test('a season before ESPN, or in progress, says what is missing', async () => {
+  const { getJson } = fakeSources();
+  const history = createHistoryFootball({ getJson, currentSeasonStart: () => 2026 });
+  const old = await history.clubSeason('Testville', '1988-89');
+  assert.ok('text' in old);
+  assert.ok(old.missing.some((m) => m.status === 'not_covered' && m.item.includes('2003-04')));
+  const now = await history.clubSeason('Testville', '2026-27');
+  assert.ok('reason' in now && now.status === 'not_covered');
+});
+
+await test("a player's career comes from his article and is kept a week", async () => {
+  const { getJson } = fakeSources();
+  const store = memoryStore();
+  const history = createHistoryFootball({ getJson, store, now: () => 0, currentSeasonStart: () => 2026 });
+  const r = await history.playerCareer('Zed Player');
+  assert.ok('text' in r && r.text.includes('Juve | 1996–97 | 29 | 5'));
+  assert.equal([...store.data.values()][0].expiresAt, 7 * 24 * 60 * 60 * 1000);
+});
+
+await test('history lookups file into the ledger as their own kinds', async () => {
+  const outcome = historyOutcome({ found: true, title: 'Zed Player', text: 'career', sources: ['w'], missing: [] }, 'career_record');
+  assert.equal(outcome.result?.kind, 'career_record');
+  assert.equal(historyOutcome({ found: false, status: 'not_covered', reason: 'in progress', missing: [] }, 'season_record').status, 'not_covered');
+  const calls = sanitizeCalls(
+    [
+      { tool: 'club_season', subject: 'Arsenal', season: '2003-04' },
+      { tool: 'club_season', subject: 'Arsenal' },
+      { tool: 'club_season', subject: 'Arsenal', season: '2004-05' },
+      { tool: 'player_career', subject: 'Thierry Henry' },
+    ],
+    6,
+  );
+  assert.deepEqual(calls.map((c) => `${c.tool}:${c.season ?? ''}`), ['club_season:2003-04', 'club_season:2004-05', 'player_career:']);
+  const seen: string[] = [];
+  const tools = {
+    clubSeason: async (club: string, season: string) => (seen.push(`${club} ${season}`), outcome),
+    playerCareer: async (name: string) => (seen.push(name), outcome),
+  } as unknown as ResearchToolset;
+  await executeCall(calls[0], tools);
+  await executeCall(calls[2], tools);
+  assert.deepEqual(seen, ['Arsenal 2003-04', 'Thierry Henry']);
+});
+
+// --- Consistency with the cards ---------------------------------------------------------------
+
+await test('a ranking is reordered to agree with the cards, uncarded entries keep their places', () => {
+  const standings = [card('Alessandro Nesta', 92), card('Fabio Cannavaro', 91), card('John Terry', 89)].map(toStanding);
+  const check = checkOrderAgainstCards(['John Terry', 'Rio Ferdinand', 'Fabio Cannavaro (Juventus)', 'Nesta'], standings);
+  assert.deepEqual(check.order, ['Nesta', 'Rio Ferdinand', 'Fabio Cannavaro (Juventus)', 'John Terry']);
+  assert.equal(check.carded.length, 3);
+  assert.ok(check.moves[0].startsWith('Nesta above John Terry, Fabio Cannavaro (Juventus)'));
+  // Already in card order: nothing moves.
+  assert.deepEqual(checkOrderAgainstCards(['Nesta', 'Terry'], standings).moves, []);
+});
+
+await test('level cards fall back to peer placement, then the proposed order', () => {
+  const a = toStanding(card('Player One', 90, { peerPlacement: { betterThan: ['Player Two'], levelWith: [], notAsGoodAs: [] } }));
+  const b = toStanding(card('Player Two', 90));
+  const c = toStanding(card('Player Three', 90));
+  assert.ok(cardAbove(a, b) && !cardAbove(b, a));
+  assert.deepEqual(checkOrderAgainstCards(['Player Two', 'Player One'], [a, b]).order, ['Player One', 'Player Two']);
+  assert.deepEqual(checkOrderAgainstCards(['Player Three', 'Player Two'], [b, c]).order, ['Player Three', 'Player Two']);
+});
+
+await test("a head-to-head verdict follows the cards only when they settle the question", () => {
+  const standings = [card('Zinedine Zidane', 94), card('Kaká', 91)].map(toStanding);
+  const flipped = checkVerdictAgainstCards('Kaká', ['Zinedine Zidane', 'Kaká'], standings, 'peak_level');
+  assert.equal(flipped.verdict, 'Zinedine Zidane');
+  assert.ok(flipped.changed && flipped.note?.includes('94'));
+  assert.equal(checkVerdictAgainstCards('Zidane', ['Zinedine Zidane', 'Kaká'], standings, 'mixed').changed, false);
+  // Output isn't what a card rates.
+  assert.equal(checkVerdictAgainstCards('Kaká', ['Zinedine Zidane', 'Kaká'], standings, 'output').changed, false);
+});
+
+await test('a name matches a card by slug or a unique surname, never ambiguously', () => {
+  const standings = [card('Ronaldo Nazário', 95), card('Cristiano Ronaldo', 94), card('Paolo Maldini', 93)].map(toStanding);
+  assert.equal(matchStanding('Maldini', standings)?.name, 'Paolo Maldini');
+  assert.equal(matchStanding('Prime Paolo Maldini', standings)?.name, 'Paolo Maldini');
+  assert.equal(matchStanding('Ronaldo', standings), null);
+  // One card per player, the prime preferred, and only cards of the turn's edition.
+  const current = card('Paolo Maldini', 80, { version: { id: 'c', type: 'current', label: 'Current', evaluationDate: '2026-10-01', seasonOrEra: '2026-27' } } as any);
+  const era = card('Paolo Maldini', 90, { version: { id: 'e', type: 'era', label: 'Era', evaluationDate: '2026-10-01', seasonOrEra: '1988-91' } } as any);
+  const held = standingsFor([era, current, card('Paolo Maldini', 93)], true);
+  assert.equal(held.length, 1);
+  assert.equal(held[0].overall, 93);
+});
+
+// --- Era snapshots and settled debates --------------------------------------------------------
+
+await test('periods and subjects normalize so one season or window shares a snapshot', () => {
+  assert.equal(normalizePeriod('2003-2006'), '2003-06');
+  assert.equal(normalizePeriod('2003–06'), '2003-06');
+  assert.equal(normalizePeriod('2008-09'), '2008-09');
+  assert.equal(normalizePeriod('1998-99 to 2000-01'), '1998-01');
+  assert.equal(normalizePeriod('his prime'), null);
+  assert.equal(subjectFromTitle('2003–04 Arsenal F.C. season', 'club_season'), 'Arsenal F.C.');
+  assert.equal(subjectFromTitle('Ronaldo (Brazilian footballer)', 'player_window'), 'Ronaldo');
+});
+
+const seasonFacts: ToolOutcome = {
+  status: 'found',
+  result: { kind: 'season_record', label: '2003–04 Testville F.C. season', content: 'Manager: Ada Coach. Bo Striker 30 league goals.', sources: ['w'] },
+  missing: [],
+};
+const story = { summary: 'Unbeaten.', setup: '4-4-2', people: ['Coach: Ada Coach'], record: 'Champions, 90 points', figures: ['Bo Striker 30 league goals (Wikipedia)'], disputed: [] };
+
+await test('an era snapshot is read once, built once, stored for good', async () => {
+  const rows = new Map<string, EraRow>();
+  let builds = 0;
+  const store = createEraSnapshotStore({
+    read: async (k) => rows.get(k) ?? null,
+    write: async (r) => void rows.set(r.snapshot_key, r),
+    build: async (req) => {
+      builds++;
+      return { ...req, story, sources: [], builtAt: '2026-11-01T00:00:00Z', version: ERA_SNAPSHOT_VERSION } as EraSnapshot;
+    },
+  });
+  const req = { kind: 'club_season' as const, subject: 'Testville', period: '2003/04', facts: Promise.resolve(seasonFacts) };
+  assert.equal(await store.stored(req), null);
+  const [a, b] = await Promise.all([store.get(req), store.get({ ...req, subject: 'Testville FC' })]);
+  assert.equal(builds, 1);
+  assert.equal(a?.key, 'club_season:testville-fc:2003-04');
+  assert.equal(b?.key, a?.key);
+  assert.ok(rows.has('club_season:testville-fc:2003-04'));
+  // Another process reads the stored row instead of building.
+  const other = createEraSnapshotStore({ read: async (k) => rows.get(k) ?? null, write: async () => {}, build: async () => assert.fail('built twice') });
+  assert.equal((await other.stored(req))?.story.summary, 'Unbeaten.');
+  // A row from an older build version doesn't count.
+  rows.set('club_season:testville-fc:2003-04', { ...rows.get('club_season:testville-fc:2003-04')!, version: ERA_SNAPSHOT_VERSION - 1 });
+  const stale = createEraSnapshotStore({ read: async (k) => rows.get(k) ?? null, write: async () => {}, build: async () => null });
+  assert.equal(await stale.stored(req), null);
+});
+
+await test('a failed build is never stored', async () => {
+  const rows = new Map<string, EraRow>();
+  const store = createEraSnapshotStore({ read: async () => null, write: async (r) => void rows.set(r.snapshot_key, r), build: async () => null });
+  assert.equal(await store.get({ kind: 'club_season', subject: 'Testville', period: '2003-04', facts: Promise.resolve(seasonFacts) }), null);
+  assert.equal(rows.size, 0);
+  // No facts, no snapshot.
+  assert.equal(await store.get({ kind: 'club_season', subject: 'X', period: '2003-04', facts: Promise.resolve({ status: 'empty', result: null, missing: [] }) }), null);
+});
+
+await test('a build reads the facts and two searches, and the writer reads it as an entry', async () => {
+  const searched: string[] = [];
+  const tools = {
+    webSearch: async (q: string, o?: { context?: string }) => {
+      searched.push(`${o?.context ? 'with facts: ' : ''}${q}`);
+      return { status: 'found', result: { kind: 'web', label: q, content: 'analysis', sources: ['s'] }, missing: [] } as ToolOutcome;
+    },
+  } as unknown as ResearchToolset;
+  let evidence = '';
+  const snap = await buildEraSnapshot(
+    { kind: 'club_season', subject: 'Testville F.C.', period: '2003-04', key: 'k' },
+    seasonFacts,
+    tools,
+    { write: async (_req, e) => ((evidence = e), story) },
+    () => Date.parse('2026-11-01T00:00:00Z'),
+  );
+  assert.equal(searched.length, 2);
+  assert.ok(searched.every((s) => s.startsWith('with facts: ')));
+  assert.ok(evidence.includes('Bo Striker 30 league goals'));
+  assert.equal(snap?.version, ERA_SNAPSHOT_VERSION);
+  const entry = eraEntry(snap!);
+  assert.equal(entry.kind, 'era_snapshot');
+  assert.ok(entry.content.includes('Figures from the sources:\n- Bo Striker 30 league goals (Wikipedia)'));
+});
+
+await test('a debate is settled by its words and its cards', async () => {
+  assert.equal(debateSignature('Prime Zidane or prime Kaká?'), debateSignature('prime kaka or PRIME zidane'));
+  assert.notEqual(debateSignature('Rank the top five strikers of the 1990s'), debateSignature('Rank the top ten strikers of the 1990s'));
+  const fp = cardFingerprint([{ slug: 'kaka', edition: 'prime', overall: 91 }, { slug: 'zidane', edition: 'prime', overall: 94 }]);
+  const rows = new Map<string, EraRow>();
+  const store = createDebateStore({ read: async (k) => rows.get(k) ?? null, write: async (r) => void rows.set(r.snapshot_key, r) });
+  const sig = debateSignature('Prime Zidane or prime Kaká?');
+  await store.write({ signature: sig, cards: fp, brief: { verdict: 'Zidane' }, settledAt: '2026-11-01T00:00:00Z', version: ERA_SNAPSHOT_VERSION });
+  const fresh = createDebateStore({ read: async (k) => rows.get(k) ?? null, write: async () => {} });
+  assert.equal((await fresh.read(sig, fp))?.brief.verdict, 'Zidane');
+  // A re-rated card reopens it.
+  assert.equal(await fresh.read(sig, fp.replace('91', '92')), null);
+  assert.equal([...rows.values()][0].kind, 'debate');
+});
+
+console.log(`${passes} passed, ${failures} failed`);
+if (failures > 0) process.exit(1);
