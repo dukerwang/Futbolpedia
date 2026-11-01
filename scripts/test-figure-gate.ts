@@ -8,7 +8,7 @@
  *   npx tsx scripts/test-figure-gate.ts
  */
 import assert from 'node:assert/strict';
-import { findFigures, gateUnsupportedFigures, isSupported } from '../services/figureGate';
+import { expandTables, findFigures, gateUnsupportedFigures, isSupported } from '../services/figureGate';
 
 let passes = 0;
 let failures = 0;
@@ -79,6 +79,23 @@ test("a sentence the writer's own search grounded stands, and a clean reply come
   assert.equal(gateUnsupportedFigures(reply, EVIDENCE, ['They allow a PPDA of 8.4 when pressing.']).text, reply);
   const clean = 'Northside press high and build through a back four.';
   assert.deepEqual(gateUnsupportedFigures(clean, EVIDENCE), { text: clean, removed: [] });
+});
+
+
+test('historical figures from a season table stand once the table is read by its columns', () => {
+  const table = `Squad appearances and goals:
+No. | Pos. | Name | Premier League Apps | Premier League Goals | Total Apps | Total Goals
+14 | FW | Bo Striker | 37 | 30 | 50 (1) | 39
+Honours:
+- Premier League: 2001–02, 2003–04`;
+  const evidence = expandTables(table);
+  assert.ok(evidence.includes('Premier League Goals 30'));
+  const reply = "He scored 30 league goals that season. He also won 4 titles at the club. He was the side's focal point.";
+  const gated = gateUnsupportedFigures(reply, evidence);
+  assert.equal(gated.text, "He scored 30 league goals that season. He was the side's focal point.");
+  assert.deepEqual(gated.removed.map((r) => r.text), ['4 titles']);
+  // Without the expansion, the table's goals sit too far from their header.
+  assert.equal(isSupported(findFigures('30 league goals')[0], table), false);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

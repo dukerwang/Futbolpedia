@@ -14,10 +14,13 @@
  *   npm run eval:live
  *   npm run eval:live -- --only 1,3,8 --label after-snapshots
  *   npm run eval:live -- --warm      # answer each question once first, so the graded run reuses today's club snapshots
+ *   npm run eval:live -- --set historical   # the historical set, each question twice (--repeat 1 to run once)
  *
  * The live routes run in-process, so no server is needed. Supabase isn't loaded outside the
  * browser, so club snapshots are built fresh in memory for each run rather than read from the
- * shared table.
+ * shared table. The historical set (docs/superpowers/evals/historical-questions.md) reads the shared
+ * cards from Supabase through a read-only client (`scripts/eval-history.ts`), so its answers see
+ * the cards a user would, and the run never writes to the shared tables.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -51,7 +54,11 @@ const argValue = (flag: string) => {
 };
 const only = argValue('--only')?.split(',').map((n) => Number(n.trim()));
 const warm = args.includes('--warm');
+const set = argValue('--set') === 'historical' ? 'historical' : 'live';
+const repeat = Math.max(1, Number(argValue('--repeat') ?? (set === 'historical' ? 2 : 1)) || 1);
 const label = (argValue('--label') ?? (warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
+const history = await import('./eval-history');
+if (set === 'historical') history.installReadOnlySupabase();
 
 interface Question {
   n: number;
@@ -220,6 +227,37 @@ async function grade(question: string, answer: string, today: string): Promise<{
 // --- The run ----------------------------------------------------------------------------------
 
 const today = new Date().toISOString().slice(0, 10);
+const dir = join(root, 'docs/superpowers/evals/reports');
+const stampOf = (prefix: string) => `${today}-${new Date().toISOString().slice(11, 16).replace(':', '')}-${prefix}${label}`;
+
+if (set === 'historical') {
+  const all = history.readQuestionTable(join(root, 'docs/superpowers/evals/historical-questions.md'));
+  const picked = all.filter((q) => !only || only.includes(q.n));
+  const { markdown, json } = await history.runHistoricalSet({
+    questions: picked,
+    pairs: history.paraphrasePairs(all).filter(([a, b]) => picked.some((q) => q.n === a) && picked.some((q) => q.n === b)),
+    repeat,
+    ask,
+    grade: async (prompt, withSearch) => {
+      const res = await getAi().models.generateContent({
+        model: FLASH_MODEL,
+        contents: prompt,
+        config: { temperature: 0, ...(withSearch ? { tools: [{ googleSearch: {} }] } : {}), thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM } },
+      });
+      return res.text ?? '';
+    },
+    today,
+    label,
+    model: FLASH_MODEL,
+  });
+  mkdirSync(dir, { recursive: true });
+  const stamp = stampOf('historical-');
+  writeFileSync(join(dir, `${stamp}.md`), markdown);
+  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(json, null, 2));
+  console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
+  process.exit(0);
+}
+
 const questions = readQuestions().filter((q) => !only || only.includes(q.n));
 const results: { q: Question; run: RunResult; grade: Grade | null; graderRaw: string }[] = [];
 
@@ -297,9 +335,8 @@ ${r.run.perf.map((l) => `    ${l}`).join('\n') || '    (no perf lines)'}
   )
   .join('\n')}`;
 
-const dir = join(root, 'docs/superpowers/evals/reports');
 mkdirSync(dir, { recursive: true });
-const stamp = `${today}-${new Date().toISOString().slice(11, 16).replace(':', '')}-${label}`;
+const stamp = stampOf('');
 writeFileSync(join(dir, `${stamp}.md`), report);
 writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(results, null, 2));
 console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);

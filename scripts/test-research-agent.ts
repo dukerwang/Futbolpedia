@@ -85,6 +85,8 @@ const fakeTools = (found: Record<string, string>, calls: string[] = [], contexts
       return answer(`web:${query}`, 'web');
     },
     card: (name) => answer(`card:${name}`, 'card'),
+    clubSeason: (club, season) => answer(`season:${club} ${season}`, 'web'),
+    playerCareer: (name) => answer(`career:${name}`, 'web'),
   };
 };
 

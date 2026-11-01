@@ -428,6 +428,8 @@ await test('a build researches what changed, reads its analysis against the live
     playerSeason: async () => assert.fail('unused'),
     leagueTable: async () => assert.fail('unused'),
     card: async () => assert.fail('unused'),
+    clubSeason: async () => assert.fail('unused'),
+    playerCareer: async () => assert.fail('unused'),
     webSearch: async (query, options) => {
       asked.push({ query, context: options?.context });
       return { status: 'found', result: { kind: 'web', label: query, content: `[2026-10-20] Digest for ${query}`, sources: [`S (https://example.com/${asked.length})`] }, missing: [] };

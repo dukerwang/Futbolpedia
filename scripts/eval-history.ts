@@ -122,3 +122,139 @@ export function parseAgreement(raw: string): { agreement: Agreement; why: string
     return null;
   }
 }
+
+// --- The historical run -----------------------------------------------------------------------
+
+interface AskResult {
+  answer: string;
+  error?: string;
+  firstTokenMs: number | null;
+  totalMs: number;
+  perf: string[];
+}
+
+export interface HistoricalRunDeps {
+  questions: EvalQuestion[];
+  /** Questions to compare as paraphrases, by number, even when only some were run. */
+  pairs: [number, number][];
+  repeat: number;
+  ask: (question: string) => Promise<AskResult>;
+  /** A grader call with Google Search; returns the model's text. */
+  grade: (prompt: string, withSearch: boolean) => Promise<string>;
+  today: string;
+  label: string;
+  model: string;
+}
+
+/**
+ * Runs each question `repeat` times, grades every answer, compares repeated answers and
+ * paraphrase pairs for the same verdict, and returns the report's Markdown and JSON.
+ */
+export async function runHistoricalSet(deps: HistoricalRunDeps): Promise<{ markdown: string; json: unknown }> {
+  const runs: { q: EvalQuestion; attempt: number; run: AskResult; grade: HistoryGrade | null }[] = [];
+  for (const q of deps.questions) {
+    for (let attempt = 1; attempt <= deps.repeat; attempt++) {
+      process.stdout.write(`Q${q.n}${deps.repeat > 1 ? ` (run ${attempt})` : ''}: ${q.text} ... `);
+      const run = await deps.ask(q.text);
+      const raw = run.answer
+        ? await deps
+            .grade(`${HISTORY_GRADE_INSTRUCTIONS}\n\nToday is ${deps.today}.\n\nQuestion: ${q.text}\n\nAnswer:\n${run.answer}`, true)
+            .catch(() => '')
+        : '';
+      const grade = parseHistoryGrade(raw);
+      runs.push({ q, attempt, run, grade });
+      console.log(
+        run.error
+          ? `failed: ${run.error}`
+          : `${((run.firstTokenMs ?? run.totalMs) / 1000).toFixed(1)}s first token, ${(run.totalMs / 1000).toFixed(1)}s total${
+              grade ? `; wrong figures ${grade.wrongFigures.length}, blended ${grade.blendedSeasons.length}, criteria ${grade.criteria}/5` : '; grading failed'
+            }`,
+      );
+    }
+  }
+
+  const agree = async (question: string, a: string, b: string) =>
+    parseAgreement(await deps.grade(`${AGREEMENT_INSTRUCTIONS}\n\nQuestion: ${question}\n\nAnswer A:\n${a}\n\nAnswer B:\n${b}`, false).catch(() => ''));
+  const repeats: { n: number; agreement: Agreement | null; why: string }[] = [];
+  for (const q of deps.questions) {
+    const [a, b] = runs.filter((r) => r.q.n === q.n && r.run.answer);
+    if (!a || !b) continue;
+    const r = await agree(q.text, a.run.answer, b.run.answer);
+    repeats.push({ n: q.n, agreement: r?.agreement ?? null, why: r?.why ?? 'comparison failed' });
+  }
+  const paraphrases: { pair: [number, number]; agreement: Agreement | null; why: string }[] = [];
+  for (const pair of deps.pairs) {
+    const a = runs.find((r) => r.q.n === pair[0] && r.run.answer);
+    const b = runs.find((r) => r.q.n === pair[1] && r.run.answer);
+    if (!a || !b) continue;
+    const r = await agree(`${a.q.text} / ${b.q.text}`, a.run.answer, b.run.answer);
+    paraphrases.push({ pair, agreement: r?.agreement ?? null, why: r?.why ?? 'comparison failed' });
+  }
+
+  const graded = runs.filter((r) => r.grade);
+  const sum = (f: (g: HistoryGrade) => number) => graded.reduce((n, r) => n + f(r.grade!), 0);
+  const mean = (f: (g: HistoryGrade) => number) => (graded.length ? (sum(f) / graded.length).toFixed(1) : '–');
+  const median = (xs: number[]) => (xs.length ? [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)] : null);
+  const secs = (ms: number | null) => (ms === null ? '–' : (ms / 1000).toFixed(1));
+  const count = (list: { agreement: Agreement | null }[], a: Agreement) => list.filter((x) => x.agreement === a).length;
+  const cell = (s: string) => s.replace(/\|/g, '/').replace(/\n/g, ' ');
+
+  const markdown = `# Historical question eval: ${deps.today}, ${deps.label}
+
+Ran ${deps.questions.length} questions ${deps.repeat} time${deps.repeat === 1 ? '' : 's'} each through the chat pipeline, each run in a new chat, with the shared cards read from Supabase; ${graded.length} of ${runs.length} answers were graded. Graded by ${deps.model} with Google Search.
+
+The grader is the same model that writes the answers, so it can share their blind spots. Compare runs with each other rather than reading any score as absolute.
+
+- Wrong figures: ${sum((g) => g.wrongFigures.length)} in total (${mean((g) => g.wrongFigures.length)} per answer)
+- Blended seasons: ${sum((g) => g.blendedSeasons.length)} in total
+- Myths repeated: ${sum((g) => g.myths.length)} in total
+- Mean use of criteria: ${mean((g) => g.criteria)} / 5
+- Takes on the counter-case: ${graded.filter((r) => r.grade!.counterCase === 'yes').length} of ${graded.filter((r) => r.grade!.counterCase !== 'not_needed').length} that needed it
+- Mean decisiveness: ${mean((g) => g.decisiveness)} / 5
+- Same verdict when asked twice: ${count(repeats, 'same')} same, ${count(repeats, 'partly')} partly, ${count(repeats, 'different')} different, of ${repeats.length}
+- Same verdict across paraphrases: ${count(paraphrases, 'same')} same, ${count(paraphrases, 'partly')} partly, ${count(paraphrases, 'different')} different, of ${paraphrases.length}
+- Median first token: ${secs(median(runs.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s; median total: ${secs(median(runs.map((r) => r.run.totalMs)))} s
+
+| # | Run | Wrong figures | Blended | Myths | Criteria | Counter-case | Decisive | First token (s) | Total (s) | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+${runs
+  .map((r) =>
+    r.grade
+      ? `| ${r.q.n} | ${r.attempt} | ${r.grade.wrongFigures.length} | ${r.grade.blendedSeasons.length} | ${r.grade.myths.length} | ${r.grade.criteria} | ${r.grade.counterCase} | ${r.grade.decisiveness} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${cell(r.grade.verdict)} |`
+      : `| ${r.q.n} | ${r.attempt} | – | – | – | – | – | – | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${cell(r.run.error)}` : 'Grading failed'} |`,
+  )
+  .join('\n')}
+
+## Consistency
+
+| Compared | Agreement | Why |
+| --- | --- | --- |
+${[
+  ...repeats.map((r) => `| Q${r.n}, run 1 and run 2 | ${r.agreement ?? '–'} | ${cell(r.why)} |`),
+  ...paraphrases.map((p) => `| Q${p.pair[0]} and Q${p.pair[1]} | ${p.agreement ?? '–'} | ${cell(p.why)} |`),
+].join('\n')}
+
+${runs
+  .map(
+    (r) => `## ${r.q.n}. ${r.q.text}${deps.repeat > 1 ? ` (run ${r.attempt})` : ''}
+
+${r.q.tests}
+
+${r.grade?.wrongFigures.length ? `Wrong figures:\n${r.grade.wrongFigures.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${
+      r.grade?.blendedSeasons.length ? `Blended seasons:\n${r.grade.blendedSeasons.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''
+    }${r.grade?.myths.length ? `Myths:\n${r.grade.myths.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${r.grade?.notes ? `${r.grade.notes}\n\n` : ''}<details><summary>Answer</summary>
+
+${r.run.answer || r.run.error || '(empty)'}
+
+</details>
+
+<details><summary>Timing</summary>
+
+${r.run.perf.map((l) => `    ${l}`).join('\n') || '    (no perf lines)'}
+
+</details>
+`,
+  )
+  .join('\n')}`;
+  return { markdown, json: { runs, repeats, paraphrases } };
+}

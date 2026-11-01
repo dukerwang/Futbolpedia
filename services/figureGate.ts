@@ -37,6 +37,7 @@ const STAT_NOUNS: [RegExp, string[], string[]][] = [
   [/^(?:draws)$/, ['draw', '\\bd$'], []],
   [/^(?:defeats|losses)$/, ['defeat', 'loss', 'lost', '\\bl$'], []],
   [/^caps$/, ['cap'], []],
+  [/^(?:titles|trophies|honours)$/, ['title', 'trophies', 'trophy', 'honour', 'winner', 'won'], []],
 ];
 const statWords = (noun: string): { near: string[]; suffix: string[] } => {
   const hit = STAT_NOUNS.find(([re]) => re.test(noun));
@@ -44,7 +45,7 @@ const statWords = (noun: string): { near: string[]; suffix: string[] } => {
 };
 
 const STAT_NOUN_SOURCE =
-  "goals?|assists?|appearances|apps|starts|minutes|clean sheets?|points|pts|shots(?: on target)?|dribbles|tackles|interceptions|key passes|passes|chances(?: created)?|big chances|saves|offsides|pressures|recoveries|duels|touches|crosses|blocks|clearances|fouls|wins|victories|draws|defeats|losses|caps|hat-tricks?";
+  "goals?|assists?|appearances|apps|starts|minutes|clean sheets?|points|pts|shots(?: on target)?|dribbles|tackles|interceptions|key passes|passes|chances(?: created)?|big chances|saves|offsides|pressures|recoveries|duels|touches|crosses|blocks|clearances|fouls|wins|victories|draws|defeats|losses|caps|hat-tricks?|titles|trophies|honours";
 
 interface Pattern {
   kind: FigureKind;
@@ -123,6 +124,31 @@ export function findFigures(text: string): FigureClaim[] {
     }
   }
   return claims.sort((a, b) => a.at - b.at).map(({ at: _a, end: _e, ...c }) => c);
+}
+
+/**
+ * Tables in the evidence (Wikipedia's appearance and career tables) as labelled cells, so a
+ * figure taken from one sits next to its column's name: a row "Thierry Henry | 37 | 30" under the
+ * header "Name | League Apps | League Goals" adds "League Apps 37; League Goals 30". The header
+ * line is the first line of a run of lines split by " | ".
+ */
+export function expandTables(text: string): string {
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let header: string[] | null = null;
+  for (const line of lines) {
+    const cells = line.includes(' | ') ? line.split(' | ').map((c) => c.trim()) : null;
+    if (!cells) {
+      header = null;
+      continue;
+    }
+    if (!header) {
+      header = cells;
+      continue;
+    }
+    out.push(cells.map((c, i) => (header![i] && c && c !== '–' ? `${header![i]} ${c}` : '')).filter(Boolean).join('; '));
+  }
+  return out.length ? `${text}\n${out.join('\n')}` : text;
 }
 
 /** How far before and after the number a word that says what it counts may sit. */
