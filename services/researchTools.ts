@@ -109,8 +109,11 @@ export { formatLeagueTable };
 /** A club lookup reads several matches on a cold cache; the others are one cached feed. */
 const CLUB_TIMEOUT_MS = 12_000;
 
+/** How the toolset reaches the app's live and history routes: over HTTP in the browser, in-process on the server. */
+export type LiveGet = <T>(url: string, timeoutMs?: number) => Promise<{ data: T } | { error: string }>;
+
 /** A live route's JSON, or why there's none: HTTP refusals and timeouts both count as failed. */
-async function getLive<T>(url: string, timeoutMs = 8_000): Promise<{ data: T } | { error: string }> {
+export async function getLive<T>(url: string, timeoutMs = 8_000): Promise<{ data: T } | { error: string }> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return { error: res.status === 429 || res.status === 403 ? `refused (HTTP ${res.status})` : `HTTP ${res.status}` };
@@ -129,9 +132,9 @@ const none = (status: LiveStatus | 'empty', note?: string, missing: LiveMissing[
 });
 
 /** The live toolset: ESPN match data and the FPL feed through the app's server routes, Gemini search, stored cards. */
-export const liveToolset = (cardPool: PlayerProfile[]): ResearchToolset => ({
+export const liveToolset = (cardPool: PlayerProfile[], get: LiveGet = getLive): ResearchToolset => ({
   async clubRecentTeam(club) {
-    const res = await getLive<LiveClubResult>(`/api/live/club?${new URLSearchParams({ name: club })}`, CLUB_TIMEOUT_MS);
+    const res = await get<LiveClubResult>(`/api/live/club?${new URLSearchParams({ name: club })}`, CLUB_TIMEOUT_MS);
     if ('error' in res) return none('failed', res.error);
     const data = res.data;
     if (!('report' in data) || !data.found) return none(('status' in data && data.status) || 'empty', undefined, data.missing ?? []);
@@ -141,7 +144,7 @@ export const liveToolset = (cardPool: PlayerProfile[]): ResearchToolset => ({
     );
   },
   async playerSeason(name) {
-    const res = await getLive<LivePlayerResult>(`/api/live/player?${new URLSearchParams({ name })}`);
+    const res = await get<LivePlayerResult>(`/api/live/player?${new URLSearchParams({ name })}`);
     if ('error' in res) return none('failed', res.error);
     const data = res.data;
     return 'reason' in data
@@ -149,7 +152,7 @@ export const liveToolset = (cardPool: PlayerProfile[]): ResearchToolset => ({
       : found({ kind: 'player_record', label: `${data.name} (${data.team})`, content: data.text, stage: 'facts', team: data.team });
   },
   async leagueTable(league, country) {
-    const res = await getLive<LiveTableResult>(`/api/live/table?${new URLSearchParams({ league, ...(country ? { country } : {}) })}`);
+    const res = await get<LiveTableResult>(`/api/live/table?${new URLSearchParams({ league, ...(country ? { country } : {}) })}`);
     if ('error' in res) return none('failed', res.error);
     const data = res.data;
     return 'reason' in data
@@ -170,12 +173,12 @@ export const liveToolset = (cardPool: PlayerProfile[]): ResearchToolset => ({
       : none('empty', 'no stored card');
   },
   async clubSeason(club, season) {
-    const res = await getLive<HistoryResult>(`/api/history/club-season?${new URLSearchParams({ club, season })}`, HISTORY_TIMEOUT_MS);
+    const res = await get<HistoryResult>(`/api/history/club-season?${new URLSearchParams({ club, season })}`, HISTORY_TIMEOUT_MS);
     if ('error' in res) return none('failed', res.error);
     return historyOutcome(res.data, 'season_record');
   },
   async playerCareer(name) {
-    const res = await getLive<HistoryResult>(`/api/history/player?${new URLSearchParams({ name })}`, HISTORY_TIMEOUT_MS);
+    const res = await get<HistoryResult>(`/api/history/player?${new URLSearchParams({ name })}`, HISTORY_TIMEOUT_MS);
     if ('error' in res) return none('failed', res.error);
     return historyOutcome(res.data, 'career_record');
   },

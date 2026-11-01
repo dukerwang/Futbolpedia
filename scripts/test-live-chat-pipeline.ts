@@ -72,6 +72,7 @@ const respond = (text: string) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+let snapshots: import('../services/snapshotServer').SnapshotServer | undefined;
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input);
@@ -82,6 +83,15 @@ globalThis.fetch = (async (input: any, init?: any) => {
   if (url.startsWith('/api/live/player')) {
     liveAsked.push(url);
     return new Response(JSON.stringify({ found: false, status: 'not_covered', reason: 'not a Premier League player' }));
+  }
+  if (url.startsWith('/api/snapshots/')) {
+    // The app's server builds snapshots; here it runs in-process over these same fakes, with no table.
+    const { createSnapshotServer } = await import('../services/snapshotServer');
+    snapshots ??= createSnapshotServer({ get: async (u) => ({ data: await (await globalThis.fetch(u)).json() }), db: null });
+    const u = new URL(url, 'http://local');
+    const club = u.searchParams.get('club') ?? '';
+    if (u.pathname === '/api/snapshots/club/research') return new Response(JSON.stringify({ research: await snapshots.clubResearch(club) }));
+    if (u.pathname === '/api/snapshots/club') return new Response(JSON.stringify({ snapshot: await snapshots.club(club) }));
   }
   if (url.startsWith('/api/')) return new Response('{}', { status: 404 });
   if (!url.includes('generativelanguage.googleapis.com')) return realFetch(input, init);

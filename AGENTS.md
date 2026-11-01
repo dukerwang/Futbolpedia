@@ -30,11 +30,12 @@ A single Express server handles everything:
 - `/api/football/squad` — Backend lookup against API-Football (hides `API_FOOTBALL_KEY` from the client); there is no general pass-through route
 - `/api/live/club`, `/api/live/player`, `/api/live/table` — current-season facts from the keyless ESPN and Fantasy Premier League feeds (`services/liveFootball.ts`). Each reports what it couldn't get with a status: `empty`, `not_covered` or `failed`
 - `/api/history/club-season`, `/api/history/player` — past seasons and careers from Wikipedia and ESPN's archive (`services/historyFootball.ts`), kept for good on the server
+- `/api/snapshots/club/research`, `/api/snapshots/club`, `/api/snapshots/era` — shared club and era snapshots, built on the server and stored with the server-only `SUPABASE_SECRET_KEY` (`services/snapshotServer.ts`); browsers can read `club_snapshots` and `era_snapshots` but not write them
 
 ### Chat research (`services/researchAgent.ts`)
 A chat turn about live facts (never one about primes and past seasons) runs inside a time budget. It plans its research in a brief at low thinking (what's distinctive or changed this season, lookups tagged facts or analysis), runs the facts first and the analysis searches against them, reads each club's shared daily snapshot (`services/clubSnapshots.ts`, Supabase `club_snapshots`), then runs reflect (discards earlier-season sources, may add a round) alongside the situation snapshot (`services/situationSnapshot.ts`: first-choice XI, absences, form, what changed). The writer argues from `<situation_snapshot>`. `CLAUDE.md` has the full description.
 
-A chat turn about primes and past seasons goes through `services/debateBrief.ts` instead: a debate brief (criteria, versions, counter-case, a committed verdict or order), checked against the stored cards' ratings and peer placements in code (`services/debateConsistency.ts`), the season and career records it needs, and permanent era snapshots and settled debates (`services/eraSnapshots.ts`, Supabase `era_snapshots`).
+A chat turn about primes and past seasons goes through `services/debateBrief.ts` instead: a debate brief (criteria, versions, counter-case, a committed verdict or order), checked against the stored cards' ratings and peer placements in code (`services/debateConsistency.ts`), the season and career records it needs, permanent era snapshots (`services/eraSnapshots.ts`, Supabase `era_snapshots`, built on the server), and settled debates kept for the browser session.
 - In dev: Vite is mounted as Express middleware (`middlewareMode: true`)
 - In prod: serves the built `/dist` directory
 

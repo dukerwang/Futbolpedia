@@ -3,7 +3,7 @@ import { generateStructured } from './aiClient';
 import { supabase } from './dossierCache';
 import { seasonSpan, toPlayerSlug } from './dossierCards';
 import { compactLedger, emptyLedger, type EvidenceEntry } from './evidenceLedger';
-import { executeCall, fileOutcomes, liveToolset, type ResearchCall, type ResearchToolset, type ToolOutcome } from './researchTools';
+import { executeCall, fileOutcomes, getLive, type ResearchCall, type ResearchToolset, type ToolOutcome } from './researchTools';
 
 /**
  * Permanent era snapshots, shared by every user like the daily club snapshots but kept for good,
@@ -15,9 +15,9 @@ import { executeCall, fileOutcomes, liveToolset, type ResearchCall, type Researc
  *
  * Each is built once, the first time research looks the season or window up, with a thorough
  * pass: the season or career record, two searches for analysis and contemporary accounts, and one
- * model call that writes the story from that evidence only. It's stored in the Supabase
- * `era_snapshots` table, which also keeps settled debates (`debateRecords`). A row is replaced only
- * by a build under a newer `ERA_SNAPSHOT_VERSION`.
+ * model call that writes the story from that evidence only. The server builds it and stores it
+ * in the Supabase `era_snapshots` table, which browsers can read but not write. A row is replaced
+ * only by a build under a newer `ERA_SNAPSHOT_VERSION`.
  */
 
 /** Bump when a snapshot's shape or how it's built changes, so older rows are rebuilt. */
@@ -435,45 +435,35 @@ export function createDebateStore(deps: {
 export const isMissingTable = (error: { code?: string; message?: string } | null | undefined): boolean =>
   Boolean(error && (error.code === 'PGRST205' || error.code === '42P01' || /does not exist|could not find the table/i.test(error.message ?? '')));
 
+/** A build takes two searches and a model call on the server; past this the turn stops waiting. */
+const SERVER_BUILD_TIMEOUT_MS = 60_000;
+
 /**
- * Whether snapshots can be stored. Until the `era_snapshots` migration is applied a build has
- * nowhere to go and every new browser session would pay for it again, so builds wait for the table.
+ * Era snapshots: stored rows are read from Supabase, and builds run on the server
+ * (`services/snapshotServer.ts`), which alone can write the table. The server only builds once
+ * the `era_snapshots` migration is applied, since a snapshot it can't store would be paid for
+ * again by every later question.
  */
-let tableReady: Promise<boolean> | null = null;
-const eraTableReady = (): Promise<boolean> => {
-  if (!supabase) return Promise.resolve(false);
-  tableReady ??= Promise.resolve(supabase.from('era_snapshots').select('snapshot_key').limit(1)).then(
-    ({ error }: { error: any }) => !error,
-    () => false,
-  );
-  return tableReady;
-};
-
-const readRow = async (key: string): Promise<EraRow | null> => {
-  if (!supabase) return null;
-  const { data, error } = await supabase.from('era_snapshots').select('*').eq('snapshot_key', key).maybeSingle();
-  if (isMissingTable(error)) tableReady = Promise.resolve(false);
-  return data ?? null;
-};
-const writeRow = async (row: EraRow): Promise<void> => {
-  if (!supabase) return;
-  const { error } = await supabase.from('era_snapshots').upsert(row, { onConflict: 'snapshot_key' });
-  if (error) console.warn('[EraSnapshots] Upsert failed:', error);
-};
-
-/** Era snapshots, shared through Supabase when it's available and kept in memory otherwise. */
 export const liveEraSnapshots: EraSnapshotSource = createEraSnapshotStore({
-  read: readRow,
-  write: writeRow,
-  build: async (req, facts) => ((await eraTableReady()) ? buildEraSnapshot(req, facts, liveToolset([])) : null),
-});
-
-export const liveDebateRecords: DebateStore = createDebateStore({
-  read: readRow,
-  write: writeRow,
-  async anyWithSubject(subject) {
-    if (!supabase) return false;
-    const { data } = await supabase.from('era_snapshots').select('snapshot_key').eq('kind', 'debate').eq('subject', subject).limit(1);
-    return Array.isArray(data) && data.length > 0;
+  async read(key) {
+    if (!supabase) return null;
+    const { data } = await supabase.from('era_snapshots').select('*').eq('snapshot_key', key).maybeSingle();
+    return data ?? null;
+  },
+  // The server stored it when it built it.
+  write: async () => {},
+  async build(req) {
+    const res = await getLive<{ snapshot: EraSnapshot | null }>(
+      `/api/snapshots/era?${new URLSearchParams({ kind: req.kind, subject: req.subject, period: req.period })}`,
+      SERVER_BUILD_TIMEOUT_MS,
+    );
+    return 'data' in res ? res.data.snapshot : null;
   },
 });
+
+/**
+ * Settled debates, kept for the browser session. A debate's brief is written in the browser from
+ * the cards and the question, so the server can't vouch for it, and a stored one would let anyone
+ * write the verdict every user gets. Across sessions, consistency comes from the card ratings.
+ */
+export const liveDebateRecords: DebateStore = createDebateStore({ read: async () => null, write: async () => {} });

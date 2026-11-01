@@ -19,7 +19,7 @@ import {
  * calibrated pool, card and conversation sharing, and the Global Dossier Hub feed.
  */
 
-const supabaseUrl = 'https://hrocnbcavstmjysptjdk.supabase.co';
+export const supabaseUrl = 'https://hrocnbcavstmjysptjdk.supabase.co';
 const supabaseKey = 'sb_publishable_NKyG9miYqS8JgdpgWuXm9A_tc3vaVCL';
 
 export const supabase =
