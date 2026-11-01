@@ -50,6 +50,14 @@ import {
   type EraSnapshot,
 } from '../services/eraSnapshots';
 import { executeCall, historyOutcome, sanitizeCalls, type ResearchToolset, type ToolOutcome } from '../services/researchTools';
+import {
+  buildDebateBriefPrompt,
+  checkBriefAgainstCards,
+  formatDebateBriefForWriter,
+  readDebateBrief,
+  runDebateResearch,
+  type DebateBrief,
+} from '../services/debateBrief';
 
 let passes = 0;
 let failures = 0;
@@ -487,6 +495,110 @@ await test('a debate is settled by its words and its cards', async () => {
   // A re-rated card reopens it.
   assert.equal(await fresh.read(sig, fp.replace('91', '92')), null);
   assert.equal([...rows.values()][0].kind, 'debate');
+});
+
+
+// --- The debate brief -------------------------------------------------------------------------
+
+const zidane = toStanding(card('Zinedine Zidane', 96));
+const kaka = toStanding(card('Kaká', 95));
+const rawBrief = {
+  understanding: 'Which prime was better',
+  kind: 'head_to_head',
+  criterion: 'peak_level',
+  criteria: [{ name: 'Control of big matches', why: 'Both were judged on them' }],
+  versions: [{ subject: 'Zinedine Zidane', period: '1999-02' }, { subject: 'Kaká', period: '2005-07' }],
+  disagreement: 'Peak brilliance against range',
+  counterCase: 'Kaká was more direct',
+  verdict: 'Kaká, narrowly',
+  ranking: [],
+  outline: ['Big matches'],
+  calls: [
+    { tool: 'player_career', subject: 'Kaká', purpose: 'his numbers in the window' },
+    { tool: 'club_season', subject: 'AC Milan', season: '2006-07', purpose: 'the side around him' },
+    { tool: 'nonsense', subject: 'x' },
+  ],
+};
+
+await test('the debate brief prompt names the cards and their order, and no examples', () => {
+  const prompt = buildDebateBriefPrompt({ message: 'Prime Zidane or prime Kaká?', thread: '', cards: [kaka, zidane], hints: { clubs: [], players: [] } });
+  assert.ok(prompt.indexOf("1. Zinedine Zidane's prime (2003-06) card, 96") < prompt.indexOf("2. Kaká's prime"));
+  assert.ok(prompt.includes('club_season (subject: club name; season: YYYY-YY)'));
+});
+
+await test('a brief is read defensively and its verdict held to the cards', () => {
+  const brief = readDebateBrief(rawBrief, { message: 'q' });
+  assert.equal(brief.calls.length, 2);
+  assert.equal(brief.calls[1].season, '2006-07');
+  const checked = checkBriefAgainstCards(brief, [zidane, kaka]);
+  assert.equal(checked.verdict, 'Zinedine Zidane');
+  assert.ok(checked.cardNotes[0].includes('96'));
+  // A question about output isn't settled by the cards.
+  assert.equal(checkBriefAgainstCards({ ...brief, criterion: 'output' }, [zidane, kaka]).verdict, 'Kaká, narrowly');
+  const ranking = checkBriefAgainstCards({ ...brief, kind: 'ranking', verdict: '', ranking: ['Kaká', 'Zidane'] }, [zidane, kaka]);
+  assert.deepEqual(ranking.ranking, ['Zidane', 'Kaká']);
+  const text = formatDebateBriefForWriter(ranking, [zidane, kaka]);
+  assert.ok(text.includes('The order, settled before writing (keep it): 1. Zidane 2. Kaká'));
+  assert.ok(text.includes('The strongest case against the verdict'));
+});
+
+const careerFacts: ToolOutcome = {
+  status: 'found',
+  result: { kind: 'career_record', label: 'Kaká', content: 'Milan 2006–07 Serie A 31 apps 8 goals', sources: ['w'] },
+  missing: [],
+};
+const fakeTools = (log: string[]) =>
+  ({
+    playerCareer: async (n: string) => (log.push(`career ${n}`), careerFacts),
+    clubSeason: async (c: string, s: string) => (log.push(`season ${c} ${s}`), { ...seasonFacts, result: { ...seasonFacts.result!, label: '2006–07 A.C. Milan season' } }),
+  }) as unknown as ResearchToolset;
+
+await test('debate research runs the lookups, attaches stored era snapshots and builds missing ones', async () => {
+  const log: string[] = [];
+  const stored = new Set(['player_window']);
+  const built: string[] = [];
+  const eras = {
+    stored: async (req: any) =>
+      stored.has(req.kind) ? ({ key: 'k', kind: req.kind, subject: req.subject, period: '2005-07', story, sources: [], builtAt: '', version: 1 } as EraSnapshot) : null,
+    get: async (req: any) => (built.push(`${req.kind} ${req.period}`), null),
+  };
+  const writes: any[] = [];
+  const debates = { read: async () => null, write: async (r: any) => void writes.push(r) };
+  let briefs = 0;
+  const { brief, ledger } = await runDebateResearch(
+    { message: 'Prime Zidane or prime Kaká?', thread: '', cards: [zidane, kaka], hints: { clubs: [], players: [] } },
+    fakeTools(log),
+    { model: { writeBrief: async () => (briefs++, readDebateBrief(rawBrief, { message: '' })) }, eras, debates },
+  );
+  assert.equal(briefs, 1);
+  assert.equal(brief.verdict, 'Zinedine Zidane');
+  assert.deepEqual(log, ['career Kaká', 'season AC Milan 2006-07']);
+  assert.deepEqual(ledger.entries.map((e) => e.kind), ['career_record', 'season_record', 'era_snapshot']);
+  assert.ok(ledger.entries[2].label.includes('the window his card rates'));
+  assert.deepEqual(built, ['club_season 2006-07']);
+  // The checked brief is settled for next time.
+  assert.equal(writes.length, 1);
+  assert.equal((writes[0].brief as DebateBrief).verdict, 'Zinedine Zidane');
+});
+
+await test('a settled debate is reused without a brief call; a follow-up never is', async () => {
+  const settled = { signature: 's', cards: 'c', brief: { ...rawBrief, verdict: 'Zinedine Zidane', calls: [] }, settledAt: '2026-11-01T00:00:00Z', version: 1 };
+  const debates = { read: async () => settled, write: async () => assert.fail('rewrote a settled debate') };
+  const model = { writeBrief: async () => assert.fail('wrote a new brief') };
+  const { brief } = await runDebateResearch(
+    { message: 'Prime Zidane or prime Kaká?', thread: '', cards: [zidane, kaka], hints: { clubs: [], players: [] } },
+    fakeTools([]),
+    { model: model as any, debates },
+  );
+  assert.ok(brief.settled);
+  assert.equal(brief.verdict, 'Zinedine Zidane');
+  let wrote = 0;
+  await runDebateResearch(
+    { message: 'and at Madrid?', thread: '<ongoing_thread>…</ongoing_thread>', cards: [], hints: { clubs: [], players: [] } },
+    fakeTools([]),
+    { model: { writeBrief: async () => (wrote++, readDebateBrief({ verdict: 'x' }, { message: '' })) }, debates: { read: async () => assert.fail('read'), write: async () => assert.fail('wrote') } },
+  );
+  assert.equal(wrote, 1);
 });
 
 console.log(`${passes} passed, ${failures} failed`);
