@@ -5,7 +5,7 @@
  * to its source. Pure functions.
  */
 
-export type EvidenceKind = 'club_context' | 'player_record' | 'web' | 'prior_turn';
+export type EvidenceKind = 'club_context' | 'player_record' | 'league_table' | 'card' | 'web' | 'prior_turn';
 
 export interface EvidenceEntry {
   id: string;
@@ -43,6 +43,8 @@ export const hasEvidence = (ledger: EvidenceLedger | null | undefined): boolean 
 const KIND_NAMES: Record<EvidenceKind, string> = {
   club_context: 'API-Football club record',
   player_record: 'API-Football player record',
+  league_table: 'API-Football league table',
+  card: 'Futbolpedia dossier card',
   web: 'Web search',
   prior_turn: 'Earlier in this conversation',
 };

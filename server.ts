@@ -101,6 +101,8 @@ async function startServer() {
   const API_URL = "https://v3.football.api-sports.io";
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
   console.log(`[startup] GEMINI_API_KEY set: ${!!GEMINI_API_KEY} (${GEMINI_API_KEY ? GEMINI_API_KEY.slice(0, 6) + '...' : 'MISSING'})`);
+  // Without it, club research has no lineups, injury list or squad; chat answers fall back to web search.
+  console.log(`[startup] API_FOOTBALL_KEY set: ${!!API_KEY}`);
 
   const apiFootballGet = (endpoint: string, params: Record<string, unknown>, timeout?: number) =>
     axios.get(`${API_URL}/${endpoint}`, {
@@ -473,6 +475,68 @@ async function startServer() {
     } catch (error: any) {
       console.warn("[api/football/fixtures] lookup failed:", error?.message || error);
       return res.status(500).json({ error: "Failed to fetch fixtures from API-Football" });
+    }
+  });
+
+  // League tables for chat research. A league is found by name; several countries share names
+  // like "Premier League", so the major European leagues win a tie unless a country is given.
+  const LEAGUE_COUNTRY_PRIORITY = ["England", "Spain", "Italy", "Germany", "France", "Portugal", "Netherlands"];
+  const leagueCache = new Map<string, { id: number; name: string; country: string | null; season: number }>();
+  const standingsCache = new Map<string, { expiresAt: number; payload: any }>();
+  const STANDINGS_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
+
+  app.get("/api/football/standings", async (req, res) => {
+    try {
+      const rawLeague = typeof req.query.league === "string" ? req.query.league.trim() : "";
+      const country = typeof req.query.country === "string" ? req.query.country.trim() : "";
+      if (rawLeague.length < 3) return res.status(400).json({ error: "Missing league name" });
+      if (!API_KEY) return res.json({ available: false, league: rawLeague, table: [] });
+
+      const leagueKey = `${rawLeague.toLowerCase()}|${country.toLowerCase()}`;
+      let league = leagueCache.get(leagueKey);
+      if (!league) {
+        const leaguesRes = await apiFootballGet(
+          "leagues",
+          { search: rawLeague, current: "true", ...(country ? { country } : {}) },
+          5000,
+        );
+        const rank = (c: string | null) => {
+          const i = LEAGUE_COUNTRY_PRIORITY.indexOf(c ?? "");
+          return i === -1 ? LEAGUE_COUNTRY_PRIORITY.length : i;
+        };
+        const best = (leaguesRes.data?.response ?? [])
+          .filter((l: any) => l?.league?.id && l.league.type === "League")
+          .sort((a: any, b: any) => rank(a.country?.name) - rank(b.country?.name))[0];
+        const season = best?.seasons?.find((s: any) => s.current)?.year;
+        if (!best || !season) return res.status(404).json({ error: "League not found" });
+        league = { id: best.league.id, name: best.league.name, country: best.country?.name ?? null, season };
+        leagueCache.set(leagueKey, league);
+      }
+
+      const cacheKey = `${league.id}:${league.season}`;
+      const cached = standingsCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) return res.json(cached.payload);
+
+      const standingsRes = await apiFootballGet("standings", { league: league.id, season: league.season }, 5000);
+      const groups: any[][] = standingsRes.data?.response?.[0]?.league?.standings ?? [];
+      const table = groups.flat().map((row: any) => ({
+        rank: row.rank ?? null,
+        team: row.team?.name ?? null,
+        group: row.group ?? null,
+        played: row.all?.played ?? null,
+        won: row.all?.win ?? null,
+        drawn: row.all?.draw ?? null,
+        lost: row.all?.lose ?? null,
+        goalDiff: row.goalsDiff ?? null,
+        points: row.points ?? null,
+        form: row.form ?? null,
+      }));
+      const payload = { available: table.length > 0, league: league.name, country: league.country, season: league.season, table };
+      standingsCache.set(cacheKey, { expiresAt: Date.now() + STANDINGS_CACHE_TTL_MS, payload });
+      return res.json(payload);
+    } catch (error: any) {
+      console.warn("[api/football/standings] lookup failed:", error?.message || error);
+      return res.status(500).json({ error: "Failed to fetch standings from API-Football" });
     }
   });
 
