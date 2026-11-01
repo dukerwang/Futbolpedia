@@ -508,7 +508,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
             message,
             thread: history.length ? ongoingThread.slice(-3000) : '',
             cards: debateCards,
-            hints: { clubs: targetClubs, players: playerNamesForGrounding },
+            hints: { clubs: targetClubs, players: [...new Set([...route.targetPlayers, ...playerNamesForGrounding])] },
             season: route.requestedSeason ?? null,
           },
           liveToolset([...lockedCards, ...allCalibrated]),

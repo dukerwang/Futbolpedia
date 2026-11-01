@@ -64,6 +64,12 @@ export const RESEARCH_COVERAGE_NOTE = `What the sources cover, and how to work a
 - Web search covers anything, but its sources can be from earlier seasons: ask for this season by name, and check the dates on what comes back.
 - A lookup that came back not covered won't work if asked again; one that failed might.`;
 
+/** The tools a question about the past can use, for the debate brief: a shorter prompt than the full guide. */
+export const HISTORY_TOOL_GUIDE = RESEARCH_TOOL_GUIDE.split('\n')
+  .filter((line) => /^- (?:club_season|player_career|card|web_search) /.test(line))
+  .map((line) => (line.startsWith('- web_search') ? line.replace(/ Write the query[^.]*\./, ' Write the query as a researcher would type it, naming the season or years.') : line))
+  .join('\n');
+
 /**
  * What the sources cover for the past, for the debate brief. Kept descriptive like the note above.
  */

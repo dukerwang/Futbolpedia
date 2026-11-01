@@ -686,6 +686,23 @@ await test('a player window gets an era snapshot only when it is the size of a c
   assert.deepEqual(eraFor({ tool: 'club_season', subject: 'Arsenal', season: '2003-04' }, b, []), { kind: 'club_season', period: '2003-04' });
 });
 
+await test('the named players career records start before the brief and are handed to its calls', async () => {
+  const log: string[] = [];
+  let briefStarted = false;
+  const tools = {
+    ...fakeTools(log),
+    playerCareer: async (n: string) => (log.push(`career ${n} ${briefStarted ? 'after' : 'before'} the brief`), careerFacts),
+  } as unknown as ResearchToolset;
+  const { ledger } = await runDebateResearch(
+    { message: 'Prime Zidane or prime Kaká?', thread: '', cards: [zidane, kaka], hints: { clubs: [], players: ['Kaká', 'Zinedine Zidane'] } },
+    tools,
+    { model: { writeBrief: async () => ((briefStarted = true), readDebateBrief(rawBrief, { message: '' })) } },
+  );
+  // Both were fetched before the brief; the brief's call for Kaká reused his, nothing was fetched twice.
+  assert.deepEqual(log.filter((l) => l.startsWith('career')), ['career Kaká before the brief', 'career Zinedine Zidane before the brief']);
+  assert.equal(ledger.entries.filter((e) => e.kind === 'career_record').length, 1);
+});
+
 // --- The historical eval's pure parts ---------------------------------------------------------
 
 await test('the eval reads its question set, paraphrase pairs and the grader replies', async () => {

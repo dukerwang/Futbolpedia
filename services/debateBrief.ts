@@ -1,6 +1,6 @@
 import { Type } from '@google/genai';
 import { generateStructured, getCurrentSeasonInfo } from './aiClient';
-import { seasonSpan } from './dossierCards';
+import { seasonSpan, toBasePlayerSlug } from './dossierCards';
 import {
   cardsSettle,
   checkOrderAgainstCards,
@@ -28,7 +28,7 @@ import {
   executeCall,
   fileOutcomes,
   HISTORY_COVERAGE_NOTE,
-  RESEARCH_TOOL_GUIDE,
+  HISTORY_TOOL_GUIDE,
   sanitizeCalls,
   type ResearchCall,
   type ResearchToolset,
@@ -101,6 +101,8 @@ export interface DebateContext {
 /** Lookups the brief may plan, and how many era snapshots one turn may start building. */
 export const DEBATE_CALL_LIMIT = 6;
 export const MAX_ERA_BUILDS = 3;
+/** Players whose career records are fetched before the brief is written. */
+export const PREFETCH_LIMIT = 3;
 /** The longest player window that gets an era snapshot: a card's window is at most three seasons. */
 export const MAX_WINDOW_SEASONS = 4;
 /** How long a turn waits for a stored settled debate before writing its own brief. */
@@ -183,7 +185,7 @@ Keep every field short: a sentence or two at most. Work out:
 9. calls: lookups, at most ${DEBATE_CALL_LIMIT}, only for facts the verdict depends on: a season's record and personnel, a player's numbers and honours in the window being compared. Prefer club_season and player_career, which read stored records; use web_search only for an analytical point those can't give, and ask for contemporary accounts. Don't fetch cards that are already in play. A question the cards and a season's record already answer may need one or two calls.
 
 Tools:
-${RESEARCH_TOOL_GUIDE}
+${HISTORY_TOOL_GUIDE}
 
 ${HISTORY_COVERAGE_NOTE}
 
@@ -326,6 +328,25 @@ export function eraFor(call: ResearchCall, brief: DebateBrief, cards: CardStandi
   return window && span && span[1] - span[0] + 1 <= MAX_WINDOW_SEASONS ? { kind: 'player_window', period: window } : null;
 }
 
+/** Career lookups started before the brief, handed to the brief's matching calls. */
+export function prefetchCareers(players: string[], tools: ResearchToolset): { take(call: ResearchCall): Promise<ToolOutcome> | null } {
+  const surname = (n: string) => toBasePlayerSlug(n.replace(/\(.*?\)/g, '')).split('-').pop() ?? '';
+  const pending = players.slice(0, PREFETCH_LIMIT).map((name) => ({
+    name,
+    run: executeCall({ tool: 'player_career', subject: name, stage: 'facts' }, tools),
+    used: false,
+  }));
+  return {
+    take(call) {
+      if (call.tool !== 'player_career') return null;
+      const hit = pending.find((p) => !p.used && (toBasePlayerSlug(p.name) === toBasePlayerSlug(call.subject) || surname(p.name) === surname(call.subject)));
+      if (!hit) return null;
+      hit.used = true;
+      return hit.run;
+    },
+  };
+}
+
 export async function runDebateResearch(
   ctx: DebateContext,
   tools: ResearchToolset,
@@ -343,6 +364,10 @@ export async function runDebateResearch(
   const model = options.model ?? liveDebateModel;
   const eras = options.eras ?? null;
   const debates = options.debates ?? null;
+
+  // The named players' career records are almost always needed: fetch them while the brief is
+  // written (Wikipedia, so a wasted one costs nothing but a request).
+  const prefetched = prefetchCareers(ctx.hints.players, tools);
 
   // A new question that has been settled before, with the same cards, keeps its verdict.
   const signature = debateSignature(ctx.message);
@@ -378,7 +403,7 @@ export async function runDebateResearch(
   if (!brief.calls.length) return { brief, ledger: emptyLedger() };
 
   options.onStage?.(`Checking ${brief.calls.length} ${brief.calls.length === 1 ? 'record' : 'records'}...`);
-  const runs = brief.calls.map((c) => executeCall(c, tools));
+  const runs = brief.calls.map((c) => prefetched.take(c) ?? executeCall(c, tools));
   // Each season or window looked up has a permanent snapshot: read it alongside, and start
   // building the ones nobody has built yet, for the next person who asks.
   let builds = 0;
