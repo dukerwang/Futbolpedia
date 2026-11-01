@@ -181,6 +181,12 @@ server cache.
 
 Each phase ships as one PR with offline tests, and each is useful on its own.
 
+**Status, 2026-11-01:** Phase 1 shipped (#41). Phase 2 is built as the brief, research and reflect
+loop (`researchAgent.ts`, `researchTools.ts`): the reflect step from Phase 3 moved into it, and the
+writer runs at low thinking once a brief exists. The verify gate and the evidence panel are built
+but parked on `feat/evidence-and-name-check`, unmerged: the focus is the quality of the research
+and the answer, not checks after the fact.
+
 1. **Unblock and ledger.** Keep the writer's tools on live turns, and stop the fallback string from
    counting as context. Ship the recent-lineups and injury grounding (branch
    `fix/tactics-grounding`). Replace `factualFoundation` with a ledger with ids and longer digests,

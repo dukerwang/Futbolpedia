@@ -25,7 +25,9 @@ import {
   serializeProfileForHistory,
   recordDossierRevision,
 } from './dossierStore';
-import { buildSquadTurnoverQuery, gatherEvidence, gatherSearchFoundation } from './groundingService';
+import { gatherSearchFoundation } from './groundingService';
+import { formatBriefForWriter, runResearch, type ResearchBrief } from './researchAgent';
+import { liveToolset } from './researchTools';
 import { addEvidence, addGap, emptyLedger, formatLedger, hasEvidence, type EvidenceLedger } from './evidenceLedger';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
 import {
@@ -355,6 +357,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 
   // 2. Universal Calibrated Ledger Matching & Pre-Grounding across Comparisons, Debates, Rankings & Tactical Chat
   let ledger: EvidenceLedger | null = null;
+  let brief: ResearchBrief | null = null;
   let researched = false;
   let effectiveLockedBlock = lockedDossiersBlock;
   let verifiedManagers: VerifiedClubManager[] = [];
@@ -432,49 +435,25 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         (route.needsSearch && Boolean(route.searchQueries?.length)));
 
     if (shouldPreGround) {
-      researched = true;
-      onStageChange?.(
-        unratedPlayers.length > 0
-          ? `Scouting ${unratedPlayers.slice(0, 2).join(' & ')} (${currentSeason} data)...`
-          : targetClubs.length > 0
-            ? `Verifying ${targetClubs.join(' & ')} active squad & tactical setup...`
-            : `Gathering ${currentSeason} grounding data...`,
-      );
       try {
-        const datePrefix = `[Date: ${month} ${year}]`;
-        let queries: string[] = [];
-
-        if (route.searchQueries && route.searchQueries.length > 0) {
-          queries = route.searchQueries
-            .slice(0, 2)
-            .map((q) => (q.includes(String(year)) ? q : `${datePrefix} ${q}`));
-          if (queries.length === 1 && targetClubs.length > 0) {
-            queries.push(`${datePrefix} ${buildSquadTurnoverQuery(targetClubs.join(' '), year)}`);
-          }
-        } else if (unratedPlayers.length === 2) {
-          queries = unratedPlayers.map(
-            (player) =>
-              `${datePrefix} ${player} — current club (${year}), confirmed head coach, age, position, ${currentSeason} season stats across competitions, tactical role, on-pitch strengths/weaknesses, and global positional peer standing`,
-          );
-        } else if (playerNamesForGrounding.length > 0) {
-          const subjectLabel = playerNamesForGrounding.join(' vs ');
-          queries = [
-            `${datePrefix} ${subjectLabel}${targetClubs.length > 0 ? ` (${targetClubs.join(', ')})` : ''} — confirmed current clubs (${year}), confirmed head coaches, ages, positions, ${currentSeason} season stats, and specific tactical roles`,
-          ];
-        } else if (targetClubs.length > 0) {
-          const clubLabel = targetClubs.join(' vs ');
-          queries = [
-            `${datePrefix} ${buildSquadTurnoverQuery(clubLabel, year)}`,
-            `${datePrefix} ${clubLabel} — latest match reports: starting lineups, injured and unavailable players, confirmed current head coach (${year}), and player roles in build-up and out of possession (${message})`,
-          ];
-        }
-
-        ledger = await gatherEvidence(queries, playerNamesForGrounding, targetClubs);
+        const research = await runResearch(
+          {
+            message,
+            thread: ongoingThread.slice(-3000),
+            cardsInPlay: lockedCards.map((c) => `${c.basicInfo.name} (${isPrimeCard(c) ? 'prime' : 'current form'})`),
+            hints: { clubs: targetClubs, players: playerNamesForGrounding },
+          },
+          liveToolset([...lockedCards, ...allCalibrated]),
+          { onStage: onStageChange, perf },
+        );
+        brief = research.brief;
+        researched = research.brief.calls.length > 0;
+        if (researched) ledger = research.ledger;
       } catch (e) {
         console.warn('[ConversationalScout] Research failed:', e);
+        researched = true;
         ledger = addGap(emptyLedger(), 'All research for this turn (the lookups failed)');
       }
-      perf?.(`research (${ledger.entries.length} found, ${ledger.gaps.length} missing)`);
     }
 
     verifiedManagers = await managersPromise;
@@ -531,6 +510,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
 ${factualFoundation ? `<factual_foundation>\n${factualFoundation}\n</factual_foundation>` : ''}
+${brief && researched ? formatBriefForWriter(brief) : ''}
 ${formatVerifiedManagersBlock(verifiedManagers)}
 ${peerLedgerBlock ?? ''}
 ${effectiveLockedBlock}
@@ -548,8 +528,9 @@ ${savedDossiersBlock}
 
   // Adapt thinking depth to the complexity of the turn: 'medium' for high-complexity rankings,
   // tactical system breakdowns, and multi-player debates; 'low' (~0.8s TTFT) for standard Q&A and comparisons.
+  // A researched turn did its planning in the brief, so the writer can think lightly and start sooner.
   const thinkingLevelOverride: ThinkingTier =
-    route.reasoningComplexity === 'high' ? 'medium' : 'low';
+    brief || route.reasoningComplexity !== 'high' ? 'low' : 'medium';
 
   const toolMode = proseToolMode({
     researched,

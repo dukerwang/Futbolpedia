@@ -104,7 +104,7 @@ const SEARCH_DIGEST_SYSTEM_INSTRUCTION =
  * state current facts, and marks what's old, instead of compressing everything into a summary.
  */
 const SEARCH_EVIDENCE_SYSTEM_INSTRUCTION =
-  'You are a football research assistant collecting evidence for an analyst. From the search results, write a factual digest of up to 450 words that answers the query. Keep every specific the results give: player names, the positions and roles they played, dates, opponents, scores, lineups, injuries with expected return dates, transfers with their window, and statistics with the competition and season they cover. Give the date of each fact or the date of the report it comes from. Mark anything from before the current season as older. When results disagree, give both versions and their dates. Do not add anything the results do not say, and do not fill gaps from general knowledge; when the results do not answer part of the query, say which part.';
+  'You are a football research assistant collecting evidence for an analyst. From the search results, write a factual digest of up to 350 words that answers the query. Keep every specific the results give: player names, the positions and roles they played, dates, opponents, scores, lineups, injuries with expected return dates, transfers with their window, and statistics with the competition and season they cover. Give the date of each fact or the date of the report it comes from. Mark anything from before the current season as older. When results disagree, give both versions and their dates. Do not add anything the results do not say, and do not fill gaps from general knowledge; when the results do not answer part of the query, say which part.';
 
 export type SearchDigest = 'brief' | 'evidence';
 
@@ -122,7 +122,7 @@ export async function runGroundedSearch(
         systemInstruction:
           options?.digest === 'evidence' ? SEARCH_EVIDENCE_SYSTEM_INSTRUCTION : SEARCH_DIGEST_SYSTEM_INSTRUCTION,
         temperature: 0.1,
-        maxOutputTokens: options?.digest === 'evidence' ? 1100 : 420,
+        maxOutputTokens: options?.digest === 'evidence' ? 800 : 420,
         tools: [{ googleSearch: {} }],
         // Cap thinkingLevel to LOW during search grounding so Flash does not run
         // multi-second dynamic thinking just to summarize search results.
