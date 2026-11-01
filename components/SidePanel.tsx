@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
-import { getShortTierLabel } from '../constants/ratingTiers';
+import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS } from './pills';
 import DOMPurify from 'dompurify';
@@ -36,33 +36,6 @@ const getTierColorClass = (rating: number) => {
 const renderMarkdown = (text: string) => {
     if (!text) return { __html: '' };
     return { __html: DOMPurify.sanitize(marked.parse(text) as string) };
-};
-
-/** Short codes for canonical position names, keyed by lowercase name. */
-const POSITION_ABBREVIATIONS: Record<string, string> = {
-    'goalkeeper': 'GK',
-    'center back': 'CB', 'centre back': 'CB', 'centre-back': 'CB',
-    'left back': 'LB', 'left-back': 'LB',
-    'right back': 'RB', 'right-back': 'RB',
-    'left wing back': 'LWB', 'left wing-back': 'LWB',
-    'right wing back': 'RWB', 'right wing-back': 'RWB',
-    'defensive midfielder': 'CDM',
-    'central midfielder': 'CM',
-    'attacking midfielder': 'CAM',
-    'left winger': 'LW', 'left midfielder': 'LM',
-    'right winger': 'RW', 'right midfielder': 'RM',
-    'libero': 'LIB',
-    'striker': 'CF', 'centre forward': 'CF', 'center forward': 'CF',
-    'second striker': 'SS', 'forward': 'FW',
-};
-
-const formatPosition = (position: string) => {
-    if (!position) return '';
-    return position.split(/[\/,]/).map(p => {
-        const trimmed = p.trim();
-        const key = trimmed.toLowerCase();
-        return Object.hasOwn(POSITION_ABBREVIATIONS, key) ? POSITION_ABBREVIATIONS[key] : trimmed;
-    }).join('/');
 };
 
 const AttributeLine: React.FC<{ label: string; rating: number }> = ({ label: attrLabel, rating }) => {
@@ -260,7 +233,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             {profile.playstyleAndRole?.playstyle?.archetype}
                         </p>
                         <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-charcoal/60 dark:text-cream-400 font-sans">
-                                <span className="font-semibold text-charcoal dark:text-cream-200">{formatPosition(profile.basicInfo.position)}</span>
+                                <span className="font-semibold text-charcoal dark:text-cream-200">{positionCodes(profile.basicInfo.position)}</span>
                                 <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
                                 <span className="line-clamp-1">{profile.basicInfo.club}</span>
                                 {profile.basicInfo.age != null && (

@@ -274,6 +274,37 @@ export const CLUB_CANON: Record<string, string> = {
   acmilan: 'AC Milan',
 };
 
+/** Short codes for canonical position names, keyed by lowercase name. */
+const POSITION_CODES: Record<string, string> = {
+  'goalkeeper': 'GK',
+  'center back': 'CB', 'centre back': 'CB', 'centre-back': 'CB',
+  'left back': 'LB', 'left-back': 'LB',
+  'right back': 'RB', 'right-back': 'RB',
+  'left wing back': 'LWB', 'left wing-back': 'LWB',
+  'right wing back': 'RWB', 'right wing-back': 'RWB',
+  'defensive midfielder': 'CDM',
+  'central midfielder': 'CM',
+  'attacking midfielder': 'CAM',
+  'left winger': 'LW', 'left midfielder': 'LM',
+  'right winger': 'RW', 'right midfielder': 'RM',
+  'libero': 'LIB',
+  'striker': 'CF', 'centre forward': 'CF', 'center forward': 'CF',
+  'second striker': 'SS', 'forward': 'FW',
+};
+
+/** A card's positions as short codes, the way the dossier shows them: "Second Striker/Centre Forward" -> "SS/CF". */
+export function positionCodes(position: string): string {
+  if (!position) return '';
+  return position
+    .split(/[/,]/)
+    .map((p) => {
+      const trimmed = p.trim();
+      const key = trimmed.toLowerCase();
+      return Object.hasOwn(POSITION_CODES, key) ? POSITION_CODES[key] : trimmed;
+    })
+    .join('/');
+}
+
 export function normalizePosition(raw: string): string {
   if (!raw || raw === 'N/A') return raw || 'N/A';
   const parts = raw

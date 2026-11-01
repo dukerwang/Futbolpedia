@@ -32,6 +32,9 @@ import {
   type ReplyAttachments,
 } from './services/geminiService';
 import { isFullCard, ratingTask, requestForCard } from './services/ratingCommand';
+import { fetchSharedEditions } from './services/dossierStore';
+import { autoTitle, generateChatTitle, hasAutoTitle, titleBrief } from './services/chatTitle';
+import { LEGACY_PURGE_KEY, isLegacyShape, orphanKeys, withoutCards } from './services/legacyDossiers';
 import { asksToSeeMentions } from './services/chatIntent';
 import { sendGaffaMessage } from './services/gaffaChatService';
 import { looksLikeGaffaQuestion } from './services/gaffaDetect';
@@ -110,9 +113,9 @@ const App: React.FC = () => {
   const [activeProfile, setActiveProfile] = useState<PlayerProfile | null>(null);
   const [allProfiles, setAllProfiles] = useState<PlayerProfile[]>([]);
   const [globalDossiers, setGlobalDossiers] = useState<PlayerProfile[]>([]);
-  // Main view: the chat, or the dossier hub ("Your dossiers" and the global hub as tabs)
+  // Main view: the chat, or the dossier hub (the global hub and "Your dossiers" as tabs)
   const [view, setView] = useState<AppView>('chat');
-  const [hubTab, setHubTab] = useState<HubTab>('mine');
+  const [hubTab, setHubTab] = useState<HubTab>('global');
   // Text the hub's "Ask" puts in the chat box
   const [chatDraft, setChatDraft] = useState<{ id: number; text: string } | null>(null);
   // The left panel is the Scout desk or one open dossier.
@@ -260,6 +263,14 @@ const App: React.FC = () => {
       savedConvs = [defaultConv];
     }
 
+    // Cards from before the current pipeline go, judged as stored (before dating fills them in).
+    const purgeLegacy = !localStorage.getItem(LEGACY_PURGE_KEY);
+    const keepCard = (p: PlayerProfile) => !purgeLegacy || !isLegacyShape(p);
+    if (purgeLegacy) {
+      savedConvs = savedConvs.map(conv => withoutCards(conv, isLegacyShape));
+      localStorage.setItem('futbolpedia-conversations', JSON.stringify(savedConvs));
+    }
+
     setConversations(savedConvs);
 
     // Load global dossiers
@@ -269,7 +280,8 @@ const App: React.FC = () => {
       if (storedGlobal) {
         const parsed = JSON.parse(storedGlobal);
         if (Array.isArray(parsed)) {
-          savedGlobalDossiers = parsed.map((p: PlayerProfile) => datedOrSelf(p, p.createdAt || Date.now()));
+          savedGlobalDossiers = parsed.filter(keepCard).map((p: PlayerProfile) => datedOrSelf(p, p.createdAt || Date.now()));
+          if (savedGlobalDossiers.length !== parsed.length) saveGlobalDossiers(savedGlobalDossiers);
         }
       } else {
         // Migrate from the legacy all-profiles key, then from saved conversations
@@ -277,7 +289,7 @@ const App: React.FC = () => {
         if (oldProfilesStr) {
           const parsedOld = JSON.parse(oldProfilesStr);
           if (Array.isArray(parsedOld)) {
-            savedGlobalDossiers = parsedOld.map((p: PlayerProfile) => datedOrSelf(p, p.createdAt || Date.now()));
+            savedGlobalDossiers = parsedOld.filter(keepCard).map((p: PlayerProfile) => datedOrSelf(p, p.createdAt || Date.now()));
           }
         }
 
@@ -314,6 +326,33 @@ const App: React.FC = () => {
 
     // Mark as initialized so synchronization effect can run safely
     isInitializedRef.current = true;
+
+    // Then the cards the shared store has never held for that player and edition. Only cards loaded
+    // now are judged, so a card Scout files in the meantime is never caught by a stale read.
+    if (purgeLegacy) {
+      const loadedAt = Date.now();
+      const loadedCards = [...savedGlobalDossiers, ...savedConvs.flatMap(c => c.allProfiles ?? [])];
+      void fetchSharedEditions().then(shared => {
+        if (!shared) return; // Try again next visit rather than judge against an unreadable store.
+        const orphans = orphanKeys(loadedCards, shared);
+        const drop = (p: PlayerProfile) => orphans.has(getCardKey(p)) && (p.createdAt ?? 0) <= loadedAt;
+        if (orphans.size > 0) {
+          setGlobalDossiers(prev => {
+            const kept = prev.filter(p => !drop(p));
+            saveGlobalDossiers(kept);
+            return kept;
+          });
+          setAllProfiles(prev => prev.filter(p => !drop(p)));
+          setActiveProfile(prev => (prev && drop(prev) ? null : prev));
+          setConversations(prev => {
+            const kept = prev.map(conv => withoutCards(conv, drop));
+            localStorage.setItem('futbolpedia-conversations', JSON.stringify(kept));
+            return kept;
+          });
+        }
+        localStorage.setItem(LEGACY_PURGE_KEY, String(Date.now()));
+      });
+    }
 
     // Handle shared content via URL hash (#/p/<slug> for dossiers, #/c/<code> for conversations)
     const loadSharedProfile = async () => {
@@ -465,8 +504,7 @@ const App: React.FC = () => {
           if (title === 'New Chat' || title === 'New Briefing' || title === '') {
             const firstUserMsg = messages.find(m => m.sender === 'user');
             if (firstUserMsg && typeof firstUserMsg.content === 'string') {
-              const textContent = firstUserMsg.content;
-              title = textContent.substring(0, 30).trim() + (textContent.length > 30 ? '...' : '');
+              title = autoTitle(firstUserMsg.content);
             }
           }
 
@@ -486,6 +524,28 @@ const App: React.FC = () => {
       return updated;
     });
   }, [messages, activeProfile, allProfiles, domain, activeConversationId]);
+
+  // Once the opening exchange lands, the model titles the chat from what it's about. Older chats
+  // still wearing their stand-in title get one the next time they're opened.
+  const titleRequestsRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (isLoading || !activeConversationId || titleRequestsRef.current.has(activeConversationId)) return;
+    const conv = conversations.find(c => c.id === activeConversationId);
+    if (!conv || !hasAutoTitle(conv)) return;
+    const brief = titleBrief(conv.messages);
+    if (!brief) return;
+    const id = activeConversationId;
+    titleRequestsRef.current.add(id);
+    void generateChatTitle(brief).then(title => {
+      if (!title) return;
+      setConversations(prev => {
+        // A rename while the title was being written wins.
+        const updated = prev.map(c => (c.id === id && hasAutoTitle(c) ? { ...c, title, titleSource: 'generated' as const } : c));
+        localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
+        return updated;
+      });
+    });
+  }, [isLoading, activeConversationId, conversations]);
   
   const handleDomainChange = useCallback((next: ChatDomain) => {
     setDomain(next);
@@ -1190,7 +1250,7 @@ const App: React.FC = () => {
 
   const handleRenameConversation = useCallback((id: string, newTitle: string) => {
     setConversations(prev => {
-      const updated = prev.map(c => c.id === id ? { ...c, title: newTitle } : c);
+      const updated = prev.map(c => c.id === id ? { ...c, title: newTitle, titleSource: 'user' as const } : c);
       localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
       return updated;
     });
@@ -1289,7 +1349,11 @@ const App: React.FC = () => {
         isDarkMode={isDarkMode} 
         dossierCount={globalDossiers.length}
         view={view}
-        onViewChange={setView}
+        onViewChange={(next) => {
+          // The header's Dossiers button always opens on the global hub.
+          if (next === 'hub') setHubTab('global');
+          setView(next);
+        }}
         onToggleConversations={toggleConversations}
         isConversationsOpen={isConversationsOpen}
       />
@@ -1314,7 +1378,7 @@ const App: React.FC = () => {
               onAsk={handleScoutAsk}
               onRetry={(id) => updateJob(id, { status: 'queued', error: undefined, stage: undefined })}
               onDismiss={(id) => setScoutJobs(prev => prev.filter(j => j.id !== id))}
-              onOpenHub={() => { setView('hub'); if (isPhone()) setIsPanelOpen(false); }}
+              onOpenHub={() => { setHubTab('mine'); setView('hub'); if (isPhone()) setIsPanelOpen(false); }}
               onClose={() => setIsPanelOpen(false)}
               focusToken={scoutFocus}
             />
@@ -1349,7 +1413,7 @@ const App: React.FC = () => {
               onAskAbout={handleAskAboutDossier}
               onRenameDossier={handleRenameDossier}
               onDeleteDossier={handleDeleteDossier}
-              onStartChat={() => setView('chat')}
+              onScout={(name) => (name ? handleScoutName(name) : openScout())}
             />
           </div>
 

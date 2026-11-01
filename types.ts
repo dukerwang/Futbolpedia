@@ -431,4 +431,6 @@ export interface Conversation {
   allProfiles: PlayerProfile[];
   /** Chat domain for this conversation. Missing on legacy rows → treat as 'default'. */
   domain?: ChatDomain;
+  /** Who set the title: the model from the opening exchange, or the user. Missing means a stand-in. */
+  titleSource?: 'generated' | 'user';
 }

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import type { PlayerProfile } from '../types';
 import type { PlayerMatch } from '../services/playerSearch';
+import { positionCodes } from '../constants/ratingTiers';
 import { describeCardEdition, pillClass } from './pills';
 
 /** One pickable line: a card a player already has, or an action on what was typed. */
@@ -109,7 +110,7 @@ export const PlayerPicker: React.FC<PlayerPickerProps> = ({
             );
           }
           const edition = describeCardEdition(row.card);
-          const meta = [row.match.position, row.match.club].filter(Boolean).join(' · ');
+          const meta = [positionCodes(row.match.position ?? ''), row.match.club].filter(Boolean).join(' · ');
           return (
             <li
               key={row.id}

@@ -17,6 +17,9 @@ export interface ScoutJob {
   error?: string;
 }
 
+/** Scout keeps a short shelf of recent cards; the Dossiers hub holds the whole library. */
+const RECENT_LIMIT = 8;
+
 /** Names typed or pasted into the Scout field: one per comma, semicolon or line. */
 const namesIn = (text: string): string[] =>
   [...new Set(text.split(/[,;\n]+/).map((n) => n.trim().replace(/\s+/g, ' ')).filter((n) => n.length >= 2))].slice(0, 10);
@@ -139,12 +142,14 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
   const fresh = new Set(freshKeys);
   const library = useMemo(
     () =>
-      [...dossiers].sort((a, b) => {
-        const fa = freshKeys.indexOf(getCardKey(a));
-        const fb = freshKeys.indexOf(getCardKey(b));
-        if (fa !== fb) return fa === -1 ? 1 : fb === -1 ? -1 : fa - fb;
-        return (b.createdAt ?? 0) - (a.createdAt ?? 0);
-      }),
+      [...dossiers]
+        .sort((a, b) => {
+          const fa = freshKeys.indexOf(getCardKey(a));
+          const fb = freshKeys.indexOf(getCardKey(b));
+          if (fa !== fb) return fa === -1 ? 1 : fb === -1 ? -1 : fa - fb;
+          return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+        })
+        .slice(0, RECENT_LIMIT),
     [dossiers, freshKeys],
   );
 
@@ -308,18 +313,20 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
           </section>
         )}
 
-        <section aria-label="Your dossiers" className="px-6 sm:px-8 pt-6 pb-10">
+        <section aria-label="Recent dossiers" className="px-6 sm:px-8 pt-6 pb-10">
           <div className="flex items-baseline justify-between mb-2 border-b border-cream-300 dark:border-charcoal-border">
             <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] pb-2">
-              Your dossiers
+              Recent
             </h3>
-            <button
-              type="button"
-              onClick={onOpenHub}
-              className="pb-2 text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/60 hover:text-emerald-700 dark:hover:text-emerald-400 transition-colors"
-            >
-              Global hub
-            </button>
+            {dossiers.length > 0 && (
+              <button
+                type="button"
+                onClick={onOpenHub}
+                className="pb-2 text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/60 hover:text-emerald-700 dark:hover:text-emerald-400 transition-colors"
+              >
+                All {dossiers.length} in Dossiers
+              </button>
+            )}
           </div>
 
           {library.length === 0 ? (
