@@ -7,7 +7,16 @@ import type { LiveClubReport } from './liveFootball';
  * <factual_foundation>; the ids let later stages trace a claim back to its source. Pure functions.
  */
 
-export type EvidenceKind = 'club_context' | 'player_record' | 'league_table' | 'card' | 'web' | 'prior_turn';
+export type EvidenceKind =
+  | 'club_context'
+  | 'player_record'
+  | 'league_table'
+  | 'card'
+  | 'web'
+  | 'prior_turn'
+  | 'season_record'
+  | 'career_record'
+  | 'era_snapshot';
 
 /** Facts are the present (who plays, results, transfers, dates); analysis is read against them. */
 export type ResearchStage = 'facts' | 'analysis';
@@ -128,6 +137,9 @@ const KIND_NAMES: Record<EvidenceKind, string> = {
   card: 'Futbolpedia dossier card',
   web: 'Web search',
   prior_turn: 'Earlier in this conversation',
+  season_record: 'Past season record (Wikipedia, ESPN)',
+  career_record: 'Career record (Wikipedia)',
+  era_snapshot: 'Era snapshot (built from the sources and stored)',
 };
 
 const GAP_HEADINGS: Record<GapStatus, string> = {

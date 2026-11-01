@@ -48,7 +48,10 @@ import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubMana
 import { reconcileDossierNumbers } from './dossierNumberGate';
 import { toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
-import { gateUnsupportedFigures, type FigureClaim } from './figureGate';
+import { expandTables, gateUnsupportedFigures, type FigureClaim, type FigureGateOptions } from './figureGate';
+import { figureBudget, formatDebateBriefForWriter, runDebateResearch, type DebateBrief } from './debateBrief';
+import { standingsFor, type CardStanding } from './debateConsistency';
+import { liveDebateRecords, liveEraSnapshots } from './eraSnapshots';
 
 /**
  * Retains the most recent verified `<factual_foundation>` for the active conversation thread
@@ -92,7 +95,7 @@ const threadIsHistorical = (route: TurnRoute, history: ChatMessage[], message = 
  */
 export function sanitizeScoutProse(
   text: string,
-  managerCtx?: { verifiedFacts?: string[]; clubManagers?: VerifiedClubManager[] },
+  managerCtx?: { verifiedFacts?: string[]; clubManagers?: VerifiedClubManager[]; past?: boolean },
   cardsInPlay: PlayerProfile[] = [],
   figures?: FigureCheck,
 ): string {
@@ -107,19 +110,23 @@ export function sanitizeScoutProse(
     )
     // Evidence ledger ids ("[E3]", "[E1, E4]") are for tracing, not for the reader.
     .replace(/\s*\[E\d+(?:\s*[,&]\s*E\d+)*\]/g, '')
-    .replace(/<\/?(?:situation_snapshot|research_brief|factual_foundation|locked_dossiers|calibrated_peer_ledger|saved_dossiers)>/gi, '')
+    .replace(/<\/?(?:situation_snapshot|research_brief|debate_brief|factual_foundation|locked_dossiers|calibrated_peer_ledger|saved_dossiers)>/gi, '')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
 
-  const scrubbed = scrubUnverifiedManagerText(stripped, {
-    currentHeadCoach: null,
-    verifiedFacts: managerCtx?.verifiedFacts ?? [],
-    clubManagers: managerCtx?.clubManagers ?? [],
-  });
+  // The manager gate guards today's coaches. An answer about past seasons names the coaches of
+  // those seasons, which it would rewrite as "the current setup", so it doesn't run there.
+  const scrubbed = managerCtx?.past
+    ? stripped
+    : scrubUnverifiedManagerText(stripped, {
+        currentHeadCoach: null,
+        verifiedFacts: managerCtx?.verifiedFacts ?? [],
+        clubManagers: managerCtx?.clubManagers ?? [],
+      });
   const reconciled = reconcileDossierNumbers(scrubbed, cardsInPlay).text;
   if (!figures) return reconciled;
-  const gated = gateUnsupportedFigures(reconciled, figures.evidence(), figures.grounded);
-  figures.onRemoved?.(gated.removed);
+  const gated = gateUnsupportedFigures(reconciled, figures.evidence(), figures.grounded, figures.options);
+  figures.onRemoved?.([...gated.removed, ...gated.trimmed]);
   return gated.text;
 }
 
@@ -131,6 +138,8 @@ export function sanitizeScoutProse(
 export interface FigureCheck {
   evidence: () => string;
   grounded: string[];
+  /** On a turn about the past: check each figure's qualifier and span, and hold the reply to its figure budget. */
+  options?: FigureGateOptions;
   onRemoved?: (removed: FigureClaim[]) => void;
 }
 
@@ -242,6 +251,8 @@ export interface ConversationalScoutParams {
   perf?: (label: string) => void;
   /** The question's web search, when it started during routing. */
   questionSearch?: Promise<ToolOutcome> | null;
+  /** A debate brief started before routing (`startDebateBrief`), for a question about the past. */
+  debateBrief?: Promise<DebateBrief | null> | null;
 }
 
 /**
@@ -260,6 +271,17 @@ export function proseToolMode(turn: { researched: boolean; isArchive: boolean; c
  */
 const RECENT_TEAM_RULES =
   'Build the team from the first-choice XI in <situation_snapshot>, and otherwise from the recent starting XIs and the injury list in <factual_foundation>, never from the registered squad or memory. Name one player for each role and commit to him; mention another only where the snapshot marks an even split, as the alternative, never as a joint holder of the role or a pair of names in a heading. A player listed as out is unavailable and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes override what you remember of the club. If neither block has recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
+
+/**
+ * How the writer argues a question about the past from the debate brief. Descriptive, like every
+ * prompt here: no players, ratings or sample phrases.
+ */
+const PAST_DEBATE_RULES =
+  'Answer from <debate_brief>. Take its criteria in order: for each, say what the evidence shows for each side (from <factual_foundation> and the stored cards) and which side it favours. Then answer the strongest counter-case directly, conceding what it gets right. For a ranking, give each entry its place and the criterion that separates it from the entry below; for a question about one season, team or player, use the criteria as the structure and end with a clear judgment. Close with the verdict or order the brief settled, in one plain sentence, and why it holds; where the brief says it was held to the stored cards, say so in a sentence. Judge from criteria and evidence, never from reputation alone. Stay consistent with the ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.';
+
+/** What a question about the past may state as fact. */
+const PAST_FACT_RULES =
+  "Quote a precise figure (goals, appearances, points, trophies, records, dates, fees) only where it decides a criterion, as <debate_brief> lists it, and only as <factual_foundation> or a stored card gives it; make every other point in words. A quoted figure keeps the competition and span its source gives: a league figure stays a league figure, a total across all competitions stays a total, and a count for named seasons is never a career total. Keep every fact to the season or spell it belongs to: never move a player, a coach, a trophy or a number into a season or side it wasn't part of, and name the season when a fact from outside the compared window matters. Don't repeat a claim that an era snapshot lists as often misstated, or an anecdote no source here supports. Name a past season's coach only as <factual_foundation> gives him; otherwise describe the side's setup without naming its coach.";
 
 export async function runConversationalScout(
   params: ConversationalScoutParams,
@@ -394,6 +416,8 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   // 2. Universal Calibrated Ledger Matching & Pre-Grounding across Comparisons, Debates, Rankings & Tactical Chat
   let ledger: EvidenceLedger | null = null;
   let brief: ResearchBrief | null = null;
+  let debate: DebateBrief | null = null;
+  let debateCards: CardStanding[] = [];
   let situation: Situation | null = null;
   let researched = false;
   let effectiveLockedBlock = lockedDossiersBlock;
@@ -427,11 +451,11 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         ? route.targetClubs
         : extractThreadClubs(message, history);
 
-    // Verified managers for the clubs in play, looked up alongside pre-grounding.
-    const managersPromise = getVerifiedClubManagers([
-      ...targetClubs,
-      ...lockedCards.filter((c) => !isPrimeCard(c)).map((c) => c.basicInfo.club),
-    ]);
+    // Verified managers for the clubs in play, looked up alongside pre-grounding. Today's coaches
+    // don't matter to a question about the past.
+    const managersPromise = isHistoricalThread
+      ? Promise.resolve<VerifiedClubManager[]>([])
+      : getVerifiedClubManagers([...targetClubs, ...lockedCards.filter((c) => !isPrimeCard(c)).map((c) => c.basicInfo.club)]);
 
     // Extract any capitalized 2-word player names mentioned in the message (e.g. "Marc Cucurella", "Malo Gusto")
     // so API-Football player lookup verifies their registered club even on tactical/pushback turns.
@@ -473,6 +497,29 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         targetClubs.length > 0 ||
         asksLiveSeasonUpdate ||
         (route.needsSearch && Boolean(route.searchQueries?.length)));
+
+    // A question about the past gets a debate brief: the criteria that settle it, the versions
+    // compared, a verdict held to the cards, and the records the verdict depends on.
+    if (isHistoricalThread) {
+      debateCards = standingsFor(lockedCards, true);
+      try {
+        const research = await runDebateResearch(
+          {
+            message,
+            thread: history.length ? ongoingThread.slice(-3000) : '',
+            cards: debateCards,
+            hints: { clubs: targetClubs, players: [...new Set([...route.targetPlayers, ...playerNamesForGrounding])] },
+            season: route.requestedSeason ?? null,
+          },
+          liveToolset([...lockedCards, ...allCalibrated]),
+          { onStage: onStageChange, perf, eras: liveEraSnapshots, debates: liveDebateRecords, early: params.debateBrief },
+        );
+        debate = research.brief;
+        if (research.ledger.entries.length || research.ledger.gaps.length) ledger = research.ledger;
+      } catch (e) {
+        console.warn('[ConversationalScout] Debate research failed:', e);
+      }
+    }
 
     if (shouldPreGround) {
       try {
@@ -518,7 +565,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   const { seasonStartYear } = getCurrentSeasonInfo();
   const factualFoundation =
     ledger && (ledger.entries.length > 0 || ledger.gaps.length > 0)
-      ? formatLedger(ledger, { seasonStart: seasonStartDate(seasonStartYear) })
+      ? formatLedger(ledger, debate ? {} : { seasonStart: seasonStartDate(seasonStartYear) })
       : '';
   let situationBlock = formatSituation(situation);
   const threadSig = getThreadSignature(history, message);
@@ -540,7 +587,9 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
           : 'debate_or_verdict');
 
   let modeGuidance: string;
-  if (route.intent === 'compare' || analyticalMode === 'head_to_head') {
+  if (debate && analyticalMode !== 'archive' && route.intent !== 'archive_inventory') {
+    modeGuidance = PAST_DEBATE_RULES;
+  } else if (route.intent === 'compare' || analyticalMode === 'head_to_head') {
     modeGuidance = `Write a detailed, scout-grade head-to-head comparison covering every player named (${route.targetPlayers.join(', ') || 'all named players'}). Contrast their footballing identity/mould directly across concrete phases of play (build-up/progression, final-third creation or box threat, out-of-possession/rest-defense, and transition) rather than writing two isolated bios. Highlight key separators across the 25-attribute framework, genuine limitations, and relative tier on the Section III scale. For any player present in <locked_dossiers>, use their exact locked Overall, Potential, and 25 attributes. Conclude with a definitive verdict on who holds the higher current standing, who has the higher ceiling, and which tactical setup favors each player. Never output a JSON dossier object.`;
   } else if (route.intent === 'archive_inventory' || analyticalMode === 'archive') {
     modeGuidance = `Summarize or query the user's saved dossier archive clearly using <saved_dossier_archive> or the \`grep_saved_dossiers\` tool.`;
@@ -572,14 +621,15 @@ ${ongoingThread}
 ${situationBlock}
 ${factualFoundation ? `<factual_foundation>\n${factualFoundation}\n</factual_foundation>` : ''}
 ${brief && researched ? formatBriefForWriter(brief) : ''}
+${debate ? formatDebateBriefForWriter(debate, debateCards) : ''}
 ${formatVerifiedManagersBlock(verifiedManagers)}
 ${peerLedgerBlock ?? ''}
 ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}${shownNote}${missingNote}
-2. Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from <situation_snapshot>, the numbered entries in <factual_foundation>, tool calls (\`get_club_recent_team\`, \`get_player_season\`, \`get_league_table\`, Google Search), or existing dossiers, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach. A precise figure (a statistic, fee, percentage, table position, points total, the minute of an event, a shirt number, a quotation) goes in only when one of those sources gives it; for standings call \`get_league_table\`, and otherwise describe the pattern without a number.
-3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.
+${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from <situation_snapshot>, the numbered entries in <factual_foundation>, tool calls (\`get_club_recent_team\`, \`get_player_season\`, \`get_league_table\`, Google Search), or existing dossiers, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach. A precise figure (a statistic, fee, percentage, table position, points total, the minute of an event, a shirt number, a quotation) goes in only when one of those sources gives it; for standings call \`get_league_table\`, and otherwise describe the pattern without a number.
+3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.`}
 4. ${CONTINUITY_REMINDER}
 </instructions>
 <task>${message}</task>`;
@@ -591,26 +641,34 @@ ${savedDossiersBlock}
   // debate from stored cards medium thinking held the first token back by 15 s or more in the evals.
   const thinkingLevelOverride: ThinkingTier = 'low';
 
-  const toolMode = proseToolMode({
-    researched,
-    isArchive: route.intent === 'archive_inventory',
-    cardsLocked: route.targetPlayers.length > 0 && Boolean(effectiveLockedBlock),
-  });
+  // A debate turn already has its records; the writer reads cards locally and only searches when a
+  // lookup failed.
+  const toolMode: ProseToolMode = debate
+    ? ledger?.gaps.some((g) => g.status === 'failed')
+      ? 'full'
+      : 'local_only'
+    : proseToolMode({
+        researched,
+        isArchive: route.intent === 'archive_inventory',
+        cardsLocked: route.targetPlayers.length > 0 && Boolean(effectiveLockedBlock),
+      });
 
   onStageChange?.('Writing scouting analysis...');
 
   const scoutManagerContext = {
     verifiedFacts: factualFoundation ? [factualFoundation] : [],
     clubManagers: verifiedManagers,
+    past: Boolean(debate),
   };
-  // On a turn about the present, precise figures must come from what the turn found.
+  // On a turn about the present, and on one about the past, precise figures must come from what
+  // the turn found: its research, the cards, and what the writer's own tools returned.
   const toolResults: string[] = [];
-  const figureCheck: FigureCheck | undefined = researched
+  const figureCheck: FigureCheck | undefined = researched || debate
     ? {
         evidence: () =>
           [
             situationBlock,
-            factualFoundation,
+            expandTables(factualFoundation),
             effectiveLockedBlock,
             peerLedgerBlock ?? '',
             savedDossiersBlock,
@@ -621,6 +679,7 @@ ${savedDossiersBlock}
             ...toolResults,
           ].join('\n'),
         grounded: [],
+        ...(debate ? { options: { scoped: true, budget: figureBudget(debate) } } : {}),
       }
     : undefined;
   if (cardsInPlay.length === 0) {
@@ -691,7 +750,7 @@ ${savedDossiersBlock}
     figureCheck && {
       ...figureCheck,
       onRemoved: (removed) => {
-        if (removed.length) console.info(`[FigureGate] Removed ${removed.length} unsupported figures: ${removed.map((r) => r.text).join('; ')}`);
+        if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures (unsupported, or over a debate's budget): ${removed.map((r) => r.text).join('; ')}`);
       },
     },
   );

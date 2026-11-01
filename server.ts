@@ -2,6 +2,8 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import path from "path";
+import { promises as fs } from "fs";
+import { createHash } from "crypto";
 import axios from "axios";
 import { pickCurrentCoach } from "./packages/engine/src/gates/managerMentions.ts";
 import { getRealWorldFootballSeason } from "./prompts/scoutCore";
@@ -14,6 +16,7 @@ import {
   type TeamLineup,
 } from "./services/teamLineups";
 import { createLiveFootball } from "./services/liveFootball";
+import { createHistoryFootball, type PermanentStore } from "./services/historyFootball";
 
 async function startServer() {
   const app = express();
@@ -550,6 +553,67 @@ async function startServer() {
     } catch (error: any) {
       console.warn(`[live] table "${league}" failed:`, error?.message || error);
       return res.json({ found: false, status: "failed", reason: "lookup failed" });
+    }
+  });
+
+  // Facts about past seasons for chat research (services/historyFootball.ts): Wikipedia's club
+  // season and player articles, and ESPN's results and lineups for seasons from 2003-04 on. Past
+  // seasons don't change, so each finished lookup is kept for good in memory and on disk, and
+  // survives a restart. Wikipedia asks API clients to name themselves in the User-Agent.
+  const historyDir = path.join(process.cwd(), ".cache", "history");
+  const historyStore: PermanentStore = {
+    async get(key) {
+      const file = path.join(historyDir, `${createHash("sha1").update(key).digest("hex")}.json`);
+      try {
+        return JSON.parse(await fs.readFile(file, "utf8"));
+      } catch {
+        return undefined;
+      }
+    },
+    async set(key, value) {
+      await fs.mkdir(historyDir, { recursive: true });
+      const file = path.join(historyDir, `${createHash("sha1").update(key).digest("hex")}.json`);
+      await fs.writeFile(file, JSON.stringify({ key, ...value }));
+    },
+  };
+  const history = createHistoryFootball({
+    getJson: async (url) => {
+      const res = await axios.get(url, {
+        timeout: 8000,
+        headers: { "User-Agent": "Futbolpedia/3.6 (https://github.com/dukerwang/Futbolpedia)", Accept: "application/json" },
+      });
+      return res.data;
+    },
+    store: historyStore,
+    currentSeasonStart: () => getRealWorldFootballSeason().seasonStartYear,
+  });
+
+  app.get("/api/history/club-season", async (req, res) => {
+    const club = liveQuery(req.query.club);
+    const season = liveQuery(req.query.season);
+    if (!club || !season) return res.status(400).json({ error: "Missing club or season" });
+    const start = Date.now();
+    try {
+      const result = await history.clubSeason(club, season);
+      console.log(`[history] club season "${club}" ${season}: ${"reason" in result ? result.reason : result.title} (${Date.now() - start}ms)${result.missing.length ? `; missing: ${result.missing.map((m) => `${m.item} [${m.status}]`).join("; ")}` : ""}`);
+      return res.json(result);
+    } catch (error: any) {
+      console.warn(`[history] club season "${club}" ${season} failed:`, error?.message || error);
+      return res.json({ found: false, status: "failed", reason: "lookup failed", missing: [] });
+    }
+  });
+
+  app.get("/api/history/player", async (req, res) => {
+    const name = liveQuery(req.query.name);
+    if (!name) return res.status(400).json({ error: "Missing player name" });
+    const start = Date.now();
+    try {
+      const result = await history.playerCareer(name);
+      console.log(`[history] player "${name}": ${"reason" in result ? result.reason : result.title} (${Date.now() - start}ms)`);
+      return res.json(result);
+    } catch (error: any) {
+      console.warn(`[history] player "${name}" failed:`, error?.message || error);
+      return res.json({ found: false, status: "failed", reason: "lookup failed", missing: [] });
     }
   });
 

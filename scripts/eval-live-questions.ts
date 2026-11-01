@@ -14,10 +14,14 @@
  *   npm run eval:live
  *   npm run eval:live -- --only 1,3,8 --label after-snapshots
  *   npm run eval:live -- --warm      # answer each question once first, so the graded run reuses today's club snapshots
+ *   npm run eval:live -- --set historical   # the historical set, each question twice (--repeat 1 to run once)
+ *   npm run eval:live -- --set historical --only 2,3 --repeat 1 --no-builds   # a small, cheap subset
  *
  * The live routes run in-process, so no server is needed. Supabase isn't loaded outside the
  * browser, so club snapshots are built fresh in memory for each run rather than read from the
- * shared table.
+ * shared table. The historical set (docs/superpowers/evals/historical-questions.md) reads the shared
+ * cards from Supabase through a read-only client (`scripts/eval-history.ts`), so its answers see
+ * the cards a user would, and the run never writes to the shared tables.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -51,7 +55,11 @@ const argValue = (flag: string) => {
 };
 const only = argValue('--only')?.split(',').map((n) => Number(n.trim()));
 const warm = args.includes('--warm');
+const set = argValue('--set') === 'historical' ? 'historical' : 'live';
+const repeat = Math.max(1, Number(argValue('--repeat') ?? (set === 'historical' ? 2 : 1)) || 1);
 const label = (argValue('--label') ?? (warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
+const history = await import('./eval-history');
+if (set === 'historical') history.installReadOnlySupabase();
 
 interface Question {
   n: number;
@@ -77,6 +85,19 @@ const live = createLiveFootball(async (url) => {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 });
+// The history routes too, kept in memory for the run (the server also keeps them on disk).
+const { createHistoryFootball } = await import('../services/historyFootball');
+const { getRealWorldFootballSeason } = await import('../prompts/scoutCore');
+const historyStore = new Map<string, any>();
+const pastSeasons = createHistoryFootball({
+  getJson: async (url) => {
+    const res = await realFetch(url, { headers: { 'User-Agent': 'Futbolpedia-eval/3.6 (https://github.com/dukerwang/Futbolpedia)', Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+  store: { get: async (k) => historyStore.get(k), set: async (k, v) => void historyStore.set(k, v) },
+  currentSeasonStart: () => getRealWorldFootballSeason().seasonStartYear,
+});
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input);
@@ -87,12 +108,23 @@ globalThis.fetch = (async (input: any, init?: any) => {
     if (u.pathname === '/api/live/player') return json(await live.player(name));
     if (u.pathname === '/api/live/table') return json(await live.table(u.searchParams.get('league') ?? '', u.searchParams.get('country') ?? undefined));
   }
+  if (url.startsWith('/api/history/')) {
+    const u = new URL(url, 'http://local');
+    if (u.pathname === '/api/history/club-season') return json(await pastSeasons.clubSeason(u.searchParams.get('club') ?? '', u.searchParams.get('season') ?? ''));
+    if (u.pathname === '/api/history/player') return json(await pastSeasons.playerCareer(u.searchParams.get('name') ?? ''));
+  }
   // API-Football's free plan can't read the current season; the app treats a refusal as no data.
   if (url.startsWith('/api/')) return json({ error: 'not available in the eval runner' }, 404);
   return realFetch(input, init);
 }) as typeof fetch;
 
 const { sendMessageToAI } = await import('../services/geminiService');
+// `--no-builds`: read era snapshots but never build one, so a small run doesn't pay for background
+// builds (two searches and a call each) that only later turns would use.
+if (args.includes('--no-builds')) {
+  const { liveEraSnapshots } = await import('../services/eraSnapshots');
+  liveEraSnapshots.get = liveEraSnapshots.stored;
+}
 const { FLASH_MODEL, generateStructured, getAi } = await import('../services/aiClient');
 
 // --- Running a question -----------------------------------------------------------------------
@@ -220,6 +252,59 @@ async function grade(question: string, answer: string, today: string): Promise<{
 // --- The run ----------------------------------------------------------------------------------
 
 const today = new Date().toISOString().slice(0, 10);
+const dir = join(root, 'docs/superpowers/evals/reports');
+const stampOf = (prefix: string) => `${today}-${new Date().toISOString().slice(11, 16).replace(':', '')}-${prefix}${label}`;
+
+const graderCall = async (prompt: string, withSearch: boolean) => {
+  const res = await getAi().models.generateContent({
+    model: FLASH_MODEL,
+    contents: prompt,
+    config: { temperature: 0, ...(withSearch ? { tools: [{ googleSearch: {} }] } : {}), thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM } },
+  });
+  return res.text ?? '';
+};
+
+// `--regrade <report.json>`: run a saved historical report's answers through the figure check again.
+const regrade = argValue('--regrade');
+if (set === 'historical' && regrade) {
+  const saved = JSON.parse(readFileSync(regrade, 'utf8'));
+  const { markdown, json } = await history.regradeFigures(saved, {
+    grade: graderCall,
+    today,
+    label: `${label}-regraded`,
+    model: FLASH_MODEL,
+    repeat: Math.max(...saved.runs.map((r: any) => r.attempt)),
+    questions: [...new Map(saved.runs.map((r: any) => [r.q.n, r.q])).values()] as any,
+  });
+  mkdirSync(dir, { recursive: true });
+  const stamp = stampOf('historical-regraded-');
+  writeFileSync(join(dir, `${stamp}.md`), markdown);
+  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(json, null, 2));
+  console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
+  process.exit(0);
+}
+
+if (set === 'historical') {
+  const all = history.readQuestionTable(join(root, 'docs/superpowers/evals/historical-questions.md'));
+  const picked = all.filter((q) => !only || only.includes(q.n));
+  const { markdown, json } = await history.runHistoricalSet({
+    questions: picked,
+    pairs: history.paraphrasePairs(all).filter(([a, b]) => picked.some((q) => q.n === a) && picked.some((q) => q.n === b)),
+    repeat,
+    ask,
+    grade: graderCall,
+    today,
+    label,
+    model: FLASH_MODEL,
+  });
+  mkdirSync(dir, { recursive: true });
+  const stamp = stampOf('historical-');
+  writeFileSync(join(dir, `${stamp}.md`), markdown);
+  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(json, null, 2));
+  console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
+  process.exit(0);
+}
+
 const questions = readQuestions().filter((q) => !only || only.includes(q.n));
 const results: { q: Question; run: RunResult; grade: Grade | null; graderRaw: string }[] = [];
 
@@ -297,9 +382,8 @@ ${r.run.perf.map((l) => `    ${l}`).join('\n') || '    (no perf lines)'}
   )
   .join('\n')}`;
 
-const dir = join(root, 'docs/superpowers/evals/reports');
 mkdirSync(dir, { recursive: true });
-const stamp = `${today}-${new Date().toISOString().slice(11, 16).replace(':', '')}-${label}`;
+const stamp = stampOf('');
 writeFileSync(join(dir, `${stamp}.md`), report);
 writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(results, null, 2));
 console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
