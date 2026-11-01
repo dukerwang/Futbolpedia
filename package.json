@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "start": "tsx server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/test-dossier-cards.ts && tsx scripts/test-dossier-pipeline.ts && tsx scripts/test-dossier-cache-hit.ts && tsx scripts/test-rating-command.ts && tsx scripts/test-player-search.ts && tsx scripts/test-chat-dossiers.ts && tsx scripts/test-library-cleanup.ts && tsx scripts/test-team-lineups.ts && tsx scripts/test-evidence-ledger.ts && tsx scripts/test-research-agent.ts && tsx scripts/test-chat-consistency.ts && tsx scripts/test-gaffa-name-matching.ts && tsx scripts/test-club-managers.ts"
+    "test": "tsx scripts/test-dossier-cards.ts && tsx scripts/test-dossier-pipeline.ts && tsx scripts/test-dossier-cache-hit.ts && tsx scripts/test-rating-command.ts && tsx scripts/test-player-search.ts && tsx scripts/test-chat-dossiers.ts && tsx scripts/test-library-cleanup.ts && tsx scripts/test-team-lineups.ts && tsx scripts/test-evidence-ledger.ts && tsx scripts/test-research-agent.ts && tsx scripts/test-live-football.ts && tsx scripts/test-chat-consistency.ts && tsx scripts/test-gaffa-name-matching.ts && tsx scripts/test-club-managers.ts"
   },
   "dependencies": {
     "@google/genai": "^1.28.0",

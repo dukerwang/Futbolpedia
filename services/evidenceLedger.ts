@@ -1,6 +1,6 @@
 /**
  * What a chat turn found out before writing: one numbered entry per piece of evidence (a club's
- * recent team, a player's API-Football record, a web search) and the gaps where a lookup came back
+ * recent team, a player's season record, a web search) and the gaps where a lookup came back
  * empty. The writer reads it as <factual_foundation>; the ids let later stages trace a claim back
  * to its source. Pure functions.
  */
@@ -41,9 +41,9 @@ export const hasEvidence = (ledger: EvidenceLedger | null | undefined): boolean 
   Boolean(ledger && ledger.entries.length > 0);
 
 const KIND_NAMES: Record<EvidenceKind, string> = {
-  club_context: 'API-Football club record',
-  player_record: 'API-Football player record',
-  league_table: 'API-Football league table',
+  club_context: 'Live club data (ESPN, FPL)',
+  player_record: 'Live player season (FPL)',
+  league_table: 'League table (ESPN)',
   card: 'Futbolpedia dossier card',
   web: 'Web search',
   prior_turn: 'Earlier in this conversation',

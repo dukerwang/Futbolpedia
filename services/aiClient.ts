@@ -331,9 +331,24 @@ export interface DossierToolHandlers {
 
 const NETWORK_FUNCTION_DECLARATIONS = [
   {
-    name: 'get_player_fact_sheet',
+    name: 'get_club_recent_team',
     description:
-      'Fetches a player’s deterministic API-Football fact sheet (registered club, age, height, weight, injury flag, and current season appearances/goals/assists/tackles/key passes).',
+      "Gets a club's live current-season data from ESPN match records: results in all competitions, the starting XI and formation of each of its last four competitive matches with every starter's position and the subs used, and next fixtures. For Premier League clubs it adds each player's starts, minutes, goals and assists this season and the injury and suspension list. Use it to establish who is actually playing and where.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        team: {
+          type: Type.STRING,
+          description: 'The name of the football club.',
+        },
+      },
+      required: ['team'],
+    },
+  },
+  {
+    name: 'get_player_season',
+    description:
+      "Gets a Premier League player's current season from the Fantasy Premier League feed: club, position, starts, minutes, goals, assists, expected goals and assists, and injury status. Covers Premier League players only.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -345,50 +360,19 @@ const NETWORK_FUNCTION_DECLARATIONS = [
       required: ['name'],
     },
   },
-  {
-    name: 'get_football_squad',
-    description:
-      'Gets the current active roster/squad of a football team using API-Football. Use this to verify current players for a club.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        team: {
-          type: Type.STRING,
-          description: 'The name of the football club.',
-        },
-      },
-      required: ['team'],
-    },
-  },
-  {
-    name: 'get_team_fixtures',
-    description:
-      'Gets the last 5 completed match results, next 3 upcoming fixtures, and registered head coach for a football club using API-Football.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        team: {
-          type: Type.STRING,
-          description: 'The name of the football club.',
-        },
-      },
-      required: ['team'],
-    },
-  },
 ];
 
-/** Server routes behind the API-Football tools, keyed by tool name. */
-const NETWORK_TOOL_ROUTES: Record<string, { arg: 'name' | 'team'; path: string; label: string }> = {
-  get_player_fact_sheet: { arg: 'name', path: '/api/football/player', label: 'Player' },
-  get_football_squad: { arg: 'team', path: '/api/football/squad', label: 'Squad' },
-  get_team_fixtures: { arg: 'team', path: '/api/football/fixtures', label: 'Fixtures' },
+/** Server routes behind the live data tools, keyed by tool name. */
+const NETWORK_TOOL_ROUTES: Record<string, { arg: 'name' | 'team'; param: string; path: string; label: string }> = {
+  get_club_recent_team: { arg: 'team', param: 'name', path: '/api/live/club', label: 'Club' },
+  get_player_season: { arg: 'name', param: 'name', path: '/api/live/player', label: 'Player' },
 };
 
 async function callNetworkTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   const route = NETWORK_TOOL_ROUTES[name];
   const value = args[route.arg];
   if (!value) return { error: `Missing ${route.arg} argument` };
-  const res = await fetch(`${route.path}?${route.arg}=${encodeURIComponent(String(value))}`);
+  const res = await fetch(`${route.path}?${route.param}=${encodeURIComponent(String(value))}`);
   return res.ok ? res.json() : { error: `${route.label} lookup returned status ${res.status}` };
 }
 

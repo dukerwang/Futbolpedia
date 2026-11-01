@@ -1,11 +1,6 @@
 import type { PlayerProfile } from '../types';
 import { getCurrentSeasonInfo, runGroundedSearch } from './aiClient';
-import {
-  fetchApiFootballPlayer,
-  fetchApiFootballTeamContext,
-  formatApiFootballFactSheetBlock,
-  formatApiFootballTeamContextBlock,
-} from './groundingService';
+import { formatLeagueTable, type LiveClubResult, type LivePlayerResult, type LiveTableResult } from './liveFootball';
 import { lookUpDossier } from './dossierLookup';
 import { serializeProfileForHistory } from './dossierContext';
 import { addEvidence, addGap, type EvidenceEntry, type EvidenceLedger } from './evidenceLedger';
@@ -30,10 +25,10 @@ export interface ResearchCall {
 }
 
 /** How the brief and reflect prompts describe the tools. */
-export const RESEARCH_TOOL_GUIDE = `- club_recent_team (subject: club name): the club's starting XIs from its last three matches, how often each player started, its injury list, registered squad, recent results and next fixtures. The most reliable source for who is actually playing.
-- player_season (subject: player's full name): his registered club, position, age and this season's appearances, minutes and output by competition.
-- league_table (subject: league name; country when the name is shared): the current table with points, goal difference and recent form.
-- web_search (subject: the search query): web search with a digest of what the results say, with sources. Use it for tactical analysis, match reports, transfers and their dates, news, and anything the API tools don't cover. Write the query as a researcher would type it, specific and tied to the current season.
+export const RESEARCH_TOOL_GUIDE = `- club_recent_team (subject: club name): live data for clubs in the major European leagues and several others: results in all competitions, the starting XI and formation of each of its last four competitive matches with every starter's position and the subs used, and next fixtures. For Premier League clubs it adds every player's starts, minutes, goals and assists this season and the injury and suspension list with return news. The most reliable source for who is actually playing and where.
+- player_season (subject: player's full name): Premier League players only: his club, position, starts, minutes, goals, assists, expected goals and assists this season, and injury status. For players elsewhere, use web_search.
+- league_table (subject: league name; country when the name is shared): the current table with points and goal difference, for the major European leagues, the Champions and Europa League phases, and several others.
+- web_search (subject: the search query): web search with a digest of what the results say, with sources. Use it for tactical analysis, match reports, transfers and their dates, news, and anything the other tools don't cover. Write the query as a researcher would type it, specific and tied to the current season.
 - card (subject: player's name; edition: current or prime): Futbolpedia's stored dossier card for the player, with his ratings and attributes.`;
 
 export type ToolResult = Omit<EvidenceEntry, 'id'> | null;
@@ -47,63 +42,38 @@ export interface ResearchToolset {
   card(name: string, edition?: 'current' | 'prime'): Promise<ToolResult>;
 }
 
-interface StandingsRow {
-  rank: number | null;
-  team: string | null;
-  group: string | null;
-  played: number | null;
-  won: number | null;
-  drawn: number | null;
-  lost: number | null;
-  goalDiff: number | null;
-  points: number | null;
-  form: string | null;
+export { formatLeagueTable };
+
+/** A club lookup reads several matches on a cold cache; the others are one cached feed. */
+const CLUB_TIMEOUT_MS = 12_000;
+
+/** A live route's JSON, or null when it failed or ran out of time. */
+async function getLive<T>(url: string, timeoutMs = 8_000): Promise<T | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    return res.ok ? ((await res.json()) as T) : null;
+  } catch {
+    return null;
+  }
 }
 
-/** A league table as text: "1. Team — 30 pts, P12 W9 D3 L0, GD +20, form WWDWW". */
-export const formatLeagueTable = (rows: StandingsRow[]): string =>
-  rows
-    .map(
-      (r) =>
-        `${r.group && rows.some((x) => x.group !== r.group) ? `[${r.group}] ` : ''}${r.rank}. ${r.team} — ${r.points} pts, P${r.played} W${r.won} D${r.drawn} L${r.lost}, GD ${
-          (r.goalDiff ?? 0) > 0 ? '+' : ''
-        }${r.goalDiff}${r.form ? `, form ${r.form}` : ''}`,
-    )
-    .join('\n');
-
-/** The live toolset: API-Football through the app's server routes, Gemini search, stored cards. */
+/** The live toolset: ESPN match data and the FPL feed through the app's server routes, Gemini search, stored cards. */
 export const liveToolset = (cardPool: PlayerProfile[]): ResearchToolset => ({
   async clubRecentTeam(club) {
-    const ctx = await fetchApiFootballTeamContext(club).catch(() => null);
-    if (!ctx) return { result: null, missing: [] };
-    const missing = [
-      ...(ctx.recentLineups?.length ? [] : [`Recent lineups for ${ctx.team} (API-Football returned none)`]),
-      ...(ctx.unavailable ? [] : [`Injury list for ${ctx.team} (API-Football returned none)`]),
-    ];
+    const data = await getLive<LiveClubResult>(`/api/live/club?${new URLSearchParams({ name: club })}`, CLUB_TIMEOUT_MS);
+    if (!data) return { result: null, missing: [] };
     return {
-      result: { kind: 'club_context', label: `${ctx.team}: recent team, injuries, squad and fixtures`, content: formatApiFootballTeamContextBlock(ctx) },
-      missing,
+      result: data.found ? { kind: 'club_context', label: `${data.team}: recent matches, starting XIs, availability and fixtures`, content: data.text } : null,
+      missing: data.missing ?? [],
     };
   },
   async playerSeason(name) {
-    const player = await fetchApiFootballPlayer(name).catch(() => null);
-    return player ? { kind: 'player_record', label: name, content: formatApiFootballFactSheetBlock(player) } : null;
+    const data = await getLive<LivePlayerResult>(`/api/live/player?${new URLSearchParams({ name })}`);
+    return data?.found ? { kind: 'player_record', label: `${data.name} (${data.team})`, content: data.text } : null;
   },
   async leagueTable(league, country) {
-    try {
-      const params = new URLSearchParams({ league, ...(country ? { country } : {}) });
-      const res = await fetch(`/api/football/standings?${params}`);
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (!data?.available || !Array.isArray(data.table)) return null;
-      return {
-        kind: 'league_table',
-        label: `${data.league}${data.country ? ` (${data.country})` : ''} table, ${data.season}`,
-        content: formatLeagueTable(data.table),
-      };
-    } catch {
-      return null;
-    }
+    const data = await getLive<LiveTableResult>(`/api/live/table?${new URLSearchParams({ league, ...(country ? { country } : {}) })}`);
+    return data?.found ? { kind: 'league_table', label: `${data.league} table${data.season ? `, ${data.season}` : ''}`, content: data.text } : null;
   },
   async webSearch(query) {
     const { month, year } = getCurrentSeasonInfo();
@@ -144,8 +114,8 @@ export function sanitizeCalls(raw: unknown, limit: number, already: ResearchCall
 }
 
 const GAP_LABELS: Record<ResearchToolName, (c: ResearchCall) => string> = {
-  club_recent_team: (c) => `API-Football record for ${c.subject} (recent lineups, injuries, squad)`,
-  player_season: (c) => `API-Football record for ${c.subject}`,
+  club_recent_team: (c) => `Live match data for ${c.subject} (recent XIs, availability, fixtures)`,
+  player_season: (c) => `Season record for ${c.subject} (covered for Premier League players only)`,
   league_table: (c) => `League table for ${c.subject}`,
   web_search: (c) => `Web search: ${c.subject}`,
   card: (c) => `Stored card for ${c.subject}`,
@@ -188,7 +158,8 @@ export async function runCalls(
   const outcomes = await Promise.all(calls.map(run));
   let next = ledger;
   outcomes.forEach(({ result, missing }, i) => {
-    next = result ? addEvidence(next, result) : addGap(next, GAP_LABELS[calls[i].tool](calls[i]));
+    // A lookup that says what it couldn't get files that instead of the generic gap.
+    next = result ? addEvidence(next, result) : missing.length ? next : addGap(next, GAP_LABELS[calls[i].tool](calls[i]));
     for (const gap of missing) next = addGap(next, gap);
   });
   return next;

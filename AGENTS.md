@@ -15,7 +15,7 @@ No test runner is configured. TypeScript type-check: `npx tsc --noEmit`.
 ## Environment Variables
 
 - `API_KEY` — Google Gemini API key (used by `services/geminiService.ts`)
-- `API_FOOTBALL_KEY` — API-Football key (used by `server.ts`)
+- `API_FOOTBALL_KEY` — API-Football key (used by `server.ts`; the free plan can't read the current season, so chat research uses the keyless ESPN and Fantasy Premier League feeds behind `/api/live/*`)
 
 Supabase credentials are hardcoded in `geminiService.ts` (publishable key, safe for client exposure). The Supabase JS client is loaded via a `<script>` tag in `index.html` and accessed at `window.supabase`, not via an npm package — see the guard at the top of `geminiService.ts`.
 

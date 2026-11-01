@@ -30,7 +30,7 @@ test('entries are numbered in order and keep their sources', () => {
   ledger = addEvidence(ledger, { kind: 'web', label: 'Club injuries', content: 'Two defenders out.', sources: ['Report (https://example.com)'] });
   assert.deepEqual(ledger.entries.map((e) => e.id), ['E1', 'E2']);
   const text = formatLedger(ledger);
-  assert.match(text, /\[E1\] API-Football club record — Club: recent team/);
+  assert.match(text, /\[E1\] Live club data \(ESPN, FPL\) — Club: recent team/);
   assert.match(text, /\[E2\] Web search — Club injuries\nTwo defenders out\.\nSources: Report \(https:\/\/example\.com\)/);
 });
 
