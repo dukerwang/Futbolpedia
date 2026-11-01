@@ -122,7 +122,7 @@ export const liveToolset = (cardPool: PlayerProfile[]): ResearchToolset => ({
     const data = res.data;
     return 'reason' in data
       ? none(data.status ?? 'empty', data.reason)
-      : found({ kind: 'player_record', label: `${data.name} (${data.team})`, content: data.text, stage: 'facts' });
+      : found({ kind: 'player_record', label: `${data.name} (${data.team})`, content: data.text, stage: 'facts', team: data.team });
   },
   async leagueTable(league, country) {
     const res = await getLive<LiveTableResult>(`/api/live/table?${new URLSearchParams({ league, ...(country ? { country } : {}) })}`);

@@ -146,6 +146,14 @@ await test('the first-choice XI follows recent starts, skips the injured and nam
   assert.deepEqual(xi.map((s) => s.role), ['G', 'LB', 'CD-L', 'CD-R', 'RB', 'DM', 'CM-L', 'CM-R', 'LF', 'F', 'RF']);
 });
 
+await test('two starts against one is not a split, so the writer gets one name', () => {
+  const twoToOne: LiveLineup[] = [lineups[0], lineups[1], lineups[2]];
+  const { xi } = firstChoiceXI(report({ lineups: twoToOne, fplPlayers: null }));
+  const lb = xi.find((s) => s.role === 'LB')!;
+  assert.equal(lb.name, 'New Fullback');
+  assert.equal(lb.rotation, undefined);
+});
+
 await test('domestic cups are told apart from league and European matches', () => {
   for (const c of ['Carabao Cup (Fourth Round)', 'Copa del Rey', 'Coppa Italia', 'DFB Pokal', 'Coupe de France', 'FA Cup']) assert.equal(isDomesticCup(c), true, c);
   for (const c of ['Premier League', 'UEFA Champions League (League Phase)', 'UEFA Europa League', 'LALIGA']) assert.equal(isDomesticCup(c), false, c);
@@ -217,7 +225,7 @@ await test('the snapshot reads as one dated block the writer can argue from', ()
   });
   const text = formatSituation({ asOf: '2026-11-01', clubs: [club], players: [], unknowns: [] });
   assert.match(text, /^<situation_snapshot>\nThe present as of 2026-11-01/);
-  assert.match(text, /First-choice XI \(4-3-3, from the last 4 starting XIs\): G Keeper \(4\/4\) \| LB New Fullback \(2\/4, rotates with Old Fullback\)/);
+  assert.match(text, /First-choice XI \(4-3-3, from the last 4 starting XIs\): G Keeper \(4\/4\) \| LB New Fullback \(2\/4, even split with Old Fullback\)/);
   assert.match(text, /Out or doubtful \(injury list\): Main Nine \(Hamstring injury - Expected back 29 Nov\); Anchor/);
   assert.match(text, /Form, most recent first \(WDLW\)/);
   assert.match(text, /Changed since last season: A new left-back signed in August/);
@@ -324,7 +332,7 @@ const liveOutcome = (team: string): Promise<ToolOutcome> =>
   Promise.resolve({ status: 'found', result: { kind: 'club_context', label: team, content: 'XIs', club: report({ team }) }, missing: [] });
 
 const fakeStore = (rows: Record<string, SnapshotRow>, built: (club: string) => ClubSnapshot | null, now = () => NOW) => {
-  const log = { reads: [] as string[], writes: [] as SnapshotRow[], builds: [] as string[] };
+  const log = { reads: [] as string[], writes: [] as SnapshotRow[], builds: [] as string[], researched: [] as string[] };
   const store = createClubSnapshotStore({
     read: async (key) => {
       log.reads.push(key);
@@ -334,9 +342,14 @@ const fakeStore = (rows: Record<string, SnapshotRow>, built: (club: string) => C
       log.writes.push(row);
       rows[row.club_key] = row;
     },
-    build: async (club) => {
-      log.builds.push(club);
+    research: async (club, live) => {
+      if (!live.result?.club) return null;
+      log.researched.push(club);
       await new Promise((r) => setTimeout(r, 5));
+      return { calls: [{ tool: 'web_search', subject: `${club} news` }], outcomes: [{ status: 'found', result: { kind: 'web', label: `${club} news`, content: 'News.' }, missing: [] }] };
+    },
+    summarize: async (club) => {
+      log.builds.push(club);
       return built(club);
     },
     now,
@@ -380,6 +393,17 @@ await test('a stale or old-version row is rebuilt once, however many turns ask a
   const second = fakeStore({ [toClubKey('Westside')]: oldVersion }, (club) => snapshot(club));
   await second.store.get('Westside', liveOutcome('Westside'));
   assert.deepEqual(second.log.builds, ['Westside']);
+});
+
+await test("a turn reads the build's research pass, and the build reuses it rather than searching again", async () => {
+  const { store, log } = fakeStore({}, (club) => snapshot(club));
+  const [pass, built] = await Promise.all([store.research('Northside', liveOutcome('Northside')), store.get('Northside', liveOutcome('Northside'))]);
+  assert.equal(pass?.outcomes[0].result?.content, 'News.');
+  assert.equal(built?.club, 'Northside');
+  assert.deepEqual(log.researched, ['Northside']);
+  assert.deepEqual(log.builds, ['Northside']);
+  // No live data means nothing to research.
+  assert.equal(await store.research('Nowhere', Promise.resolve({ status: 'failed', result: null, missing: [] })), null);
 });
 
 await test('a failed build is never stored, and is retried after a few minutes rather than straight away', async () => {

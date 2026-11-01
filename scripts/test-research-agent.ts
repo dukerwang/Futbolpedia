@@ -15,7 +15,10 @@ import {
   fallbackBrief,
   formatBriefForWriter,
   REFLECT_CUTOFF_MS,
+  looksLikePresentQuestion,
+  RESEARCH_DEADLINE_MS,
   runResearch,
+  startQuestionSearch,
   type ResearchBrief,
   type ResearchContext,
   type ResearchModel,
@@ -309,8 +312,15 @@ await test('analysis searches start after the live facts and read their sources 
 });
 
 /** A snapshot source that serves `stored` and records what it was asked to build. */
-const fakeSnapshots = (stored: Record<string, ClubSnapshot>, builds: string[] = []): SnapshotSource => ({
+const fakeSnapshots = (stored: Record<string, ClubSnapshot>, builds: string[] = [], researched: string[] = []): SnapshotSource => ({
   stored: async (club) => stored[club] ?? null,
+  research: async (club) => {
+    researched.push(club);
+    return {
+      calls: [{ tool: 'web_search', subject: `${club} changes since last season`, stage: 'facts' }],
+      outcomes: [{ status: 'found', result: { kind: 'web', label: `${club} changes since last season`, content: '[2026-08-01] A new coach.' }, missing: [] }],
+    };
+  },
   get: async (club) => {
     if (stored[club]) return stored[club];
     builds.push(club);
@@ -345,7 +355,9 @@ await test("a stored snapshot reaches the brief and stands in for the situation 
   });
   assert.deepEqual(seen[0].storedSnapshots, [{ club: 'Club', asOf: '2026-11-01' }]);
   // The brief planned nothing, but a question about the present still gets the club's live data.
+  // With today's snapshot for every club, there's no research pass and no wait on a search.
   assert.deepEqual(asked, ['club:Club']);
+  assert.deepEqual(seen[0].running, []);
   assert.equal(ledger.entries.length, 1);
   assert.equal(situation?.clubs[0].distinctive, 'Presses far higher than last season.');
   // The live core wins over the stored one: today's XI, the stored story.
@@ -406,6 +418,157 @@ await test('past the cutoff, the situation snapshot is what code worked out, wit
   const { situation } = await runResearch(ctx, reportTools([], {}), { model, situationModel: noModel, now: () => clock });
   assert.equal(situation?.clubs[0].club, 'Club');
   assert.equal(situation?.clubs[0].distinctive, undefined);
+});
+
+await test("a club with no snapshot gets a research pass the turn reads, and the brief hears what's running", async () => {
+  const asked: string[] = [];
+  const researched: string[] = [];
+  const seen: ResearchContext[] = [];
+  const model: ResearchModel = {
+    writeBrief: async (c) => {
+      seen.push(c);
+      // The brief repeats the question search; it isn't run twice.
+      return brief([{ tool: 'web_search', subject: ctx.message, stage: 'facts' }]);
+    },
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
+  };
+  const situationModel: SituationModel = { enrich: async () => ({ clubs: [], players: [], unknowns: [] }) };
+  const { ledger } = await runResearch({ ...ctx, present: true }, reportTools(asked, {}), { model, situationModel, snapshots: fakeSnapshots({}, [], researched) });
+  assert.deepEqual(researched, ['Club']);
+  assert.equal(seen[0].running?.length, 2);
+  assert.match(seen[0].running![1], /^for Club, searches on what changed since last season/);
+  assert.deepEqual(asked.filter((a) => a.startsWith('web:')), [`web:${ctx.message}`]);
+  assert.deepEqual(ledger.entries.map((e) => e.label), ['Club', 'Club changes since last season']);
+});
+
+await test('a web search that cannot finish by the deadline is not started, and a slow lookup is left out at the deadline', async () => {
+  let clock = 0;
+  const asked: string[] = [];
+  const tools: ResearchToolset = {
+    ...fakeTools({ 'table:League': 'Table' }, asked),
+    // A feed that never answers.
+    playerSeason: () => new Promise(() => {}),
+  };
+  const model: ResearchModel = {
+    writeBrief: async () => {
+      // 300 ms left: too little for any search, and a short wait for the slow feed.
+      clock = RESEARCH_DEADLINE_MS - 300;
+      return brief([
+        { tool: 'web_search', subject: 'Club analysis', stage: 'analysis' },
+        { tool: 'league_table', subject: 'League' },
+        { tool: 'player_season', subject: 'Someone' },
+      ]);
+    },
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
+  };
+  const started = Date.now();
+  const { ledger } = await runResearch({ ...ctx, hints: { clubs: [], players: [] } }, tools, {
+    model,
+    situationModel: { enrich: async () => ({ clubs: [], players: [], unknowns: [] }) },
+    now: () => clock + (Date.now() - started),
+  });
+  assert.ok(!asked.includes('web:Club analysis'), 'the search was never started');
+  assert.ok(asked.includes('table:League'));
+  assert.ok(Date.now() - started < 2_000, 'research stopped at the deadline');
+  assert.deepEqual(ledger.entries.map((e) => e.kind), ['league_table']);
+  const notes = ledger.lookups.map((l) => `${l.tool}:${l.status}:${l.note ?? ''}`);
+  assert.ok(notes.includes('web_search:failed:not started: no time left for a web search'));
+  assert.ok(notes.includes('player_season:failed:still running when the writer started'));
+});
+
+await test('a lookup that misses the deadline but finishes while reflect and the snapshot run still reaches the writer', async () => {
+  let clock = 0;
+  const started = Date.now();
+  const tools: ResearchToolset = {
+    ...fakeTools({}),
+    // Answers 150 ms after the deadline, inside the situation call's 300 ms.
+    leagueTable: () => new Promise((r) => setTimeout(() => r({ status: 'found', result: { kind: 'league_table', label: 'League', content: 'Table' }, missing: [] }), 250)),
+  };
+  const model: ResearchModel = {
+    writeBrief: async () => {
+      clock = RESEARCH_DEADLINE_MS - 100;
+      return brief([{ tool: 'league_table', subject: 'League' }]);
+    },
+    reflect: async () => assert.fail('a turn that ran to the deadline skips reflect'),
+  };
+  const situationModel: SituationModel = {
+    enrich: async () => {
+      await new Promise((r) => setTimeout(r, 300));
+      return { clubs: [], players: [], unknowns: [] };
+    },
+  };
+  const { ledger } = await runResearch({ ...ctx, hints: { clubs: [], players: ['Someone'] } }, tools, {
+    model,
+    situationModel,
+    now: () => clock + (Date.now() - started),
+  });
+  assert.deepEqual(ledger.entries.map((e) => e.kind), ['league_table']);
+  assert.ok(!ledger.gaps.some((g) => /League/.test(g.label)));
+});
+
+await test('a question about the present starts its search during routing, and research uses that search rather than a second one', async () => {
+  assert.equal(looksLikePresentQuestion("How is Liverpool's midfield set up right now?"), true);
+  assert.equal(looksLikePresentQuestion("Who's injured at Manchester City at the moment?"), true);
+  assert.equal(looksLikePresentQuestion('Prime Zidane or prime Kaká?'), false);
+  assert.equal(looksLikePresentQuestion('Rank the best centre-backs of the 2000s'), false);
+  assert.equal(looksLikePresentQuestion('rate Bukayo Saka'), false);
+
+  const asked: string[] = [];
+  const tools = fakeTools({ [`web:${ctx.message}`]: 'Found early.' }, asked);
+  const early = startQuestionSearch("Break down Club's build-up shape this season", tools);
+  assert.ok(early);
+  const model: ResearchModel = {
+    writeBrief: async () => brief([]),
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
+  };
+  const { ledger } = await runResearch({ ...ctx, hints: { clubs: [], players: [] }, present: true, questionSearch: early }, tools, {
+    model,
+    situationModel: { enrich: async () => ({ clubs: [], players: [], unknowns: [] }) },
+  });
+  assert.deepEqual(asked, [`web:${ctx.message}`]);
+  assert.deepEqual(ledger.entries.map((e) => e.content), ['Found early.']);
+});
+
+await test("a spotted player's record opens the club he plays for, and the snapshot runs alongside the brief", async () => {
+  const asked: string[] = [];
+  const order: string[] = [];
+  const tools: ResearchToolset = {
+    ...reportTools(asked, {}),
+    playerSeason: async (name) => {
+      asked.push(`player:${name}`);
+      return { status: 'found', result: { kind: 'player_record', label: `${name} (Eastside)`, content: `${name} — Eastside, Midfielder.`, team: 'Eastside' }, missing: [] };
+    },
+  };
+  let releaseBrief: () => void = () => {};
+  const model: ResearchModel = {
+    writeBrief: async () => {
+      // The brief only returns once the snapshot call has started.
+      await new Promise<void>((r) => (releaseBrief = r));
+      order.push('brief');
+      return brief([{ tool: 'player_season', subject: 'Some Player' }]);
+    },
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
+  };
+  const inputs: SituationInput[] = [];
+  const situationModel: SituationModel = {
+    enrich: async (input) => {
+      inputs.push(input);
+      order.push('situation');
+      releaseBrief();
+      return { clubs: [], players: [{ name: 'Some Player', club: 'Eastside', role: 'left of a midfield three', form: '', status: 'fit', changes: '' }], unknowns: [] };
+    },
+  };
+  const { situation, ledger } = await runResearch(
+    { ...ctx, hints: { clubs: ['Westside'], players: ['Some Player'] }, present: true },
+    tools,
+    { model, situationModel },
+  );
+  assert.deepEqual(order, ['situation', 'brief']);
+  // The guessed club and the real one are both looked up; the player is asked about once.
+  assert.deepEqual(asked.filter((a) => a.startsWith('club:') || a.startsWith('player:')).sort(), ['club:Eastside', 'club:Westside', 'player:Some Player']);
+  assert.deepEqual(inputs[0].clubs.map((c) => c.club).sort(), ['Eastside', 'Westside']);
+  assert.equal(situation?.players[0].role, 'left of a midfield three');
+  assert.ok(ledger.entries.some((e) => e.kind === 'player_record'));
 });
 
 console.log(`${passes} passed, ${failures} failed`);

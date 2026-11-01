@@ -114,8 +114,8 @@ globalThis.fetch = (async (input: any, init?: any) => {
     );
   }
   if (structured && prompt.includes('You are checking whether research')) {
-    const stale = prompt.match(/\[(E\d+)\] Web search — Southside tactical analysis/)?.[1];
-    return respond(JSON.stringify({ enough: true, discard: stale ? [{ id: stale, reason: 'describes last season' }] : [], calls: [], unresolved: [] }));
+    const stale = [...prompt.matchAll(/\[(E\d+)\] Web search — Southside tactical analysis/g)].map((m) => ({ id: m[1], reason: 'describes last season' }));
+    return respond(JSON.stringify({ enough: true, discard: stale, calls: [], unresolved: [] }));
   }
   if (structured && prompt.includes('situation snapshot a football analyst')) {
     return respond(
@@ -142,7 +142,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
     );
   }
   if (structured) return respond('{}');
-  return respond('New Fullback starts at left-back in a back four.');
+  return respond('New Fullback starts at left-back in a back four. They allow a PPDA of 8.4 when they press. Main Nine leads the line.');
 }) as typeof fetch;
 
 const { sendMessageToAI } = await import('../services/geminiService');
@@ -161,7 +161,8 @@ await test('a question about the present researches facts, then analysis, and th
   const reply = await quietly(() =>
     sendMessageToAI("Break down Southside's build-up shape this season", [], undefined, [], [], { onStageChange: (s) => stages.push(s) }),
   );
-  assert.equal(reply, 'New Fullback starts at left-back in a back four.');
+  // The pressing figure was never looked up, so its sentence goes; the rest stands.
+  assert.equal(reply, 'New Fullback starts at left-back in a back four. Main Nine leads the line.');
   assert.ok(liveAsked.some((u) => u.includes('name=Southside')), 'the club was looked up live');
   assert.ok(stages.includes('Working out what the question needs...'));
 
@@ -175,6 +176,9 @@ await test('a question about the present researches facts, then analysis, and th
 
   const writer = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1)?.prompt ?? '';
   assert.match(writer, /<situation_snapshot>/);
+  assert.match(writer, /A precise figure .* goes in only when one of those sources gives it; for standings call `get_league_table`/);
+  const writerCall = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1);
+  assert.ok(writerCall);
   assert.match(writer, /First-choice XI \(4-3-3, from the last 3 starting XIs\): G Keeper \(3\/3\) \| LB New Fullback/);
   assert.match(writer, /CM-R Eight Two \(3\/3, news reports him out: ankle/);
   assert.match(writer, /Changed since last season: New Fullback signed in August/);
@@ -183,6 +187,9 @@ await test('a question about the present researches facts, then analysis, and th
   // The stale piece was set aside, and the injury gap reads as not covered.
   assert.doesNotMatch(writer, /Departed Star/);
   assert.match(writer, /\[Not covered\][^\]]*Injury list for Southside/);
+  // The club's research pass and the search on the question went in with the turn's own lookups.
+  assert.match(writer, /Web search — Southside transfers in and out and coaching changes since last season/);
+  assert.match(writer, /Web search — Break down Southside's build-up shape this season/);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

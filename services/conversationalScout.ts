@@ -27,7 +27,7 @@ import {
 } from './dossierStore';
 import { gatherSearchFoundation } from './groundingService';
 import { formatBriefForWriter, runResearch, type ResearchBrief } from './researchAgent';
-import { liveToolset } from './researchTools';
+import { liveToolset, type ToolOutcome } from './researchTools';
 import { liveClubSnapshots } from './clubSnapshots';
 import { formatSituation, type Situation } from './situationSnapshot';
 import {
@@ -48,6 +48,7 @@ import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubMana
 import { reconcileDossierNumbers } from './dossierNumberGate';
 import { toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
+import { gateUnsupportedFigures, type FigureClaim } from './figureGate';
 
 /**
  * Retains the most recent verified `<factual_foundation>` for the active conversation thread
@@ -81,9 +82,9 @@ const recentThreadText = (history: ChatMessage[], count = 6): string =>
  * Whether the thread is about players' primes. A follow-up such as "he wasn't better than him"
  * names no timeframe, but continues a prime-versus-prime debate.
  */
-const threadIsHistorical = (route: TurnRoute, history: ChatMessage[]): boolean =>
+const threadIsHistorical = (route: TurnRoute, history: ChatMessage[], message = ''): boolean =>
   route.isHistorical ||
-  (!route.wantsCurrentForm && /\b(prime|peak|all[- ]time)\b/i.test(recentThreadText(history)));
+  (!route.wantsCurrentForm && /\b(prime|peak|all[- ]time|(?:19|20)\d0s)\b/i.test(`${recentThreadText(history)}\n${message}`));
 
 /**
  * Strip leaked internal grounding tags or search citations from user-facing prose, enforce
@@ -93,6 +94,7 @@ export function sanitizeScoutProse(
   text: string,
   managerCtx?: { verifiedFacts?: string[]; clubManagers?: VerifiedClubManager[] },
   cardsInPlay: PlayerProfile[] = [],
+  figures?: FigureCheck,
 ): string {
   const stripped = text
     .replace(
@@ -114,7 +116,22 @@ export function sanitizeScoutProse(
     verifiedFacts: managerCtx?.verifiedFacts ?? [],
     clubManagers: managerCtx?.clubManagers ?? [],
   });
-  return reconcileDossierNumbers(scrubbed, cardsInPlay).text;
+  const reconciled = reconcileDossierNumbers(scrubbed, cardsInPlay).text;
+  if (!figures) return reconciled;
+  const gated = gateUnsupportedFigures(reconciled, figures.evidence(), figures.grounded);
+  figures.onRemoved?.(gated.removed);
+  return gated.text;
+}
+
+/**
+ * What a live answer's precise figures are checked against (`figureGate.ts`): the turn's evidence,
+ * read when the check runs so tool results the writer fetched count, and the passages its own
+ * search grounded.
+ */
+export interface FigureCheck {
+  evidence: () => string;
+  grounded: string[];
+  onRemoved?: (removed: FigureClaim[]) => void;
 }
 
 interface ChallengeTurnResponse {
@@ -223,6 +240,8 @@ export interface ConversationalScoutParams {
   onStageChange?: (stageLabel: string) => void;
   /** Marks a step for the turn's timing log. */
   perf?: (label: string) => void;
+  /** The question's web search, when it started during routing. */
+  questionSearch?: Promise<ToolOutcome> | null;
 }
 
 /**
@@ -240,7 +259,7 @@ export function proseToolMode(turn: { researched: boolean; isArchive: boolean; c
  * only recent lineups and the injury list say who plays, so the answer starts there.
  */
 const RECENT_TEAM_RULES =
-  'Build the team from the first-choice XI in <situation_snapshot>, and otherwise from the recent starting XIs and the injury list in <factual_foundation>, never from the registered squad or memory. Name one player for each role; name a second only where the snapshot says they rotate. A player listed as out is unavailable and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes override what you remember of the club. If neither block has recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
+  'Build the team from the first-choice XI in <situation_snapshot>, and otherwise from the recent starting XIs and the injury list in <factual_foundation>, never from the registered squad or memory. Name one player for each role and commit to him; mention another only where the snapshot marks an even split, as the alternative, never as a joint holder of the role or a pair of names in a heading. A player listed as out is unavailable and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes override what you remember of the club. If neither block has recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
 
 export async function runConversationalScout(
   params: ConversationalScoutParams,
@@ -380,7 +399,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   let effectiveLockedBlock = lockedDossiersBlock;
   let verifiedManagers: VerifiedClubManager[] = [];
   let cardsInPlay: PlayerProfile[] = [];
-  const isHistoricalThread = threadIsHistorical(route, history);
+  const isHistoricalThread = threadIsHistorical(route, history, message);
 
   if (!imageData && route.intent !== 'archive_inventory') {
     const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
@@ -445,7 +464,10 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       targetClubs.length === 0 &&
       !asksLiveSeasonUpdate;
 
+    // Research is for the present. A thread about primes and past seasons answers from cards, and
+    // the writer keeps its tools for anything it needs to check.
     const shouldPreGround =
+      !isHistoricalThread &&
       !allTargetsAlreadyCalibrated &&
       (playerNamesForGrounding.length > 0 ||
         targetClubs.length > 0 ||
@@ -461,6 +483,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
             cardsInPlay: lockedCards.map((c) => `${c.basicInfo.name} (${isPrimeCard(c) ? 'prime' : 'current form'})`),
             hints: { clubs: targetClubs, players: playerNamesForGrounding },
             present: !isHistoricalThread,
+            questionSearch: params.questionSearch,
           },
           liveToolset([...lockedCards, ...allCalibrated]),
           { onStage: onStageChange, perf, snapshots: liveClubSnapshots },
@@ -539,6 +562,11 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   const shownNote = shownNames.length
     ? ` The user sees the dossier card of ${shownNames.join(' and ')} under your reply, so answer from it without reciting its attributes.`
     : '';
+  // Cards this turn already looked for and didn't find, so the writer doesn't spend a tool round on them.
+  const missingCards = attachments?.scoutOffers ?? [];
+  const missingNote = missingCards.length
+    ? ` No stored card exists for ${missingCards.join(' or ')}; they were already checked, so don't look them up.`
+    : '';
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${ongoingThread}
 ${situationBlock}
@@ -549,8 +577,8 @@ ${peerLedgerBlock ?? ''}
 ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
-1. ${modeGuidance}${shownNote}
-2. Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from <situation_snapshot>, the numbered entries in <factual_foundation>, tool calls (\`get_club_recent_team\`, \`get_player_season\`, Google Search), or existing dossiers, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach.
+1. ${modeGuidance}${shownNote}${missingNote}
+2. Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from <situation_snapshot>, the numbered entries in <factual_foundation>, tool calls (\`get_club_recent_team\`, \`get_player_season\`, \`get_league_table\`, Google Search), or existing dossiers, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach. A precise figure (a statistic, fee, percentage, table position, points total, the minute of an event, a shirt number, a quotation) goes in only when one of those sources gives it; for standings call \`get_league_table\`, and otherwise describe the pattern without a number.
 3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.
 4. ${CONTINUITY_REMINDER}
 </instructions>
@@ -559,11 +587,9 @@ ${savedDossiersBlock}
   const historyContents = buildHistoryContents(history, conversationDossiers);
   const dossiersPool = [...savedDossiers, ...conversationDossiers];
 
-  // Adapt thinking depth to the complexity of the turn: 'medium' for high-complexity rankings,
-  // tactical system breakdowns, and multi-player debates; 'low' (~0.8s TTFT) for standard Q&A and comparisons.
-  // A researched turn did its planning in the brief, so the writer can think lightly and start sooner.
-  const thinkingLevelOverride: ThinkingTier =
-    brief || route.reasoningComplexity !== 'high' ? 'low' : 'medium';
+  // Low thinking for every prose turn: a researched turn did its planning in the brief, and on a
+  // debate from stored cards medium thinking held the first token back by 15 s or more in the evals.
+  const thinkingLevelOverride: ThinkingTier = 'low';
 
   const toolMode = proseToolMode({
     researched,
@@ -577,6 +603,26 @@ ${savedDossiersBlock}
     verifiedFacts: factualFoundation ? [factualFoundation] : [],
     clubManagers: verifiedManagers,
   };
+  // On a turn about the present, precise figures must come from what the turn found.
+  const toolResults: string[] = [];
+  const figureCheck: FigureCheck | undefined = researched
+    ? {
+        evidence: () =>
+          [
+            situationBlock,
+            factualFoundation,
+            effectiveLockedBlock,
+            peerLedgerBlock ?? '',
+            savedDossiersBlock,
+            formatVerifiedManagersBlock(verifiedManagers),
+            ongoingThread,
+            message,
+            ...cardsInPlay.map(serializeProfileForHistory),
+            ...toolResults,
+          ].join('\n'),
+        grounded: [],
+      }
+    : undefined;
   if (cardsInPlay.length === 0) {
     cardsInPlay = pickCardPerPlayer(
       findReferencedDossiers(message, conversationDossiers, route.targetPlayers),
@@ -625,16 +671,28 @@ ${savedDossiersBlock}
     dossiersPool,
     dossierTools,
     onToolCalls: (names) => perf?.(`writer tool calls: ${names.join(', ')}`),
+    onToolResult: (_name, result) => toolResults.push(typeof result === 'string' ? result : JSON.stringify(result)),
+    onGrounded: (segment) => figureCheck?.grounded.push(segment),
     onStreamChunk: onStreamChunk
       ? (partial) => {
           if (firstChunk) {
             firstChunk = false;
             perf?.('first answer token');
           }
-          onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay));
+          onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay, figureCheck));
         }
       : undefined,
   });
 
-  return sanitizeScoutProse(rawReply, scoutManagerContext, cardsInPlay);
+  return sanitizeScoutProse(
+    rawReply,
+    scoutManagerContext,
+    cardsInPlay,
+    figureCheck && {
+      ...figureCheck,
+      onRemoved: (removed) => {
+        if (removed.length) console.info(`[FigureGate] Removed ${removed.length} unsupported figures: ${removed.map((r) => r.text).join('; ')}`);
+      },
+    },
+  );
 }
