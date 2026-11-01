@@ -5,6 +5,7 @@ import { ATTRIBUTE_KEYS } from '../constants/ratingTiers';
 import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
 import {
   generateProseTurn,
+  type ProseToolMode,
   generateStructured,
   getCurrentSeasonInfo,
   type DossierToolHandlers,
@@ -24,7 +25,8 @@ import {
   serializeProfileForHistory,
   recordDossierRevision,
 } from './dossierStore';
-import { buildSquadTurnoverQuery, gatherSearchFoundation } from './groundingService';
+import { buildSquadTurnoverQuery, gatherEvidence, gatherSearchFoundation } from './groundingService';
+import { addEvidence, addGap, emptyLedger, formatLedger, hasEvidence, type EvidenceLedger } from './evidenceLedger';
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
 import {
   scrubUnverifiedManagerText,
@@ -68,7 +70,7 @@ const threadIsHistorical = (route: TurnRoute, history: ChatMessage[]): boolean =
  * Strip leaked internal grounding tags or search citations from user-facing prose, enforce
  * manager fidelity, and put any misquoted attribute of a card in play back to its stored value.
  */
-function sanitizeScoutProse(
+export function sanitizeScoutProse(
   text: string,
   managerCtx?: { verifiedFacts?: string[]; clubManagers?: VerifiedClubManager[] },
   cardsInPlay: PlayerProfile[] = [],
@@ -82,6 +84,8 @@ function sanitizeScoutProse(
       /\s*\((?:Search|Source|Grounding)\s*\d+(?:\s*[,&]\s*(?:Search|Source|Grounding)\s*\d+)*\)/gi,
       '',
     )
+    // Evidence ledger ids ("[E3]", "[E1, E4]") are for tracing, not for the reader.
+    .replace(/\s*\[E\d+(?:\s*[,&]\s*E\d+)*\]/g, '')
     .replace(/<\/?(?:factual_foundation|locked_dossiers|calibrated_peer_ledger|saved_dossiers)>/gi, '')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
@@ -198,7 +202,26 @@ export interface ConversationalScoutParams {
   onDossierUpdated?: (updatedProfile: PlayerProfile) => void;
   onStreamChunk?: (accumulatedText: string) => void;
   onStageChange?: (stageLabel: string) => void;
+  /** Marks a step for the turn's timing log. */
+  perf?: (label: string) => void;
 }
+
+/**
+ * Which tools the writer gets. A turn that researched live facts keeps every tool, so it can look
+ * up what research missed. A turn answered entirely from stored cards or the archive gets only the
+ * instant local tools, so it doesn't pause to search for facts it already has.
+ */
+export function proseToolMode(turn: { researched: boolean; isArchive: boolean; cardsLocked: boolean }): ProseToolMode {
+  if (turn.researched) return 'full';
+  return turn.isArchive || turn.cardsLocked ? 'local_only' : 'full';
+}
+
+/**
+ * How tactical and squad answers use the club's recent team. The squad list says who is registered;
+ * only recent lineups and the injury list say who plays, so the answer starts there.
+ */
+const RECENT_TEAM_RULES =
+  'Build the team from the "Recent Starting XIs" and the injury list in <factual_foundation>, not from the registered squad or memory: the regular starters are the players who started most of those matches, in the lines they started in. A player on the injury list is out and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes the XIs show override what you remember of the club. If <factual_foundation> has no recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
 
 export async function runConversationalScout(
   params: ConversationalScoutParams,
@@ -218,6 +241,7 @@ export async function runConversationalScout(
     onDossierUpdated,
     onStreamChunk,
     onStageChange,
+    perf,
   } = params;
 
   const { year, month, currentSeason } = getCurrentSeasonInfo();
@@ -330,7 +354,8 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   }
 
   // 2. Universal Calibrated Ledger Matching & Pre-Grounding across Comparisons, Debates, Rankings & Tactical Chat
-  let factualFoundation = '';
+  let ledger: EvidenceLedger | null = null;
+  let researched = false;
   let effectiveLockedBlock = lockedDossiersBlock;
   let verifiedManagers: VerifiedClubManager[] = [];
   let cardsInPlay: PlayerProfile[] = [];
@@ -407,6 +432,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
         (route.needsSearch && Boolean(route.searchQueries?.length)));
 
     if (shouldPreGround) {
+      researched = true;
       onStageChange?.(
         unratedPlayers.length > 0
           ? `Scouting ${unratedPlayers.slice(0, 2).join(' & ')} (${currentSeason} data)...`
@@ -439,33 +465,35 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
           const clubLabel = targetClubs.join(' vs ');
           queries = [
             `${datePrefix} ${buildSquadTurnoverQuery(clubLabel, year)}`,
-            `${datePrefix} ${clubLabel} — confirmed current head coach (${year}), starting XI by position, and specific player roles in build-up and out of possession (${message})`,
+            `${datePrefix} ${clubLabel} — latest match reports: starting lineups, injured and unavailable players, confirmed current head coach (${year}), and player roles in build-up and out of possession (${message})`,
           ];
         }
 
-        factualFoundation = await gatherSearchFoundation(
-          queries,
-          playerNamesForGrounding,
-          targetClubs,
-        );
+        ledger = await gatherEvidence(queries, playerNamesForGrounding, targetClubs);
       } catch (e) {
-        console.warn('[ConversationalScout] Pre-grounding search failed:', e);
+        console.warn('[ConversationalScout] Research failed:', e);
+        ledger = addGap(emptyLedger(), 'All research for this turn (the lookups failed)');
       }
+      perf?.(`research (${ledger.entries.length} found, ${ledger.gaps.length} missing)`);
     }
 
     verifiedManagers = await managersPromise;
 
+    // A follow-up in the same thread keeps what the last turn found, as a lower-priority entry.
     const currentSig = getThreadSignature(history);
-    if (factualFoundation) {
-      if (currentSig && currentSig === lastThreadSignature && lastThreadGrounding && !factualFoundation.includes(lastThreadGrounding.slice(0, 120))) {
-        factualFoundation = `${factualFoundation}\n\n[PRIOR TURN VERIFIED THREAD GROUNDING]\n${lastThreadGrounding.slice(0, 1400)}`;
+    const sameThread = Boolean(currentSig && currentSig === lastThreadSignature && lastThreadGrounding);
+    if (hasEvidence(ledger)) {
+      const thisTurn = formatLedger(ledger!);
+      if (sameThread && !thisTurn.includes(lastThreadGrounding.slice(0, 120))) {
+        ledger = addEvidence(ledger!, { kind: 'prior_turn', label: 'Research from the previous turn', content: lastThreadGrounding.slice(0, 1400) });
       }
       lastThreadSignature = currentSig || `turn:${message.slice(0, 60)}`;
-      lastThreadGrounding = factualFoundation;
-    } else if (currentSig && currentSig === lastThreadSignature && lastThreadGrounding) {
-      factualFoundation = lastThreadGrounding;
+      lastThreadGrounding = thisTurn;
+    } else if (sameThread) {
+      ledger = addEvidence(ledger ?? emptyLedger(), { kind: 'prior_turn', label: 'Research from the previous turn', content: lastThreadGrounding });
     }
   }
+  const factualFoundation = ledger && (ledger.entries.length > 0 || ledger.gaps.length > 0) ? formatLedger(ledger) : '';
 
   const analyticalMode =
     route.analyticalMode ??
@@ -487,9 +515,9 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   } else if (analyticalMode === 'ranking_or_tierlist') {
     modeGuidance = `Build a rigorous, scout-grade positional ranking or tier breakdown tied explicitly to the Section III Rating Tier Scale (\`93–95 World-Class Elite\`, \`90–92 World-Class\`, \`87–89 Borderline World-Class\`, \`84–86 High-End Starter\`). Honor every player rating already established in <calibrated_peer_ledger> and <locked_dossiers>. For each ranked player, cite their approximate Overall tier, signature attributes, and the exact on-pitch separator that places them ahead of or behind their peers. Never output a JSON dossier object.`;
   } else if (analyticalMode === 'tactical_or_system') {
-    modeGuidance = `Deliver a concrete, player-specific tactical breakdown — NEVER write from an aerial, nameless theoretical template. Start from the verified active squad and starting XI in <factual_foundation>: name the exact players at each relevant position, explain how their individual profiles dictate the team's actual build-up and out-of-possession geometry, and identify the specific matchup trade-offs those personnel choices create. Every paragraph must pass the Swap Test. Ground all current squad, starter, and head-coach references strictly in verified ${currentSeason} facts. Never output a JSON dossier object.`;
+    modeGuidance = `Deliver a concrete, player-specific tactical breakdown — NEVER write from an aerial, nameless theoretical template. ${RECENT_TEAM_RULES} Name the player in every role you describe, attackers included, and explain how their individual profiles dictate the team's actual build-up and out-of-possession geometry and the matchup trade-offs those personnel choices create. Every paragraph must pass the Swap Test. Ground all current squad, starter, and head-coach references strictly in verified ${currentSeason} facts. Never output a JSON dossier object.`;
   } else if (analyticalMode === 'squad_or_recruitment') {
-    modeGuidance = `Analyze the squad structure, lineup balance, or recruitment question like a Sporting Director and Chief Scout. Ground your analysis in the verified active squad in <factual_foundation>: name the specific current starters and rotational options, diagnose the specific functional profile the squad lacks, evaluate how candidate profiles complement existing starters, and pin player quality to the Section III tier scale and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
+    modeGuidance = `Analyze the squad structure, lineup balance, or recruitment question like a Sporting Director and Chief Scout. ${RECENT_TEAM_RULES} Name the specific current starters and rotational options, diagnose the specific functional profile the squad lacks, evaluate how candidate profiles complement existing starters, and pin player quality to the Section III tier scale and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
   } else if (analyticalMode === 'debate_or_verdict') {
     modeGuidance = `Engage the football debate with dialectical depth: (1) steelman the strongest tactical and statistical case for each side, (2) decouple intrinsic player quality from system/environment tax (how role, surrounding talent, or league tempo inflates or suppresses box-score output), (3) evaluate through the 25-attribute framework, big-game knockout translation, and Section III tiers, and (4) finish with a clear, non-fence-sitting verdict. If the user is challenging a prior factual or tactical claim, verify the facts against <factual_foundation> first, correct any prior slip concisely in one sentence without theatrical self-flagellation, and deliver the grounded analysis. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
   } else {
@@ -509,7 +537,7 @@ ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}${shownNote}
-2. Current-state facts (club, manager, squad membership, injuries, ${currentSeason} stats) must come from <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, \`get_team_fixtures\`, Google Search), or existing dossiers — never stale training memory. Never name an unverified head coach.
+2. Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from the numbered entries in <factual_foundation>, tool calls (\`get_player_fact_sheet\`, \`get_football_squad\`, \`get_team_fixtures\`, Google Search), or existing dossiers, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach.
 3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.
 4. ${CONTINUITY_REMINDER}
 </instructions>
@@ -523,13 +551,11 @@ ${savedDossiersBlock}
   const thinkingLevelOverride: ThinkingTier =
     route.reasoningComplexity === 'high' ? 'medium' : 'low';
 
-  // When pre-grounding has already populated <factual_foundation> (or all compared players are locked),
-  // restrict tools to instant (<1ms) in-memory dossier grep so the model does not pause the stream
-  // to run a duplicate wave of web searches or API-Football HTTP requests.
-  const hasCompleteContext =
-    Boolean(factualFoundation) ||
-    route.intent === 'archive_inventory' ||
-    (route.targetPlayers.length > 0 && Boolean(effectiveLockedBlock));
+  const toolMode = proseToolMode({
+    researched,
+    isArchive: route.intent === 'archive_inventory',
+    cardsLocked: route.targetPlayers.length > 0 && Boolean(effectiveLockedBlock),
+  });
 
   onStageChange?.('Writing scouting analysis...');
 
@@ -574,17 +600,25 @@ ${savedDossiersBlock}
       return { shown: true };
     },
   };
+  let firstChunk = true;
   const rawReply = await generateProseTurn({
     message: fullPrompt,
     historyContents,
     systemInstruction,
     imageData,
     thinkingLevelOverride,
-    toolMode: hasCompleteContext ? 'local_only' : 'full',
+    toolMode,
     dossiersPool,
     dossierTools,
+    onToolCalls: (names) => perf?.(`writer tool calls: ${names.join(', ')}`),
     onStreamChunk: onStreamChunk
-      ? (partial) => onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay))
+      ? (partial) => {
+          if (firstChunk) {
+            firstChunk = false;
+            perf?.('first answer token');
+          }
+          onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay));
+        }
       : undefined,
   });
 

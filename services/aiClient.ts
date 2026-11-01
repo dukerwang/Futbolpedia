@@ -99,9 +99,18 @@ export interface GroundedSearchResult {
 const SEARCH_DIGEST_SYSTEM_INSTRUCTION =
   'You are a high-precision football scouting and tactical fact extractor. Summarize verified search results into a dense, factual bullet digest (max 190 words). For player queries, state exact figures (age, appearances, starts, minutes, goals, assists, or key defensive/passing metrics across competitions), confirmed current club, confirmed current head coach, most recent match date/score/fitness, major honours (UCL, Ballon d\'Or, FIFPro, league titles), and concrete on-pitch traits/limitations. For club, tactical, or ranking queries, state confirmed current head coach, primary formation and phase-of-play mechanics (build-up, pressing, rest-defense), current starting XI and key transfers/loans in or out, recent match results/standings, and statistical standouts. Omit filler, introductions, and speculation.';
 
+/**
+ * The longer digest chat research uses. It keeps the names, dates and numbers a writer needs to
+ * state current facts, and marks what's old, instead of compressing everything into a summary.
+ */
+const SEARCH_EVIDENCE_SYSTEM_INSTRUCTION =
+  'You are a football research assistant collecting evidence for an analyst. From the search results, write a factual digest of up to 450 words that answers the query. Keep every specific the results give: player names, the positions and roles they played, dates, opponents, scores, lineups, injuries with expected return dates, transfers with their window, and statistics with the competition and season they cover. Give the date of each fact or the date of the report it comes from. Mark anything from before the current season as older. When results disagree, give both versions and their dates. Do not add anything the results do not say, and do not fill gaps from general knowledge; when the results do not answer part of the query, say which part.';
+
+export type SearchDigest = 'brief' | 'evidence';
+
 export async function runGroundedSearch(
   query: string,
-  options?: { datePrefix?: string; attempt?: number },
+  options?: { datePrefix?: string; attempt?: number; digest?: SearchDigest },
 ): Promise<GroundedSearchResult> {
   const attempt = options?.attempt ?? 0;
   const fullQuery = options?.datePrefix ? `${options.datePrefix} ${query}` : query;
@@ -110,9 +119,10 @@ export async function runGroundedSearch(
       model: FLASH_MODEL,
       contents: fullQuery,
       config: {
-        systemInstruction: SEARCH_DIGEST_SYSTEM_INSTRUCTION,
+        systemInstruction:
+          options?.digest === 'evidence' ? SEARCH_EVIDENCE_SYSTEM_INSTRUCTION : SEARCH_DIGEST_SYSTEM_INSTRUCTION,
         temperature: 0.1,
-        maxOutputTokens: 420,
+        maxOutputTokens: options?.digest === 'evidence' ? 1100 : 420,
         tools: [{ googleSearch: {} }],
         // Cap thinkingLevel to LOW during search grounding so Flash does not run
         // multi-second dynamic thinking just to summarize search results.
@@ -126,7 +136,7 @@ export async function runGroundedSearch(
     const sources: string[] =
       chunks
         ?.filter((c: any) => c.web?.uri)
-        ?.slice(0, 4)
+        ?.slice(0, options?.digest === 'evidence' ? 6 : 4)
         ?.map((c: any) => (c.web.title ? `${c.web.title} (${c.web.uri})` : String(c.web.uri))) ??
       [];
 
@@ -398,6 +408,8 @@ export interface GenerateProseTurnParams {
   gaffaBag?: GaffaContextBag;
   dossierTools?: DossierToolHandlers;
   onStreamChunk?: (accumulatedText: string) => void;
+  /** Called with the tool names each time the model calls tools, for the turn's timing log. */
+  onToolCalls?: (names: string[]) => void;
 }
 
 export async function generateProseTurn(params: GenerateProseTurnParams): Promise<string> {
@@ -451,8 +463,9 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
   const parts: any[] = [{ text: params.message }];
   if (params.imageData) parts.push(dataUrlToInlinePart(params.imageData));
 
-  const executeToolCalls = async (calls: any[]) =>
-    Promise.all(
+  const executeToolCalls = async (calls: any[]) => {
+    params.onToolCalls?.(calls.map((c) => String(c.name)));
+    return Promise.all(
       calls.map(async (functionCall) => {
         let apiResult: any = {};
         const args = (functionCall.args as any) ?? {};
@@ -486,6 +499,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
         };
       }),
     );
+  };
 
   // Use live token streaming when an onStreamChunk callback is provided
   if (params.onStreamChunk && typeof (chatSession as any).sendMessageStream === 'function') {
