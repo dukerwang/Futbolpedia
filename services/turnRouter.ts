@@ -692,7 +692,7 @@ async function classifyTurnBase(params: {
       targetClubs: referencedClubs,
       searchQueries: [
         buildSquadTurnoverQuery(clubLabel, currentYear),
-        `${clubLabel} current head coach tactical system starting XI by position and player roles: ${trimmed}`,
+        `${clubLabel} latest match reports: starting lineups, injured and unavailable players, and how the team has set up in possession and out of possession this season: ${trimmed}`,
       ],
       reasoningComplexity: 'high',
       isHistorical,

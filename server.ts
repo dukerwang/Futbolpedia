@@ -5,6 +5,14 @@ import path from "path";
 import axios from "axios";
 import { pickCurrentCoach } from "./packages/engine/src/gates/managerMentions.ts";
 import { getRealWorldFootballSeason } from "./prompts/scoutCore";
+import {
+  LINEUP_MATCHES,
+  mergeAbsences,
+  parseAbsences,
+  parseTeamLineup,
+  type TeamAbsence,
+  type TeamLineup,
+} from "./services/teamLineups";
 
 async function startServer() {
   const app = express();
@@ -113,6 +121,9 @@ async function startServer() {
       recentFixtures: any[];
       upcomingFixtures: any[];
       squad: Array<{ name: string; position: string | null; age: number | null }>;
+      recentLineups: TeamLineup[];
+      /** Null when the injury list couldn't be read, so "nobody injured" is never assumed. */
+      unavailable: TeamAbsence[] | null;
     }
   >();
 
@@ -157,6 +168,39 @@ async function startServer() {
         ? pickCurrentCoach(coachRes.value.data?.response, teamId)
         : { coach: null, coachSince: null };
 
+    // Who actually played and who is out: lineups of the latest matches and the injury lists for
+    // the last and next fixtures. These need the fixture ids, so they follow the first round.
+    const fixturesOf = (r: PromiseSettledResult<any>): any[] =>
+      r.status === "fulfilled" && Array.isArray(r.value.data?.response) ? r.value.data.response : [];
+    const played = fixturesOf(lastFixturesRes)
+      .filter((f: any) => f?.goals?.home != null && f?.fixture?.id)
+      .sort((a: any, b: any) => (b.fixture.timestamp ?? 0) - (a.fixture.timestamp ?? 0))
+      .slice(0, LINEUP_MATCHES);
+    const nextFixtureId = fixturesOf(nextFixturesRes)
+      .filter((f: any) => f?.fixture?.id)
+      .sort((a: any, b: any) => (a.fixture.timestamp ?? 0) - (b.fixture.timestamp ?? 0))[0]?.fixture.id;
+    const injuryFixtureIds = [nextFixtureId, played[0]?.fixture.id].filter(Boolean);
+    const [lineupResults, injuryResults] = await Promise.all([
+      Promise.allSettled(played.map((f: any) => apiFootballGet("fixtures/lineups", { fixture: f.fixture.id }, 4500))),
+      Promise.allSettled(injuryFixtureIds.map((id) => apiFootballGet("injuries", { fixture: id }, 4500))),
+    ]);
+    const recentLineups = played
+      .map((f: any, i: number) => {
+        const r = lineupResults[i];
+        if (r.status !== "fulfilled") return null;
+        const home = f.teams?.home?.id === teamId;
+        return parseTeamLineup(r.value.data?.response, teamId, {
+          date: f.fixture.date ? String(f.fixture.date).slice(0, 10) : null,
+          competition: f.league?.name ?? null,
+          opponent: (home ? f.teams?.away?.name : f.teams?.home?.name) ?? null,
+        });
+      })
+      .filter((l: TeamLineup | null): l is TeamLineup => l !== null);
+    const injuryLists = injuryResults
+      .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled" && Array.isArray(r.value.data?.response))
+      .map((r) => parseAbsences(r.value.data.response, teamId));
+    const unavailable = injuryLists.length > 0 ? mergeAbsences(...injuryLists) : null;
+
     const squad: Array<{ name: string; position: string | null; age: number | null }> =
       squadRes.status === "fulfilled"
         ? (squadRes.value.data?.response?.[0]?.players ?? [])
@@ -175,6 +219,8 @@ async function startServer() {
       recentFixtures,
       upcomingFixtures,
       squad,
+      recentLineups,
+      unavailable,
     };
     teamContextCache.set(teamId, entry);
     return entry;
@@ -421,6 +467,8 @@ async function startServer() {
         recentFixtures: ctx.recentFixtures,
         upcomingFixtures: ctx.upcomingFixtures,
         squad: ctx.squad,
+        recentLineups: ctx.recentLineups,
+        unavailable: ctx.unavailable,
       });
     } catch (error: any) {
       console.warn("[api/football/fixtures] lookup failed:", error?.message || error);

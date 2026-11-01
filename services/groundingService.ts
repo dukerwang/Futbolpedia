@@ -6,6 +6,8 @@ import {
   runGroundedSearch,
 } from './aiClient';
 import type { FutbolpediaVerifiedFacts } from './profileManagerGrounding';
+import { formatRecentTeamBlock, type TeamAbsence, type TeamLineup } from './teamLineups';
+import { addEvidence, addGap, emptyLedger, type EvidenceLedger } from './evidenceLedger';
 
 export interface ApiFootballFixtureItem {
   date: string | null;
@@ -215,11 +217,16 @@ export interface ApiFootballTeamContext {
   recentFixtures: ApiFootballFixtureItem[];
   upcomingFixtures: ApiFootballFixtureItem[];
   squad?: ApiFootballSquadMember[];
+  recentLineups?: TeamLineup[];
+  /** Null when API-Football's injury list couldn't be read. */
+  unavailable?: TeamAbsence[] | null;
 }
 
+// A cold lookup reads fixtures first, then their lineups; it runs alongside web search, so the
+// longer wait rarely adds to the turn.
 export async function fetchApiFootballTeamContext(
   teamName: string,
-  timeoutMs = 3200,
+  timeoutMs = 7000,
 ): Promise<ApiFootballTeamContext | null> {
   if (!teamName.trim()) return null;
   const data = await fetchJsonWithTimeout(
@@ -234,6 +241,8 @@ export async function fetchApiFootballTeamContext(
     recentFixtures: Array.isArray(data.recentFixtures) ? data.recentFixtures : [],
     upcomingFixtures: Array.isArray(data.upcomingFixtures) ? data.upcomingFixtures : [],
     squad: Array.isArray(data.squad) ? data.squad : [],
+    recentLineups: Array.isArray(data.recentLineups) ? data.recentLineups : [],
+    unavailable: Array.isArray(data.unavailable) ? data.unavailable : null,
   };
 }
 
@@ -280,6 +289,7 @@ export function formatApiFootballTeamContextBlock(ctx: ApiFootballTeamContext | 
 
   return [
     `[API-FOOTBALL CLUB CONTEXT — ${ctx.team}]`,
+    formatRecentTeamBlock(ctx.team, ctx.recentLineups ?? [], ctx.unavailable ?? null),
     squadBlock,
     recentLine,
     upcomingLine,
@@ -329,6 +339,49 @@ export async function gatherSearchFoundation(
   });
 
   return chunks.join('\n\n') || 'No grounded search results available for this turn.';
+}
+
+/**
+ * Chat research: API-Football records for the players and clubs in play and the web searches, run
+ * in parallel, as an evidence ledger. Unlike `gatherSearchFoundation`, searches keep a full
+ * evidence digest with sources, and every lookup that comes back empty is recorded as a gap.
+ */
+export async function gatherEvidence(
+  queries: string[],
+  playerNames: string[] = [],
+  clubNames: string[] = [],
+): Promise<EvidenceLedger> {
+  const uniquePlayers = [...new Set(playerNames.map((n) => n.trim()).filter(Boolean))].slice(0, 3);
+  const uniqueClubs = [...new Set(clubNames.map((c) => c.trim()).filter(Boolean))].slice(0, 2);
+
+  const [apiPlayers, apiClubs, searches] = await Promise.all([
+    Promise.all(uniquePlayers.map((name) => fetchApiFootballPlayer(name).catch(() => null))),
+    Promise.all(uniqueClubs.map((club) => fetchApiFootballTeamContext(club).catch(() => null))),
+    Promise.all(queries.map((q) => runGroundedSearch(q, { digest: 'evidence' }))),
+  ]);
+
+  let ledger = emptyLedger();
+  uniqueClubs.forEach((club, i) => {
+    const ctx = apiClubs[i];
+    ledger = ctx
+      ? addEvidence(ledger, { kind: 'club_context', label: `${ctx.team}: recent team, squad and fixtures`, content: formatApiFootballTeamContextBlock(ctx) })
+      : addGap(ledger, `API-Football record for ${club} (recent lineups, injuries, squad)`);
+  });
+  uniquePlayers.forEach((name, i) => {
+    const p = apiPlayers[i];
+    ledger = p
+      ? addEvidence(ledger, { kind: 'player_record', label: name, content: formatApiFootballFactSheetBlock(p) })
+      : addGap(ledger, `API-Football record for ${name}`);
+  });
+  searches.forEach((result) => {
+    ledger = addEvidence(ledger, {
+      kind: 'web',
+      label: result.query,
+      content: result.text,
+      sources: result.sources,
+    });
+  });
+  return ledger;
 }
 
 export type CareerStatus = 'active' | 'retired' | 'unknown';

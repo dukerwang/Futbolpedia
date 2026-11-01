@@ -272,7 +272,14 @@
   .dark ::-webkit-scrollbar-thumb {
       background: #3E4559;
   }
-  
+  /* Scrolls without a visible bar: the chat field and the hub's filter row. */
+  .scrollbar-hide {
+      scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+      display: none;
+  }
+
   /* Markdown Styles specific to Editorial Theme */
   .prose p { margin-bottom: 1.25em; line-height: 1.75; font-weight: 300; }
   .prose strong { font-family: 'Playfair Display', serif; font-weight: 700; }

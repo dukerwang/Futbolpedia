@@ -779,6 +779,7 @@ export const sendMessageToAI = async (
     onDossierUpdated: options?.onDossierUpdated,
     onStreamChunk: options?.onStreamChunk,
     onStageChange: options?.onStageChange,
+    perf,
   });
   perf('conversational scout');
   if (attachments.cards.length > 0 || attachments.scoutOffers.length > 0) {
