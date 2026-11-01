@@ -104,12 +104,25 @@ async function startServer() {
   // Without it, club research has no lineups, injury list or squad; chat answers fall back to web search.
   console.log(`[startup] API_FOOTBALL_KEY set: ${!!API_KEY}`);
 
+  // API-Football answers plan limits, quota and bad parameters with HTTP 200, an empty response and
+  // an `errors` field, so a refused call looks like "no data" unless the errors are logged.
   const apiFootballGet = (endpoint: string, params: Record<string, unknown>, timeout?: number) =>
-    axios.get(`${API_URL}/${endpoint}`, {
-      params,
-      headers: { "x-apisports-key": API_KEY },
-      ...(timeout ? { timeout } : {}),
-    });
+    axios
+      .get(`${API_URL}/${endpoint}`, {
+        params,
+        headers: { "x-apisports-key": API_KEY },
+        ...(timeout ? { timeout } : {}),
+      })
+      .then((res) => {
+        const errors = res.data?.errors;
+        const hasErrors = Array.isArray(errors) ? errors.length > 0 : errors && Object.keys(errors).length > 0;
+        if (hasErrors) console.warn(`[api-football] ${endpoint} ${JSON.stringify(params)} refused: ${JSON.stringify(errors)}`);
+        return res;
+      })
+      .catch((err) => {
+        console.warn(`[api-football] ${endpoint} ${JSON.stringify(params)} failed: ${err?.message || err}`);
+        throw err;
+      });
 
   const PLAYER_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
   const playerFactCache = new Map<string, { expiresAt: number; payload: any }>();
@@ -214,8 +227,16 @@ async function startServer() {
             }))
         : [];
 
+    console.log(
+      `[api-football] team ${teamId}: ${recentFixtures.length} recent fixtures, ${recentLineups.length}/${played.length} lineups, injuries ${
+        unavailable ? unavailable.length : "unread"
+      }, squad ${squad.length}`,
+    );
+
+    // A context with no recent fixtures means the calls failed or were refused; keep it only
+    // briefly so the next turn tries again instead of reusing the empty answer for hours.
     const entry = {
-      expiresAt: Date.now() + PLAYER_CACHE_TTL_MS,
+      expiresAt: Date.now() + (recentFixtures.length > 0 ? PLAYER_CACHE_TTL_MS : 5 * 60 * 1000),
       coach,
       coachSince,
       recentFixtures,
@@ -456,6 +477,7 @@ async function startServer() {
         }
         teamId = first.id as number;
         resolvedTeamName = first.name || rawTeam;
+        console.log(`[api-football] team "${rawTeam}" resolved to ${first.name} (${first.country ?? "?"}, id ${teamId})`);
         teamIdCache.set(rawTeam.toLowerCase(), teamId);
         if (first.name) teamIdCache.set(String(first.name).toLowerCase(), teamId);
       }
