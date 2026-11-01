@@ -5,7 +5,7 @@ interface WhatsNewPopupProps {
 }
 
 /** Bump when the popup describes a new release, so everyone sees it once more. */
-const SEEN_KEY = 'futbolpedia-whats-new-seen-fp35';
+const SEEN_KEY = 'futbolpedia-whats-new-seen-fp36';
 
 interface FeatureGroup {
   id: string;
@@ -20,8 +20,33 @@ interface FeatureGroup {
 const scoutShortcut = (): string =>
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl+K';
 
-/** What's new in 3.5 first, then everything major since Futbolpedia 2, grouped by what you do with it. */
+/** What's new in 3.6 and 3.5 first, then everything major since Futbolpedia 2, grouped by what you do with it. */
 const featureGroups = (): FeatureGroup[] => [
+  {
+    id: 'past',
+    icon: 'history_edu',
+    title: 'Debates About the Past',
+    kicker: 'New in 3.6',
+    featured: true,
+    items: [
+      {
+        title: 'Argued on clear criteria',
+        body: 'All-time debates say what the question turns on, such as peak level, longevity, output or influence, weigh each one, and answer the strongest case for the other side before committing.',
+      },
+      {
+        title: 'In line with the cards',
+        body: "Verdicts and rankings are checked against the cards' ratings, and a question asked again in the same session gets the same verdict.",
+      },
+      {
+        title: 'Facts from the record',
+        body: "Past seasons and careers are looked up in Wikipedia and ESPN's archives instead of recalled from memory, and each fact stays in its own season.",
+      },
+      {
+        title: 'Figures that fit',
+        body: 'Answers quote only the figures that decide a point, each with its competition and seasons, so a league tally stays a league tally and a spell is never passed off as a career.',
+      },
+    ],
+  },
   {
     id: 'present',
     icon: 'update',
@@ -192,15 +217,15 @@ export const WhatsNewPopup: React.FC<WhatsNewPopupProps> = ({ onClose }) => {
               <span className="material-symbols-outlined text-[18px]">sports_soccer</span>
             </div>
             <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-emerald-600 dark:text-emerald-400 font-bold">
-              Update Briefing • v3.5
+              Update Briefing • v3.6
             </span>
           </div>
 
           <h2 id="whats-new-title" className="text-2xl md:text-4xl font-serif font-bold text-charcoal dark:text-cream-100 tracking-tight leading-tight">
-            Welcome to Futbolpedia 3.5
+            Welcome to Futbolpedia 3.6
           </h2>
           <p className="text-xs md:text-sm text-cream-800 dark:text-cream-400 mt-1 md:mt-2 font-sans font-light">
-            Answers about the current season now start from who is actually playing, lead with what changed, and commit to a view. Everything from Futbolpedia 3 is below.
+            Debates about the past are argued from the record and stay in line with the cards. Below that: 3.5's answers about the current season, and everything from Futbolpedia 3.
           </p>
         </div>
 

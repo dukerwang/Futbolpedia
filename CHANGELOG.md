@@ -1,5 +1,20 @@
 # What's New in Futbolpedia
 
+## Futbolpedia 3.6: debates about the past
+
+- **Argued on clear criteria.** All-time debates and rankings say what the question turns on (peak level, longevity, output or influence), weigh each criterion, and answer the strongest case for the other side before committing to a verdict.
+- **In line with the cards.** Verdicts and rankings are checked against the cards' ratings and peer placements. A question asked again in the same session gets the same verdict.
+- **Facts from the record.** Past seasons and careers come from Wikipedia and ESPN's archives instead of the model's memory, and each fact stays in its own season. A club season or a player's best seasons is researched once and kept for everyone.
+- **Figures that fit.** Answers quote only the figures that decide a point, each with its competition and seasons, so a league tally stays a league tally and a spell is never passed off as a career total.
+
+## Futbolpedia 3.5: answers about right now
+
+- **Today's team, not last season's.** Questions about a club start from who has been playing and who is out, read from live match data and the Fantasy Premier League feed, so answers name the current starters.
+- **What changed, and why.** Answers lead with what's different this season, such as arrivals, departures, a new shape or new roles.
+- **One starter per role.** The analyst commits to a first-choice player for each position and mentions rotation only where a team really rotates.
+- **Fewer invented facts.** Figures nobody looked up are left out, and older articles that describe last season's team are set aside.
+- **Quicker, consistent club facts.** Each club's current picture is worked out once a day and shared, so repeat questions are faster and everyone gets the same facts.
+
 ## Juggle multiple players and chats at once
 
 This is the big one — everything below is built on top of it.
