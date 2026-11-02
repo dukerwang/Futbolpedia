@@ -13,7 +13,7 @@ import {
   showCard,
   type ReplyAttachments,
 } from './conversationalScout';
-import { lookUpDossier } from './dossierLookup';
+import { lookUpDossier, replaceSupersededPrimes } from './dossierLookup';
 import {
   CALIBRATION_EPOCH_MS,
   buildHistoryContents,
@@ -714,7 +714,7 @@ export const sendMessageToAI = async (
 ): Promise<string | PlayerProfile> => {
   const perf = createPerfLogger();
   const isEAFCRequest = /\b(playstyle\+?|fc\s*card|eafc|ea\s*fc)\b/i.test(message);
-  const conversationDossiers = mergeConversationDossiers(history, conversationProfiles);
+  let conversationDossiers = mergeConversationDossiers(history, conversationProfiles);
 
   // 1. Classify turn via Structured Turn Router (warm Supabase pool in background without blocking routing)
   void fetchSupabaseCalibratedPool();
@@ -725,6 +725,19 @@ export const sendMessageToAI = async (
     hasImage: Boolean(imageData),
   });
   perf(`turn router (${route.intent})`);
+
+  // A prime re-rated since this thread or your dossiers got it is read from its new card. A
+  // "rerate" starts from scratch and strips its own cards itself.
+  if (!route.rerate) {
+    const live = await replaceSupersededPrimes({ history, conversationProfiles, savedDossiers }).catch(
+      () => null,
+    );
+    if (live) {
+      ({ history, savedDossiers } = live);
+      conversationDossiers = mergeConversationDossiers(history, live.conversationProfiles);
+      perf('superseded primes');
+    }
+  }
 
   // 2. Single-Player Dossier Pipeline
   if (route.intent === 'single_dossier') {
@@ -802,6 +815,10 @@ export const ratePlayer = async (
   const perf = createPerfLogger();
   const message = ratingTask(request);
   const route = routeForRating(request);
+  const live = await replaceSupersededPrimes({ history, conversationProfiles, savedDossiers }).catch(
+    () => null,
+  );
+  if (live) ({ history, conversationProfiles, savedDossiers } = live);
   const conversationDossiers = mergeConversationDossiers(history, conversationProfiles);
   void fetchSupabaseCalibratedPool();
   const context = buildTurnContext(message, route, conversationDossiers, savedDossiers);
