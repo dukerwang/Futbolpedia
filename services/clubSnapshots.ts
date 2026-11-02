@@ -60,16 +60,28 @@ export const rowToSnapshot = (row: SnapshotRow): ClubSnapshot | null =>
       }
     : null;
 
-/** How research reaches the snapshots: the stored one only, or the stored one else a new build. */
+/** A build's research pass: the searches it ran and what each found. */
+export interface ClubResearch {
+  calls: ResearchCall[];
+  outcomes: ToolOutcome[];
+}
+
+/**
+ * How research reaches the snapshots: the stored one only; the research pass a build runs, which
+ * the turn that started it reads as evidence instead of searching the same things again; or the
+ * stored snapshot, else a new build.
+ */
 export interface SnapshotSource {
   stored(club: string, live: Promise<ToolOutcome>): Promise<ClubSnapshot | null>;
+  research(club: string, live: Promise<ToolOutcome>): Promise<ClubResearch | null>;
   get(club: string, live: Promise<ToolOutcome>): Promise<ClubSnapshot | null>;
 }
 
 export interface SnapshotStoreDeps {
   read(key: string): Promise<SnapshotRow | null>;
   write(row: SnapshotRow): Promise<void>;
-  build(club: string, live: ToolOutcome): Promise<ClubSnapshot | null>;
+  research(club: string, live: ToolOutcome): Promise<ClubResearch | null>;
+  summarize(club: string, live: ToolOutcome, research: ClubResearch): Promise<ClubSnapshot | null>;
   now?: () => number;
 }
 
@@ -79,12 +91,13 @@ const FAILED_RETRY_MS = 10 * 60 * 1000;
 /**
  * The store: memory, then the shared row, then a build. A club is keyed by the name the live data
  * resolves it to, so "Spurs" and "Tottenham Hotspur" share a snapshot. Concurrent requests for a
- * club share one read and one build.
+ * club share one read, one research pass and one build.
  */
 export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource {
   const now = deps.now ?? Date.now;
   const memory = new Map<string, { snapshot: ClubSnapshot | null; expiresAt: number }>();
   const reads = new Map<string, Promise<ClubSnapshot | null>>();
+  const researches = new Map<string, Promise<ClubResearch | null>>();
   const builds = new Map<string, Promise<ClubSnapshot | null>>();
 
   const fromMemory = (key: string): ClubSnapshot | null | undefined => {
@@ -125,6 +138,26 @@ export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource
     return key && key !== typedKey ? readKey(key) : null;
   }
 
+  async function research(club: string, live: Promise<ToolOutcome>): Promise<ClubResearch | null> {
+    const key = await canonicalKey(club, live);
+    if (!key) return null;
+    const pending = researches.get(key);
+    if (pending) return pending;
+    const job = (async () => {
+      const outcome = await live.catch(() => null);
+      return outcome
+        ? deps.research(club, outcome).catch((e) => {
+            console.warn(`[ClubSnapshots] Research failed for ${club}:`, e);
+            return null;
+          })
+        : null;
+    })();
+    researches.set(key, job);
+    // The build that follows reads it; after that a new research pass starts fresh.
+    void job.then(() => setTimeout(() => researches.delete(key), 60_000));
+    return job;
+  }
+
   async function get(club: string, live: Promise<ToolOutcome>): Promise<ClubSnapshot | null> {
     const hit = await stored(club, live);
     if (hit) return hit;
@@ -136,10 +169,14 @@ export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource
     if (pending) return pending;
     const job = (async () => {
       const outcome = await live.catch(() => null);
-      const snapshot = outcome ? await deps.build(club, outcome).catch((e) => {
-        console.warn(`[ClubSnapshots] Build failed for ${club}:`, e);
-        return null;
-      }) : null;
+      const pass = outcome ? await research(club, live) : null;
+      const snapshot =
+        outcome && pass
+          ? await deps.summarize(club, outcome, pass).catch((e) => {
+              console.warn(`[ClubSnapshots] Build failed for ${club}:`, e);
+              return null;
+            })
+          : null;
       memory.set(key, { snapshot, expiresAt: now() + (snapshot ? SNAPSHOT_REFRESH_MS : FAILED_RETRY_MS) });
       if (snapshot) {
         await deps.write(snapshotToRow(snapshot)).catch((e) => console.warn('[ClubSnapshots] Write failed:', e));
@@ -150,19 +187,33 @@ export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource
     return job;
   }
 
-  return { stored, get };
+  return { stored, research, get };
 }
 
 /**
- * A club's snapshot from its live data and a research pass: what changed since last season, an
- * analysis search read against the live facts, and team news where no injury list covers the
- * club, then the situation call. It stays at low thinking so a build started with the turn can
- * finish before the writer starts.
+ * A build's research pass: what changed since last season, a tactical analysis read against the
+ * live facts, and team news where no injury list covers the club, all at once.
  */
-export async function buildClubSnapshot(
+export async function researchClub(club: string, live: ToolOutcome, tools: ResearchToolset, now: () => number = Date.now): Promise<ClubResearch | null> {
+  const report = live.result?.club;
+  if (!report) return null;
+  const core = deriveClubCore(report);
+  const { currentSeason, month, year } = getCurrentSeasonInfo(new Date(now()));
+  const calls: ResearchCall[] = [
+    { tool: 'web_search', subject: `${report.team} transfers in and out and coaching changes since last season, ${currentSeason}`, stage: 'facts' },
+    { tool: 'web_search', subject: `${report.team} tactical analysis ${currentSeason}: shape, build-up, pressing and key roles`, stage: 'analysis' },
+    ...(core.outCovered ? [] : [{ tool: 'web_search' as const, subject: `${report.team} team news, injuries and suspensions, ${month} ${year}`, stage: 'facts' as const }]),
+  ];
+  const context = formatFactContext([core]);
+  const outcomes = await Promise.all(calls.map((c) => executeCall(c, tools, c.stage === 'analysis' ? context : undefined)));
+  return { calls, outcomes };
+}
+
+/** A club's snapshot from its live data and research pass, through the situation call at low thinking. */
+export async function summarizeClub(
   club: string,
   live: ToolOutcome,
-  tools: ResearchToolset,
+  pass: ClubResearch,
   model: SituationModel = liveSituationModel,
   now: () => number = Date.now,
 ): Promise<ClubSnapshot | null> {
@@ -170,15 +221,8 @@ export async function buildClubSnapshot(
   if (!report) return null;
   const start = now();
   const core = deriveClubCore(report);
-  const { currentSeason, month, year, seasonStartYear } = getCurrentSeasonInfo(new Date(now()));
-  const searches: ResearchCall[] = [
-    { tool: 'web_search', subject: `${report.team} transfers in and out and coaching changes since last season, ${currentSeason}`, stage: 'facts' },
-    { tool: 'web_search', subject: `${report.team} tactical analysis ${currentSeason}: shape, build-up, pressing and key roles`, stage: 'analysis' },
-    ...(core.outCovered ? [] : [{ tool: 'web_search' as const, subject: `${report.team} team news, injuries and suspensions, ${month} ${year}`, stage: 'facts' as const }]),
-  ];
-  const context = formatFactContext([core]);
-  const outcomes = await Promise.all(searches.map((c) => executeCall(c, tools, c.stage === 'analysis' ? context : undefined)));
-  const ledger = fileOutcomes(emptyLedger(), [{ tool: 'club_recent_team', subject: club }, ...searches], [live, ...outcomes]);
+  const { currentSeason, seasonStartYear } = getCurrentSeasonInfo(new Date(now()));
+  const ledger = fileOutcomes(emptyLedger(), [{ tool: 'club_recent_team', subject: club }, ...pass.calls], [live, ...pass.outcomes]);
   const { situation, usedModel } = await buildSituation({
     ledger,
     stored: [],
@@ -193,7 +237,7 @@ export async function buildClubSnapshot(
   });
   const built = situation.clubs[0];
   if (!usedModel || !built) return null;
-  console.log(`[Perf] club snapshot build "${report.team}": ${now() - start}ms`);
+  console.log(`[Perf] club snapshot summary "${report.team}": ${now() - start}ms`);
   return {
     club: report.team,
     league: report.league,
@@ -203,6 +247,18 @@ export async function buildClubSnapshot(
     builtAt: new Date(now()).toISOString(),
     version: SNAPSHOT_VERSION,
   };
+}
+
+/** A whole build: the research pass, then the summary. */
+export async function buildClubSnapshot(
+  club: string,
+  live: ToolOutcome,
+  tools: ResearchToolset,
+  model: SituationModel = liveSituationModel,
+  now: () => number = Date.now,
+): Promise<ClubSnapshot | null> {
+  const pass = await researchClub(club, live, tools, now);
+  return pass ? summarizeClub(club, live, pass, model, now) : null;
 }
 
 /** The live store, shared through Supabase when it's available and kept in memory otherwise. */
@@ -217,5 +273,6 @@ export const liveClubSnapshots: SnapshotSource = createClubSnapshotStore({
     const { error } = await supabase.from('club_snapshots').upsert(row, { onConflict: 'club_key' });
     if (error) console.warn('[ClubSnapshots] Upsert failed:', error);
   },
-  build: (club, live) => buildClubSnapshot(club, live, liveToolset([])),
+  research: (club, live) => researchClub(club, live, liveToolset([])),
+  summarize: (club, live, pass) => summarizeClub(club, live, pass),
 });

@@ -445,7 +445,10 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       targetClubs.length === 0 &&
       !asksLiveSeasonUpdate;
 
+    // Research is for the present. A thread about primes and past seasons answers from cards, and
+    // the writer keeps its tools for anything it needs to check.
     const shouldPreGround =
+      !isHistoricalThread &&
       !allTargetsAlreadyCalibrated &&
       (playerNamesForGrounding.length > 0 ||
         targetClubs.length > 0 ||
@@ -559,11 +562,9 @@ ${savedDossiersBlock}
   const historyContents = buildHistoryContents(history, conversationDossiers);
   const dossiersPool = [...savedDossiers, ...conversationDossiers];
 
-  // Adapt thinking depth to the complexity of the turn: 'medium' for high-complexity rankings,
-  // tactical system breakdowns, and multi-player debates; 'low' (~0.8s TTFT) for standard Q&A and comparisons.
-  // A researched turn did its planning in the brief, so the writer can think lightly and start sooner.
-  const thinkingLevelOverride: ThinkingTier =
-    brief || route.reasoningComplexity !== 'high' ? 'low' : 'medium';
+  // Low thinking for every prose turn: a researched turn did its planning in the brief, and on a
+  // debate from stored cards medium thinking held the first token back by 15 s or more in the evals.
+  const thinkingLevelOverride: ThinkingTier = 'low';
 
   const toolMode = proseToolMode({
     researched,

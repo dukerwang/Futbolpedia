@@ -324,7 +324,7 @@ const liveOutcome = (team: string): Promise<ToolOutcome> =>
   Promise.resolve({ status: 'found', result: { kind: 'club_context', label: team, content: 'XIs', club: report({ team }) }, missing: [] });
 
 const fakeStore = (rows: Record<string, SnapshotRow>, built: (club: string) => ClubSnapshot | null, now = () => NOW) => {
-  const log = { reads: [] as string[], writes: [] as SnapshotRow[], builds: [] as string[] };
+  const log = { reads: [] as string[], writes: [] as SnapshotRow[], builds: [] as string[], researched: [] as string[] };
   const store = createClubSnapshotStore({
     read: async (key) => {
       log.reads.push(key);
@@ -334,9 +334,14 @@ const fakeStore = (rows: Record<string, SnapshotRow>, built: (club: string) => C
       log.writes.push(row);
       rows[row.club_key] = row;
     },
-    build: async (club) => {
-      log.builds.push(club);
+    research: async (club, live) => {
+      if (!live.result?.club) return null;
+      log.researched.push(club);
       await new Promise((r) => setTimeout(r, 5));
+      return { calls: [{ tool: 'web_search', subject: `${club} news` }], outcomes: [{ status: 'found', result: { kind: 'web', label: `${club} news`, content: 'News.' }, missing: [] }] };
+    },
+    summarize: async (club) => {
+      log.builds.push(club);
       return built(club);
     },
     now,
@@ -380,6 +385,17 @@ await test('a stale or old-version row is rebuilt once, however many turns ask a
   const second = fakeStore({ [toClubKey('Westside')]: oldVersion }, (club) => snapshot(club));
   await second.store.get('Westside', liveOutcome('Westside'));
   assert.deepEqual(second.log.builds, ['Westside']);
+});
+
+await test("a turn reads the build's research pass, and the build reuses it rather than searching again", async () => {
+  const { store, log } = fakeStore({}, (club) => snapshot(club));
+  const [pass, built] = await Promise.all([store.research('Northside', liveOutcome('Northside')), store.get('Northside', liveOutcome('Northside'))]);
+  assert.equal(pass?.outcomes[0].result?.content, 'News.');
+  assert.equal(built?.club, 'Northside');
+  assert.deepEqual(log.researched, ['Northside']);
+  assert.deepEqual(log.builds, ['Northside']);
+  // No live data means nothing to research.
+  assert.equal(await store.research('Nowhere', Promise.resolve({ status: 'failed', result: null, missing: [] })), null);
 });
 
 await test('a failed build is never stored, and is retried after a few minutes rather than straight away', async () => {

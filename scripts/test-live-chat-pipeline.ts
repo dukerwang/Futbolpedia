@@ -114,8 +114,8 @@ globalThis.fetch = (async (input: any, init?: any) => {
     );
   }
   if (structured && prompt.includes('You are checking whether research')) {
-    const stale = prompt.match(/\[(E\d+)\] Web search — Southside tactical analysis/)?.[1];
-    return respond(JSON.stringify({ enough: true, discard: stale ? [{ id: stale, reason: 'describes last season' }] : [], calls: [], unresolved: [] }));
+    const stale = [...prompt.matchAll(/\[(E\d+)\] Web search — Southside tactical analysis/g)].map((m) => ({ id: m[1], reason: 'describes last season' }));
+    return respond(JSON.stringify({ enough: true, discard: stale, calls: [], unresolved: [] }));
   }
   if (structured && prompt.includes('situation snapshot a football analyst')) {
     return respond(
@@ -183,6 +183,9 @@ await test('a question about the present researches facts, then analysis, and th
   // The stale piece was set aside, and the injury gap reads as not covered.
   assert.doesNotMatch(writer, /Departed Star/);
   assert.match(writer, /\[Not covered\][^\]]*Injury list for Southside/);
+  // The club's research pass and the search on the question went in with the turn's own lookups.
+  assert.match(writer, /Web search — Southside transfers in and out and coaching changes since last season/);
+  assert.match(writer, /Web search — Break down Southside's build-up shape this season/);
 });
 
 console.log(`${passes} passed, ${failures} failed`);
