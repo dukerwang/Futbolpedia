@@ -1,7 +1,8 @@
 import { Type } from '@google/genai';
 import type { PlayerProfile } from '../types';
-import { generateStructured, getCurrentSeasonInfo, runGroundedSearch } from './aiClient';
+import { generateStructured, getCurrentSeasonInfo } from './aiClient';
 import { getClubManager } from './clubManagers';
+import { formatDossierResearch, researchCurrentPlayer } from './dossierResearch';
 import {
   getCachedDossier,
   getCardKey,
@@ -30,10 +31,14 @@ const LATEST_UPDATE_SCHEMA = {
 async function rewriteLatestUpdate(card: PlayerProfile): Promise<PlayerProfile> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
   const name = card.basicInfo.name;
-  const [search, apiPlayer, manager] = await Promise.all([
-    runGroundedSearch(
-      `${name} (${card.basicInfo.club}) latest news as of ${month} ${year}: recent match appearances and performances, ${currentSeason} season stats, injury or fitness status, transfer or loan news`,
-    ),
+  const [research, apiPlayer, manager] = await Promise.all([
+    researchCurrentPlayer({
+      name,
+      searches: [
+        `${name} (${card.basicInfo.club}) latest news as of ${month} ${year}: recent match appearances and performances, ${currentSeason} season stats, injury or fitness status, transfer or loan news`,
+      ],
+      registeredClub: Promise.resolve(card.basicInfo.club === 'N/A' ? null : card.basicInfo.club),
+    }),
     fetchApiFootballPlayer(name).catch(() => null),
     getClubManager(card.basicInfo.club).catch(() => null),
   ]);
@@ -43,7 +48,7 @@ async function rewriteLatestUpdate(card: PlayerProfile): Promise<PlayerProfile> 
     schema: LATEST_UPDATE_SCHEMA,
     prompt: `<context>System Date: ${month} ${year} (${todayIso()}). Season: ${currentSeason}</context>
 <factual_foundation>
-${search.formattedBlock}
+${formatDossierResearch(research, { current: true })}
 ${formatApiFootballFactSheetBlock(apiPlayer)}
 </factual_foundation>
 <previous_latest_update as_of="${getLatestUpdateDate(card) ?? 'unknown'}">
@@ -51,6 +56,7 @@ ${card.latestUpdate}
 </previous_latest_update>
 Rewrite the Latest Update for ${name}'s scouting card (${card.basicInfo.position}, ${card.basicInfo.club}): 2–4 sentences on where the player stands now, covering recent appearances and output, fitness or injury status, and any transfer or loan news.
 - Use only facts in <factual_foundation>. Never cite a statistic without its verified number, and never invent a match event.
+- The live season record and the club's live data settle his club, starts, minutes and output this season and whether he has started recently; a web entry that contradicts them is out of date. Lookups listed as not found, not covered or failed are unknowns.
 - Never name a head coach or manager.
 - Don't rate the player or restate the scouting profile; this line is news, not evaluation.
 - If the foundation has nothing newer than the previous update, keep its facts and say so plainly.`,
