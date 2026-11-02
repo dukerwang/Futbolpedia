@@ -146,6 +146,14 @@ await test('the first-choice XI follows recent starts, skips the injured and nam
   assert.deepEqual(xi.map((s) => s.role), ['G', 'LB', 'CD-L', 'CD-R', 'RB', 'DM', 'CM-L', 'CM-R', 'LF', 'F', 'RF']);
 });
 
+await test('two starts against one is not a split, so the writer gets one name', () => {
+  const twoToOne: LiveLineup[] = [lineups[0], lineups[1], lineups[2]];
+  const { xi } = firstChoiceXI(report({ lineups: twoToOne, fplPlayers: null }));
+  const lb = xi.find((s) => s.role === 'LB')!;
+  assert.equal(lb.name, 'New Fullback');
+  assert.equal(lb.rotation, undefined);
+});
+
 await test('domestic cups are told apart from league and European matches', () => {
   for (const c of ['Carabao Cup (Fourth Round)', 'Copa del Rey', 'Coppa Italia', 'DFB Pokal', 'Coupe de France', 'FA Cup']) assert.equal(isDomesticCup(c), true, c);
   for (const c of ['Premier League', 'UEFA Champions League (League Phase)', 'UEFA Europa League', 'LALIGA']) assert.equal(isDomesticCup(c), false, c);
@@ -217,7 +225,7 @@ await test('the snapshot reads as one dated block the writer can argue from', ()
   });
   const text = formatSituation({ asOf: '2026-11-01', clubs: [club], players: [], unknowns: [] });
   assert.match(text, /^<situation_snapshot>\nThe present as of 2026-11-01/);
-  assert.match(text, /First-choice XI \(4-3-3, from the last 4 starting XIs\): G Keeper \(4\/4\) \| LB New Fullback \(2\/4, rotates with Old Fullback\)/);
+  assert.match(text, /First-choice XI \(4-3-3, from the last 4 starting XIs\): G Keeper \(4\/4\) \| LB New Fullback \(2\/4, even split with Old Fullback\)/);
   assert.match(text, /Out or doubtful \(injury list\): Main Nine \(Hamstring injury - Expected back 29 Nov\); Anchor/);
   assert.match(text, /Form, most recent first \(WDLW\)/);
   assert.match(text, /Changed since last season: A new left-back signed in August/);
@@ -420,6 +428,8 @@ await test('a build researches what changed, reads its analysis against the live
     playerSeason: async () => assert.fail('unused'),
     leagueTable: async () => assert.fail('unused'),
     card: async () => assert.fail('unused'),
+    clubSeason: async () => assert.fail('unused'),
+    playerCareer: async () => assert.fail('unused'),
     webSearch: async (query, options) => {
       asked.push({ query, context: options?.context });
       return { status: 'found', result: { kind: 'web', label: query, content: `[2026-10-20] Digest for ${query}`, sources: [`S (https://example.com/${asked.length})`] }, missing: [] };

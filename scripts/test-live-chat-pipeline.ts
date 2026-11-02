@@ -72,6 +72,7 @@ const respond = (text: string) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+let snapshots: import('../services/snapshotServer').SnapshotServer | undefined;
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input);
@@ -82,6 +83,15 @@ globalThis.fetch = (async (input: any, init?: any) => {
   if (url.startsWith('/api/live/player')) {
     liveAsked.push(url);
     return new Response(JSON.stringify({ found: false, status: 'not_covered', reason: 'not a Premier League player' }));
+  }
+  if (url.startsWith('/api/snapshots/')) {
+    // The app's server builds snapshots; here it runs in-process over these same fakes, with no table.
+    const { createSnapshotServer } = await import('../services/snapshotServer');
+    snapshots ??= createSnapshotServer({ get: async (u) => ({ data: await (await globalThis.fetch(u)).json() }), db: null });
+    const u = new URL(url, 'http://local');
+    const club = u.searchParams.get('club') ?? '';
+    if (u.pathname === '/api/snapshots/club/research') return new Response(JSON.stringify({ research: await snapshots.clubResearch(club) }));
+    if (u.pathname === '/api/snapshots/club') return new Response(JSON.stringify({ snapshot: await snapshots.club(club) }));
   }
   if (url.startsWith('/api/')) return new Response('{}', { status: 404 });
   if (!url.includes('generativelanguage.googleapis.com')) return realFetch(input, init);
@@ -142,7 +152,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
     );
   }
   if (structured) return respond('{}');
-  return respond('New Fullback starts at left-back in a back four.');
+  return respond('New Fullback starts at left-back in a back four. They allow a PPDA of 8.4 when they press. Main Nine leads the line.');
 }) as typeof fetch;
 
 const { sendMessageToAI } = await import('../services/geminiService');
@@ -161,7 +171,8 @@ await test('a question about the present researches facts, then analysis, and th
   const reply = await quietly(() =>
     sendMessageToAI("Break down Southside's build-up shape this season", [], undefined, [], [], { onStageChange: (s) => stages.push(s) }),
   );
-  assert.equal(reply, 'New Fullback starts at left-back in a back four.');
+  // The pressing figure was never looked up, so its sentence goes; the rest stands.
+  assert.equal(reply, 'New Fullback starts at left-back in a back four. Main Nine leads the line.');
   assert.ok(liveAsked.some((u) => u.includes('name=Southside')), 'the club was looked up live');
   assert.ok(stages.includes('Working out what the question needs...'));
 
@@ -175,6 +186,9 @@ await test('a question about the present researches facts, then analysis, and th
 
   const writer = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1)?.prompt ?? '';
   assert.match(writer, /<situation_snapshot>/);
+  assert.match(writer, /A precise figure .* goes in only when one of those sources gives it; for standings call `get_league_table`/);
+  const writerCall = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1);
+  assert.ok(writerCall);
   assert.match(writer, /First-choice XI \(4-3-3, from the last 3 starting XIs\): G Keeper \(3\/3\) \| LB New Fullback/);
   assert.match(writer, /CM-R Eight Two \(3\/3, news reports him out: ankle/);
   assert.match(writer, /Changed since last season: New Fullback signed in August/);

@@ -1,0 +1,37 @@
+[
+  {
+    "q": {
+      "n": 13,
+      "text": "Prime Zidane or prime Kaká?",
+      "tests": "Control: historical debate"
+    },
+    "run": {
+      "answer": "To determine who reached the higher level at his peak, this evaluation measures **Zinedine Zidane** across his defining prime window (1998–2003) against **Kaká** across his peak era (2005–2008).\n\nBoth reached the pinnacle of world football, claiming the Ballon d'Or and the FIFA World Player of the Year, but they operated as entirely different species of playmaker. Evaluating their peak levels turns on two central criteria:\n\n---\n\n### 1. Game Control and Big-Match Mastery\n\nThis criterion measures how completely each playmaker could dictate the tempo, manipulate defensive structures, and orchestrate the rhythm of decisive knockout ties and major finals.\n\nZidane represents the historical benchmark for spatial and tempo control. Between 1998 and 2003, Zidane dominated games through his ability to slow down play, protect possession under intense pressure, and link defensive phases to final-third penetration. In the 1998 World Cup final, he scored twice against Brazil; at Euro 2000, he delivered a tournament-defining masterclass across the knockout stages; and in the 2001–02 Champions League final, he delivered the iconic winning volley for Real Madrid. His presence ensured his team owned the middle third regardless of the opposition's defensive block.\n\nKaká was not a controller who dictated thirty-pass sequences from deep or paused play to let his full-backs advance. Instead, he relied on explosive verticality, occupying the half-spaces or the hole behind Filippo Inzaghi and Alberto Gilardino to attack retreating backlines directly. While Kaká was the decisive catalyst of AC Milan's attacking structure, he did not manage match tempo or organize possession in the way Zidane did.\n\n*Advantage: **Zidane***\n\n---\n\n### 2. Decisive Direct Attacking Threat\n\nThis criterion evaluates pure vertical penetration, counter-attacking devastation, and raw end-product in goals and assists during their peak seasons.\n\nKaká’s peak was defined by an unstoppable combination of long-striding acceleration, balance, and clean ball-striking on the move. Over his peak 2006–07 campaign, Kaká produced **18 goals in 48 total appearances**, finishing as the top scorer in the Champions League with **10 continental goals in 15 appearances**—including pivotal goals against Celtic, Bayern Munich, and Manchester United. As a dynamic transitional force driving forward with the ball at his feet, prime Kaká offered a level of direct goal threat and sudden vertical incision that broke games open in seconds.\n\nZidane, by contrast, was never a high-volume goalscorer. While his ball-striking technique and delivery from dead balls were world-class, he was far less lethal on the break and did not possess the devastating straight-line burst that allowed Kaká to bypass entire midfields single-handedly.\n\n*Advantage: **Kaká***\n\n---\n\n### Direct Counter-Case & Resolution\n\nThe strongest case for Kaká rests on his singular dominance in the 2006–07 season. That campaign was one of the most explosive individual carry-jobs in modern European football; Kaká dismantled top-tier defenses on the counter-attack, using direct speed and finishing that Zidane never possessed.\n\nHowever, while Kaká’s direct transitional peak was devastating, it required open space to exploit. When games compressed into dense, low-block territory, or when game states required calming possession under aggressive pressure, Kaká could be contained more effectively than Zidane. Zidane's game was functionally press-immune; his blend of touch, spatial vision, and technical mastery allowed him to dictate terms across both club and international tournaments against every defensive configuration.\n\n---\n\n### Verdict\n\n**Zinedine Zidane ranks above Kaká at his peak due to his superior, all-phase game control and repeated tactical mastery across the highest-stakes club and international knockout stages.**",
+      "firstTokenMs": 9285,
+      "totalMs": 17860,
+      "perf": [
+        "[Perf] turn router (compare): +2857ms (total 2857ms)",
+        "[Perf] dossier lookup: +1ms (total 2858ms)",
+        "[Perf] lookup player_career \"Prime Zidane\": 510ms (empty: no Wikipedia article found)",
+        "[Perf] lookup player_career \"Kaká\": 803ms (found)",
+        "[Perf] lookup player_career \"Zinedine Zidane\": 847ms (found)",
+        "[Perf] debate brief (started early, head_to_head, peak_level, 4 lookups): +4528ms (total 7386ms)",
+        "[Perf] lookup card \"Zinedine Zidane\": 4ms (empty: no stored card)",
+        "[Perf] lookup card \"Kaká\": 3ms (empty: no stored card)",
+        "[Perf] debate research (2 found, 2 missing; 0 era snapshots, 1 building): +5ms (total 7391ms)",
+        "[Perf] first answer token: +1885ms (total 9275ms)",
+        "[Perf] conversational scout: +8584ms (total 17859ms)"
+      ]
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "not_needed",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "The answer provides a rigorous, tactically astute comparison of both players at their peaks, backed by exact historical statistics and tournament milestones. It commits firmly to a verdict without hedging."
+    },
+    "graderRaw": "```json\n{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"not_needed\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"The answer provides a rigorous, tactically astute comparison of both players at their peaks, backed by exact historical statistics and tournament milestones. It commits firmly to a verdict without hedging.\"\n}\n```"
+  }
+]

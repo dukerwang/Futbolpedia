@@ -2,6 +2,8 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import path from "path";
+import { promises as fs } from "fs";
+import { createHash } from "crypto";
 import axios from "axios";
 import { pickCurrentCoach } from "./packages/engine/src/gates/managerMentions.ts";
 import { getRealWorldFootballSeason } from "./prompts/scoutCore";
@@ -14,6 +16,10 @@ import {
   type TeamLineup,
 } from "./services/teamLineups";
 import { createLiveFootball } from "./services/liveFootball";
+import { createHistoryFootball, type PermanentStore } from "./services/historyFootball";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { supabaseUrl } from "./services/dossierCache";
+import { createSnapshotServer, inProcessGet, supabaseSnapshotDb } from "./services/snapshotServer";
 
 async function startServer() {
   const app = express();
@@ -551,6 +557,110 @@ async function startServer() {
       console.warn(`[live] table "${league}" failed:`, error?.message || error);
       return res.json({ found: false, status: "failed", reason: "lookup failed" });
     }
+  });
+
+  // Facts about past seasons for chat research (services/historyFootball.ts): Wikipedia's club
+  // season and player articles, and ESPN's results and lineups for seasons from 2003-04 on. Past
+  // seasons don't change, so each finished lookup is kept for good in memory and on disk, and
+  // survives a restart. Wikipedia asks API clients to name themselves in the User-Agent.
+  const historyDir = path.join(process.cwd(), ".cache", "history");
+  const historyStore: PermanentStore = {
+    async get(key) {
+      const file = path.join(historyDir, `${createHash("sha1").update(key).digest("hex")}.json`);
+      try {
+        return JSON.parse(await fs.readFile(file, "utf8"));
+      } catch {
+        return undefined;
+      }
+    },
+    async set(key, value) {
+      await fs.mkdir(historyDir, { recursive: true });
+      const file = path.join(historyDir, `${createHash("sha1").update(key).digest("hex")}.json`);
+      await fs.writeFile(file, JSON.stringify({ key, ...value }));
+    },
+  };
+  const history = createHistoryFootball({
+    getJson: async (url) => {
+      const res = await axios.get(url, {
+        timeout: 8000,
+        headers: { "User-Agent": "Futbolpedia/3.6 (https://github.com/dukerwang/Futbolpedia)", Accept: "application/json" },
+      });
+      return res.data;
+    },
+    store: historyStore,
+    currentSeasonStart: () => getRealWorldFootballSeason().seasonStartYear,
+  });
+
+  app.get("/api/history/club-season", async (req, res) => {
+    const club = liveQuery(req.query.club);
+    const season = liveQuery(req.query.season);
+    if (!club || !season) return res.status(400).json({ error: "Missing club or season" });
+    const start = Date.now();
+    try {
+      const result = await history.clubSeason(club, season);
+      console.log(`[history] club season "${club}" ${season}: ${"reason" in result ? result.reason : result.title} (${Date.now() - start}ms)${result.missing.length ? `; missing: ${result.missing.map((m) => `${m.item} [${m.status}]`).join("; ")}` : ""}`);
+      return res.json(result);
+    } catch (error: any) {
+      console.warn(`[history] club season "${club}" ${season} failed:`, error?.message || error);
+      return res.json({ found: false, status: "failed", reason: "lookup failed", missing: [] });
+    }
+  });
+
+  app.get("/api/history/player", async (req, res) => {
+    const name = liveQuery(req.query.name);
+    if (!name) return res.status(400).json({ error: "Missing player name" });
+    const start = Date.now();
+    try {
+      const result = await history.playerCareer(name);
+      console.log(`[history] player "${name}": ${"reason" in result ? result.reason : result.title} (${Date.now() - start}ms)`);
+      return res.json(result);
+    } catch (error: any) {
+      console.warn(`[history] player "${name}" failed:`, error?.message || error);
+      return res.json({ found: false, status: "failed", reason: "lookup failed", missing: [] });
+    }
+  });
+
+  // Shared club and era snapshots (services/snapshotServer.ts). Browsers read the tables but can't
+  // write them; these routes build a snapshot from the server's own lookups and searches and store
+  // it with the Supabase secret key. Without the key, builds are kept in this process's memory and
+  // era snapshots aren't built at all.
+  if (GEMINI_API_KEY) process.env.API_KEY = GEMINI_API_KEY; // services/aiClient.ts reads API_KEY
+  const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+  console.log(`[startup] SUPABASE_SECRET_KEY set: ${!!SUPABASE_SECRET_KEY}`);
+  const snapshots = createSnapshotServer({
+    get: inProcessGet({ live, history }),
+    db: SUPABASE_SECRET_KEY
+      ? supabaseSnapshotDb(createSupabaseClient(supabaseUrl, SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } }))
+      : null,
+  });
+
+  app.get("/api/snapshots/club/research", async (req, res) => {
+    const club = liveQuery(req.query.club);
+    if (!club) return res.status(400).json({ error: "Missing club" });
+    const start = Date.now();
+    const research = await snapshots.clubResearch(club).catch(() => null);
+    console.log(`[snapshots] club research "${club}": ${research ? `${research.calls.length} searches` : "none"} (${Date.now() - start}ms)`);
+    return res.json({ research });
+  });
+
+  app.get("/api/snapshots/club", async (req, res) => {
+    const club = liveQuery(req.query.club);
+    if (!club) return res.status(400).json({ error: "Missing club" });
+    const start = Date.now();
+    const snapshot = await snapshots.club(club).catch(() => null);
+    console.log(`[snapshots] club "${club}": ${snapshot ? `${snapshot.club}, built ${snapshot.builtAt}` : "none"} (${Date.now() - start}ms)`);
+    return res.json({ snapshot });
+  });
+
+  app.get("/api/snapshots/era", async (req, res) => {
+    const kind = req.query.kind;
+    const subject = liveQuery(req.query.subject);
+    const period = liveQuery(req.query.period).slice(0, 20);
+    if ((kind !== "club_season" && kind !== "player_window") || !subject || !period) return res.status(400).json({ error: "Missing kind, subject or period" });
+    const start = Date.now();
+    const snapshot = await snapshots.era(kind, subject, period).catch(() => null);
+    console.log(`[snapshots] era ${kind} "${subject}" ${period}: ${snapshot ? snapshot.key : "none"} (${Date.now() - start}ms)`);
+    return res.json({ snapshot });
   });
 
   // AI Studio's service worker intercepts browser requests to generativelanguage.googleapis.com

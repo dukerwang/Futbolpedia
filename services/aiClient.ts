@@ -376,19 +376,35 @@ const NETWORK_FUNCTION_DECLARATIONS = [
       required: ['name'],
     },
   },
+  {
+    name: 'get_league_table',
+    description:
+      "Gets a league's current table from ESPN: every club's position, points, games played, wins, draws, losses and goal difference. Covers the major European leagues, the Champions and Europa League phases, and several others. Use it for any position, points or goal-difference figure.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        league: { type: Type.STRING, description: "The league's usual English name." },
+        country: { type: Type.STRING, description: "The league's country, when its name is shared." },
+      },
+      required: ['league'],
+    },
+  },
 ];
 
-/** Server routes behind the live data tools, keyed by tool name. */
-const NETWORK_TOOL_ROUTES: Record<string, { arg: 'name' | 'team'; param: string; path: string; label: string }> = {
-  get_club_recent_team: { arg: 'team', param: 'name', path: '/api/live/club', label: 'Club' },
-  get_player_season: { arg: 'name', param: 'name', path: '/api/live/player', label: 'Player' },
+/** Server routes behind the live data tools, keyed by tool name: each argument and the query parameter it fills. */
+const NETWORK_TOOL_ROUTES: Record<string, { args: Record<string, string>; required: string; path: string; label: string }> = {
+  get_club_recent_team: { args: { team: 'name' }, required: 'team', path: '/api/live/club', label: 'Club' },
+  get_player_season: { args: { name: 'name' }, required: 'name', path: '/api/live/player', label: 'Player' },
+  get_league_table: { args: { league: 'league', country: 'country' }, required: 'league', path: '/api/live/table', label: 'Table' },
 };
 
 async function callNetworkTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   const route = NETWORK_TOOL_ROUTES[name];
-  const value = args[route.arg];
-  if (!value) return { error: `Missing ${route.arg} argument` };
-  const res = await fetch(`${route.path}?${route.param}=${encodeURIComponent(String(value))}`);
+  if (!args[route.required]) return { error: `Missing ${route.required} argument` };
+  const query = new URLSearchParams(
+    Object.entries(route.args).flatMap(([arg, param]) => (args[arg] ? [[param, String(args[arg])]] : [])),
+  );
+  const res = await fetch(`${route.path}?${query}`);
   if (!res.ok) return { error: `${route.label} lookup returned status ${res.status}` };
   // The structured club report is for research code; the model reads its text.
   const { report: _report, ...rest } = await res.json();
@@ -413,7 +429,19 @@ export interface GenerateProseTurnParams {
   onStreamChunk?: (accumulatedText: string) => void;
   /** Called with the tool names each time the model calls tools, for the turn's timing log. */
   onToolCalls?: (names: string[]) => void;
+  /** Called with each tool's result, so checks on the reply know what the tools returned. */
+  onToolResult?: (name: string, result: unknown) => void;
+  /** Called with each passage of the reply that the model's own search grounded. */
+  onGrounded?: (segment: string) => void;
 }
+
+/** Hands each grounded passage of a response to `onGrounded`. */
+const reportGrounding = (candidate: any, onGrounded?: (segment: string) => void) => {
+  if (!onGrounded) return;
+  for (const support of candidate?.groundingMetadata?.groundingSupports ?? []) {
+    if (typeof support?.segment?.text === 'string') onGrounded(support.segment.text);
+  }
+};
 
 export async function generateProseTurn(params: GenerateProseTurnParams): Promise<string> {
   const resolved = resolveTaskModelConfig('chat', {
@@ -494,6 +522,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
           apiResult = { error: e?.message || 'Tool execution failed' };
         }
 
+        params.onToolResult?.(String(functionCall.name), apiResult);
         return {
           functionResponse: {
             name: functionCall.name,
@@ -519,6 +548,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
         }
         const finish = chunk.candidates?.[0]?.finishReason;
         if (finish) lastFinishReason = finish;
+        reportGrounding(chunk.candidates?.[0], params.onGrounded);
 
         const chunkText = chunk.text;
         if (typeof chunkText === 'string' && chunkText.length > 0 && pendingCalls.length === 0) {
@@ -547,6 +577,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
     });
   }
 
+  reportGrounding(response.candidates?.[0], params.onGrounded);
   const text = response.text;
   if (typeof text !== 'string') {
     throw blockedOrEmptyResponseError(response.candidates?.[0]?.finishReason);

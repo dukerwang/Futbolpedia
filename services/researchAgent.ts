@@ -23,6 +23,7 @@ import {
 import type { ClubResearch, SnapshotSource } from './clubSnapshots';
 import {
   buildSituation,
+  coresFromLedger,
   deriveClubCore,
   formatFactContext,
   liveSituationModel,
@@ -79,7 +80,26 @@ export interface ResearchContext {
   storedSnapshots?: { club: string; asOf: string }[];
   /** Research already running when the brief plans, so it doesn't repeat it. */
   running?: string[];
+  /** A search on the question started before routing (`startQuestionSearch`), to use instead of a new one. */
+  questionSearch?: Promise<ToolOutcome> | null;
 }
+
+const PRESENT_CUES =
+  /\b(this season|right now|currently|at the moment|these days|so far|lately|recently|now|injur\w*|fit|fitness|form|line-?ups?|starting xi|best xi|table|standings|signings?|transfers?|playing|used|set up|pressing|build-up|shape)\b/i;
+const NOT_CHAT = /\b(rate|rerate|rating|dossier|card|prime|peak|all[- ]time|greatest|ever|\d{4}s|\d{4}-\d{2})\b/i;
+
+/**
+ * Whether a message reads as a question about the present, so its search can start while the turn
+ * is still being routed. Wrong guesses cost one search, never time.
+ */
+export const looksLikePresentQuestion = (message: string): boolean => PRESENT_CUES.test(message) && !NOT_CHAT.test(message);
+
+/** The search on the question as asked, as research files it. */
+export const questionCallFor = (message: string): ResearchCall => ({ tool: 'web_search', subject: message, stage: 'facts', purpose: 'the question as asked' });
+
+/** Starts the question's search before routing, for a message that looks like a question about the present. */
+export const startQuestionSearch = (message: string, tools: ResearchToolset): Promise<ToolOutcome> | null =>
+  looksLikePresentQuestion(message) ? executeCall(questionCallFor(message), tools) : null;
 
 /** Lookups in the first round, and in the reflect round. */
 export const FIRST_ROUND_LIMIT = 6;
@@ -87,7 +107,7 @@ export const SECOND_ROUND_LIMIT = 3;
 /** Clubs per turn that get live data through the snapshot path. */
 export const MAX_SNAPSHOT_CLUBS = 3;
 /** How long the brief waits for stored snapshots before planning without them. */
-export const STORED_PEEK_MS = 700;
+export const STORED_PEEK_MS = 300;
 /** How long analysis searches wait for the live facts before starting without them. */
 export const ANALYSIS_WAIT_MS = 2_500;
 /**
@@ -96,7 +116,7 @@ export const ANALYSIS_WAIT_MS = 2_500;
  */
 export const SNAPSHOT_GRACE_MS = 500;
 /** Research stops waiting at this point in the turn; whatever is still running is left out. */
-export const RESEARCH_DEADLINE_MS = 10_000;
+export const RESEARCH_DEADLINE_MS = 9_000;
 /** How long a grounded web search usually takes; one that can't finish by the deadline isn't started. */
 export const SEARCH_ESTIMATE_MS = 8_000;
 /** Past this point in the turn, reflect is skipped. */
@@ -350,8 +370,56 @@ export async function runResearch(
     return job;
   };
   if (ctx.present !== false) ctx.hints.clubs.forEach((club) => openClub(club, Boolean(ctx.present)));
-  // A search on the question itself starts with the brief, so a turn about the present has web
-  // evidence by the deadline whatever the brief plans.
+  // On a question about the present, the players the router spotted get their season record at
+  // once, and a record naming a club the turn hasn't opened opens it, so the snapshot covers the
+  // club he actually plays for rather than one the router guessed.
+  const playerJobs = ctx.present
+    ? ctx.hints.players.slice(0, 3).map((name) => {
+        const call: ResearchCall = { tool: 'player_season', subject: name, stage: 'facts' };
+        const run = executeCall(call, tools).then((o) => {
+          if (o.result?.team) openClub(o.result.team, true);
+          return o;
+        });
+        return { call, run };
+      })
+    : [];
+  // The situation snapshot needs only the live feeds and each club's snapshot or research pass,
+  // so it starts now and runs alongside the brief instead of after it.
+  const situationEarly = ctx.present
+    ? (async (): Promise<Situation> => {
+        await Promise.all(playerJobs.map((p) => within(p.run, untilDeadline())));
+        const js = [...clubs];
+        const lives = await Promise.all(js.map((j) => within(j.live, untilDeadline())));
+        const stored = await Promise.all(js.map((j) => within(j.stored, untilDeadline())));
+        const passes = await Promise.all(js.map((j, i) => (stored[i] || !j.research ? Promise.resolve(null) : within(j.research, untilDeadline()))));
+        const built = await Promise.all(js.map((j, i) => (stored[i] ? Promise.resolve(stored[i]) : j.snapshot ? within(j.snapshot, SNAPSHOT_GRACE_MS) : Promise.resolve(null))));
+        const players = await Promise.all(playerJobs.map((p) => within(p.run, 0)));
+        const ledger = fileOutcomes(
+          emptyLedger(),
+          [...js.filter((_, i) => lives[i]).map((j) => j.call), ...passes.flatMap((p) => p?.calls ?? []), ...playerJobs.filter((_, i) => players[i]).map((p) => p.call)],
+          [...lives, ...passes.flatMap((p) => p?.outcomes ?? []), ...players].filter((o): o is ToolOutcome => o !== null),
+        );
+        const r = await buildSituation({
+          ledger,
+          stored: built.filter((s): s is ClubSnapshot => s !== null),
+          players: ctx.hints.players,
+          question: ctx.message,
+          focus: '',
+          today: new Date(now()).toISOString().slice(0, 10),
+          season: currentSeason,
+          seasonStart,
+          allowModel: now() - start < SITUATION_CUTOFF_MS,
+          model: situationModel,
+        });
+        options.perf?.(
+          `situation snapshot (${r.situation.clubs.length} clubs, ${r.situation.players.length} players, ${built.filter(Boolean).length} stored or built${r.usedModel ? '' : ', code only'})`,
+        );
+        return r.situation;
+      })().catch((e) => {
+        console.warn('[Research] Situation snapshot failed:', e);
+        return null;
+      })
+    : null;
   options.onStage?.('Working out what the question needs...');
   const peeked = clubs.length ? await within(Promise.all(clubs.map((j) => j.stored)), STORED_PEEK_MS) : null;
   const storedSnapshots = (peeked ?? []).filter((s): s is ClubSnapshot => s !== null);
@@ -359,11 +427,12 @@ export async function runResearch(
   // When every club already has today's snapshot, the turn answers from it and the live data
   // instead of waiting on a search.
   const allStored = clubs.length > 0 && storedSnapshots.length === clubs.length;
-  const questionCall: ResearchCall | null =
-    ctx.present && !allStored ? { tool: 'web_search', subject: ctx.message, stage: 'facts', purpose: 'the question as asked' } : null;
-  const questionRun = questionCall ? executeCall(questionCall, tools) : null;
+  // Otherwise a search on the question itself runs alongside the brief (or already started during
+  // routing), so a turn about the present has web evidence by the deadline whatever the brief plans.
+  const questionCall: ResearchCall | null = ctx.present ? questionCallFor(ctx.message) : null;
+  const questionRun = questionCall && !allStored ? (ctx.questionSearch ?? executeCall(questionCall, tools)) : null;
   const running = [
-    ...(questionCall ? ['a web search on the question as asked'] : []),
+    ...(questionRun ? ['a web search on the question as asked'] : []),
     ...clubs
       .filter((j) => j.research && !storedSnapshots.some((s) => sameClubName(s.club, j.name)))
       .map((j) => `for ${j.name}, searches on what changed since last season, a tactical analysis read against the live data, and team news where no injury list covers it`),
@@ -378,15 +447,17 @@ export async function runResearch(
   }
   options.perf?.(`brief (${brief.timeframe}, ${brief.calls.length} lookups)`);
   const isLive = brief.timeframe === 'live';
-  if (brief.calls.length === 0 && !(isLive && (clubs.length > 0 || questionRun))) return { brief, ledger: emptyLedger(), situation: null };
+  if (brief.calls.length === 0 && !(isLive && (clubs.length > 0 || playerJobs.length > 0 || questionRun))) return { brief, ledger: emptyLedger(), situation: null };
 
   // The brief's club lookups go through the club jobs; on a question about the present, so do the
   // clubs the router spotted, each with its snapshot.
   const jobs: ClubJob[] = isLive ? [...clubs] : [];
   if (isLive) clubs.forEach((j) => openClub(j.name, true));
   const otherCalls: ResearchCall[] = [];
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
   for (const call of brief.calls) {
-    if (questionCall && call.tool === 'web_search' && call.subject.trim().toLowerCase() === questionCall.subject.trim().toLowerCase()) continue;
+    if (questionCall && call.tool === 'web_search' && same(call.subject, questionCall.subject)) continue;
+    if (call.tool === 'player_season' && playerJobs.some((p) => same(p.call.subject, call.subject))) continue;
     const job = call.tool === 'club_recent_team' ? openClub(call.subject, isLive) : null;
     if (job) {
       if (!jobs.includes(job)) jobs.push(job);
@@ -395,7 +466,7 @@ export async function runResearch(
   const facts = otherCalls.filter((c) => c.stage !== 'analysis');
   const analysis = otherCalls.filter((c) => c.stage === 'analysis');
 
-  options.onStage?.(describeRound([...jobs.map((j) => j.call), ...(questionCall && isLive ? [questionCall] : []), ...facts, ...analysis]));
+  options.onStage?.(describeRound([...jobs.map((j) => j.call), ...(questionRun && isLive ? [questionCall!] : []), ...facts, ...analysis]));
   const startCall = (c: ResearchCall, context?: string): Promise<ToolOutcome> =>
     c.tool === 'web_search' && !searchFits() ? Promise.resolve(SKIPPED) : executeCall(c, tools, context);
   const factRuns = facts.map((c) => startCall(c));
@@ -416,8 +487,8 @@ export async function runResearch(
 
   // At the deadline, research stops waiting. A lookup still running is kept aside: if it finishes
   // while reflect and the snapshot run, the writer still gets it; otherwise it's filed as too slow.
-  const allCalls = [...jobs.map((j) => j.call), ...(questionRun && isLive ? [questionCall!] : []), ...facts, ...analysis];
-  const allRuns = [...jobs.map((j) => j.live), ...(questionRun && isLive ? [questionRun] : []), ...factRuns, ...analysisRuns];
+  const allCalls = [...jobs.map((j) => j.call), ...(isLive ? playerJobs.map((p) => p.call) : []), ...(questionRun && isLive ? [questionCall!] : []), ...facts, ...analysis];
+  const allRuns = [...jobs.map((j) => j.live), ...(isLive ? playerJobs.map((p) => p.run) : []), ...(questionRun && isLive ? [questionRun] : []), ...factRuns, ...analysisRuns];
   const [onTime, passes] = await Promise.all([
     Promise.all(allRuns.map((p) => within(p, untilDeadline()))),
     Promise.all(jobs.map((j) => (j.research ? within(j.research, untilDeadline()) : Promise.resolve(null)))),
@@ -439,11 +510,15 @@ export async function runResearch(
   );
   const researchedLate = lateRuns.length + latePasses.length > 0;
 
-  // The situation snapshot runs alongside reflect. Snapshots ready by now (or within a short
-  // grace) are used; one still building finishes for the next turn while this one works it out.
+  // A turn not marked as about the present builds its snapshot now, alongside reflect. Snapshots
+  // ready by now (or within a short grace) are used; one still building finishes for the next turn
+  // while this one works it out.
   const players = [...new Set([...ctx.hints.players, ...brief.calls.filter((c) => c.tool === 'player_season').map((c) => c.subject)])];
-  const situationRun = isLive
-    ? (async () => {
+  const situationRun = !isLive
+    ? Promise.resolve(null)
+    : situationEarly
+      ? situationEarly
+      : (async () => {
         let stored = storedSnapshots;
         if (snapshots && jobs.length) {
           const ready = await Promise.all(jobs.map((j) => within(j.snapshot ?? j.stored, SNAPSHOT_GRACE_MS)));
@@ -464,8 +539,7 @@ export async function runResearch(
         });
         options.perf?.(`situation snapshot (${r.situation.clubs.length} clubs, ${r.situation.players.length} players${r.usedModel ? '' : ', code only'})`);
         return r.situation;
-      })()
-    : Promise.resolve(null);
+      })();
 
   // Reflect is for a turn with time in hand; one that ran to the deadline goes straight to writing.
   if (!researchedLate && now() - start < REFLECT_CUTOFF_MS) {
@@ -494,7 +568,12 @@ export async function runResearch(
       }
     }
   }
-  const situation = await situationRun;
+  let situation = await situationRun;
+  // Clubs the brief added after the snapshot started still get what code works out for them.
+  if (situation) {
+    const extra = coresFromLedger(ledger).filter((c) => !situation!.clubs.some((s) => sameClubName(s.club, c.club)));
+    if (extra.length) situation = { ...situation, clubs: [...situation.clubs, ...extra] };
+  }
   // Whatever finished while reflect and the snapshot ran still reaches the writer.
   if (researchedLate) {
     const [lateOutcomes, latePassResults] = await Promise.all([

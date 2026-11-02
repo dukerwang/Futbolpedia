@@ -28,7 +28,7 @@ export interface XiSlot {
   name: string | null;
   /** Starts in this slot's line across the recent XIs read. */
   starts: number;
-  /** Another player who has shared the role closely enough to count as rotation. */
+  /** Another player who has started there just as often in league and European matches: an even split. */
   rotation?: string;
   note?: string;
 }
@@ -126,8 +126,9 @@ export const isDomesticCup = (competition: string): boolean =>
  * The first-choice XI from recent lineups: the main formation's slots, each filled by the
  * available player who started there most, recent matches counting a little more and domestic
  * cup matches half, season starts breaking ties. A player who is out never fills a slot. Another
- * player who started in the same slot in league or European matches about as often is named as
- * rotation, each such player once.
+ * player who started in the same slot in league and European matches at least twice and as often
+ * as the first choice is named as an even split, each such player once. Anything less is not a
+ * split, so the writer commits to one name.
  */
 export function firstChoiceXI(r: LiveClubReport): { xi: XiSlot[]; formation: string | null; basis: ClubCore['xiBasis'] } {
   const fpl = fplByEspnName(r);
@@ -193,7 +194,7 @@ export function firstChoiceXI(r: LiveClubReport): { xi: XiSlot[]; formation: str
       ? [...firstTeam.entries()]
           .filter(([other]) => other !== name && !used.has(other) && !named.has(other) && !isOut(fpl.get(other)))
           .map(([other, counts]) => ({ other, n: counts.get(role) ?? 0 }))
-          .filter(({ n }) => n >= 1 && mine - n <= 1)
+          .filter(({ n }) => n >= 2 && n >= mine)
           .sort((a, b) => b.n - a.n)[0]
       : undefined;
     if (rival) named.add(rival.other);
@@ -267,7 +268,7 @@ const slotText = (s: XiSlot, matchesRead: number): string => {
   if (!s.name) return `${s.role} unknown${s.note ? ` (${s.note})` : ''}`;
   const extras = [
     matchesRead > 0 ? `${s.starts}/${matchesRead}` : `${s.starts} starts`,
-    ...(s.rotation ? [`rotates with ${s.rotation}`] : []),
+    ...(s.rotation ? [`even split with ${s.rotation}`] : []),
     ...(s.note ? [s.note] : []),
   ];
   return `${s.role} ${s.name} (${extras.join(', ')})`;
@@ -313,7 +314,7 @@ export function formatSituation(s: Situation | null | undefined): string {
     ...(s.unknowns.length ? [`Still unknown: ${s.unknowns.join('; ')}`] : []),
   ];
   return `<situation_snapshot>
-The present as of ${s.asOf}, worked out from the evidence below. Argue from it: name the first-choice player for each role it lists, mention a second player only where it says they rotate, and treat anyone out as unavailable.
+The present as of ${s.asOf}, worked out from the evidence below. Argue from it: name the first-choice player for each role it lists, mention another player only where it marks an even split and then as the alternative rather than a joint holder, and treat anyone out as unavailable.
 ${blocks.join('\n\n')}
 </situation_snapshot>`;
 }
@@ -402,9 +403,10 @@ The question: ${input.question}
 Evidence:
 ${input.evidence}`;
 
+// Bounded lengths keep a stored snapshot small and inside what a database guard on club_snapshots would accept.
 const strings = (v: unknown, max: number): string[] =>
-  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim()).slice(0, max) : [];
-const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim().slice(0, 300)).slice(0, max) : [];
+const text = (v: unknown): string => (typeof v === 'string' ? v.trim().slice(0, 600) : '');
 
 /** The model's answer, cleaned: known shapes only, lists capped, blank fields dropped. */
 export function sanitizeEnrichment(raw: any): SituationEnrichment {

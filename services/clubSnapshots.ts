@@ -2,7 +2,7 @@ import { getCurrentSeasonInfo } from './aiClient';
 import { toClubKey } from './clubManagers';
 import { supabase } from './dossierCache';
 import { emptyLedger, seasonStartDate } from './evidenceLedger';
-import { executeCall, fileOutcomes, liveToolset, type ResearchCall, type ResearchToolset, type ToolOutcome } from './researchTools';
+import { executeCall, fileOutcomes, getLive, type ResearchCall, type ResearchToolset, type ToolOutcome } from './researchTools';
 import {
   buildSituation,
   deriveClubCore,
@@ -16,7 +16,8 @@ import {
  * Shared daily club snapshots. Each club's situation (first-choice XI, absences, form, what
  * changed since last season, what's distinctive this season) is built at most once a day across
  * all users, from the live club data plus a research pass, and kept in the Supabase
- * `club_snapshots` table, like `club_managers`. Chat reads the stored snapshot first and only
+ * `club_snapshots` table. The server builds and stores them (`services/snapshotServer.ts`); the
+ * browser can read the table but not write it. Chat reads the stored snapshot first and only
  * builds one when it's missing or stale, so answers are faster and every user and turn works from
  * the same facts.
  */
@@ -261,18 +262,27 @@ export async function buildClubSnapshot(
   return pass ? summarizeClub(club, live, pass, model, now) : null;
 }
 
-/** The live store, shared through Supabase when it's available and kept in memory otherwise. */
+/** A build takes a research pass and a model call on the server; past this the turn stops waiting. */
+const SERVER_BUILD_TIMEOUT_MS = 60_000;
+
+/**
+ * The live store: stored rows are read from Supabase, and research passes and builds run on the
+ * server (`services/snapshotServer.ts`), which alone can write the table.
+ */
 export const liveClubSnapshots: SnapshotSource = createClubSnapshotStore({
   async read(key) {
     if (!supabase) return null;
     const { data } = await supabase.from('club_snapshots').select('*').eq('club_key', key).maybeSingle();
     return data ?? null;
   },
-  async write(row) {
-    if (!supabase) return;
-    const { error } = await supabase.from('club_snapshots').upsert(row, { onConflict: 'club_key' });
-    if (error) console.warn('[ClubSnapshots] Upsert failed:', error);
+  // The server stored it when it built it.
+  write: async () => {},
+  async research(club) {
+    const res = await getLive<{ research: ClubResearch | null }>(`/api/snapshots/club/research?${new URLSearchParams({ club })}`, SERVER_BUILD_TIMEOUT_MS);
+    return 'data' in res ? res.data.research : null;
   },
-  research: (club, live) => researchClub(club, live, liveToolset([])),
-  summarize: (club, live, pass) => summarizeClub(club, live, pass),
+  async summarize(club) {
+    const res = await getLive<{ snapshot: ClubSnapshot | null }>(`/api/snapshots/club?${new URLSearchParams({ club })}`, SERVER_BUILD_TIMEOUT_MS);
+    return 'data' in res ? res.data.snapshot : null;
+  },
 });

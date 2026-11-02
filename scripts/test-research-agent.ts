@@ -15,8 +15,10 @@ import {
   fallbackBrief,
   formatBriefForWriter,
   REFLECT_CUTOFF_MS,
+  looksLikePresentQuestion,
   RESEARCH_DEADLINE_MS,
   runResearch,
+  startQuestionSearch,
   type ResearchBrief,
   type ResearchContext,
   type ResearchModel,
@@ -83,6 +85,8 @@ const fakeTools = (found: Record<string, string>, calls: string[] = [], contexts
       return answer(`web:${query}`, 'web');
     },
     card: (name) => answer(`card:${name}`, 'card'),
+    clubSeason: (club, season) => answer(`season:${club} ${season}`, 'web'),
+    playerCareer: (name) => answer(`career:${name}`, 'web'),
   };
 };
 
@@ -502,6 +506,71 @@ await test('a lookup that misses the deadline but finishes while reflect and the
   });
   assert.deepEqual(ledger.entries.map((e) => e.kind), ['league_table']);
   assert.ok(!ledger.gaps.some((g) => /League/.test(g.label)));
+});
+
+await test('a question about the present starts its search during routing, and research uses that search rather than a second one', async () => {
+  assert.equal(looksLikePresentQuestion("How is Liverpool's midfield set up right now?"), true);
+  assert.equal(looksLikePresentQuestion("Who's injured at Manchester City at the moment?"), true);
+  assert.equal(looksLikePresentQuestion('Prime Zidane or prime Kaká?'), false);
+  assert.equal(looksLikePresentQuestion('Rank the best centre-backs of the 2000s'), false);
+  assert.equal(looksLikePresentQuestion('rate Bukayo Saka'), false);
+
+  const asked: string[] = [];
+  const tools = fakeTools({ [`web:${ctx.message}`]: 'Found early.' }, asked);
+  const early = startQuestionSearch("Break down Club's build-up shape this season", tools);
+  assert.ok(early);
+  const model: ResearchModel = {
+    writeBrief: async () => brief([]),
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
+  };
+  const { ledger } = await runResearch({ ...ctx, hints: { clubs: [], players: [] }, present: true, questionSearch: early }, tools, {
+    model,
+    situationModel: { enrich: async () => ({ clubs: [], players: [], unknowns: [] }) },
+  });
+  assert.deepEqual(asked, [`web:${ctx.message}`]);
+  assert.deepEqual(ledger.entries.map((e) => e.content), ['Found early.']);
+});
+
+await test("a spotted player's record opens the club he plays for, and the snapshot runs alongside the brief", async () => {
+  const asked: string[] = [];
+  const order: string[] = [];
+  const tools: ResearchToolset = {
+    ...reportTools(asked, {}),
+    playerSeason: async (name) => {
+      asked.push(`player:${name}`);
+      return { status: 'found', result: { kind: 'player_record', label: `${name} (Eastside)`, content: `${name} — Eastside, Midfielder.`, team: 'Eastside' }, missing: [] };
+    },
+  };
+  let releaseBrief: () => void = () => {};
+  const model: ResearchModel = {
+    writeBrief: async () => {
+      // The brief only returns once the snapshot call has started.
+      await new Promise<void>((r) => (releaseBrief = r));
+      order.push('brief');
+      return brief([{ tool: 'player_season', subject: 'Some Player' }]);
+    },
+    reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }),
+  };
+  const inputs: SituationInput[] = [];
+  const situationModel: SituationModel = {
+    enrich: async (input) => {
+      inputs.push(input);
+      order.push('situation');
+      releaseBrief();
+      return { clubs: [], players: [{ name: 'Some Player', club: 'Eastside', role: 'left of a midfield three', form: '', status: 'fit', changes: '' }], unknowns: [] };
+    },
+  };
+  const { situation, ledger } = await runResearch(
+    { ...ctx, hints: { clubs: ['Westside'], players: ['Some Player'] }, present: true },
+    tools,
+    { model, situationModel },
+  );
+  assert.deepEqual(order, ['situation', 'brief']);
+  // The guessed club and the real one are both looked up; the player is asked about once.
+  assert.deepEqual(asked.filter((a) => a.startsWith('club:') || a.startsWith('player:')).sort(), ['club:Eastside', 'club:Westside', 'player:Some Player']);
+  assert.deepEqual(inputs[0].clubs.map((c) => c.club).sort(), ['Eastside', 'Westside']);
+  assert.equal(situation?.players[0].role, 'left of a midfield three');
+  assert.ok(ledger.entries.some((e) => e.kind === 'player_record'));
 });
 
 console.log(`${passes} passed, ${failures} failed`);

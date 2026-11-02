@@ -325,6 +325,8 @@ await test("a lookup that says what it couldn't get files that, not a second gen
     leagueTable: async () => ({ status: 'empty', result: null, missing: [] }),
     webSearch: async () => ({ status: 'failed', result: null, missing: [], note: 'refused (rate limited)' }),
     card: async () => ({ status: 'empty', result: null, missing: [] }),
+    clubSeason: async () => ({ status: 'empty', result: null, missing: [] }),
+    playerCareer: async () => ({ status: 'empty', result: null, missing: [] }),
   };
   const ledger = await runCalls(
     [
