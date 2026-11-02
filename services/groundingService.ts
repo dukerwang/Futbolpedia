@@ -5,6 +5,13 @@ import {
   getCurrentSeasonInfo,
   runGroundedSearch,
 } from './aiClient';
+import {
+  formatDossierResearch,
+  researchCurrentPlayer,
+  researchPastPlayer,
+  type DossierResearchDeps,
+} from './dossierResearch';
+import type { EvidenceLedger } from './evidenceLedger';
 import type { FutbolpediaVerifiedFacts } from './profileManagerGrounding';
 import { formatRecentTeamBlock, type TeamAbsence, type TeamLineup } from './teamLineups';
 
@@ -128,6 +135,8 @@ export interface PlayerGroundingBundle {
   verifiedFacts: ExtendedVerifiedFacts | null;
   verifiedFactsBlock: string;
   apiPlayer: ApiFootballPlayerFactSheet | null;
+  /** What the lookups found and didn't, behind foundationText (see dossierResearch.ts). */
+  ledger: EvidenceLedger;
 }
 
 /** Search query that surfaces a club's summer departures and signings, so squad talk skips sold players. */
@@ -137,9 +146,9 @@ export const buildSquadTurnoverQuery = (clubLabel: string, year: number): string
 const ANTI_GAME_FILTER ='-site:futbin.com -site:sofifa.com -site:fifaindex.com -site:futwiz.com';
 
 /**
- * Direct, parallel grounding gatherer.
- * Runs API-Football lookup concurrently with focused web search grounding so API-Football
- * adds 0ms of sequential wait time on top of search.
+ * A dossier's grounding: the chat research's live feeds, history routes and dated web searches,
+ * filed in an evidence ledger (`dossierResearch.ts`), plus API-Football's bio record for a current
+ * card. Everything runs alongside the searches, so the feeds add at most `LIVE_GRACE_MS`.
  */
 export async function gatherPlayerGrounding(params: {
   playerName: string;
@@ -149,24 +158,29 @@ export async function gatherPlayerGrounding(params: {
   season?: string | null;
   /** A named version of the player to rate instead of his prime (see TurnRoute.requestedEra). */
   era?: string | null;
+  /** Tests swap in fake tools and snapshot stores. */
+  researchDeps?: DossierResearchDeps;
 }): Promise<PlayerGroundingBundle> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
-  const datePrefix = `[Date: ${month} ${year}]`;
   const subject = params.playerName || params.rawMessage;
 
   if (params.isHistorical) {
-    const searchResult = await runGroundedSearch(
-      params.season
+    const research = await researchPastPlayer({
+      name: subject,
+      season: params.season,
+      deps: params.researchDeps,
+      search: params.season
         ? `${subject} in the ${params.season} season: club, age, position and role, appearances, goals, assists, honours, form and tactical profile that season ${ANTI_GAME_FILTER}`
         : params.era
           ? `${subject} ${params.era} era: which seasons it covers, club, age, position and role, appearances, goals, assists, honours, form and tactical profile season by season ${ANTI_GAME_FILTER}`
           : `${subject} career peak prime seasons major honours Ballon d'Or FIFPro World XI best season stats tactical profile ${ANTI_GAME_FILTER}`,
-    );
+    });
     return {
-      foundationText: searchResult.formattedBlock,
+      foundationText: formatDossierResearch(research, { current: false }),
       verifiedFacts: null,
       verifiedFactsBlock: '',
       apiPlayer: null,
+      ledger: research.ledger,
     };
   }
 
@@ -175,14 +189,19 @@ export async function gatherPlayerGrounding(params: {
     `${subject} — tactical scouting report: playing style, positional standing in world football, technical/physical/mental strengths and weaknesses ${ANTI_GAME_FILTER}`,
   ];
 
-  const [apiPlayer, ...searchResults] = await Promise.all([
-    fetchApiFootballPlayer(subject, 2800),
-    ...searchQueries.map((q) => runGroundedSearch(q, { datePrefix })),
+  const apiPlayerPromise = fetchApiFootballPlayer(subject, 2800);
+  const [apiPlayer, research] = await Promise.all([
+    apiPlayerPromise,
+    researchCurrentPlayer({
+      name: subject,
+      searches: searchQueries,
+      registeredClub: apiPlayerPromise.then((p) => p?.currentClub ?? null),
+      deps: params.researchDeps,
+    }),
   ]);
 
   const apiBlock = formatApiFootballFactSheetBlock(apiPlayer);
-  const searchBlock = searchResults.map((r) => r.formattedBlock).join('\n\n---\n\n');
-  const foundationText = [apiBlock, searchBlock].filter(Boolean).join('\n\n===\n\n');
+  const foundationText = [apiBlock, formatDossierResearch(research, { current: true })].filter(Boolean).join('\n\n===\n\n');
 
   const verifiedFactsBlock = apiPlayer
     ? `<deterministic_bio_record>
@@ -200,6 +219,7 @@ Authoritative API-Football record for ${apiPlayer.name}:
     verifiedFacts: null,
     verifiedFactsBlock,
     apiPlayer,
+    ledger: research.ledger,
   };
 }
 

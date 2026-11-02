@@ -29,6 +29,9 @@ interface Scenario {
   apiPlayer?: { name: string; currentClub: string; age?: number };
   /** The turn classifier's answer, for messages no fast path routes. */
   route?: { intent: string; targetPlayers: string[] };
+  /** What /api/live/player and /api/history/player answer; unset, they 404. */
+  livePlayer?: { found: true; name: string; team: string; text: string };
+  career?: { found: true; title: string; text: string; sources: string[]; missing: [] };
 }
 
 interface GeminiCall {
@@ -147,6 +150,12 @@ globalThis.fetch = (async (input: any, init?: any) => {
   }
   if (url.startsWith('/api/football/player') && scenario.apiPlayer) {
     return new Response(JSON.stringify({ player: scenario.apiPlayer }), { status: 200 });
+  }
+  if (url.startsWith('/api/live/player') && scenario.livePlayer) {
+    return new Response(JSON.stringify(scenario.livePlayer), { status: 200 });
+  }
+  if (url.startsWith('/api/history/player') && scenario.career) {
+    return new Response(JSON.stringify(scenario.career), { status: 200 });
   }
   if (url.startsWith('/api/')) return new Response('{}', { status: 404 });
   return realFetch(input, init);
@@ -436,6 +445,40 @@ async function main() {
     assert.equal(card.ratings.overall, 92);
     assert.equal(card.ratings.potential, 92);
     assert.deepEqual(card.peerPlacement?.betterThan, ['Peer Maestro (2008-09)']);
+  });
+
+  await test("a current card is rated from his live season record, with the gaps the lookups left", async () => {
+    scenario = {
+      status: 'ACTIVE',
+      search: () => '- [2026-10-20] Recent form digest.',
+      name: 'Marcus Okonkwo',
+      apiPlayer: { name: 'Marcus Okonkwo', currentClub: 'FC Barcelona', age: 28 },
+      livePlayer: { found: true, name: 'Marcus Okonkwo', team: 'Northside', text: 'Northside, Midfielder: 9 starts, 760 minutes, 2 goals.' },
+    };
+    const card = await rate('Rate Marcus Okonkwo');
+    assert.equal(typeof card, 'object', String(card));
+    const prompt = synthesisPrompt();
+    assert.match(prompt, /Live player season \(FPL\)[^\n]*Marcus Okonkwo \(Northside\)/);
+    assert.match(prompt, /9 starts, 760 minutes/);
+    // The club route 404s in this test, so the lookup is a gap the card must not fill from memory.
+    assert.match(prompt, /Lookup failed[^\n]*\\n- Live match data for Northside/);
+    assert.match(prompt, /never fill them from memory/);
+    // More data never turns the rating into a reading of figures.
+    assert.match(prompt, /settle facts, not how good he is/);
+    assert.match(prompt, /never a formula for it/);
+  });
+
+  await test("a prime is rated from his career record", async () => {
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      career: { found: true, title: 'Andrés Iniesta', text: 'Season by season: 2008-09 Barcelona 26 apps 4 goals.', sources: ['https://en.wikipedia.org/wiki/Andr%C3%A9s_Iniesta'], missing: [] },
+    };
+    await rate('Rate Andrés Iniesta');
+    assert.match(synthesisPrompt(), /Career record \(Wikipedia\)[^\n]*Andrés Iniesta/);
+    assert.match(synthesisPrompt(), /2008-09 Barcelona 26 apps/);
+    assert.match(synthesisPrompt(), /settle facts, not how good he is/);
+    assert.match(synthesisPrompt(), /choose the seasons when he played his best football/);
   });
 
   console.log(`${passes} passed, ${failures} failed`);
