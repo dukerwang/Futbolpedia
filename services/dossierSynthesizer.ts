@@ -52,8 +52,18 @@ const OUTFIELD_ATTRIBUTES_SCHEMA = {
 const GK_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
   properties: Object.fromEntries(
-    Object.keys(GK_ATTRIBUTE_LABELS).map((key) => [key, { type: Type.NUMBER }]),
+    Object.keys(GK_ATTRIBUTE_LABELS).map((key) => [key, { type: Type.INTEGER, minimum: 1, maximum: 99 }]),
   ),
+  required: Object.keys(GK_ATTRIBUTE_LABELS),
+};
+
+/**
+ * A goalkeeper attribute the card can show: a whole number from 1 to 99. A missing, non-numeric or
+ * runaway value (the model has returned 7e199) becomes 0, which validation sends back for a retry.
+ */
+const cleanGkAttribute = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value > 100) return 0;
+  return Math.max(0, Math.min(99, Math.round(value)));
 };
 
 const DOSSIER_VERSION_TYPES: DossierVersionType[] = ['current', 'prime', 'season_snapshot', 'era', 'retro'];
@@ -487,7 +497,12 @@ export const sanitizeProfileData = (
     Object.keys(gkAttributes).length > 0 &&
     (positionLower.includes('goalkeeper') || positionLower.includes('gk'))
   ) {
-    sanitized.goalkeeperAttributes = gkAttributes as GoalkeeperAttributes;
+    sanitized.goalkeeperAttributes = Object.fromEntries(
+      Object.keys(GK_ATTRIBUTE_LABELS).map((key) => [
+        key,
+        cleanGkAttribute((gkAttributes as Record<string, unknown>)[key]),
+      ]),
+    ) as unknown as GoalkeeperAttributes;
   } else {
     delete sanitized.goalkeeperAttributes;
   }
@@ -943,6 +958,16 @@ function findSynthesisValidationIssues(
 
   const isGK = profile.basicInfo.position.toLowerCase().includes('goalkeeper');
   const overall = profile.ratings.overall;
+  if (isGK && overall >= 60) {
+    const missing = Object.keys(GK_ATTRIBUTE_LABELS).filter(
+      (key) => !((profile.goalkeeperAttributes?.[key as keyof GoalkeeperAttributes] ?? 0) > 0),
+    );
+    if (missing.length > 0) {
+      issues.push(
+        `Goalkeeper attributes ${missing.join(', ')} are missing, 0 or not a number from 1 to 99. Populate all 7 goalkeeperAttributes with real whole-number ratings.`,
+      );
+    }
+  }
   if (!isGK && overall >= 60) {
     const vals = Object.values(profile.attributes).filter(
       (v): v is number => typeof v === 'number',
