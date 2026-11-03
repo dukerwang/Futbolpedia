@@ -977,6 +977,20 @@ async function main() {
     }
   });
 
+  await test('goalkeeper attributes are whole numbers from 1 to 99, and a bad one reads as 0', () => {
+    const gk = sanitizeProfileData({
+      basicInfo: { name: 'Test Keeper', age: 23, nationality: 'Czech Republic', club: 'Chelsea', primaryPosition: 'Goalkeeper' },
+      ratings: { overall: 94, potential: 94 },
+      goalkeeperAttributes: { reflexes: 93.6, handling: 96, GKpositioning: 150, sweeping: 7.458123e199 },
+    }).goalkeeperAttributes!;
+    assert.equal(gk.reflexes, 94);
+    assert.equal(gk.handling, 96);
+    assert.equal(gk.GKpositioning, 0);
+    assert.equal(gk.sweeping, 0);
+    assert.equal(gk.distribution, 0);
+    assert.deepEqual(Object.keys(gk).sort(), ['GKpositioning', 'ballPlaying', 'commandOfArea', 'distribution', 'handling', 'reflexes', 'sweeping']);
+  });
+
   console.log(`${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }
