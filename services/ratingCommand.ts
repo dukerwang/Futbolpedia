@@ -1,6 +1,6 @@
 import type { PlayerProfile, RatingRequest } from '../types';
 import { cardEdition, formatEraQualifier } from './dossierCards';
-import type { TurnRoute } from './turnRouter';
+import { eraIn, extractCandidatePlayerName, hasCurrentFormCue, pastSeasonIn, type TurnRoute } from './turnRouter';
 
 /** The version a request asks for, for the command line in the chat; null for `auto`. */
 export const ratingVersionLabel = (request: RatingRequest): string | null => {
@@ -37,6 +37,37 @@ export const ratingTask = (request: RatingRequest): string => {
     default:
       return `Rate ${name}`;
   }
+};
+
+// Not "best": it is a surname.
+const PRIME_WORD_RE = /\b(?:prime|peak)\b/gi;
+const CURRENT_WORD_RE = /\b(?:current(?:ly)?(?:\s+form)?|right now|nowadays|today|this season|these days|at the moment)\b/gi;
+
+/**
+ * A name typed into the Scout panel, read the way the turn router reads a typed rating: a past
+ * season ("1998-99 Paul Scholes", "Scholes 1998-1999") asks for that season's card, "prime" or
+ * "peak" for his prime, "current"/"right now" for his current form, and a named version ("PSG
+ * Neymar", "young Messi") for that era. Anything else takes the panel's Prime toggle.
+ */
+export const ratingRequestFromText = (text: string, prime: boolean): RatingRequest => {
+  const raw = text.trim().replace(/\s+/g, ' ');
+  const season = pastSeasonIn(raw);
+  const wantsPrime = !season && new RegExp(PRIME_WORD_RE.source, 'i').test(raw);
+  const wantsCurrent = !season && !wantsPrime && hasCurrentFormCue(raw);
+  const bare = raw.replace(PRIME_WORD_RE, ' ').replace(CURRENT_WORD_RE, ' ').replace(/\s+/g, ' ').trim();
+  const era = !season && !wantsPrime && !wantsCurrent ? eraIn(bare) : null;
+  const name =
+    extractCandidatePlayerName(bare) ??
+    bare
+      .replace(/\b(?:19|20)\d{2}(?:\s*[-/–]\s*(?:19|20)?\d{2})?\b/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  if (!name || name.length < 2) return { name: raw, edition: prime ? 'prime' : 'auto' };
+  if (season) return { name, edition: 'season', season };
+  if (wantsPrime) return { name, edition: 'prime' };
+  if (wantsCurrent) return { name, edition: 'current' };
+  if (era) return { name, edition: 'era', era };
+  return { name, edition: prime ? 'prime' : 'auto' };
 };
 
 /** The route the turn router gives a typed rating of the same version, built without routing. */

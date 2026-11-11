@@ -263,6 +263,30 @@ async function main() {
     assert.equal(syntheses().length, 1);
   });
 
+  const { ratingRequestFromText } = await import('../services/ratingCommand');
+  const typed: Array<[string, boolean, RatingRequest]> = [
+    ['1998-1999 paul scholes', false, { name: 'paul scholes', edition: 'season', season: '1998-99' }],
+    ['Paul Scholes 1998/99', true, { name: 'Paul Scholes', edition: 'season', season: '1998-99' }],
+    ['Paul Scholes', false, { name: 'Paul Scholes', edition: 'auto' }],
+    ['Paul Scholes', true, { name: 'Paul Scholes', edition: 'prime' }],
+    ['prime Ronaldinho', false, { name: 'Ronaldinho', edition: 'prime' }],
+    ['Kevin De Bruyne right now', true, { name: 'Kevin De Bruyne', edition: 'current' }],
+    ['PSG Neymar', false, { name: 'Neymar', edition: 'era', era: 'PSG' }],
+    ['George Best', false, { name: 'George Best', edition: 'auto' }],
+    ['Milan Skriniar', false, { name: 'Milan Skriniar', edition: 'auto' }],
+  ];
+  for (const [text, prime, expected] of typed) {
+    await test(`Scout reads "${text}"${prime ? ' (Prime on)' : ''} as ${expected.edition}`, async () => {
+      assert.deepEqual(ratingRequestFromText(text, prime), expected);
+    });
+  }
+
+  await test('a season typed in the Scout panel is rated as that season, not his prime', async () => {
+    const served = await rate(ratingRequestFromText('1997-1998 zinedine zidane', false));
+    assert.equal(served.version?.type, 'season_snapshot');
+    assert.equal(served.version?.seasonOrEra, '1997-98');
+  });
+
   console.log(`${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }

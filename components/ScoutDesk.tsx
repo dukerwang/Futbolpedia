@@ -5,6 +5,7 @@ import { searchPlayers } from '../services/playerSearch';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { PlayerPicker, cardRows, type PickerRow } from './PlayerPicker';
 import { describeCardEdition, pillClass } from './pills';
+import { ratingRequestFromText, ratingVersionLabel } from '../services/ratingCommand';
 
 /** A rating the Scout desk is working on. Finished ratings leave the queue for your dossiers. */
 export interface ScoutJob {
@@ -88,7 +89,10 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
 
   const names = namesIn(text);
   // Suggestions only make sense for one name; a pasted list goes straight to the queue.
-  const query = names.length === 1 && !/[,;\n]/.test(text) ? names[0] : '';
+  const single = names.length === 1 && !/[,;\n]/.test(text) ? ratingRequestFromText(names[0], prime) : null;
+  // A season, era or edition typed with the name searches the name; the label says which version.
+  const query = single?.name ?? '';
+  const version = single ? ratingVersionLabel(single) : null;
   const rows = useMemo<PickerRow[]>(() => {
     if (!query) return [];
     const matches = cardRows(searchPlayers(query, dossiers, sharedCards, 4));
@@ -98,17 +102,17 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
         kind: 'action',
         id: 'scout-new',
         icon: 'person_search',
-        label: `Scout “${query}”${prime ? ' at his prime' : ''}`,
+        label: `Scout “${query}”${version ? ` · ${version}` : ''}`,
         hint: 'New card',
       },
     ];
-  }, [query, dossiers, sharedCards, prime]);
+  }, [query, version, dossiers, sharedCards]);
 
   useEffect(() => setHighlighted(null), [query]);
 
   const submit = () => {
     if (names.length === 0) return;
-    onScout(names.map((name) => ({ name, edition: prime ? 'prime' : 'auto' })));
+    onScout(names.map((name) => ratingRequestFromText(name, prime)));
     setText('');
   };
 
@@ -273,8 +277,10 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="min-w-0 truncate font-serif font-bold text-[17px] text-charcoal dark:text-cream-50">
                       {job.request.name}
-                      {job.request.edition === 'prime' && (
-                        <span className={`${pillClass('amber', 'xs')} ml-2 align-middle`}>Prime</span>
+                      {ratingVersionLabel(job.request) && (
+                        <span className={`${pillClass(job.request.edition === 'era' ? 'blue' : job.request.edition === 'current' ? 'emerald' : 'amber', 'xs')} ml-2 align-middle`}>
+                          {ratingVersionLabel(job.request)}
+                        </span>
                       )}
                     </span>
                     {job.status === 'running' && job.startedAt && (
