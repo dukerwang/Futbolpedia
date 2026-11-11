@@ -5,6 +5,7 @@ import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS } from './pills';
 import DOMPurify from 'dompurify';
+import { DossierNavigator } from './DossierNavigator';
 import {
   getCardKey,
   isPrimeCard,
@@ -273,31 +274,13 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             </div>
                         </div>
 
-                        {/* Navigation Arrows placed in the blank space under OVR and POT, but above share/close buttons */}
+                        {/* Pager under OVR and POT: arrows step one by one, hovering or pressing the count opens a searchable list */}
                         {allProfiles.length > 1 && currentIndex !== -1 && (
-                            <div className="flex items-center bg-cream-200/60 dark:bg-charcoal-light/35 rounded-lg p-0.5 border border-cream-300/60 dark:border-charcoal-border select-none mt-4">
-                                <button 
-                                    disabled={currentIndex === 0}
-                                    onClick={() => onSelectProfile(allProfiles[currentIndex - 1])}
-                                    className="p-1 rounded text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-white hover:bg-cream-200 dark:hover:bg-charcoal-light disabled:opacity-20 disabled:pointer-events-none transition-all active:scale-95"
-                                    title="Previous Dossier"
-                                >
-                                    <span className="material-symbols-outlined text-[15px] font-bold block">arrow_back</span>
-                                </button>
-                                
-                                <span className="text-[10px] font-mono font-bold px-2 text-charcoal/70 dark:text-cream-300">
-                                    {currentIndex + 1}/{allProfiles.length}
-                                </span>
-
-                                <button 
-                                    disabled={currentIndex === allProfiles.length - 1}
-                                    onClick={() => onSelectProfile(allProfiles[currentIndex + 1])}
-                                    className="p-1 rounded text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-white hover:bg-cream-200 dark:hover:bg-charcoal-light disabled:opacity-20 disabled:pointer-events-none transition-all active:scale-95"
-                                    title="Next Dossier"
-                                >
-                                    <span className="material-symbols-outlined text-[15px] font-bold block">arrow_forward</span>
-                                </button>
-                            </div>
+                            <DossierNavigator
+                                profiles={allProfiles}
+                                currentIndex={currentIndex}
+                                onSelect={onSelectProfile}
+                            />
                         )}
                     </div>
                 </div>
