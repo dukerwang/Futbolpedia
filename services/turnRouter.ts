@@ -385,7 +385,7 @@ const hasHistoricalWordCue = (msg: string): boolean =>
   /\b(prime|peak|all[- ]time|historical)\b/i.test(msg);
 
 /** The season a message names, when it is earlier than the current one. */
-const pastSeasonIn = (msg: string): string | null => {
+export const pastSeasonIn = (msg: string): string | null => {
   const season = parseRequestedSeason(msg);
   if (!season) return null;
   const start = seasonStartYear(season);
@@ -396,7 +396,7 @@ const pastSeasonIn = (msg: string): string | null => {
 const hasHistoricalCue = (msg: string): boolean =>
   hasHistoricalWordCue(msg) || pastSeasonIn(msg) !== null;
 
-const hasCurrentFormCue = (msg: string): boolean =>
+export const hasCurrentFormCue = (msg: string): boolean =>
   /\b(current(?:ly)?|right now|nowadays|today|this season|these days|at the moment)\b/i.test(msg);
 
 const hasDossierTriggerCue = (msg: string): boolean =>
