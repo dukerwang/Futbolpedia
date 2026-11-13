@@ -121,6 +121,7 @@ await test('the synthesis prompt says a skill his role never asked of him is not
   assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /if it would read just as true on most players at his position/);
   assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /A quality worded as a flaw is not a weakness/);
   assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /two to four plain words a football fan would use/);
+  assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /never his only weakness/);
   assert.doesNotMatch(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /\$\{/);
 });
 
@@ -223,6 +224,16 @@ await test('a checked weakness that breaks the rules is replaced, even when the 
   });
   const revised = await reviseCardTraits(subject, pool, '');
   assert.deepEqual(revised.weaknesses, ['**Fades Late:** His pressing drops off in the last twenty minutes. Opponents finish games on top.']);
+
+  // A weakness most players share may stay, with one particular to him added beside it.
+  geminiReplyText = JSON.stringify({
+    revisions: [{ id: 'NEW', drop: false, title: 'Drifts Out Of Games', detail: 'Goes missing for long spells when his side has to defend', consequence: 'Opponents play through his zone' }],
+  });
+  const one = card('Subject', [], ['**Slow Over Distance:** loses races.']);
+  assert.deepEqual((await reviseCardTraits(one, pool, '')).weaknesses, [
+    '**Slow Over Distance:** loses races.',
+    '**Drifts Out Of Games:** Goes missing for long spells when his side has to defend. Opponents play through his zone.',
+  ]);
 
   // When every weakness is dropped, one is still kept.
   geminiReplyText = JSON.stringify({ revisions: [{ id: 'W1', drop: true }, { id: 'W2', drop: true }] });

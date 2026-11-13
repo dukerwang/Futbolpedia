@@ -358,7 +358,7 @@ const REVISION_SCHEMA = {
       items: {
         type: Type.OBJECT,
         properties: {
-          id: { type: Type.STRING, description: 'The id of the line being rewritten, exactly as given.' },
+          id: { type: Type.STRING, description: 'The id of the line being rewritten, exactly as given, or NEW to add a weakness.' },
           drop: {
             type: Type.BOOLEAN,
             description:
@@ -428,10 +428,11 @@ ${takenBlock(taken)}
 </taken_lines>
 <task>
 The lines marked [REWRITE] read the same as lines already on several other players' cards, so they describe the position or the attribute rather than this player. For each one, return a revision with its id: either the same trait written about him specifically (a new title in his own terms, and both sentences), or, when that trait doesn't hold up for him, a different trait of the same kind that does. A weakness written again in other words is still the stock line: keep its trait only when the evidence says what it cost him; otherwise give a different limitation of his, or drop it.
-The lines marked [CHECK] are his other weaknesses. Test each against the rules: leave one that meets them out of your reply. One that breaks them (a skill his role never asked of him, a quality worded as a flaw, a line just as true of most players at his position, a limitation that never cost him, or the same point as a common line in <taken_lines>) gets a revision with its id: a different, real limitation of his from the card and the evidence.
+The lines marked [CHECK] are his other weaknesses. Test each against the rules: leave one that meets them out of your reply. One that breaks them (a skill his role never asked of him, a quality worded as a flaw, a limitation that never cost him, or a limitation most players at his position share that the evidence doesn't show costing him in particular) gets a revision with its id: a different, real limitation of his from the card and the evidence.
 <taken_lines> lists the lines already on other players' cards: the most common ones, and those at his position. No new line may make the same point as one of them, even in other words or about a different part of the pitch, unless the evidence shows it is distinctively his; then name what is his alone. A team sitting deep, crowding him or marking him tightly happens to most good players: it is his only when the evidence says how it beat him in particular.
 Set drop to true only for a weakness that breaks the rules when the evidence gives no real limitation to put in its place. The card must keep at least one weakness that meets the rules, so when every weakness breaks them, replace rather than drop. Never replace a weakness with one another line already names.
-Each title is two to four plain words a football fan would use, in title case; the sentences carry the detail. Keep each new line about as long as the one it replaces. Don't repeat anything the card's other lines already say, and keep every claim consistent with the card and the evidence: no figures, results or events the evidence doesn't give. Return revisions only for marked ids.
+A limitation many players at his position share may stay when the evidence shows it cost him, but never as his only weakness. When the card would end with one weakness and it is that kind, add a weakness particular to his game with id NEW, from the card and the evidence.
+Each title is two to four plain words a football fan would use, in title case; the sentences carry the detail. Keep each new line about as long as the one it replaces. Don't repeat anything the card's other lines already say, and keep every claim consistent with the card and the evidence: no figures, results or events the evidence doesn't give. Return revisions only for marked ids, and NEW.
 </task>`;
 }
 
@@ -501,6 +502,12 @@ export function applyTraitRevisions(
     if (!traitTitle(line) || !revision.detail) continue;
     if (item.kind === 'strength') strengths[item.index] = line;
     else weaknesses[item.index] = line;
+  }
+  // One added weakness, for a card whose only weakness is one most players at his position share.
+  const added = byId.get('NEW');
+  if (added && !added.drop && added.detail) {
+    const line = formatTrait(added.title, added.detail, added.consequence);
+    if (traitTitle(line) && !weaknesses.some((w) => w && traitTitle(w) === traitTitle(line))) weaknesses.push(line);
   }
   return { ...profile, strengths, weaknesses: weaknesses.filter((w): w is string => w !== null) };
 }
