@@ -24,9 +24,13 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `npm run build` on ev
 
 The live app (futbolpedia.ai.studio) is hosted by Google AI Studio and does not deploy from GitHub on its own. A change goes live in three steps, all of which are needed:
 
-1. **Push to GitHub and merge into `main`.** The pull script copies `main` only, so a pushed branch or an open PR is not live.
-2. **Run the pull script in Google AI Studio** (`sync.sh`: `degit` of `dukerwang/Futbolpedia` into the workspace, `npm install`, `npm run build`).
-3. **Publish from Google AI Studio.** Until this step, the live app keeps serving the previously published build.
+1. **Push to GitHub and merge into `main`.** Both ways of pulling below copy `main` only, so a pushed branch or an open PR is not live.
+2. **Pull `main` into the Google AI Studio workspace**, in either of two ways:
+   - **GitHub sync.** In the app's settings (gear icon), open the **GitHub** tab and click **Pull changes to Google AI Studio**. The tab is linked to `dukerwang/Futbolpedia` on `main`. If it reports conflicts, keep GitHub's version: the workspace holds no edits of its own. Never click **Push changes to GitHub**. The only local change is AI Studio's own `bun.lock`.
+   - **Pull script.** Type `pull` in AI Studio's chat, and its agent runs `sync.sh`: `degit` of `dukerwang/Futbolpedia` into the workspace, `npm install` and `npm run build`. `degit` adds and overwrites files but never deletes them, so files removed from `main` stay in the workspace, and GitHub sync reports them as conflicts the next time it's used.
+3. **Publish from Google AI Studio.** In the **Publish** tab, click **Republish**, keep the spend cap and the futbolpedia.ai.studio URL, then click **Publish your app**. Publishing builds the app from source, so the workspace's `dist/` doesn't need rebuilding first. The new build is live about 3 minutes later. Until then, the live app keeps serving the previously published build.
+
+To confirm a deploy, compare the bundle the live page loads (`curl -s https://futbolpedia.ai.studio | grep -o 'assets/index-[^"]*\.js'`) with the one before publishing, and search the new bundle for a string the change added.
 
 So when reporting that a fix is done, say whether it is merged, and remind the user that the AI Studio pull and publish are still needed before it reaches the live app.
 
