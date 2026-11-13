@@ -34,6 +34,13 @@ export interface ModelCapabilityProfile {
    * about a thousand tokens on a search digest, which left the capped calls empty (MAX_TOKENS).
    */
   thinkingHeadroomTokens: number;
+  /**
+   * How long a grounded web search usually takes on this model. Chat research sets its deadline
+   * from it (`researchAgent.ts`), so a model whose searches are slower gets the time to finish them.
+   * Measured 2026-11-13 over five evidence searches: 3.8 Flash 7.9-10.4 s, Hydrogen 10.8-18.2 s
+   * (average 14.4 s; it runs more queries per search).
+   */
+  searchLatencyMs: number;
   /** Unified per-stage tuning across the pipeline */
   tuning: Record<AITask, TaskTuning>;
 }
@@ -60,6 +67,7 @@ const GEMINI_3_8_FLASH_PROFILE: ModelCapabilityProfile = {
   supportsDeepSchemaThinking: true,
   honorsSampling: true,
   thinkingHeadroomTokens: 0,
+  searchLatencyMs: 8_000,
   tuning: {
     routing: { thinkingLevel: 'minimal', temperature: 0.1 },
     grounding: { thinkingLevel: 'minimal', temperature: 0.2 },
@@ -82,6 +90,7 @@ const GEMINI_4_HYDROGEN_PROFILE: ModelCapabilityProfile = {
   supportsDeepSchemaThinking: true,
   honorsSampling: false,
   thinkingHeadroomTokens: 4096,
+  searchLatencyMs: 14_000,
   tuning: {
     routing: { thinkingLevel: 'low', temperature: 0.1 },
     grounding: { thinkingLevel: 'low', temperature: 0.2 },
@@ -97,6 +106,7 @@ const GEMINI_4_ARGON_PROFILE: ModelCapabilityProfile = {
   supportsDeepSchemaThinking: true,
   honorsSampling: true,
   thinkingHeadroomTokens: 0,
+  searchLatencyMs: 8_000,
   tuning: {
     routing: { thinkingLevel: 'minimal', temperature: 0.1 },
     grounding: { thinkingLevel: 'minimal', temperature: 0.2 },

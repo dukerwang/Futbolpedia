@@ -63,5 +63,10 @@ test('output caps leave Hydrogen room to think and leave 3.8 Flash caps as they 
   assert.ok(outputCap(GEMINI_4_HYDROGEN, 120) >= 120 + 1024);
 });
 
+test('Hydrogen expects slower searches than 3.8 Flash, so research waits longer for them', () => {
+  assert.equal(getModelProfile(GEMINI_3_8_FLASH).searchLatencyMs, 8_000);
+  assert.ok(getModelProfile(GEMINI_4_HYDROGEN).searchLatencyMs > getModelProfile(GEMINI_3_8_FLASH).searchLatencyMs);
+});
+
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);
