@@ -21,6 +21,15 @@ import {
 } from '../services/cardTraits';
 import { sanitizeProfileData } from '../services/dossierSynthesizer';
 import { DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION } from '../prompts/dossierPrompt';
+import {
+  applyEntry,
+  cardEvidence,
+  groupCards,
+  proposeEntry,
+  reportMarkdown,
+  type BackfillEntry,
+  type CardStore,
+} from './backfill-card-traits';
 
 process.env.API_KEY = 'offline-test-key';
 
@@ -188,6 +197,82 @@ await test('no stock lines means no call; a failed call keeps the card as writte
   geminiReplyText = null;
   const kept = await reviseStockTraits(stocky, pool, '');
   assert.deepEqual(kept.weaknesses, stocky.weaknesses);
+});
+
+await test('the backfill groups a pointer and its archive row as one card and skips personal revisions', () => {
+  const messi = card('Subject', ['**A:** a.'], ['**Aerial Limitations:** small.']);
+  const groups = groupCards([
+    { player_slug: 'prime-subject', player_data: messi },
+    { player_slug: 'subject--prime--2012-05-25', player_data: structuredClone(messi) },
+    { player_slug: 'subject--prime--2012-05-25--rev-abc', player_data: messi },
+    { player_slug: 'subject', player_data: card('Subject', ['**B:** b.'], ['**C:** c.']) },
+    { player_slug: 'empty', player_data: {} as PlayerProfile },
+  ]);
+  assert.deepEqual(
+    groups.map((g) => g.slugs),
+    [['prime-subject', 'subject--prime--2012-05-25'], ['subject']],
+  );
+});
+
+await test("the backfill reads an old card's own prose as its evidence", () => {
+  const old = {
+    ...card('Subject', [], []),
+    version: { type: 'prime', peakContext: 'Best years.' },
+    scoutingDebate: { caseForHigher: 'Higher case.', caseForLower: 'Lower case.' },
+    definingMoments: [{ year: 2011, title: 'Final', description: 'Scored.' }],
+  } as unknown as PlayerProfile;
+  const evidence = cardEvidence(old);
+  for (const part of ['Best years.', 'Bio: Bio.', 'Lower case.', 'Defining moment (2011): Final. Scored.']) {
+    assert.ok(evidence.includes(part), part);
+  }
+});
+
+await test('the backfill proposes only cards whose rewrite changed something', async () => {
+  const stocky = { slugs: ['subject'], card: card('Subject', ['**Own:** kept.'], ['**Aerial Limitations:** small.', '**Own Weakness:** kept.']) };
+  geminiReplyText = JSON.stringify({
+    revisions: [{ id: 'W1', drop: false, title: 'Loses The Second Ball', detail: 'Steps off after the first contact', consequence: 'Opponents keep the ball' }],
+  });
+  const entry = await proposeEntry(stocky, pool);
+  assert.ok(entry);
+  assert.deepEqual(entry!.slugs, ['subject']);
+  assert.equal(entry!.after.weaknesses[0], '**Loses The Second Ball:** Steps off after the first contact. Opponents keep the ball.');
+  assert.match(reportMarkdown([entry!]), /~~\*\*Aerial Limitations:\*\* small\.~~/);
+
+  geminiPrompts = [];
+  assert.equal(await proposeEntry({ slugs: ['x'], card: card('Subject', ['**Own:** a.'], ['**Own Weakness:** b.']) }, pool), null);
+  assert.equal(geminiPrompts.length, 0);
+  geminiReplyText = null;
+  assert.equal(await proposeEntry(stocky, pool), null);
+});
+
+await test('applying writes only rows that still hold the proposed-from lines, and reports a refused write', async () => {
+  const before = card('Subject', ['**S:** s.'], ['**W:** w.']);
+  const rows = new Map<string, PlayerProfile>([
+    ['a', structuredClone(before)],
+    ['b', { ...structuredClone(before), weaknesses: ['**Changed Since:** x.'] }],
+    ['frozen', structuredClone(before)],
+  ]);
+  const writes: string[] = [];
+  const store: CardStore = {
+    read: async (slug) => rows.get(slug) ?? null,
+    write: async (slug, next) => {
+      writes.push(slug);
+      if (slug === 'frozen') return rows.get(slug)!; // the trigger skipped it
+      rows.set(slug, next);
+      return next;
+    },
+  };
+  const entry: BackfillEntry = {
+    player: 'Subject',
+    edition: 'Prime',
+    slugs: ['a', 'b', 'frozen', 'gone'],
+    before: { strengths: before.strengths, weaknesses: before.weaknesses },
+    after: { strengths: before.strengths, weaknesses: ['**New:** n.'] },
+  };
+  assert.deepEqual(await applyEntry(store, entry), { a: 'updated', b: 'changed_since', frozen: 'blocked', gone: 'missing' });
+  assert.deepEqual(writes, ['a', 'frozen']);
+  assert.deepEqual(rows.get('a')!.weaknesses, ['**New:** n.']);
+  assert.equal(rows.get('a')!.ratings.overall, 88);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

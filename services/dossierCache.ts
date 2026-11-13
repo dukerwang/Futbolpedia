@@ -20,11 +20,11 @@ import {
  */
 
 export const supabaseUrl = 'https://hrocnbcavstmjysptjdk.supabase.co';
-const supabaseKey = 'sb_publishable_NKyG9miYqS8JgdpgWuXm9A_tc3vaVCL';
+export const supabasePublishableKey = 'sb_publishable_NKyG9miYqS8JgdpgWuXm9A_tc3vaVCL';
 
 export const supabase =
   typeof window !== 'undefined' && (window as any).supabase
-    ? (window as any).supabase.createClient(supabaseUrl, supabaseKey)
+    ? (window as any).supabase.createClient(supabaseUrl, supabasePublishableKey)
     : null;
 
 export const isSupabaseReady = () => !!supabase;
