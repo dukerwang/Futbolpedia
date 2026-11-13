@@ -1,8 +1,9 @@
 #!/usr/bin/env npx tsx
 /**
- * Rewrites the stock strengths and weaknesses on published cards: the lines that read the same as
- * lines on two or more other players' cards (services/cardTraits.ts). New cards get this check
- * when they're rated; this applies it to the cards rated before it existed.
+ * Rewrites the stock strengths and weaknesses on published cards (the lines that read the same as
+ * lines on two or more other players' cards), and replaces or drops any other weakness that breaks
+ * the card rules (services/cardTraits.ts). New cards get this check when they're rated; this
+ * applies it to the cards rated before it existed.
  *
  * Two steps, so a person reads the rewrites before any card changes:
  *
@@ -20,13 +21,14 @@
  *
  * Personal revisions ("--rev-" rows) are left alone: a person accepted them. Each player's card is
  * checked against the cards as they were when the run started, so the order cards are rewritten
- * in doesn't change which lines count as stock. Cards copied into people's own dossiers (their
+ * in doesn't change which lines count as stock; the rewrite is also shown the lines just written
+ * for other players at his position, so the run doesn't make a new stock line of its own. Cards copied into people's own dossiers (their
  * browser's storage) keep the lines they had.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 import type { PlayerProfile } from '../types';
-import { findStockTraits, reviseStockTraits, traitTitle } from '../services/cardTraits';
+import { findTraitsToReview, reviseCardTraits, traitTitle } from '../services/cardTraits';
 import { supabasePublishableKey, supabaseUrl } from '../services/dossierCache';
 import { toBasePlayerSlug } from '../services/dossierCards';
 
@@ -83,13 +85,22 @@ export function cardEvidence(card: PlayerProfile): string {
     .join('\n');
 }
 
-/** Proposes the rewrite for one card; null when it has no stock lines or the rewrite changed nothing. */
-export async function proposeEntry(group: CardGroup, pool: PlayerProfile[]): Promise<BackfillEntry | null> {
-  if (findStockTraits(group.card, pool).length === 0) return null;
-  const revised = await reviseStockTraits(group.card, pool, cardEvidence(group.card));
+/**
+ * Proposes the rewrite for one card; null when it has nothing to review or the rewrite changed
+ * nothing. `written` holds the cards rewritten earlier in the run, so a new line doesn't repeat one
+ * just written for another player at his position; a changed card is added to it.
+ */
+export async function proposeEntry(
+  group: CardGroup,
+  pool: PlayerProfile[],
+  written: PlayerProfile[] = [],
+): Promise<BackfillEntry | null> {
+  if (findTraitsToReview(group.card, pool).length === 0) return null;
+  const revised = await reviseCardTraits(group.card, pool, cardEvidence(group.card), { written });
   const before = { strengths: group.card.strengths ?? [], weaknesses: group.card.weaknesses ?? [] };
   const after = { strengths: revised.strengths ?? [], weaknesses: revised.weaknesses ?? [] };
   if (JSON.stringify(before) === JSON.stringify(after)) return null;
+  written.push(revised);
   return {
     player: group.card.basicInfo.name,
     edition: group.card.version?.label ?? group.card.version?.type ?? 'card',
@@ -189,18 +200,20 @@ async function propose(): Promise<void> {
   const pool = groups.map((g) => g.card);
   const todo = groups
     .filter((g) => !only || g.card.basicInfo.name.toLowerCase().includes(only))
-    .filter((g) => findStockTraits(g.card, pool).length > 0)
+    .filter((g) => findTraitsToReview(g.card, pool).length > 0)
     .slice(0, limit);
-  console.log(`${groups.length} published cards; ${todo.length} with stock lines to rewrite.`);
+  console.log(`${groups.length} published cards; ${todo.length} with lines to review.`);
 
   const entries: BackfillEntry[] = [];
-  const concurrency = 4;
+  const written: PlayerProfile[] = [];
+  // One card at a time, so each rewrite sees every line the run wrote before it.
+  const concurrency = 1;
   let next = 0;
   await Promise.all(
     Array.from({ length: concurrency }, async () => {
       while (next < todo.length) {
         const group = todo[next++];
-        const entry = await proposeEntry(group, pool).catch((err) => {
+        const entry = await proposeEntry(group, pool, written).catch((err) => {
           console.warn(`[backfill] ${group.card.basicInfo.name}: ${(err as Error).message}`);
           return null;
         });
