@@ -27,6 +27,13 @@ import {
 import { DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION } from '../prompts/dossierPrompt';
 import { generateStructured, getCurrentSeasonInfo } from './aiClient';
 import {
+  STRENGTH_ITEM_SCHEMA,
+  WEAKNESS_ITEM_SCHEMA,
+  toTraitLines,
+  type RawStrength,
+  type RawWeakness,
+} from './cardTraits';
+import {
   findProfileManagerGroundingIssues,
   scrubProfileManagerMentions,
   type FutbolpediaVerifiedFacts,
@@ -220,8 +227,16 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
       },
       required: ['overall', 'potential'],
     },
-    strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
-    weaknesses: { type: Type.ARRAY, items: { type: Type.STRING } },
+    strengths: {
+      type: Type.ARRAY,
+      description: '3-5 strengths of this player, each one his own rather than his position\'s.',
+      items: STRENGTH_ITEM_SCHEMA,
+    },
+    weaknesses: {
+      type: Type.ARRAY,
+      description: '2-4 limitations that cost him in the role this card rates, each one his own rather than his position\'s.',
+      items: WEAKNESS_ITEM_SCHEMA,
+    },
     attributes: OUTFIELD_ATTRIBUTES_SCHEMA,
     goalkeeperAttributes: GK_ATTRIBUTES_SCHEMA,
     shortBio: { type: Type.STRING },
@@ -392,8 +407,8 @@ interface RawSynthesizedProfile {
     weight?: string;
   };
   ratings?: { overall?: number; potential?: number };
-  strengths?: string[];
-  weaknesses?: string[];
+  strengths?: Array<RawStrength | string>;
+  weaknesses?: Array<RawWeakness | string>;
   attributes?: Partial<Attributes>;
   goalkeeperAttributes?: Partial<GoalkeeperAttributes>;
   shortBio?: string;
@@ -484,8 +499,8 @@ export const sanitizeProfileData = (
         ? raw.playstyleAndRole!.bestRoles
         : [],
     },
-    strengths: Array.isArray(raw.strengths) ? raw.strengths : [],
-    weaknesses: Array.isArray(raw.weaknesses) ? raw.weaknesses : [],
+    strengths: toTraitLines(raw.strengths, 'strength'),
+    weaknesses: toTraitLines(raw.weaknesses, 'weakness'),
     shortBio: raw.shortBio || defaults.shortBio,
     latestUpdate: raw.latestUpdate || defaults.latestUpdate,
   };

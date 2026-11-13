@@ -41,6 +41,7 @@ import {
   renameDossierCard,
   getDossierEvaluationDate,
   getSharedConversation,
+  getSupabaseCalibratedPool,
   hasRevisionConsensus,
   isCardInRefreshWindow,
   isDossierDated,
@@ -66,6 +67,7 @@ import {
 import { synthesizePlayerDossier } from './dossierSynthesizer';
 import { getClubManager, isSameClub } from './clubManagers';
 import { attachVerifiedManager } from './profileManagerGrounding';
+import { reviseStockTraits } from './cardTraits';
 import {
   type CareerStatus,
   fetchApiFootballPlayer,
@@ -682,7 +684,14 @@ const rateDossier = async (params: {
     }
   }
 
-  let profile = synthesized;
+  // Strengths and weaknesses that read the same as lines on other players' cards are rewritten
+  // about this player (services/cardTraits.ts).
+  let profile = await reviseStockTraits(
+    synthesized,
+    [...getSupabaseCalibratedPool(), ...savedDossiers, ...conversationDossiers],
+    grounding.foundationText,
+  );
+  perf('card traits');
   if (!isHistorical) {
     // API-Football's registered club decides whose manager is shown. The card's club stands in
     // only when API-Football has no record; when they disagree, nobody can say which club is
