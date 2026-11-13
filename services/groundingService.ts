@@ -1,4 +1,5 @@
 import { ThinkingLevel } from '@google/genai';
+import { outputCap, samplingFor } from '../constants/modelProfiles';
 import {
   FLASH_MODEL,
   getAi,
@@ -436,9 +437,9 @@ export function getPlayerIdentity(playerName: string): Promise<PlayerIdentity> {
       model: FLASH_MODEL,
       contents: `As of ${month} ${year}, is the footballer ${playerName} still playing professionally, or has he retired from playing? Also give the name football coverage commonly calls him by and his full name. Reply on one line, exactly: STATUS: <ACTIVE, RETIRED or UNKNOWN> | KNOWN AS: <name> | FULL NAME: <name>. Write UNKNOWN for anything you cannot tell. If no footballer goes by that name or anything close to it, reply exactly: STATUS: NONE. Never answer with a different footballer.`,
       config: {
-        temperature: 0,
+        ...samplingFor(FLASH_MODEL, 0),
         // Thinking tokens count against this budget, so leave room beyond the one-line answer.
-        maxOutputTokens: 512,
+        maxOutputTokens: outputCap(FLASH_MODEL, 512),
         tools: [{ googleSearch: {} }],
         thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
       },

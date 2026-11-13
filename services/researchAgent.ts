@@ -1,4 +1,5 @@
 import { Type } from '@google/genai';
+import { DEFAULT_FAST_MODEL, getModelProfile } from '../constants/modelProfiles';
 import { generateStructured, getCurrentSeasonInfo } from './aiClient';
 import {
   compactLedger,
@@ -115,14 +116,18 @@ export const ANALYSIS_WAIT_MS = 2_500;
  * finishes in the background for the next turn and other users; this turn works it out itself.
  */
 export const SNAPSHOT_GRACE_MS = 500;
+/**
+ * How long a grounded web search usually takes on the search model; one that can't finish by the
+ * deadline isn't started. The timings below follow it: 9, 11 and 12 s on 3.8 Flash, 15, 17 and 18 s
+ * on Hydrogen, whose slower searches would otherwise mostly miss the deadline.
+ */
+export const SEARCH_ESTIMATE_MS = getModelProfile(DEFAULT_FAST_MODEL).searchLatencyMs;
 /** Research stops waiting at this point in the turn; whatever is still running is left out. */
-export const RESEARCH_DEADLINE_MS = 9_000;
-/** How long a grounded web search usually takes; one that can't finish by the deadline isn't started. */
-export const SEARCH_ESTIMATE_MS = 8_000;
+export const RESEARCH_DEADLINE_MS = SEARCH_ESTIMATE_MS + 1_000;
 /** Past this point in the turn, reflect is skipped. */
-export const REFLECT_CUTOFF_MS = 11_000;
+export const REFLECT_CUTOFF_MS = RESEARCH_DEADLINE_MS + 2_000;
 /** Past this point, the situation snapshot is what code works out, without the model's call. */
-export const SITUATION_CUTOFF_MS = 12_000;
+export const SITUATION_CUTOFF_MS = RESEARCH_DEADLINE_MS + 3_000;
 
 const CALL_ITEM_SCHEMA = {
   type: Type.OBJECT,
