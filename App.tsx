@@ -79,6 +79,18 @@ const upsertCard = (list: PlayerProfile[], card: PlayerProfile): PlayerProfile[]
   return list.map((p, i) => (i === index ? card : p));
 };
 
+/**
+ * Files a card in your dossiers: it goes to the end of the list, which is newest-last, so a card
+ * Scout just served sits at the top of "Most recent" even when the shared card was rated weeks ago.
+ * Your own revision of that card is kept in place of the shared one, but still moves up.
+ */
+const fileCard = (list: PlayerProfile[], card: PlayerProfile): PlayerProfile[] => {
+  const key = getCardKey(card);
+  const existing = list.find(p => getCardKey(p) === key);
+  const kept = existing?.revision && !card.revision ? existing : card;
+  return [...list.filter(p => getCardKey(p) !== key), kept];
+};
+
 /** Appends the cards whose card key isn't in the list yet; returns the same list if none are new. */
 const addMissingCards = (list: PlayerProfile[], cards: PlayerProfile[]): PlayerProfile[] => {
   const keys = new Set(list.map(getCardKey));
@@ -183,7 +195,7 @@ const App: React.FC = () => {
       localStorage.setItem(ACTIVE_PROFILE_KEY, JSON.stringify(datedProfile));
 
       setGlobalDossiers(prev => {
-        const updated = upsertCard(prev, datedProfile);
+        const updated = fileCard(prev, datedProfile);
         saveGlobalDossiers(updated);
         return updated;
       });
@@ -731,7 +743,7 @@ const App: React.FC = () => {
     }
     if (mentionedCards.length > 0) {
       setGlobalDossiers(prev => {
-        const updated = mentionedCards.reduce(upsertCard, prev);
+        const updated = mentionedCards.reduce(fileCard, prev);
         saveGlobalDossiers(updated);
         return updated;
       });
@@ -965,7 +977,7 @@ const App: React.FC = () => {
         if (cards.length > 0) {
           const stamped = cards.map(card => stampDossier(card, Date.now()));
           setGlobalDossiers(prev => {
-            const updated = stamped.reduce(upsertCard, prev);
+            const updated = stamped.reduce(fileCard, prev);
             saveGlobalDossiers(updated);
             return updated;
           });
@@ -1064,7 +1076,7 @@ const App: React.FC = () => {
       }
       const card = stampDossier(reply, Date.now());
       setGlobalDossiers(prev => {
-        const updated = upsertCard(prev, card);
+        const updated = fileCard(prev, card);
         saveGlobalDossiers(updated);
         return updated;
       });

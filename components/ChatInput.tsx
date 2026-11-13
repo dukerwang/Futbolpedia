@@ -167,7 +167,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     const query = active.query.trim();
     if (!query) {
       // A bare @ lists your most recent dossiers.
-      const recent = [...localCards].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)).slice(0, 6);
+      const recent = [...localCards].reverse().slice(0, 6); // newest-last, as filed
       const matches: PlayerMatch[] = recent.map((card) => ({
         key: `${toBasePlayerSlug(card.basicInfo.name)}:${getCardKey(card)}`,
         name: card.basicInfo.name,
