@@ -80,10 +80,12 @@ const SELECT_CLASS =
 const playerKey = (p: PlayerProfile) => getCardKey(p).split(':')[0];
 
 /** When the card was added to the user's dossiers, else when it was rated. */
-const recencyKey = (p: PlayerProfile, tab: HubTab): string =>
-  tab === 'mine' && p.createdAt
-    ? new Date(p.createdAt).toISOString()
-    : p.evaluationDate || p.version?.evaluationDate || '';
+/**
+ * When a shared card was rated: a re-rating, else its generation time. The evaluation date is no
+ * use here, since a prime card's is the end of his peak, years ago.
+ */
+const ratedAtMs = (p: PlayerProfile): number =>
+  p.rerateAt || p.createdAt || Date.parse(p.evaluationDate || p.version?.evaluationDate || '') || 0;
 
 const Dot = () => <span className="w-1 h-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20 shrink-0" />;
 
@@ -424,18 +426,27 @@ export const DossierHub: React.FC<DossierHubProps> = ({
     }
   }, []);
 
+  // A card rated after the last fetch makes the global list stale, so it shows up straight away.
+  const newestRatedMs = useMemo(() => Math.max(0, ...savedProfiles.map(ratedAtMs)), [savedProfiles]);
+
   useEffect(() => {
     if (!isActive || tab !== 'global') return;
+    const stale =
+      Date.now() - lastGlobalFetchRef.current > GLOBAL_STALE_MS || newestRatedMs > lastGlobalFetchRef.current;
     if (globalStatus === 'idle') loadGlobal(true);
-    else if (globalStatus === 'ready' && Date.now() - lastGlobalFetchRef.current > GLOBAL_STALE_MS) loadGlobal(false);
+    else if (globalStatus === 'ready' && stale) loadGlobal(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive, tab]);
+  }, [isActive, tab, newestRatedMs]);
 
   const mineItems = useMemo<GlobalHubDossierItem[]>(
     () => savedProfiles.map((profile) => ({ profile, isCurrentRating: false })),
     [savedProfiles],
   );
   const savedKeys = useMemo(() => new Set(savedProfiles.map(getCardKey)), [savedProfiles]);
+  const libraryOrder = useMemo(
+    () => new Map(savedProfiles.map((p, i) => [getCardKey(p), i] as const)),
+    [savedProfiles],
+  );
 
   const items = tab === 'mine' ? mineItems : globalItems;
 
@@ -530,7 +541,11 @@ export const DossierHub: React.FC<DossierHubProps> = ({
         return b.profile.ratings.overall - a.profile.ratings.overall;
       }
       if (sortOption === 'recent') {
-        return recencyKey(b.profile, tab).localeCompare(recencyKey(a.profile, tab));
+        // Your dossiers are newest-last in the order they joined, so a card Scout just served from
+        // the shared store comes first even though it was rated earlier.
+        return tab === 'mine'
+          ? (libraryOrder.get(getCardKey(b.profile)) ?? -1) - (libraryOrder.get(getCardKey(a.profile)) ?? -1)
+          : ratedAtMs(b.profile) - ratedAtMs(a.profile);
       }
       if (sortOption === 'name_asc') {
         return (
@@ -544,7 +559,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
     });
 
     return result;
-  }, [items, tab, searchQuery, editionFilter, positionFilter, minTierFilter, sortOption]);
+  }, [items, tab, libraryOrder, searchQuery, editionFilter, positionFilter, minTierFilter, sortOption]);
 
   const tabs: Array<{ id: HubTab; label: string; icon: string; count?: number }> = [
     { id: 'global', label: 'Global hub', icon: 'public', count: globalStatus === 'ready' ? globalItems.length : undefined },

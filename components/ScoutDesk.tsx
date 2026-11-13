@@ -146,13 +146,16 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
   const fresh = new Set(freshKeys);
   const library = useMemo(
     () =>
-      [...dossiers]
+      // Your dossiers are newest-last, so the reversed list is most recently added first.
+      dossiers
+        .map((card, order) => ({ card, order }))
         .sort((a, b) => {
-          const fa = freshKeys.indexOf(getCardKey(a));
-          const fb = freshKeys.indexOf(getCardKey(b));
+          const fa = freshKeys.indexOf(getCardKey(a.card));
+          const fb = freshKeys.indexOf(getCardKey(b.card));
           if (fa !== fb) return fa === -1 ? 1 : fb === -1 ? -1 : fa - fb;
-          return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+          return b.order - a.order;
         })
+        .map(({ card }) => card)
         .slice(0, RECENT_LIMIT),
     [dossiers, freshKeys],
   );
