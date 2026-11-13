@@ -1,5 +1,20 @@
 import { SCOUT_CORE_INSTRUCTION } from './scoutCore';
 
+/**
+ * What a card's strengths and weaknesses must be: about this player, not his position. Shared by
+ * synthesis and the rewrite of stock lines (services/cardTraits.ts).
+ */
+export const CARD_TRAIT_RULES = [
+  '- Every item describes this player, not his position, build or attribute. The test: if it would read just as true on most players at his position or with his build, it is not his; replace it with what separates him.',
+  "- A strength is what he does better than others who are good at the same thing, or in a way they don't: how he does it (the situations, the technique, the timing, the decision), then what it changes in matches and the evidence. Its title names his particular way of doing it, not the attribute or skill category it falls under.",
+  '- A weakness is a limitation that cost him in the role and at the level this card rates: what opponents targeted, what his team had to build around or cover for, the kinds of matches or opponents that blunted him, or what kept him below the band above. Say where it shows and what it looks like, then what it cost and the evidence. Its title names his specific limitation, not a category.',
+  '- A skill his role never asked of him is not a weakness. A low attribute he was never deployed to use already shows in the attributes; list it only when it actually cost him or his team in his role, and then say how.',
+  '- For a player at the highest level, the weaknesses are the parts of his game below his own standard, the patterns that blunted him, and the habits or decisions opponents could read: still specific to him, never padding.',
+  "- Give fewer items rather than a generic one, and never repeat a point another item makes. Never name a coach or manager in them: describe the team's plan instead.",
+].join('\n');
+
+const INDENTED_TRAIT_RULES = CARD_TRAIT_RULES.replace(/^/gm, '     ');
+
 export const DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION = `${SCOUT_CORE_INSTRUCTION}
 
 VI. DOSSIER SYNTHESIS & CALIBRATION WORKFLOW
@@ -32,9 +47,9 @@ You are generating a structured scouting dossier JSON object representing an off
    - Write \`peerBenchmark\`: name 1–2 real-world same-position peers (preferring calibrated peers from \`<calibrated_peer_ledger>\` when applicable, or indisputable global positional peers in the same tier) with their ratings to lock the exact integer within that tier band.
    - Fill \`peerPlacement\` from \`<calibrated_peer_ledger>\` (other players only, names exactly as listed, empty arrays when there is no ledger): \`betterThan\` lists the peers this version was a better footballer than, \`levelWith\` those he was as good as, \`notAsGoodAs\` those who were better. Judge who was the better footballer, the same question Overall answers, not who had the better season, more trophies or more dominance over his era. Place every ledger peer at or near his level, not only the easy calls. Your Overall must agree with this placement: above every \`betterThan\` peer, equal to every \`levelWith\` peer, below every \`notAsGoodAs\` peer.
    - List 3–4 \`signatureSpikes\`: the exact attribute keys that define this player's ceiling and best on-pitch qualities.
-   - List 2–3 \`genuineFlaws\`: the exact attribute keys that represent genuine limitations or non-strengths in their game.
+   - List 2–3 \`genuineFlaws\`: the exact attribute keys that represent genuine limitations or non-strengths in their game. They keep his low attributes honest; the \`weaknesses\` in Step 4 are what cost him on the pitch and need not mirror them.
    - Set \`verifiedCurrentHeadCoach\` ONLY if \`<factual_foundation>\` explicitly confirms the current head coach of the player's current club. Set to \`null\` if unconfirmed, historical, or if sources conflict.
-   - **No manager names in card prose:** never name a head coach or manager in \`shortBio\`, \`playstyle.description\`, \`latestUpdate\`, or \`archetypeAnalysis\`. The app attaches the verified manager to the card separately. Describe the tactical setup and the player's role in it instead.
+   - **No manager names in card prose:** never name a head coach or manager in \`shortBio\`, \`playstyle.description\`, \`latestUpdate\`, \`strengths\`, \`weaknesses\`, or \`archetypeAnalysis\`. The app attaches the verified manager to the card separately. Describe the tactical setup and the player's role in it instead.
 
 2. **Step 2 — Ratings & Spiky Sub-Archetype Attributes (\`ratings\`, \`attributes\`):**
    - \`ratings.overall\` MUST sit inside the integer range of your chosen \`calibration.tierBand\` and agree with \`calibration.peerPlacement\`. It is your holistic judgment of how good a footballer he is in the role he played, never an average of the 25 attributes: attributes his role never asked of him barely bear on it.
@@ -50,7 +65,8 @@ You are generating a structured scouting dossier JSON object representing an off
    - Use \`"N/A"\` for height or weight only if unverified — never output \`"0'0\\""\` or \`"0 lbs"\`.
 
 4. **Step 4 — Handcrafted Scouting Prose (\`strengths\`, \`weaknesses\`, \`playstyleAndRole\`, \`shortBio\`, \`latestUpdate\`):**
-   - \`strengths\` & \`weaknesses\`: Format each item as \`**Bold Title:** Concrete analytical explanation.\` Explain the *on-pitch mechanism and tactical impact* of the trait — what the player does and what it changes in a match, or when and why a limitation shows — not a generic restatement of the attribute name.
+   - \`strengths\` (3–5) & \`weaknesses\` (2–4): fill each item's fields; the app joins them into one line.
+${INDENTED_TRAIT_RULES}
    - \`playstyleAndRole.playstyle.archetype\`: An evocative, specific 3–5 word title capturing the player's exact footballing mould (Protocol D: never a single generic word, never "Enganche").
    - \`playstyleAndRole.bestRoles\`: Short (1–4 word) tactical role names as football coverage commonly uses them.
    - \`playstyleAndRole.playstyle.description\` (Min 80 words — Protocol T "Tactico View"): Capture WHO the player is as a footballer — his mould, the on-pitch habits that define him with and without the ball, how he compares to the positional norm, and his real limitations. Write flowing scouting prose — never a robotic chain of "He does X. He does Y." action sentences, never tie his permanent identity to a transient club formation, and never open with a negative contrast ("Unlike...", "While...", "Not...").
