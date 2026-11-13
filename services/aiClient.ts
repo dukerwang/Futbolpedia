@@ -4,6 +4,8 @@ import {
   AITask,
   DEFAULT_FAST_MODEL,
   resolveTaskModelConfig,
+  outputCap,
+  samplingFor,
   ThinkingTier,
 } from '../constants/modelProfiles';
 import { GaffaMarketGrepParams, grepGaffaBag } from '../constants/gaffaRules';
@@ -16,7 +18,8 @@ let _ai: GoogleGenAI | null = null;
 export const getAi = (): GoogleGenAI =>
   (_ai ??= new GoogleGenAI({ apiKey: process.env.API_KEY as string }));
 
-// gemini-3.8-flash rejects ThinkingLevel.MINIMAL with HTTP 400; map 'minimal' to LOW.
+// gemini-3.8-flash and gemini-4-hydrogen both reject ThinkingLevel.MINIMAL with HTTP 400; map
+// 'minimal' to LOW.
 const THINKING_LEVEL_MAP: Record<ThinkingTier, ThinkingLevel> = {
   minimal: ThinkingLevel.LOW,
   low: ThinkingLevel.LOW,
@@ -64,7 +67,7 @@ export async function generateStructured<T>(params: GenerateStructuredParams): P
     contents: params.prompt,
     config: {
       ...(params.systemInstruction ? { systemInstruction: params.systemInstruction } : {}),
-      temperature: resolved.temperature,
+      ...samplingFor(resolved.model, resolved.temperature),
       responseMimeType: 'application/json',
       responseSchema: params.schema,
       thinkingConfig: {
@@ -136,8 +139,8 @@ export async function runGroundedSearch(
           options?.digest === 'evidence'
             ? SEARCH_EVIDENCE_SYSTEM_INSTRUCTION + (options.context ? SEARCH_ANALYSIS_ADDENDUM : '')
             : SEARCH_DIGEST_SYSTEM_INSTRUCTION,
-        temperature: 0.1,
-        maxOutputTokens: options?.digest === 'evidence' ? 800 : 420,
+        ...samplingFor(FLASH_MODEL, 0.1),
+        maxOutputTokens: outputCap(FLASH_MODEL, options?.digest === 'evidence' ? 800 : 420),
         tools: [{ googleSearch: {} }],
         // Cap thinkingLevel to LOW during search grounding so Flash does not run
         // multi-second dynamic thinking just to summarize search results.
@@ -483,7 +486,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
             },
           }
         : {}),
-      temperature: resolved.temperature,
+      ...samplingFor(resolved.model, resolved.temperature),
       thinkingConfig: {
         thinkingLevel: THINKING_LEVEL_MAP[resolved.thinkingLevel],
       },

@@ -1,4 +1,5 @@
 import { ThinkingLevel } from '@google/genai';
+import { outputCap, samplingFor } from '../constants/modelProfiles';
 import { normalizeClub } from '../constants/ratingTiers';
 import {
   sameCoach,
@@ -106,8 +107,8 @@ async function searchCurrentCoach(club: string) {
     contents: `As of ${month} ${year}, who is the current first-team head coach (manager) of ${club}? Use the most recent reliable reports. If a caretaker or interim coach is in charge, name them. Reply with exactly one line and nothing else:
 COACH: <full name or UNKNOWN> | SINCE: <appointment date YYYY-MM-DD or UNKNOWN> | PREVIOUS: <the head coach immediately before them, full name, or UNKNOWN> | SOURCE_DATE: <publication date of your most recent source YYYY-MM-DD or UNKNOWN>`,
     config: {
-      temperature: 0,
-      maxOutputTokens: 120,
+      ...samplingFor(FLASH_MODEL, 0),
+      maxOutputTokens: outputCap(FLASH_MODEL, 120),
       tools: [{ googleSearch: {} }],
       thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
     },
