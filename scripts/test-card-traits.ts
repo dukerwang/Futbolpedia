@@ -1,8 +1,8 @@
 #!/usr/bin/env npx tsx
 /**
  * Offline checks for a card's strengths and weaknesses (services/cardTraits.ts): structured items
- * become card lines, stock lines shared with other players' cards are found, and only those are
- * rewritten (Gemini faked at the fetch layer).
+ * become card lines, stock lines shared with other players' cards are found and rewritten, and
+ * every other weakness is checked against the rules (Gemini faked at the fetch layer).
  *
  * Usage:
  *   npx tsx scripts/test-card-traits.ts
@@ -12,8 +12,10 @@ import type { PlayerProfile } from '../types';
 import {
   applyTraitRevisions,
   findStockTraits,
+  findTraitsToReview,
   formatTrait,
-  reviseStockTraits,
+  reviseCardTraits,
+  takenTraitTitles,
   titleSimilarity,
   titleWords,
   toTraitLines,
@@ -117,6 +119,9 @@ await test('the synthesis sanitizer stores structured traits as card lines', () 
 await test('the synthesis prompt says a skill his role never asked of him is not a weakness', () => {
   assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /A skill his role never asked of him is not a weakness/);
   assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /if it would read just as true on most players at his position/);
+  assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /A quality worded as a flaw is not a weakness/);
+  assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /two to four plain words a football fan would use/);
+  assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /never his only weakness/);
   assert.doesNotMatch(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /\$\{/);
 });
 
@@ -171,31 +176,116 @@ await test('revisions replace only the stock lines; a weakness drops only when a
   assert.deepEqual(empty.weaknesses, two.weaknesses);
 });
 
-await test('reviseStockTraits asks for the marked lines only and applies the reply', async () => {
+await test('every weakness that isn\'t stock is marked to check; strengths only when stock', () => {
+  const subject = card(
+    'Subject',
+    ['**Anticipatory Interceptions:** reads it.', '**Own Strength:** kept.'],
+    ['**Aerial Limitations:** small.', '**Own Weakness:** kept.'],
+  );
+  assert.deepEqual(
+    findTraitsToReview(subject, pool).map((t) => [t.kind, t.index, t.review]),
+    [
+      ['strength', 0, 'rewrite'],
+      ['weakness', 0, 'rewrite'],
+      ['weakness', 1, 'check'],
+    ],
+  );
+  assert.deepEqual(findTraitsToReview(card('Subject', ['**Own Strength:** kept.'], []), pool), []);
+});
+
+await test('reviseCardTraits marks stock lines to rewrite and other weaknesses to check, and applies the reply', async () => {
   const subject = card('Subject', ['**Own Strength:** kept.'], ['**Minimal Defensive Contribution:** stays high.', '**Own Weakness:** kept.']);
   geminiReplyText = JSON.stringify({
-    revisions: [{ id: 'W1', drop: false, title: 'Switches Off After Losing It', detail: 'Walks back when a move he started breaks down', consequence: 'His side defends the counter a man short' }],
+    revisions: [{ id: 'W1', drop: false, title: 'Switches Off', detail: 'Walks back when a move he started breaks down', consequence: 'His side defends the counter a man short' }],
   });
-  const revised = await reviseStockTraits(subject, pool, 'EVIDENCE TEXT');
+  const revised = await reviseCardTraits(subject, pool, 'EVIDENCE TEXT');
   assert.equal(geminiPrompts.length, 1);
   assert.match(geminiPrompts[0], /W1 \[REWRITE\]: \*\*Minimal Defensive Contribution/);
-  assert.doesNotMatch(geminiPrompts[0], /W2 \[REWRITE\]/);
+  assert.match(geminiPrompts[0], /W2 \[CHECK\]: \*\*Own Weakness/);
+  assert.match(geminiPrompts[0], /S1: \*\*Own Strength/);
+  assert.match(geminiPrompts[0], /two to four plain words/);
+  assert.match(geminiPrompts[0], /<taken_lines>/);
+  assert.match(geminiPrompts[0], /On other cards at his position/);
   assert.match(geminiPrompts[0], /EVIDENCE TEXT/);
   assert.deepEqual(revised.weaknesses, [
-    '**Switches Off After Losing It:** Walks back when a move he started breaks down. His side defends the counter a man short.',
+    '**Switches Off:** Walks back when a move he started breaks down. His side defends the counter a man short.',
     '**Own Weakness:** kept.',
   ]);
   assert.deepEqual(revised.strengths, subject.strengths);
 });
 
-await test('no stock lines means no call; a failed call keeps the card as written', async () => {
-  const clean = card('Subject', ['**Own Strength:** kept.'], ['**Own Weakness:** kept.']);
-  assert.equal(await reviseStockTraits(clean, pool, ''), clean);
+await test('a checked weakness that breaks the rules is replaced, even when the stock one beside it is dropped', async () => {
+  const subject = card('Subject', [], ['**Aerial Limitations:** small.', '**Too Economical:** never tries a trick.']);
+  geminiReplyText = JSON.stringify({
+    revisions: [
+      { id: 'W1', drop: true },
+      { id: 'W2', drop: false, title: 'Fades Late', detail: 'His pressing drops off in the last twenty minutes', consequence: 'Opponents finish games on top' },
+    ],
+  });
+  const revised = await reviseCardTraits(subject, pool, '');
+  assert.deepEqual(revised.weaknesses, ['**Fades Late:** His pressing drops off in the last twenty minutes. Opponents finish games on top.']);
+
+  // A weakness most players share may stay, with one particular to him added beside it.
+  geminiReplyText = JSON.stringify({
+    revisions: [{ id: 'NEW', drop: false, title: 'Drifts Out Of Games', detail: 'Goes missing for long spells when his side has to defend', consequence: 'Opponents play through his zone' }],
+  });
+  const one = card('Subject', [], ['**Slow Over Distance:** loses races.']);
+  assert.deepEqual((await reviseCardTraits(one, pool, '')).weaknesses, [
+    '**Slow Over Distance:** loses races.',
+    '**Drifts Out Of Games:** Goes missing for long spells when his side has to defend. Opponents play through his zone.',
+  ]);
+
+  // When every weakness is dropped, one is still kept.
+  geminiReplyText = JSON.stringify({ revisions: [{ id: 'W1', drop: true }, { id: 'W2', drop: true }] });
+  assert.equal((await reviseCardTraits(subject, pool, '')).weaknesses.length, 1);
+});
+
+await test('taken titles: lines common across other players, and lines at his position with the newest rewrites first', () => {
+  const at = (name: string, position: string, weaknesses: string[]) => {
+    const c = card(name, [], weaknesses);
+    c.basicInfo.position = position;
+    return c;
+  };
+  const many = [
+    at('A', 'Centre-Back', ['**Aerial Limitations:** a.']),
+    at('B', 'Centre-Back', ['**Aerial Limitation:** b.']),
+    at('C', 'Centre-Back', ['**Aerial Limitations:** c.', '**Slow Turn:** c.']),
+    at('Subject', 'Centre-Back', ['**Aerial Limitations:** his own.']),
+    at('D', 'Centre Forward', ['**Wasteful Finishing:** d.']),
+    at('G', 'Defensive Midfielder/Centre-Back', ['**Slow Over Ten Yards:** g.']),
+  ];
+  const subject = at('Subject', 'Centre-Back', ['**Own:** x.']);
+  const written = [at('E', 'Centre-Back', ['**Stretched Wide:** Pulled into the channels.']), at('F', 'Centre Forward', ['**Low Block Struggles:** f.'])];
+  const taken = takenTraitTitles(subject, many, written);
+  // On three other players' cards; his own card doesn't add a fourth.
+  assert.deepEqual(taken.common.weakness, [{ title: 'Aerial Limitations', players: 3 }]);
+  assert.deepEqual(taken.common.strength, []);
+  // Cards sharing a position only, the run's rewrites first, each title once, never his own.
+  assert.deepEqual(taken.nearby.weakness, [
+    'Stretched Wide (Pulled into the channels.)',
+    'Aerial Limitations (a.)',
+    'Aerial Limitation (b.)',
+    'Slow Turn (c.)',
+    'Slow Over Ten Yards (g.)',
+  ]);
+  // A second call on the same pool reads the counted clusters again.
+  assert.equal(takenTraitTitles(subject, many).common.weakness[0].players, 3);
+});
+
+await test('no stock lines and no weaknesses means no call; a failed call keeps the card as written', async () => {
+  const clean = card('Subject', ['**Own Strength:** kept.'], []);
+  assert.equal(await reviseCardTraits(clean, pool, ''), clean);
   assert.equal(geminiPrompts.length, 0);
+
+  // A card whose weaknesses all meet the rules comes back unchanged.
+  const fine = card('Subject', ['**Own Strength:** kept.'], ['**Own Weakness:** kept.']);
+  geminiReplyText = JSON.stringify({ revisions: [] });
+  assert.deepEqual(await reviseCardTraits(fine, pool, ''), fine);
+  assert.equal(geminiPrompts.length, 1);
 
   const stocky = card('Subject', [], ['**Aerial Limitations:** small.']);
   geminiReplyText = null;
-  const kept = await reviseStockTraits(stocky, pool, '');
+  const kept = await reviseCardTraits(stocky, pool, '');
   assert.deepEqual(kept.weaknesses, stocky.weaknesses);
 });
 
@@ -232,15 +322,22 @@ await test('the backfill proposes only cards whose rewrite changed something', a
   geminiReplyText = JSON.stringify({
     revisions: [{ id: 'W1', drop: false, title: 'Loses The Second Ball', detail: 'Steps off after the first contact', consequence: 'Opponents keep the ball' }],
   });
-  const entry = await proposeEntry(stocky, pool);
+  const written: PlayerProfile[] = [];
+  const entry = await proposeEntry(stocky, pool, written);
   assert.ok(entry);
+  // The rewritten card is passed on to the cards after it.
+  assert.equal(written.length, 1);
+  assert.equal(written[0].weaknesses[0], entry!.after.weaknesses[0]);
   assert.deepEqual(entry!.slugs, ['subject']);
   assert.equal(entry!.after.weaknesses[0], '**Loses The Second Ball:** Steps off after the first contact. Opponents keep the ball.');
   assert.match(reportMarkdown([entry!]), /~~\*\*Aerial Limitations:\*\* small\.~~/);
 
   geminiPrompts = [];
-  assert.equal(await proposeEntry({ slugs: ['x'], card: card('Subject', ['**Own:** a.'], ['**Own Weakness:** b.']) }, pool), null);
+  assert.equal(await proposeEntry({ slugs: ['x'], card: card('Subject', ['**Own:** a.'], []) }, pool), null);
   assert.equal(geminiPrompts.length, 0);
+  geminiReplyText = JSON.stringify({ revisions: [] });
+  assert.equal(await proposeEntry({ slugs: ['x'], card: card('Subject', ['**Own:** a.'], ['**Own Weakness:** b.']) }, pool), null);
+  assert.equal(geminiPrompts.length, 1);
   geminiReplyText = null;
   assert.equal(await proposeEntry(stocky, pool), null);
 });

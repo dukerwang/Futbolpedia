@@ -67,7 +67,7 @@ import {
 import { synthesizePlayerDossier } from './dossierSynthesizer';
 import { getClubManager, isSameClub } from './clubManagers';
 import { attachVerifiedManager } from './profileManagerGrounding';
-import { reviseStockTraits } from './cardTraits';
+import { reviseCardTraits } from './cardTraits';
 import {
   type CareerStatus,
   fetchApiFootballPlayer,
@@ -685,8 +685,9 @@ const rateDossier = async (params: {
   }
 
   // Strengths and weaknesses that read the same as lines on other players' cards are rewritten
-  // about this player (services/cardTraits.ts).
-  let profile = await reviseStockTraits(
+  // about this player, and any other weakness that breaks the rules is replaced
+  // (services/cardTraits.ts).
+  let profile = await reviseCardTraits(
     synthesized,
     [...getSupabaseCalibratedPool(), ...savedDossiers, ...conversationDossiers],
     grounding.foundationText,
