@@ -8,7 +8,9 @@
  * Two steps, so a person reads the rewrites before any card changes:
  *
  *   1. Propose (needs GEMINI_API_KEY; reads the cards with the publishable key):
- *        npx tsx scripts/backfill-card-traits.ts --out trait-backfill.json [--player "Name"] [--limit N]
+ *        npx tsx scripts/backfill-card-traits.ts --out trait-backfill.json [--player "Name"] [--limit N] [--few-weaknesses]
+ *      --few-weaknesses takes only the cards with fewer than MIN_WEAKNESSES weaknesses, so the
+ *      rewrite adds the missing one.
  *      Writes every proposed rewrite, before and after, to the JSON report and a Markdown copy
  *      beside it. Nothing is written to Supabase.
  *
@@ -28,7 +30,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 import type { PlayerProfile } from '../types';
-import { findTraitsToReview, reviseCardTraits, traitTitle } from '../services/cardTraits';
+import { findTraitsToReview, MIN_WEAKNESSES, reviseCardTraits, traitTitle } from '../services/cardTraits';
 import { supabasePublishableKey, supabaseUrl } from '../services/dossierCache';
 import { toBasePlayerSlug } from '../services/dossierCards';
 
@@ -194,12 +196,14 @@ async function propose(): Promise<void> {
   const out = arg('--out') ?? `trait-backfill-${new Date().toISOString().slice(0, 10)}.json`;
   const only = arg('--player')?.toLowerCase();
   const limit = Number(arg('--limit') ?? Infinity);
+  const fewOnly = process.argv.includes('--few-weaknesses');
 
   const client = createClient(supabaseUrl, process.env.SUPABASE_SECRET_KEY ?? supabasePublishableKey);
   const groups = groupCards(await readAllRows(client));
   const pool = groups.map((g) => g.card);
   const todo = groups
     .filter((g) => !only || g.card.basicInfo.name.toLowerCase().includes(only))
+    .filter((g) => !fewOnly || (g.card.weaknesses ?? []).length < MIN_WEAKNESSES)
     .filter((g) => findTraitsToReview(g.card, pool).length > 0)
     .slice(0, limit);
   console.log(`${groups.length} published cards; ${todo.length} with lines to review.`);

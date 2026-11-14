@@ -156,7 +156,7 @@ await test('a line on two other players\' cards is stock; one other player, or h
   assert.deepEqual(findStockTraits(card('Subject', [], ['**Aerial Limitations:** c.']), own), []);
 });
 
-await test('revisions replace only the stock lines; a weakness drops only when another remains', () => {
+await test('revisions replace only the stock lines; a weakness drops only when two others remain', () => {
   const subject = card('Subject', ['**Anticipatory Interceptions:** reads it.', '**Own Strength:** kept.'], ['**Aerial Limitations:** small.']);
   const stock = findStockTraits(subject, pool);
   const revised = applyTraitRevisions(subject, stock, [
@@ -169,8 +169,11 @@ await test('revisions replace only the stock lines; a weakness drops only when a
   assert.deepEqual(revised.weaknesses, ['**Aerial Limitations:** small.']);
 
   const two = card('Subject', [], ['**Aerial Limitations:** small.', '**Own Weakness:** kept.']);
-  const dropped = applyTraitRevisions(two, findStockTraits(two, pool), [{ id: 'W1', drop: true }]);
-  assert.deepEqual(dropped.weaknesses, ['**Own Weakness:** kept.']);
+  // Two weaknesses is the floor, so neither is dropped.
+  assert.deepEqual(applyTraitRevisions(two, findStockTraits(two, pool), [{ id: 'W1', drop: true }]).weaknesses, two.weaknesses);
+  const three = card('Subject', [], ['**Aerial Limitations:** small.', '**Own Weakness:** kept.', '**Second Own:** kept.']);
+  const dropped = applyTraitRevisions(three, findStockTraits(three, pool), [{ id: 'W1', drop: true }]);
+  assert.deepEqual(dropped.weaknesses, ['**Own Weakness:** kept.', '**Second Own:** kept.']);
   // An empty rewrite keeps the line.
   const empty = applyTraitRevisions(two, findStockTraits(two, pool), [{ id: 'W1', drop: false, title: 'X', detail: '' }]);
   assert.deepEqual(empty.weaknesses, two.weaknesses);
@@ -223,7 +226,11 @@ await test('a checked weakness that breaks the rules is replaced, even when the 
     ],
   });
   const revised = await reviseCardTraits(subject, pool, '');
-  assert.deepEqual(revised.weaknesses, ['**Fades Late:** His pressing drops off in the last twenty minutes. Opponents finish games on top.']);
+  // The stock line can't be dropped below two weaknesses, so it stays beside the replacement.
+  assert.deepEqual(revised.weaknesses, [
+    '**Aerial Limitations:** small.',
+    '**Fades Late:** His pressing drops off in the last twenty minutes. Opponents finish games on top.',
+  ]);
 
   // A weakness most players share may stay, with one particular to him added beside it.
   geminiReplyText = JSON.stringify({
@@ -235,9 +242,17 @@ await test('a checked weakness that breaks the rules is replaced, even when the 
     '**Drifts Out Of Games:** Goes missing for long spells when his side has to defend. Opponents play through his zone.',
   ]);
 
-  // When every weakness is dropped, one is still kept.
+  // A card with one weakness of his own also gets a second.
+  const single = card('Subject', [], ['**Own Weakness:** kept.']);
+  assert.equal((await reviseCardTraits(single, pool, '')).weaknesses.length, 2);
+  assert.match(geminiPrompts[geminiPrompts.length - 1], /at least two weaknesses/);
+
+  // A NEW line isn't added to a card that already has two.
+  assert.deepEqual((await reviseCardTraits(subject, pool, '')).weaknesses, subject.weaknesses);
+
+  // When every weakness is dropped, two are still kept.
   geminiReplyText = JSON.stringify({ revisions: [{ id: 'W1', drop: true }, { id: 'W2', drop: true }] });
-  assert.equal((await reviseCardTraits(subject, pool, '')).weaknesses.length, 1);
+  assert.equal((await reviseCardTraits(subject, pool, '')).weaknesses.length, 2);
 });
 
 await test('taken titles: lines common across other players, and lines at his position with the newest rewrites first', () => {
