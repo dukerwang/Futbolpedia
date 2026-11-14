@@ -526,6 +526,12 @@ const rateDossier = async (params: {
     perf('no such footballer');
     return `I couldn't find a footballer called "${primaryPlayer}". Which player did you mean?`;
   }
+  // Futbolpedia rates footballers, never a coach or anyone else who never played.
+  if (identity.neverPlayed) {
+    perf('never played professionally');
+    const who = identity.knownAs || primaryPlayer;
+    return `${who} never played professionally, so there's no footballer to rate. Futbolpedia rates players' footballing ability, not coaching.`;
+  }
   const subjectName = identity.knownAs || primaryPlayer;
 
   options?.onStageChange?.(
@@ -562,15 +568,18 @@ const rateDossier = async (params: {
     return knownEraCard;
   }
 
-  // A retired player has no current form to rate, so with no timeframe he gets his prime.
+  // A retired player has no current form to rate, so he gets his prime, even when current form
+  // was asked for: a coach or pundit who once played is rated as the player he was.
   // When the status check is inconclusive, the grounding itself can still show it.
+  // A request for current form skips the early status check, so read the identity's.
+  const status = careerStatus === 'unknown' ? identity.status : careerStatus;
   const retired =
     !isHistorical &&
-    (careerStatus === 'retired' ||
-      (careerStatus === 'unknown' &&
+    !season &&
+    !era &&
+    (status === 'retired' ||
+      (status === 'unknown' &&
         !imageData &&
-        !season &&
-        !route.wantsCurrentForm &&
         groundingShowsRetirement(grounding.foundationText, grounding.apiPlayer)));
   if (retired) {
     isHistorical = true;

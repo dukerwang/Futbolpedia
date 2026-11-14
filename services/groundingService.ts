@@ -370,6 +370,8 @@ export interface PlayerIdentity {
   fullName: string | null;
   /** The check found that no footballer goes by this name. */
   noSuchPlayer?: boolean;
+  /** The name is a coach's, executive's or pundit's who never played professionally. */
+  neverPlayed?: boolean;
 }
 
 const identityCache = new Map<string, Promise<PlayerIdentity>>();
@@ -382,15 +384,20 @@ export function parseCareerStatus(text: string): CareerStatus {
 
 /**
  * Reads "STATUS: … | KNOWN AS: … | FULL NAME: …"; a bare status word still reads as the status, and
- * "STATUS: NONE" means no footballer goes by the name.
+ * "STATUS: NONE" means no footballer goes by the name, and "STATUS: NOT A PLAYER" that the name is
+ * someone in football who never played professionally.
  */
 export function parsePlayerIdentity(text: string): PlayerIdentity {
   const field = (label: string): string | null =>
     text.match(new RegExp(`${label}\\s*:\\s*([^|\\n]+)`, 'i'))?.[1].replace(/[*"]/g, '').trim() || null;
   const name = (value: string | null): string | null =>
     value && value.length <= 60 && !/^(unknown|n\/a|none)$/i.test(value) ? value : null;
-  if (/^none\b/i.test(field('STATUS') ?? '')) {
+  const status = field('STATUS') ?? '';
+  if (/^none\b/i.test(status)) {
     return { status: 'unknown', knownAs: null, fullName: null, noSuchPlayer: true };
+  }
+  if (/^not\s+a\s+player\b/i.test(status)) {
+    return { status: 'unknown', knownAs: name(field('KNOWN AS')), fullName: name(field('FULL NAME')), neverPlayed: true };
   }
   return {
     status: parseCareerStatus(field('STATUS') ?? text),
@@ -414,7 +421,7 @@ export function groundingShowsRetirement(
     /[^.\n]*\b(international|national team|national side)\b[^.\n]*/gi,
     ' ',
   );
-  return /\b(retired|retirement|hung up (?:his|her|their) boots)\b/i.test(text) &&
+  return /\b(retired|retirement|hung up (?:his|her|their) boots|(?:ended|after|since) (?:his|her|their) playing (?:career|days))\b/i.test(text) &&
     !/\bcame out of retirement|un-?retire/i.test(text);
 }
 
@@ -435,7 +442,7 @@ export function getPlayerIdentity(playerName: string): Promise<PlayerIdentity> {
   const job = getAi()
     .models.generateContent({
       model: FLASH_MODEL,
-      contents: `As of ${month} ${year}, is the footballer ${playerName} still playing professionally, or has he retired from playing? Also give the name football coverage commonly calls him by and his full name. Reply on one line, exactly: STATUS: <ACTIVE, RETIRED or UNKNOWN> | KNOWN AS: <name> | FULL NAME: <name>. Write UNKNOWN for anything you cannot tell. If no footballer goes by that name or anything close to it, reply exactly: STATUS: NONE. Never answer with a different footballer.`,
+      contents: `As of ${month} ${year}, is the footballer ${playerName} still playing professionally, or has he retired from playing? Only playing in matches counts: a former player who now coaches, manages, owns a club or works in any other role has RETIRED. Also give the name football coverage commonly calls him by and his full name. Reply on one line, exactly: STATUS: <ACTIVE, RETIRED or UNKNOWN> | KNOWN AS: <name> | FULL NAME: <name>. Write UNKNOWN for anything you cannot tell. If the name is a coach, manager, executive or pundit who never played professionally, reply exactly: STATUS: NOT A PLAYER | KNOWN AS: <name> | FULL NAME: <name>. If no footballer goes by that name or anything close to it, reply exactly: STATUS: NONE. Never answer with a different footballer.`,
       config: {
         ...samplingFor(FLASH_MODEL, 0),
         // Thinking tokens count against this budget, so leave room beyond the one-line answer.
@@ -446,10 +453,12 @@ export function getPlayerIdentity(playerName: string): Promise<PlayerIdentity> {
     })
     .then((res): PlayerIdentity => {
       const identity = parsePlayerIdentity(res.text ?? '');
-      if (identity.status === 'unknown') identityCache.delete(key);
+      if (identity.status === 'unknown' && !identity.neverPlayed) identityCache.delete(key);
       console.info(
         identity.noSuchPlayer
           ? `[PlayerIdentity] ${playerName}: no such footballer`
+          : identity.neverPlayed
+            ? `[PlayerIdentity] ${playerName}: never played professionally`
           : `[PlayerIdentity] ${playerName}: ${identity.status}, known as ${identity.knownAs ?? '?'} (${identity.fullName ?? '?'})`,
       );
       return identity;

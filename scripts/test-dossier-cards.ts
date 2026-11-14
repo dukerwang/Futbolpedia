@@ -566,6 +566,13 @@ async function main() {
     assert.equal(parsePlayerIdentity('STATUS: UNKNOWN | KNOWN AS: Active Player | FULL NAME: UNKNOWN').status, 'unknown');
     assert.deepEqual(parsePlayerIdentity('RETIRED'), { status: 'retired', knownAs: null, fullName: null });
     assert.equal(parsePlayerIdentity('STATUS: NONE').noSuchPlayer, true);
+    assert.deepEqual(parsePlayerIdentity('STATUS: NOT A PLAYER | KNOWN AS: Test Coach | FULL NAME: UNKNOWN'), {
+      status: 'unknown',
+      knownAs: 'Test Coach',
+      fullName: null,
+      neverPlayed: true,
+    });
+    assert.equal(groundingShowsRetirement('- Has managed since he ended his playing career in 2006.', null), true);
     assert.equal(parsePlayerIdentity('STATUS: UNKNOWN | KNOWN AS: UNKNOWN | FULL NAME: UNKNOWN').noSuchPlayer, undefined);
 
     const retiredText = '- Retired from professional football in 2024 after a spell in the UAE.';
