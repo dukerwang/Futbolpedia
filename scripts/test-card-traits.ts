@@ -122,6 +122,8 @@ await test('the synthesis prompt says a skill his role never asked of him is not
   assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /A quality worded as a flaw is not a weakness/);
   assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /two to four plain words a football fan would use/);
   assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /never his only weakness/);
+  assert.match(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /Never mention his rating, a tier, a band or where he ranks/);
+  assert.doesNotMatch(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /below the band above/);
   assert.doesNotMatch(DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION, /\$\{/);
 });
 
