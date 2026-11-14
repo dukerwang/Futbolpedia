@@ -176,6 +176,13 @@ export async function connectGaffa(): Promise<'connected' | 'cancelled'> {
     };
     const onMessage = (e: MessageEvent) => {
       if (e.origin !== gaffaOrigin || e.data?.type !== 'gaffa-connect' || e.data?.state !== state) return;
+      // Gaffa's page waits for this window to close it; still open after a moment, it falls back
+      // to the redirect route (it can't tell whether its opener is Futbolpedia).
+      try {
+        popup.close();
+      } catch {
+        /* already closed */
+      }
       completeGaffaConnect({ code: e.data.code, error: e.data.error, state })
         .then((outcome) => finish(() => resolve(outcome)))
         .catch((err) => finish(() => reject(err)));
