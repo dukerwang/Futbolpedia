@@ -2,7 +2,8 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import path from "path";
-import { promises as fs } from "fs";
+import { promises as fs, existsSync, readFileSync } from "fs";
+import util from "util";
 import { createHash } from "crypto";
 import axios from "axios";
 import { pickCurrentCoach } from "./packages/engine/src/gates/managerMentions.ts";
@@ -21,7 +22,24 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { supabaseUrl } from "./services/dossierCache";
 import { createSnapshotServer, inProcessGet, supabaseSnapshotDb } from "./services/snapshotServer";
 
+/**
+ * Local runs: Vite reads `.env.local` for the browser, but the server process didn't, so server
+ * features (snapshot builds, Gaffa's panel, the Gemini proxy) ran without keys. Variables already
+ * set win, so AI Studio's environment is never overridden; a missing file changes nothing.
+ */
+function loadLocalEnv(): void {
+  const parse = (util as { parseEnv?: (text: string) => Record<string, string> }).parseEnv;
+  if (!parse) return;
+  for (const file of [".env.local", ".env"]) {
+    if (!existsSync(file)) continue;
+    for (const [key, value] of Object.entries(parse(readFileSync(file, "utf8")))) {
+      if (process.env[key] === undefined) process.env[key] = value;
+    }
+  }
+}
+
 async function startServer() {
+  loadLocalEnv();
   const app = express();
   const PORT = 3000;
 

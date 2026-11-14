@@ -32,7 +32,7 @@ So when reporting that a fix is done, say whether it is merged, and remind the u
 
 ## Environment Variables
 
-- `GEMINI_API_KEY` — Google Gemini key. Vite injects it into the client as `process.env.API_KEY` (read by `services/aiClient.ts`); the server's `/gemini-api-proxy/*` and its snapshot builds also use it.
+- `GEMINI_API_KEY` — Google Gemini key. Vite injects it into the client as `process.env.API_KEY` (read by `services/aiClient.ts`); the server's `/gemini-api-proxy/*` and its snapshot builds also use it. Run locally, `server.ts` fills any variable missing from its environment from `.env.local`, then `.env` (`loadLocalEnv`), so the server has the same keys as the browser; variables already set, as on AI Studio, always win.
 - `SUPABASE_SECRET_KEY` — server-only Supabase secret key (or the legacy `service_role` key), the only credential that can write `club_snapshots` and `era_snapshots`. Without it, club snapshots are built into the server's memory only and era snapshots aren't built.
 - `API_FOOTBALL_KEY` — API-Football key (used by `server.ts`). The free plan can't read the current season or use `last`/`next`, so it only helps dossier grounding for past seasons and the manager cross-check; chat research uses the live routes below.
 - `GAFFA_BASE_URL` (default `https://www.gaffa.live`), `FUTBOLPEDIA_READ_SECRET` — server-only Gaffa integration (see `.env.example`). The browser learns the Gaffa origin from `GET /api/gaffa/config`
