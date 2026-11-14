@@ -12,6 +12,7 @@ export const CARD_TRAIT_RULES = [
   '- A limitation many players at his position share can be listed when the evidence shows it cost him, but it is never his only weakness: at least one weakness names something particular to his game.',
   '- For a player at the highest level, the weaknesses are the parts of his game below his own standard, the patterns that blunted him, and the habits or decisions opponents could read: still specific to him, never padding.',
   "- Give fewer items rather than a generic one, and never repeat a point another item makes. Never name a coach or manager in them: describe the team's plan instead.",
+  '- Say it in words: never quote his rating, a tier band or an attribute number in a strength or weakness.',
 ].join('\n');
 
 const INDENTED_TRAIT_RULES = CARD_TRAIT_RULES.replace(/^/gm, '     ');
