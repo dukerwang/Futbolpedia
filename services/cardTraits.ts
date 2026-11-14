@@ -339,6 +339,8 @@ const takenBlock = (taken: TakenTitles): string => {
 
 /** How long the rewrite may take before the card keeps the lines it has. */
 export const TRAIT_REWRITE_TIMEOUT_MS = 15_000;
+/** The fewest weaknesses a card keeps: a drop that would go below it is ignored, and a NEW line is added to reach it. */
+export const MIN_WEAKNESSES = 2;
 /** How much of the card's evidence the rewrite reads. */
 const EVIDENCE_CHARS = 6_000;
 
@@ -362,7 +364,7 @@ const REVISION_SCHEMA = {
           drop: {
             type: Type.BOOLEAN,
             description:
-              'True only for a weakness that breaks the rules and has no real replacement in the evidence, and only when the card keeps another weakness that meets the rules.',
+              'True only for a weakness that breaks the rules and has no real replacement in the evidence, and only when the card keeps two other weaknesses that meet the rules.',
           },
           title: { type: Type.STRING, description: 'Two to four plain words a football fan would use, in title case; the sentences carry the detail.' },
           detail: {
@@ -430,16 +432,17 @@ ${takenBlock(taken)}
 The lines marked [REWRITE] read the same as lines already on several other players' cards, so they describe the position or the attribute rather than this player. For each one, return a revision with its id: either the same trait written about him specifically (a new title in his own terms, and both sentences), or, when that trait doesn't hold up for him, a different trait of the same kind that does. A weakness written again in other words is still the stock line: keep its trait only when the evidence says what it cost him; otherwise give a different limitation of his, or drop it.
 The lines marked [CHECK] are his other weaknesses. Test each against the rules: leave one that meets them out of your reply. One that breaks them (a skill his role never asked of him, a quality worded as a flaw, a limitation that never cost him, or a limitation most players at his position share that the evidence doesn't show costing him in particular) gets a revision with its id: a different, real limitation of his from the card and the evidence.
 <taken_lines> lists the lines already on other players' cards: the most common ones, and those at his position. No new line may make the same point as one of them, even in other words or about a different part of the pitch, unless the evidence shows it is distinctively his; then name what is his alone. A team sitting deep, crowding him or marking him tightly happens to most good players: it is his only when the evidence says how it beat him in particular.
-Set drop to true only for a weakness that breaks the rules when the evidence gives no real limitation to put in its place. The card must keep at least one weakness that meets the rules, so when every weakness breaks them, replace rather than drop. Never replace a weakness with one another line already names.
-A limitation many players at his position share may stay when the evidence shows it cost him, but never as his only weakness. When the card would end with one weakness and it is that kind, add a weakness particular to his game with id NEW, from the card and the evidence.
+Set drop to true only for a weakness that breaks the rules when the evidence gives no real limitation to put in its place, and only when the card keeps two other weaknesses that meet the rules; otherwise replace it. Never replace a weakness with one another line already names.
+The card ends with at least two weaknesses. When it has fewer, add one with id NEW: a limitation particular to his game, from the card and the evidence. It can be a recurring pattern in how he plays rather than one match, as long as it is his and the evidence supports it. A limitation many players at his position share may stay when the evidence shows it cost him, but never as his only weakness, so the NEW line is never that kind.
 Each title is two to four plain words a football fan would use, in title case; the sentences carry the detail. Keep each new line about as long as the one it replaces. Don't repeat anything the card's other lines already say, and keep every claim consistent with the card and the evidence: no figures, results or events the evidence doesn't give. Return revisions only for marked ids, and NEW.
 </task>`;
 }
 
 /**
  * Rewrites a card's stock strengths and weaknesses, and replaces or drops any other weakness that
- * breaks the rules. The card keeps its lines when there's nothing to review, the call fails or it
- * takes longer than `TRAIT_REWRITE_TIMEOUT_MS`; a weakness is dropped only when another remains.
+ * breaks the rules, and adds one when the card has fewer than `MIN_WEAKNESSES`. The card keeps its
+ * lines when there's nothing to review, the call fails or it takes longer than
+ * `TRAIT_REWRITE_TIMEOUT_MS`; a weakness is dropped only when `MIN_WEAKNESSES` others remain.
  */
 export interface TraitRewriteOptions {
   /** Cards rewritten earlier in the same run, newest last (`takenTraitTitles`). */
@@ -496,16 +499,16 @@ export function applyTraitRevisions(
     if (!revision) continue;
     const line = formatTrait(revision.title, revision.detail, revision.consequence);
     if (item.kind === 'weakness' && revision.drop) {
-      if (weaknesses.filter((w) => w !== null).length > 1) weaknesses[item.index] = null;
+      if (weaknesses.filter((w) => w !== null).length > MIN_WEAKNESSES) weaknesses[item.index] = null;
       continue;
     }
     if (!traitTitle(line) || !revision.detail) continue;
     if (item.kind === 'strength') strengths[item.index] = line;
     else weaknesses[item.index] = line;
   }
-  // One added weakness, for a card whose only weakness is one most players at his position share.
+  // One added weakness, for a card left with fewer than MIN_WEAKNESSES.
   const added = byId.get('NEW');
-  if (added && !added.drop && added.detail) {
+  if (added && !added.drop && added.detail && weaknesses.filter((w) => w !== null).length < MIN_WEAKNESSES) {
     const line = formatTrait(added.title, added.detail, added.consequence);
     if (traitTitle(line) && !weaknesses.some((w) => w && traitTitle(w) === traitTitle(line))) weaknesses.push(line);
   }
