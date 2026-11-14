@@ -22,10 +22,18 @@ import {
 export const supabaseUrl = 'https://hrocnbcavstmjysptjdk.supabase.co';
 export const supabasePublishableKey = 'sb_publishable_NKyG9miYqS8JgdpgWuXm9A_tc3vaVCL';
 
-export const supabase =
+export let supabase: any =
   typeof window !== 'undefined' && (window as any).supabase
     ? (window as any).supabase.createClient(supabaseUrl, supabasePublishableKey)
     : null;
+
+/**
+ * The server's client, with the same publishable key and the same row-level security as any
+ * browser, so the chat pipeline can read shared cards and snapshots when it runs for Gaffa's panel.
+ */
+export function useServerSupabase(client: unknown): void {
+  if (typeof window === 'undefined') supabase = client;
+}
 
 export const isSupabaseReady = () => !!supabase;
 

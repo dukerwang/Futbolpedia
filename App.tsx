@@ -148,6 +148,8 @@ const App: React.FC = () => {
   // Cards Scout rated this session, newest first.
   const [freshKeys, setFreshKeys] = useState<string[]>([]);
   const [scoutFocus, setScoutFocus] = useState(0);
+  // Names a link put in Scout's field (`#/scout?name=`), waiting for you to press Rate.
+  const [scoutPrefill, setScoutPrefill] = useState<{ id: number; text: string } | null>(null);
   // Puts a mention of a card in the chat box (Scout's Ask).
   const [mentionRequest, setMentionRequest] = useState<{ id: number; card: PlayerProfile } | null>(null);
 
@@ -516,6 +518,15 @@ const App: React.FC = () => {
         } finally {
           setIsLoading(false);
         }
+      } else if (hash.startsWith('#/scout')) {
+        // Scout on Futbolpedia (from Gaffa): Scout opens with the name in its field. Nothing is
+        // rated until you press Rate, so a link can't spend a rating on its own.
+        const name = new URLSearchParams(hash.split('?')[1] ?? '').get('name')?.trim().slice(0, 80);
+        window.history.replaceState({}, '', window.location.pathname);
+        setPanelMode('scout');
+        setIsPanelOpen(true);
+        setScoutFocus(Date.now());
+        if (name) setScoutPrefill({ id: Date.now(), text: name });
       } else if (hash.startsWith('#/gaffa/connected')) {
         // Gaffa's approval page sent this tab back with its answer (no popup, or the popup lost its
         // opener). Finish the exchange; a popup tab then closes itself.
@@ -763,6 +774,7 @@ const App: React.FC = () => {
           },
           onStageChange: (label) => setLoadingMessage(label),
           gaffaBag: clubBag?.connected ? clubBag : undefined,
+          conversationId: activeConversationId ?? undefined,
           onGaffaScorecard: (card) => {
             scorecard = card;
             streamStarted = true;
@@ -842,7 +854,7 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [messages, allProfiles, globalDossiers, gaffaClub, gaffaGrant, saveAndSetActiveProfile, dossierReply]);
+  }, [messages, allProfiles, globalDossiers, gaffaClub, gaffaGrant, activeConversationId, saveAndSetActiveProfile, dossierReply]);
 
   // The Rate command: a rating without a chat turn to route. It lands in the chat like a typed one.
   const handleRate = useCallback(async (request: RatingRequest) => {
@@ -1258,6 +1270,7 @@ const App: React.FC = () => {
               onOpenHub={() => { setHubTab('mine'); setView('hub'); if (isPhone()) setIsPanelOpen(false); }}
               onClose={() => setIsPanelOpen(false)}
               focusToken={scoutFocus}
+              prefill={scoutPrefill}
             />
           }
       />
