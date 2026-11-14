@@ -1,47 +1,24 @@
 import type { GaffaClubContextResponse, GaffaContextBag } from '../types';
 import { GAFFA_RULES_VERSION, emptyGaffaContextBag } from '../constants/gaffaRules';
-import { fetchGaffaContextFromSupabase, getGaffaSessionUser } from './gaffaAuth';
+import { fetchGaffaClubContext } from './gaffaConnect';
 
-const GAFFA_LINK_KEY = 'futbolpedia-gaffa-link';
+/** A conversation's attached Gaffa club. */
+export interface GaffaClubRef {
+  leagueId: string;
+  clubId: string;
+}
 
+const BAG_CACHE_KEY = 'futbolpedia-gaffa-bags';
 const FRESH_MS = 10 * 60 * 1000;
 const STALE_MAX_MS = 24 * 60 * 60 * 1000;
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function isUuid(value: string): boolean {
   return UUID.test(value);
 }
 
-export interface GaffaLinkState {
-  league_id: string;
-  club_id: string;
-  league_name?: string;
-  club_name?: string;
-  last_synced_at?: string;
-  bag?: GaffaContextBag;
-}
-
-export function loadGaffaLink(): GaffaLinkState | null {
-  try {
-    const raw = localStorage.getItem(GAFFA_LINK_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as GaffaLinkState;
-    if (!parsed?.league_id || !parsed?.club_id) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-export function saveGaffaLink(link: GaffaLinkState): void {
-  localStorage.setItem(GAFFA_LINK_KEY, JSON.stringify(link));
-}
-
-export function clearGaffaLink(): void {
-  localStorage.removeItem(GAFFA_LINK_KEY);
-}
+export const clubRefKey = (club: GaffaClubRef): string => `${club.leagueId}:${club.clubId}`;
 
 export function mapResponseToBag(res: GaffaClubContextResponse): GaffaContextBag {
   return {
@@ -67,73 +44,75 @@ export function mapResponseToBag(res: GaffaClubContextResponse): GaffaContextBag
   };
 }
 
-export const GAFFA_SIGN_IN_REQUIRED = 'Sign in to Gaffa to load this club.';
+function readCache(): Record<string, GaffaContextBag> {
+  try {
+    const raw = localStorage.getItem(BAG_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
-/**
- * A club's context, read with the signed-in manager's own Gaffa session, so RLS decides what they
- * can see. There is no anonymous path: the old server proxy let anyone holding two UUIDs read a club.
- */
-export async function fetchGaffaContext(
-  leagueId: string,
-  teamId: string,
-): Promise<GaffaClubContextResponse> {
-  const sessionUser = await getGaffaSessionUser();
-  if (!sessionUser) throw new Error(GAFFA_SIGN_IN_REQUIRED);
-  return fetchGaffaContextFromSupabase(leagueId, teamId);
+function writeCache(cache: Record<string, GaffaContextBag>): void {
+  try {
+    localStorage.setItem(BAG_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    /* storage full or unavailable: the bag is refetched next time */
+  }
+}
+
+/** The last bag read for a club, however old. */
+export function cachedClubBag(club: GaffaClubRef): GaffaContextBag | null {
+  return readCache()[clubRefKey(club)] ?? null;
+}
+
+/** Forgets every cached bag (on disconnect, so another manager's squad never lingers). */
+export function clearClubBags(): void {
+  try {
+    localStorage.removeItem(BAG_CACHE_KEY);
+  } catch {
+    /* unavailable */
+  }
 }
 
 function ageMs(iso?: string): number {
   if (!iso) return Number.POSITIVE_INFINITY;
   const t = Date.parse(iso);
-  if (Number.isNaN(t)) return Number.POSITIVE_INFINITY;
-  return Date.now() - t;
+  return Number.isNaN(t) ? Number.POSITIVE_INFINITY : Date.now() - t;
 }
 
 /**
- * Resolve bag for a Gaffa send: refresh if older than 10m; on failure use
- * cache if < 24h (stale); else disconnected.
+ * A club's bag for a turn: the cached one while it's under ten minutes old (unless `force`),
+ * otherwise a new read. When the read fails, a bag under a day old is used and marked
+ * stale; older than that, the turn goes without the club.
  */
-export async function resolveContextBagForSend(
-  link: GaffaLinkState | null,
-): Promise<GaffaContextBag> {
-  if (!link) return emptyGaffaContextBag();
-
-  const cached = link.bag;
-  const syncedAt = cached?.synced_at ?? link.last_synced_at;
-  if (cached?.connected && ageMs(syncedAt) < FRESH_MS) {
+export async function loadClubBag(club: GaffaClubRef, opts: { force?: boolean } = {}): Promise<GaffaContextBag> {
+  const cached = cachedClubBag(club);
+  if (!opts.force && cached?.connected && ageMs(cached.synced_at) < FRESH_MS) {
     return { ...cached, stale: false };
   }
-
   try {
-    const res = await fetchGaffaContext(link.league_id, link.club_id);
-    const bag = mapResponseToBag(res);
-    const next: GaffaLinkState = {
-      league_id: bag.league_id!,
-      club_id: bag.club_id!,
-      league_name: bag.league_name,
-      club_name: bag.club_name,
-      last_synced_at: bag.synced_at,
-      bag,
-    };
-    saveGaffaLink(next);
+    const bag = mapResponseToBag(await fetchGaffaClubContext(club.leagueId, club.clubId));
+    writeCache({ ...readCache(), [clubRefKey(club)]: bag });
     return bag;
   } catch (err) {
-    console.warn('[Gaffa] context refresh failed:', err);
-    if (cached?.connected && ageMs(syncedAt) < STALE_MAX_MS) {
-      return { ...cached, stale: true };
-    }
+    console.warn('[Gaffa] club context read failed:', err);
+    if (cached?.connected && ageMs(cached.synced_at) < STALE_MAX_MS) return { ...cached, stale: true };
     return emptyGaffaContextBag();
   }
 }
 
-/** Parse `#/gaffa/<leagueId>/<clubId>` from Futbolpedia's hash router. */
-export function parseGaffaConnectHash(
-  hash: string,
-): { leagueId: string; clubId: string } | null {
-  const m = hash.match(/^#\/gaffa\/([^/]+)\/([^/?#]+)/i);
+/**
+ * `#/gaffa/<leagueId>/<clubId>`, optionally with `?q=<question>`, from Gaffa's Open in Futbolpedia
+ * and Ask links. The club is only attached if it's one of the connected manager's.
+ */
+export function parseGaffaClubHash(hash: string): (GaffaClubRef & { question?: string }) | null {
+  const m = hash.match(/^#\/gaffa\/([^/?#]+)\/([^/?#]+)(?:\?(.*))?$/i);
   if (!m) return null;
-  const leagueId = m[1].trim();
-  const clubId = m[2].trim();
+  const leagueId = decodeURIComponent(m[1]).trim();
+  const clubId = decodeURIComponent(m[2]).trim();
   if (!isUuid(leagueId) || !isUuid(clubId)) return null;
-  return { leagueId, clubId };
+  const question = m[3] ? new URLSearchParams(m[3]).get('q')?.trim() : undefined;
+  return { leagueId, clubId, ...(question ? { question: question.slice(0, 1000) } : {}) };
 }

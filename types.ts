@@ -267,7 +267,6 @@ export interface ChatDossierRef {
   versionLabel?: string;
 }
 
-export type ChatDomain = 'default' | 'gaffa';
 
 export interface GaffaRosterPlayer {
   player_id: string;
@@ -417,11 +416,6 @@ export interface GaffaUserClub {
   league_status?: string | null;
 }
 
-export interface GaffaAuthUser {
-  id: string;
-  email?: string;
-}
-
 export interface Conversation {
   id: string;
   title: string;
@@ -429,8 +423,8 @@ export interface Conversation {
   createdAt: number;
   activeProfile: PlayerProfile | null;
   allProfiles: PlayerProfile[];
-  /** Chat domain for this conversation. Missing on legacy rows → treat as 'default'. */
-  domain?: ChatDomain;
+  /** The Gaffa club attached to this conversation (Connect with Gaffa); chat answers with it in mind. */
+  gaffaClub?: { leagueId: string; clubId: string };
   /** Who set the title: the model from the opening exchange, or the user. Missing means a stand-in. */
   titleSource?: 'generated' | 'user';
 }

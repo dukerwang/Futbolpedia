@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
-import type { ChatDomain, PlayerProfile } from '../types';
+import type { PlayerProfile } from '../types';
 import { fetchCardIndex, getCardKey, toBasePlayerSlug } from '../services/dossierStore';
 import { searchPlayers, type PlayerMatch } from '../services/playerSearch';
 import { PlayerPicker, cardRows, type PickerRow } from './PlayerPicker';
@@ -55,16 +55,12 @@ interface ChatInputProps {
   onSendMessage: (
     message: string,
     imageData?: string,
-    domain?: ChatDomain,
     mentions?: Mention[],
   ) => void;
   isLoading: boolean;
   loadingMessage: string;
-  domain: ChatDomain;
-  onDomainChange: (domain: ChatDomain) => void;
-  gaffaNudge?: string | null;
-  onAcceptGaffaNudge?: () => void;
-  onDismissGaffaNudge?: () => void;
+  /** The Gaffa club control, beside the attach and mention buttons. */
+  gaffaControl?: React.ReactNode;
   /** Text to put in the box, ready for the user to finish (a new `id` applies it again). */
   draft?: { id: number; text: string } | null;
   /** Your dossiers: what @ suggests first. */
@@ -83,11 +79,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
   isLoading,
   loadingMessage,
-  domain,
-  onDomainChange,
-  gaffaNudge,
-  onAcceptGaffaNudge,
-  onDismissGaffaNudge,
+  gaffaControl,
   draft,
   localCards,
   mentionRequest,
@@ -105,7 +97,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
-  const gaffaOn = domain === 'gaffa';
 
   const focusAt = (position: number) =>
     requestAnimationFrame(() => {
@@ -128,7 +119,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     if (!mentionRequest) return;
     const { card } = mentionRequest;
     const label = mentionLabel(card);
-    if (gaffaOn) onDomainChange('default');
     setMentions((prev) => (prev.some((m) => m.label === label) ? prev : [...prev, { label, card }]));
     const prev = message;
     const next = prev.includes(label) ? prev : `${prev}${prev && !/\s$/.test(prev) ? ' ' : ''}${label} `;
@@ -138,7 +128,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     return () => clearTimeout(timer);
   }, [mentionRequest?.id]);
 
-  const typing = !gaffaOn ? activeMentionAt(message, caret) : null;
+  const typing = activeMentionAt(message, caret);
   // A finished mention isn't a search: its @ starts a label already picked.
   const active =
     typing && !mentions.some((m) => message.startsWith(m.label, typing.start)) ? typing : null;
@@ -241,14 +231,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     e.preventDefault();
     if ((!message.trim() && !image) || isLoading) return;
     const named = mentions.filter((m) => message.includes(m.label));
-    onSendMessage(message, image || undefined, domain, named.length > 0 ? named : undefined);
+    onSendMessage(message, image || undefined, named.length > 0 ? named : undefined);
     setMessage('');
     setMentions([]);
     setImage(null);
   };
 
   const insertAt = () => {
-    if (gaffaOn) onDomainChange('default');
     const box = textareaRef.current;
     const at = box ? box.selectionStart : message.length;
     const before = message.slice(0, at);
@@ -311,30 +300,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     )}
     <div className="relative group bg-cream-50 dark:bg-charcoal-surface rounded-none shadow-float dark:shadow-dark-float border-t-2 border-charcoal dark:border-cream-400 overflow-hidden transition-colors duration-300">
       <div className="flex flex-col relative z-10">
-        {gaffaNudge && (
-          <div className="px-4 pt-3 flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1 text-sm border-b border-charcoal/10 dark:border-cream-400/10 pb-3">
-            <span className="flex-1 font-serif italic text-charcoal/80 dark:text-cream-200/80 leading-snug">
-              {gaffaNudge}
-            </span>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={onAcceptGaffaNudge}
-                className="min-h-9 px-1 text-xs font-sans uppercase tracking-wide text-emerald-700 dark:text-emerald-400 hover:underline"
-              >
-                Switch
-              </button>
-              <button
-                type="button"
-                onClick={onDismissGaffaNudge}
-                className="min-h-9 px-1 text-xs font-sans uppercase tracking-wide text-charcoal/50 dark:text-cream-400/50 hover:underline"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        )}
-
         {image && (
           <div className="px-4 sm:px-6 pt-3 sm:pt-4 pb-0 flex items-center gap-3">
             <div className="relative">
@@ -395,9 +360,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             placeholder={
               isLoading
                 ? loadingMessage
-                : gaffaOn
-                  ? 'Ask about rules, strategy, or a trade…'
-                  : typeof window !== 'undefined' && window.innerWidth < 640
+                : typeof window !== 'undefined' && window.innerWidth < 640
                     ? 'Ask, or type @ for a dossier'
                     : 'Ask anything, or type @ to bring in a dossier'
             }
@@ -430,78 +393,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               <span className="material-symbols-outlined text-[20px] font-light">alternate_email</span>
             </button>
 
-            {/* Domain Toggle: Futbolpedia vs Gaffa */}
-            <button
-              type="button"
-              role="switch"
-              aria-checked={gaffaOn}
-              aria-label="Gaffa fantasy mode"
-              disabled={isLoading}
-              className="relative flex items-center bg-cream-200 dark:bg-charcoal-light rounded-full p-1 w-24 h-10 sm:h-9 cursor-pointer border border-cream-300 dark:border-charcoal-border select-none disabled:cursor-not-allowed disabled:opacity-60"
-              onClick={() => onDomainChange(gaffaOn ? 'default' : 'gaffa')}
-              title={
-                gaffaOn
-                  ? 'Gaffa mode active — click to switch to Futbolpedia'
-                  : 'Futbolpedia mode active — click to switch to Gaffa'
-              }
-            >
-              <div
-                className={`absolute top-1 bottom-1 w-[46%] bg-white dark:bg-charcoal rounded-full shadow-sm transition-all duration-300 ease-out mx-[2%] ${
-                  !gaffaOn ? 'left-0' : 'left-[50%]'
-                }`}
-              />
-              {/* Left: Futbolpedia mark */}
-              <div
-                className={`flex-1 flex justify-center items-center z-10 transition-colors duration-300 ${
-                  !gaffaOn
-                    ? 'text-charcoal dark:text-white'
-                    : 'text-charcoal/40 dark:text-cream-400/40'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[18px]">sports_soccer</span>
-              </div>
-              {/* Right: Gaffa mark (football head + manager suit & tie) */}
-              <div
-                className={`flex-1 flex justify-center items-center z-10 transition-colors duration-300 ${
-                  gaffaOn
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : 'text-charcoal/40 dark:text-cream-400/40'
-                }`}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 128 128"
-                  className="size-[19px]"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="5.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="64" cy="64" r="56" />
-                  <g transform="translate(35.2, 82.8) scale(0.06)">
-                    <path
-                      fill="currentColor"
-                      stroke="none"
-                      d="M480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm200-500 54-18 16-54q-32-48-77-82.5T574-786l-54 38v56l160 112Zm-400 0 160-112v-56l-54-38q-54 17-99 51.5T210-652l16 54 54 18Zm-42 308 46-4 30-54-58-174-56-20-40 30q0 65 18 118.5T238-272Zm242 112q26 0 51-4t49-12l28-60-26-44H378l-26 44 28 60q24 8 49 12t51 4Zm-90-200h180l56-160-146-102-144 102 54 160Zm332 88q42-50 60-103.5T800-494l-40-28-56 18-58 174 30 54 46 4Z"
-                    />
-                  </g>
-                  <path d="M 24.8 104 C 34 88, 42 82, 50 82 M 103.2 104 C 94 88, 86 82, 78 82" />
-                  <path d="M 50 82 L 44 94 H 49 L 64 116 L 79 94 H 84 L 78 82" />
-                  <path d="M 54 82 L 64 96 L 74 82" />
-                  <path
-                    fill="currentColor"
-                    stroke="none"
-                    d="M 61 82 H 67 L 66 90 L 67.5 106 L 64 111 L 60.5 106 L 62 90 Z"
-                  />
-                </svg>
-              </div>
-            </button>
-            {gaffaOn && (
-              <span className="hidden sm:inline text-[10px] font-sans font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-400">
-                Gaffa
-              </span>
-            )}
+            {gaffaControl}
           </div>
 
           <button

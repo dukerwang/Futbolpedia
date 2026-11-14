@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Header, type AppView } from './components/Header';
 import { ChatHistory } from './components/ChatHistory';
 import { ChatInput, type Mention } from './components/ChatInput';
@@ -12,8 +12,8 @@ import type {
   ChatMessage,
   PlayerProfile,
   Conversation,
-  ChatDomain,
-  GaffaAuthUser,
+  GaffaContextBag,
+  GaffaTradeScorecard,
   GaffaUserClub,
   ChatDossierRef,
   RatingRequest,
@@ -36,27 +36,26 @@ import { fetchSharedEditions } from './services/dossierStore';
 import { autoTitle, generateChatTitle, hasAutoTitle, titleBrief } from './services/chatTitle';
 import { LEGACY_PURGE_KEY, isLegacyShape, orphanKeys, withoutCards } from './services/legacyDossiers';
 import { asksToSeeMentions } from './services/chatIntent';
-import { sendGaffaMessage } from './services/gaffaChatService';
-import { looksLikeGaffaQuestion } from './services/gaffaDetect';
 import {
-  clearGaffaLink,
-  fetchGaffaContext,
-  loadGaffaLink,
-  mapResponseToBag,
-  parseGaffaConnectHash,
-  resolveContextBagForSend,
-  saveGaffaLink,
-  type GaffaLinkState,
+  completeGaffaConnect,
+  connectGaffa,
+  disconnectGaffa,
+  gaffaBaseUrl,
+  GaffaNotConnectedError,
+  listMyGaffaClubs,
+  loadGrant,
+  onGrantChange,
+  parseConnectedHash,
+} from './services/gaffaConnect';
+import {
+  cachedClubBag,
+  clearClubBags,
+  loadClubBag,
+  parseGaffaClubHash,
+  type GaffaClubRef,
 } from './services/gaffaContext';
-import {
-  fetchMyGaffaClubs,
-  getGaffaSessionUser,
-  onGaffaAuthStateChange,
-  signInGaffaWithGoogle,
-  signInGaffaWithPassword,
-  signOutGaffa,
-} from './services/gaffaAuth';
-import { GaffaConnectStrip } from './components/GaffaConnectStrip';
+import { GaffaClubChip } from './components/GaffaClubChip';
+import type { GaffaWelcomeClub } from './components/GaffaClubWelcome';
 
 const generateId = () => `id-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 const CHAT_HISTORY_KEY = 'futbolpedia-chat-history';
@@ -107,6 +106,19 @@ const addMissingCards = (list: PlayerProfile[], cards: PlayerProfile[]): PlayerP
 const datedOrSelf = (p: PlayerProfile, fallbackMs: number): PlayerProfile =>
   ensureDossierDated(p, fallbackMs) ?? p;
 
+const LAST_GAFFA_CLUB_KEY = 'futbolpedia-gaffa-last-club';
+
+/** The club last attached to a conversation, while Gaffa is connected. */
+function lastGaffaClub(): GaffaClubRef | null {
+  if (!loadGrant()) return null;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAST_GAFFA_CLUB_KEY) ?? 'null');
+    return parsed?.leagueId && parsed?.clubId ? { leagueId: parsed.leagueId, clubId: parsed.clubId } : null;
+  } catch {
+    return null;
+  }
+}
+
 const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingMessage, setLoadingMessage] = useState<string>('Processing...');
@@ -139,25 +151,17 @@ const App: React.FC = () => {
   // Puts a mention of a card in the chat box (Scout's Ask).
   const [mentionRequest, setMentionRequest] = useState<{ id: number; card: PlayerProfile } | null>(null);
 
-  // Chat domain (Futbolpedia default vs Gaffa Q&A) — persisted per conversation
-  const [domain, setDomain] = useState<ChatDomain>('default');
-  const [gaffaNudge, setGaffaNudge] = useState<string | null>(null);
-  const [gaffaLink, setGaffaLink] = useState<GaffaLinkState | null>(null);
-  // Phones only: the connect strip can be folded away so the conversation keeps most of the screen.
-  const [gaffaStripCollapsed, setGaffaStripCollapsed] = useState(() => {
-    try { return localStorage.getItem('futbolpedia-gaffa-strip-collapsed') === 'true'; } catch { return false; }
-  });
-  const toggleGaffaStrip = () => {
-    setGaffaStripCollapsed(prev => {
-      try { localStorage.setItem('futbolpedia-gaffa-strip-collapsed', String(!prev)); } catch { /* storage unavailable */ }
-      return !prev;
-    });
-  };
-  const [gaffaSyncing, setGaffaSyncing] = useState(false);
-  const [gaffaSyncError, setGaffaSyncError] = useState<string | null>(null);
-  const [gaffaUser, setGaffaUser] = useState<GaffaAuthUser | null>(null);
+  // Connect with Gaffa: the grant, the manager's clubs, and the club attached to this conversation.
+  const [gaffaGrant, setGaffaGrant] = useState<string | null>(() => loadGrant());
+  const [gaffaClub, setGaffaClub] = useState<GaffaClubRef | null>(null);
   const [gaffaClubs, setGaffaClubs] = useState<GaffaUserClub[]>([]);
-  const [gaffaAuthLoading, setGaffaAuthLoading] = useState(false);
+  const [gaffaClubsLoading, setGaffaClubsLoading] = useState(false);
+  const [gaffaConnecting, setGaffaConnecting] = useState(false);
+  const [gaffaError, setGaffaError] = useState<string | null>(null);
+  const [gaffaBag, setGaffaBag] = useState<GaffaContextBag | null>(null);
+  const [gaffaBase, setGaffaBase] = useState<string | null>(null);
+  // A club from Gaffa's Open in Futbolpedia link, waiting for conversations (and the grant) to load.
+  const [pendingClubLink, setPendingClubLink] = useState<(GaffaClubRef & { question?: string }) | null>(null);
 
   // Initialize Theme
   useEffect(() => {
@@ -170,10 +174,77 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Load persisted Gaffa club link
+  // The old Gaffa mode kept a Gaffa Supabase session (its access and refresh tokens) and a saved
+  // club here. Connect with Gaffa replaced both, so they go.
   useEffect(() => {
-    setGaffaLink(loadGaffaLink());
+    try {
+      for (const key of [
+        'futbolpedia-gaffa-auth',
+        'futbolpedia-gaffa-auth-code-verifier',
+        'futbolpedia-gaffa-link',
+        'futbolpedia-gaffa-strip-collapsed',
+      ]) localStorage.removeItem(key);
+    } catch { /* unavailable */ }
   }, []);
+
+  // The grant can arrive from a popup tab or go when Gaffa refuses it.
+  useEffect(() => onGrantChange(setGaffaGrant), []);
+  useEffect(() => {
+    void gaffaBaseUrl().then(setGaffaBase);
+  }, []);
+
+  // With a grant, load the manager's clubs.
+  useEffect(() => {
+    if (!gaffaGrant) {
+      setGaffaClubs([]);
+      return;
+    }
+    let active = true;
+    setGaffaClubsLoading(true);
+    listMyGaffaClubs()
+      .then((clubs) => {
+        if (!active) return;
+        setGaffaClubs(clubs);
+        setGaffaError(null);
+      })
+      .catch((err) => {
+        if (active && !(err instanceof GaffaNotConnectedError)) {
+          setGaffaError(err instanceof Error ? err.message : 'Could not load your Gaffa clubs');
+        }
+      })
+      .finally(() => {
+        if (active) setGaffaClubsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [gaffaGrant]);
+
+  // A club attached to this conversation that isn't one of the manager's (a shared conversation,
+  // another account) is dropped once the clubs are known.
+  useEffect(() => {
+    if (!gaffaClub || gaffaClubsLoading || !gaffaGrant) return;
+    if (gaffaClubs.length > 0 && !gaffaClubs.some(c => c.league_id === gaffaClub.leagueId && c.club_id === gaffaClub.clubId)) {
+      setGaffaClub(null);
+    }
+  }, [gaffaClub, gaffaClubs, gaffaClubsLoading, gaffaGrant]);
+
+  // The attached club's bag, for the welcome; each turn reads it again if it's over ten minutes old.
+  useEffect(() => {
+    if (!gaffaClub || !gaffaGrant) {
+      setGaffaBag(null);
+      return;
+    }
+    let active = true;
+    setGaffaBag(cachedClubBag(gaffaClub));
+    void loadClubBag(gaffaClub).then((bag) => {
+      if (active) setGaffaBag(bag.connected ? bag : null);
+    });
+    try { localStorage.setItem(LAST_GAFFA_CLUB_KEY, JSON.stringify(gaffaClub)); } catch { /* unavailable */ }
+    return () => {
+      active = false;
+    };
+  }, [gaffaClub, gaffaGrant]);
 
   const toggleTheme = () => {
     if (isDarkMode) {
@@ -334,7 +405,7 @@ const App: React.FC = () => {
     setMessages(activeConv.messages);
     setActiveProfile(activeConv.activeProfile);
     setAllProfiles(activeConv.allProfiles);
-    setDomain(activeConv.domain ?? 'default');
+    setGaffaClub(activeConv.gaffaClub ?? null);
 
     // Mark as initialized so synchronization effect can run safely
     isInitializedRef.current = true;
@@ -425,8 +496,7 @@ const App: React.FC = () => {
             setMessages(importedConv.messages);
             setActiveProfile(importedConv.activeProfile);
             setAllProfiles(importedConv.allProfiles);
-            setDomain(importedConv.domain ?? 'default');
-            setGaffaNudge(null);
+            setGaffaClub(importedConv.gaffaClub ?? null);
             // Merge any dossiers from the shared conversation
             if (importedConv.allProfiles?.length > 0) {
               setGlobalDossiers(prev => {
@@ -446,59 +516,24 @@ const App: React.FC = () => {
         } finally {
           setIsLoading(false);
         }
-      } else if (hash.startsWith('#/gaffa/')) {
-        const ids = parseGaffaConnectHash(hash);
+      } else if (hash.startsWith('#/gaffa/connected')) {
+        // Gaffa's approval page sent this tab back with its answer (no popup, or the popup lost its
+        // opener). Finish the exchange; a popup tab then closes itself.
+        const answer = parseConnectedHash(hash);
         window.history.replaceState({}, '', window.location.pathname);
-        if (!ids) return;
-        const newId = generateId();
-        const newConv: Conversation = {
-          id: newId,
-          title: 'Gaffa club',
-          messages: [],
-          createdAt: Date.now(),
-          activeProfile: null,
-          allProfiles: [],
-          domain: 'gaffa',
-        };
-        setConversations((prev) => {
-          const updated = [newConv, ...prev];
-          localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
-          return updated;
-        });
-        setActiveConversationId(newId);
-        localStorage.setItem('futbolpedia-active-conversation-id', newId);
-        setMessages([]);
-        setActiveProfile(null);
-        setAllProfiles([]);
-        setDomain('gaffa');
-        setGaffaNudge(null);
-        setIsLoading(true);
-        setGaffaSyncing(true);
-        setGaffaSyncError(null);
+        if (!answer) return;
         try {
-          const res = await fetchGaffaContext(ids.leagueId, ids.clubId);
-          const bag = mapResponseToBag(res);
-          const next: GaffaLinkState = {
-            league_id: bag.league_id!,
-            club_id: bag.club_id!,
-            league_name: bag.league_name,
-            club_name: bag.club_name,
-            last_synced_at: bag.synced_at,
-            bag,
-          };
-          saveGaffaLink(next);
-          setGaffaLink(next);
+          await completeGaffaConnect(answer);
+          if (window.opener || window.name === 'gaffa-connect') window.close();
         } catch (err) {
-          console.error('Gaffa connect from hash failed:', err);
-          setGaffaSyncError(err instanceof Error ? err.message : 'Sync failed');
-          // Kept as the saved link, so signing in loads this club if it's one of the manager's.
-          const pending: GaffaLinkState = { league_id: ids.leagueId, club_id: ids.clubId };
-          saveGaffaLink(pending);
-          setGaffaLink(pending);
-        } finally {
-          setGaffaSyncing(false);
-          setIsLoading(false);
+          setGaffaError(err instanceof Error ? err.message : 'Gaffa connection failed');
         }
+      } else if (hash.startsWith('#/gaffa/')) {
+        // Open in Futbolpedia / Ask from Gaffa: a new conversation with that club, once the
+        // conversations have loaded.
+        const link = parseGaffaClubHash(hash);
+        window.history.replaceState({}, '', window.location.pathname);
+        if (link) setPendingClubLink(link);
       }
     };
 
@@ -528,7 +563,7 @@ const App: React.FC = () => {
             messages,
             activeProfile,
             allProfiles,
-            domain,
+            gaffaClub: gaffaClub ?? undefined,
             title
           };
         }
@@ -538,7 +573,7 @@ const App: React.FC = () => {
       localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
       return updated;
     });
-  }, [messages, activeProfile, allProfiles, domain, activeConversationId]);
+  }, [messages, activeProfile, allProfiles, gaffaClub, activeConversationId]);
 
   // Once the opening exchange lands, the model titles the chat from what it's about. Older chats
   // still wearing their stand-in title get one the next time they're opened.
@@ -562,141 +597,36 @@ const App: React.FC = () => {
     });
   }, [isLoading, activeConversationId, conversations]);
   
-  const handleDomainChange = useCallback((next: ChatDomain) => {
-    setDomain(next);
-    setGaffaNudge(null);
-    resetChat();
-  }, []);
-
-  const handleGaffaSync = useCallback(async (leagueId: string, clubId: string) => {
-    setGaffaSyncing(true);
-    setGaffaSyncError(null);
+  // Connect Gaffa: the popup has to open inside the click, so this runs straight from it.
+  const handleConnectGaffa = useCallback(async () => {
+    setGaffaConnecting(true);
+    setGaffaError(null);
     try {
-      const res = await fetchGaffaContext(leagueId, clubId);
-      const bag = mapResponseToBag(res);
-      const next: GaffaLinkState = {
-        league_id: bag.league_id!,
-        club_id: bag.club_id!,
-        league_name: bag.league_name,
-        club_name: bag.club_name,
-        last_synced_at: bag.synced_at,
-        bag,
-      };
-      saveGaffaLink(next);
-      setGaffaLink(next);
+      const outcome = await connectGaffa();
+      if (outcome === 'cancelled') setGaffaError('Gaffa wasn\'t connected.');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Sync failed';
-      setGaffaSyncError(msg);
+      setGaffaError(err instanceof Error ? err.message : 'Gaffa connection failed');
     } finally {
-      setGaffaSyncing(false);
+      setGaffaConnecting(false);
     }
   }, []);
 
-  // Subscribe to Gaffa Supabase Auth and auto-load/select user's clubs
-  useEffect(() => {
-    let active = true;
-
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('gaffa_auth') === '1') {
-      setDomain('gaffa');
-      params.delete('gaffa_auth');
-      const nextSearch = params.toString();
-      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
-      window.history.replaceState({}, '', nextUrl);
-    }
-
-    const syncClubsForUser = async (user: GaffaAuthUser | null) => {
-      if (!active) return;
-      setGaffaUser(user);
-      if (!user) {
-        setGaffaClubs([]);
-        return;
-      }
-      try {
-        const clubs = await fetchMyGaffaClubs(user.id);
-        if (!active) return;
-        setGaffaClubs(clubs);
-        if (clubs.length === 0) return;
-
-        const saved = loadGaffaLink();
-        const matchingSaved = saved
-          ? clubs.find(
-              (c) => c.league_id === saved.league_id && c.club_id === saved.club_id,
-            )
-          : undefined;
-        const target = matchingSaved ?? clubs[0];
-        const alreadyFresh =
-          matchingSaved &&
-          saved?.bag?.connected &&
-          saved.last_synced_at &&
-          Date.now() - Date.parse(saved.last_synced_at) < 10 * 60 * 1000;
-
-        if (!alreadyFresh) {
-          void handleGaffaSync(target.league_id, target.club_id);
-        }
-      } catch (err) {
-        if (!active) return;
-        setGaffaSyncError(
-          err instanceof Error ? err.message : 'Could not load your Gaffa clubs',
-        );
-      }
-    };
-
-    void getGaffaSessionUser().then(syncClubsForUser);
-    const unsubscribe = onGaffaAuthStateChange((user) => {
-      void syncClubsForUser(user);
-    });
-
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [handleGaffaSync]);
-
-  const handleGaffaSignInPassword = useCallback(
-    async (email: string, password: string) => {
-      setGaffaAuthLoading(true);
-      setGaffaSyncError(null);
-      try {
-        await signInGaffaWithPassword(email, password);
-      } catch (err) {
-        setGaffaSyncError(err instanceof Error ? err.message : 'Sign-in failed');
-      } finally {
-        setGaffaAuthLoading(false);
-      }
-    },
-    [],
-  );
-
-  const handleGaffaSignInGoogle = useCallback(async () => {
-    setGaffaAuthLoading(true);
-    setGaffaSyncError(null);
-    try {
-      await signInGaffaWithGoogle();
-    } catch (err) {
-      setGaffaSyncError(err instanceof Error ? err.message : 'Google sign-in failed');
-      setGaffaAuthLoading(false);
+  const handleSelectGaffaClub = useCallback((club: GaffaClubRef | null) => {
+    setGaffaClub(club);
+    setGaffaError(null);
+    if (!club) {
+      try { localStorage.removeItem(LAST_GAFFA_CLUB_KEY); } catch { /* unavailable */ }
     }
   }, []);
 
-  const handleGaffaSignOut = useCallback(async () => {
-    setGaffaAuthLoading(true);
-    try {
-      await signOutGaffa();
-      clearGaffaLink();
-      setGaffaUser(null);
-      setGaffaClubs([]);
-      setGaffaLink(null);
-      setGaffaSyncError(null);
-    } finally {
-      setGaffaAuthLoading(false);
-    }
-  }, []);
-
-  const handleGaffaDisconnect = useCallback(() => {
-    clearGaffaLink();
-    setGaffaLink(null);
-    setGaffaSyncError(null);
+  const handleDisconnectGaffa = useCallback(async () => {
+    await disconnectGaffa();
+    clearClubBags();
+    try { localStorage.removeItem(LAST_GAFFA_CLUB_KEY); } catch { /* unavailable */ }
+    setGaffaClub(null);
+    setGaffaClubs([]);
+    setGaffaBag(null);
+    setGaffaError(null);
   }, []);
 
   // A reply that filed a dossier: the card is saved and shown, and the chat gets its card.
@@ -724,7 +654,6 @@ const App: React.FC = () => {
   const handleSendMessage = useCallback(async (
     userMessageText: string,
     imageData?: string,
-    messageDomain: ChatDomain = domain,
     mentions: Mention[] = [],
   ) => {
     if (!userMessageText.trim() && !imageData) return;
@@ -783,30 +712,10 @@ const App: React.FC = () => {
       userMessageText,
     );
 
-    const activeDomain = messageDomain;
     const lowerCaseMessage = userMessageText.toLowerCase();
 
-    // Soft nudge when default domain looks Gaffa-specific — never silently inject Gaffa context.
-    if (activeDomain === 'default' && userMessageText.trim() && looksLikeGaffaQuestion(userMessageText)) {
-      setGaffaNudge('This looks like a Gaffa question — switch to Gaffa mode?');
-    } else if (activeDomain === 'gaffa') {
-      setGaffaNudge(null);
-    }
-
     let specificLoadingMessage = 'Consulting archives...';
-    if (activeDomain === 'gaffa') {
-      if (/\b(trade|swap|€|\d+\s*m)\b/i.test(userMessageText)) {
-        specificLoadingMessage = 'Weighing the trade...';
-      } else if (/\b(audit|lineup|starting xi|\bxi\b|auto-?subs?|formation)\b/i.test(lowerCaseMessage)) {
-        specificLoadingMessage = 'Auditing lineup & bench cover...';
-      } else if (/\b(bid|nominate|auction|fa floor|scout'?s? fee|clause)\b/i.test(lowerCaseMessage)) {
-        specificLoadingMessage = 'Calculating bid & market math...';
-      } else if (/\b(oop|auto-?sub|eligibility|formation|bench|lock|rule)\b/i.test(lowerCaseMessage)) {
-        specificLoadingMessage = 'Checking the rulebook...';
-      } else {
-        specificLoadingMessage = 'Gaffa briefing...';
-      }
-    } else if (imageData) {
+    if (imageData) {
       specificLoadingMessage = 'Analyzing imagery...';
     } else if (/\b(compare|versus)\b|\bvs\.?\b/.test(lowerCaseMessage)) {
       specificLoadingMessage = 'Comparing players...';
@@ -834,98 +743,10 @@ const App: React.FC = () => {
       let lastStreamFlushAt = 0;
       let revisedProfile: PlayerProfile | null = null;
 
-      if (activeDomain === 'gaffa') {
-        const contextBag = await resolveContextBagForSend(gaffaLink);
-        if (contextBag.connected && contextBag.synced_at) {
-          const nextLink: GaffaLinkState = {
-            league_id: contextBag.league_id!,
-            club_id: contextBag.club_id!,
-            league_name: contextBag.league_name,
-            club_name: contextBag.club_name,
-            last_synced_at: contextBag.synced_at,
-            bag: contextBag,
-          };
-          saveGaffaLink(nextLink);
-          setGaffaLink(nextLink);
-        }
-        const { prose, scorecard } = await sendGaffaMessage(userMessageText, messages, {
-          imageData,
-          contextBag,
-          connectAttempted: Boolean(gaffaLink),
-          savedDossiers: globalDossiers,
-          conversationProfiles: allProfiles,
-          onStageChange: (label) => setLoadingMessage(label),
-          onScorecardReady: (lockedCard) => {
-            streamStarted = true;
-            setIsLoading(false);
-            setMessages(prev => {
-              const exists = prev.some(m => m.id === streamingMessageId);
-              if (exists) {
-                return prev.map(m =>
-                  m.id === streamingMessageId ? { ...m, gaffaScorecard: lockedCard } : m,
-                );
-              }
-              return [
-                ...prev,
-                {
-                  id: streamingMessageId,
-                  sender: 'ai',
-                  content: '',
-                  timestamp: Date.now(),
-                  gaffaScorecard: lockedCard,
-                },
-              ];
-            });
-          },
-          onStreamChunk: (accumulatedText) => {
-            const now = Date.now();
-            if (streamStarted && now - lastStreamFlushAt < 45) return;
-            lastStreamFlushAt = now;
-            if (!streamStarted) {
-              streamStarted = true;
-              setIsLoading(false);
-            }
-            setMessages(prev => {
-              const exists = prev.some(m => m.id === streamingMessageId);
-              if (exists) {
-                return prev.map(m =>
-                  m.id === streamingMessageId ? { ...m, content: accumulatedText } : m,
-                );
-              }
-              return [
-                ...prev,
-                {
-                  id: streamingMessageId,
-                  sender: 'ai',
-                  content: accumulatedText,
-                  timestamp: now,
-                },
-              ];
-            });
-          },
-        });
-        setMessages(prev => {
-          const exists = prev.some(m => m.id === streamingMessageId);
-          if (exists) {
-            return prev.map(m =>
-              m.id === streamingMessageId
-                ? { ...m, content: prose, gaffaScorecard: scorecard ?? m.gaffaScorecard }
-                : m,
-            );
-          }
-          return [
-            ...prev,
-            {
-              id: streamingMessageId,
-              sender: 'ai',
-              content: prose,
-              timestamp: Date.now(),
-              gaffaScorecard: scorecard ?? undefined,
-            },
-          ];
-        });
-        return;
-      }
+      // The conversation's Gaffa club, read again if it's over ten minutes old.
+      const clubBag = gaffaClub && gaffaGrant ? await loadClubBag(gaffaClub) : null;
+      if (clubBag?.connected) setGaffaBag(clubBag);
+      let scorecard: GaffaTradeScorecard | null = null;
 
       let attachments: ReplyAttachments | null = null;
       const aiResponse = await sendMessageToAI(
@@ -941,6 +762,16 @@ const App: React.FC = () => {
             revisedProfile = updatedProfile;
           },
           onStageChange: (label) => setLoadingMessage(label),
+          gaffaBag: clubBag?.connected ? clubBag : undefined,
+          onGaffaScorecard: (card) => {
+            scorecard = card;
+            streamStarted = true;
+            setIsLoading(false);
+            setMessages(prev => [
+              ...prev.filter(m => m.id !== streamingMessageId),
+              { id: streamingMessageId, sender: 'ai', content: '', timestamp: Date.now(), gaffaScorecard: card },
+            ]);
+          },
           onStreamChunk: (accumulatedText) => {
             const now = Date.now();
             if (streamStarted && now - lastStreamFlushAt < 45) return;
@@ -995,6 +826,7 @@ const App: React.FC = () => {
           ...(revisedProfile ? { dossier: toChatDossierRef(revisedProfile) } : {}),
           ...(cards.length > 0 ? { cards: cards.map(toChatDossierRef) } : {}),
           ...(scoutOffers.length > 0 ? { scoutOffers } : {}),
+          ...(scorecard ? { gaffaScorecard: scorecard } : {}),
         };
       }
 
@@ -1010,13 +842,11 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [messages, allProfiles, globalDossiers, domain, gaffaLink, saveAndSetActiveProfile, dossierReply]);
+  }, [messages, allProfiles, globalDossiers, gaffaClub, gaffaGrant, saveAndSetActiveProfile, dossierReply]);
 
   // The Rate command: a rating without a chat turn to route. It lands in the chat like a typed one.
   const handleRate = useCallback(async (request: RatingRequest) => {
     if (isLoading) return;
-    if (domain === 'gaffa') handleDomainChange('default');
-    setGaffaNudge(null);
     setLoadingMessage(`Scouting ${request.name}...`);
     setIsLoading(true);
     setMessages(prev => [...prev, {
@@ -1041,7 +871,7 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, domain, handleDomainChange, messages, allProfiles, globalDossiers, dossierReply]);
+  }, [isLoading, messages, allProfiles, globalDossiers, dossierReply]);
 
   const openScout = useCallback(() => {
     setPanelMode('scout');
@@ -1227,8 +1057,7 @@ const App: React.FC = () => {
     setMessages(target.messages);
     setActiveProfile(target.activeProfile);
     setAllProfiles(target.allProfiles);
-    setDomain(target.domain ?? 'default');
-    setGaffaNudge(null);
+    setGaffaClub(target.gaffaClub ?? null);
   }, [conversations]);
 
   const handleNewConversation = useCallback(() => {
@@ -1242,7 +1071,8 @@ const App: React.FC = () => {
       createdAt: Date.now(),
       activeProfile: null,
       allProfiles: [],
-      domain: 'default',
+      // A new conversation keeps the last club you used.
+      ...(lastGaffaClub() ? { gaffaClub: lastGaffaClub()! } : {}),
     };
 
     setConversations(prev => {
@@ -1258,10 +1088,46 @@ const App: React.FC = () => {
     setMessages([]);
     setActiveProfile(null);
     setAllProfiles([]);
-    setDomain('default');
-    setGaffaNudge(null);
+    setGaffaClub(newConv.gaffaClub ?? null);
     setIsPanelOpen(false);
   }, []);
+
+  // A club linked from Gaffa opens a new conversation (once), then joins it when it's one of the
+  // connected manager's clubs. Signed out of Gaffa, it waits for Connect Gaffa.
+  const openedClubLinkRef = useRef<object | null>(null);
+  useEffect(() => {
+    if (!pendingClubLink || !isInitializedRef.current || conversations.length === 0) return;
+    if (openedClubLinkRef.current !== pendingClubLink) {
+      openedClubLinkRef.current = pendingClubLink;
+      handleNewConversation();
+      if (pendingClubLink.question) setChatDraft({ id: Date.now(), text: pendingClubLink.question });
+    }
+    if (!gaffaGrant) {
+      setGaffaError('Connect Gaffa to bring this club into the chat.');
+      return;
+    }
+    if (gaffaClubsLoading) return;
+    const owned = gaffaClubs.some(c => c.league_id === pendingClubLink.leagueId && c.club_id === pendingClubLink.clubId);
+    if (owned) {
+      setGaffaClub({ leagueId: pendingClubLink.leagueId, clubId: pendingClubLink.clubId });
+      setGaffaError(null);
+    } else if (gaffaClubs.length > 0) {
+      setGaffaError('That club isn\'t one of yours on Gaffa.');
+    }
+    if (gaffaClubs.length > 0) setPendingClubLink(null);
+  }, [pendingClubLink, conversations.length, gaffaGrant, gaffaClubs, gaffaClubsLoading, handleNewConversation]);
+
+  // The new-chat welcome for the attached club.
+  const gaffaWelcome = useMemo<GaffaWelcomeClub | null>(() => {
+    if (!gaffaClub || !gaffaGrant) return null;
+    const club = gaffaClubs.find(c => c.league_id === gaffaClub.leagueId && c.club_id === gaffaClub.clubId);
+    if (!club && !gaffaBag) return null;
+    return {
+      clubName: club?.club_name ?? gaffaBag?.club_name ?? 'Your club',
+      leagueName: club?.league_name ?? gaffaBag?.league_name ?? 'Gaffa',
+      bag: gaffaBag,
+    };
+  }, [gaffaClub, gaffaGrant, gaffaClubs, gaffaBag]);
 
   const handleRenameConversation = useCallback((id: string, newTitle: string) => {
     setConversations(prev => {
@@ -1283,8 +1149,7 @@ const App: React.FC = () => {
           setMessages(nextActive.messages);
           setActiveProfile(nextActive.activeProfile);
           setAllProfiles(nextActive.allProfiles);
-          setDomain(nextActive.domain ?? 'default');
-          setGaffaNudge(null);
+          setGaffaClub(nextActive.gaffaClub ?? null);
         } else {
           const newId = generateId();
           const newConv: Conversation = {
@@ -1294,7 +1159,6 @@ const App: React.FC = () => {
             createdAt: Date.now(),
             activeProfile: null,
             allProfiles: [],
-            domain: 'default',
           };
           filtered.push(newConv);
           setActiveConversationId(newId);
@@ -1302,8 +1166,7 @@ const App: React.FC = () => {
           setMessages([]);
           setActiveProfile(null);
           setAllProfiles([]);
-          setDomain('default');
-          setGaffaNudge(null);
+          setGaffaClub(null);
           setIsPanelOpen(false);
         }
       }
@@ -1326,7 +1189,6 @@ const App: React.FC = () => {
   // version, which keeps the reply on it rather than another edition of the player.
   const handleAskAboutDossier = useCallback((profile: PlayerProfile) => {
     saveAndSetActiveProfile(profile);
-    if (domain === 'gaffa') handleDomainChange('default');
     const reference = cardReference(profile);
     const key = getCardKey(profile);
     setMessages(prev =>
@@ -1342,7 +1204,7 @@ const App: React.FC = () => {
     );
     setChatDraft({ id: Date.now(), text: `${reference}: ` });
     setView('chat');
-  }, [saveAndSetActiveProfile, domain, handleDomainChange]);
+  }, [saveAndSetActiveProfile]);
 
   // The panel shows the Scout desk, or one dossier (and is closed when none is active).
   const showPanel = isPanelOpen && (panelMode === 'scout' || activeProfile !== null);
@@ -1439,7 +1301,7 @@ const App: React.FC = () => {
                 isLoading={isLoading} 
                 loadingMessage={loadingMessage}
                 conversationKey={`${activeConversationId ?? 'init'}-${newChatRevision}`}
-                domain={domain}
+                gaffaClub={gaffaWelcome}
                 onSuggestion={(prompt) => handleSendMessage(prompt)}
                 onOpenScout={openScout}
                 onScoutName={handleScoutName}
@@ -1450,53 +1312,25 @@ const App: React.FC = () => {
             {/* Input Container - Sticky Bottom */}
             <div className="flex-none px-3 sm:px-6 pt-2 sm:pt-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-8 bg-gradient-to-t from-cream-200 dark:from-charcoal via-cream-200/95 dark:via-charcoal/95 to-transparent z-20">
                 <div className="max-w-[800px] mx-auto w-full">
-                    {domain === 'gaffa' && (
-                      <button
-                        type="button"
-                        onClick={toggleGaffaStrip}
-                        aria-expanded={!gaffaStripCollapsed}
-                        className="sm:hidden w-full mb-2 flex items-center justify-between gap-2 min-h-9 px-3 border border-charcoal/15 dark:border-cream-400/15 bg-cream-50/85 dark:bg-charcoal-surface/85 text-left"
-                      >
-                        <span className="min-w-0 truncate text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/55 dark:text-cream-400/60">
-                          Gaffa club
-                          <span className="normal-case tracking-normal font-serif italic font-normal text-xs text-charcoal/80 dark:text-cream-200/80 ml-2">
-                            {gaffaLink?.club_name ?? (gaffaUser ? 'Not connected' : 'Signed out')}
-                          </span>
-                        </span>
-                        <span className="material-symbols-outlined text-[18px] text-charcoal/60 dark:text-cream-400/60">
-                          {gaffaStripCollapsed ? 'expand_less' : 'expand_more'}
-                        </span>
-                      </button>
-                    )}
-                    {domain === 'gaffa' && (
-                      <div className={gaffaStripCollapsed ? 'hidden sm:block' : ''}>
-                      <GaffaConnectStrip
-                        link={gaffaLink}
-                        syncing={gaffaSyncing}
-                        error={gaffaSyncError}
-                        onSync={handleGaffaSync}
-                        onDisconnect={handleGaffaDisconnect}
-                        onQuickPrompt={(prompt) => handleSendMessage(prompt, undefined, 'gaffa')}
-                        calibratedDossiers={globalDossiers}
-                        disabled={isLoading}
-                        authUser={gaffaUser}
-                        userClubs={gaffaClubs}
-                        authLoading={gaffaAuthLoading}
-                        onSignInPassword={handleGaffaSignInPassword}
-                        onSignInGoogle={handleGaffaSignInGoogle}
-                        onSignOut={handleGaffaSignOut}
-                      />
-                      </div>
-                    )}
                     <ChatInput
                         onSendMessage={handleSendMessage}
                         isLoading={isLoading}
                         loadingMessage={loadingMessage}
-                        domain={domain}
-                        onDomainChange={handleDomainChange}
-                        gaffaNudge={gaffaNudge}
-                        onAcceptGaffaNudge={() => handleDomainChange('gaffa')}
-                        onDismissGaffaNudge={() => setGaffaNudge(null)}
+                        gaffaControl={
+                          <GaffaClubChip
+                            connected={Boolean(gaffaGrant)}
+                            clubs={gaffaClubs}
+                            selected={gaffaClub}
+                            loadingClubs={gaffaClubsLoading}
+                            connecting={gaffaConnecting}
+                            error={gaffaError}
+                            gaffaBaseUrl={gaffaBase}
+                            disabled={isLoading}
+                            onConnect={handleConnectGaffa}
+                            onSelect={handleSelectGaffaClub}
+                            onDisconnect={handleDisconnectGaffa}
+                          />
+                        }
                         draft={chatDraft}
                         localCards={globalDossiers}
                         mentionRequest={mentionRequest}
