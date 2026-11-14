@@ -2,7 +2,8 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import path from "path";
-import { promises as fs } from "fs";
+import { promises as fs, existsSync, readFileSync } from "fs";
+import util from "util";
 import { createHash } from "crypto";
 import axios from "axios";
 import { pickCurrentCoach } from "./packages/engine/src/gates/managerMentions.ts";
@@ -21,9 +22,40 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { supabaseUrl } from "./services/dossierCache";
 import { createSnapshotServer, inProcessGet, supabaseSnapshotDb } from "./services/snapshotServer";
 
+/**
+ * Local runs: Vite reads `.env.local` for the browser, but the server process didn't, so server
+ * features (snapshot builds, Gaffa's panel, the Gemini proxy) ran without keys. Variables already
+ * set win, so AI Studio's environment is never overridden; a missing file changes nothing.
+ */
+function loadLocalEnv(): void {
+  const parse = (util as { parseEnv?: (text: string) => Record<string, string> }).parseEnv;
+  if (!parse) return;
+  for (const file of [".env.local", ".env"]) {
+    if (!existsSync(file)) continue;
+    for (const [key, value] of Object.entries(parse(readFileSync(file, "utf8")))) {
+      if (process.env[key] === undefined) process.env[key] = value;
+    }
+  }
+}
+
 async function startServer() {
+  loadLocalEnv();
   const app = express();
   const PORT = 3000;
+
+  // The chat pipeline also runs here, for Gaffa's panel. It fetches this app's routes with relative
+  // URLs ("/api/live/club"), which Node can't resolve, so those come back to this server.
+  const nodeFetch = globalThis.fetch;
+  globalThis.fetch = ((input: any, init?: any) =>
+    typeof input === "string" && input.startsWith("/")
+      ? nodeFetch(`http://127.0.0.1:${PORT}${input}`, init)
+      : nodeFetch(input, init)) as typeof fetch;
+  if (!process.env.API_KEY && process.env.GEMINI_API_KEY) process.env.API_KEY = process.env.GEMINI_API_KEY;
+  // Shared cards and snapshots, read with the same key and row-level security as a browser.
+  {
+    const { supabasePublishableKey, useServerSupabase } = await import("./services/dossierCache");
+    useServerSupabase(createSupabaseClient(supabaseUrl, supabasePublishableKey, { auth: { persistSession: false, autoRefreshToken: false } }));
+  }
 
   app.use(cors());
   app.use(express.json({ limit: "10mb" }));
@@ -64,33 +96,90 @@ async function startServer() {
     res.status(out.status).json(out.body);
   });
 
-  // In-app Gaffa chat: Gaffa (session-auth) proxies here with the read secret.
-  // Always loads the live club bag (roster, listings, auctions, unowned FA pool, settings) before
-  // Gaffa-mode prompt assembly — first turn included; the user need not say "Gaffa".
-  // Prose only (+ optional trade lock), never a dossier card.
+  // Gaffa's in-app Futbolpedia panel. Gaffa's server checks the session and that the club is the
+  // manager's, then calls here with the read secret. The turn runs the same pipeline as this app's
+  // chat; `stream: true` gets newline-delimited JSON events, otherwise one JSON reply.
   app.post("/api/gaffa/chat", async (req, res) => {
     const { authorizeGaffaReadSecret, runGaffaChatTurn } = await import("./services/gaffaChatApi");
     if (!authorizeGaffaReadSecret(req.headers["x-futbolpedia-secret"])) {
       return res.status(401).json({ error: "Unauthorized" });
     }
-
     const body = req.body ?? {};
+    const input = {
+      message: body.message,
+      history: body.history,
+      leagueId: body.leagueId ?? body.league_id,
+      clubId: body.clubId ?? body.club_id ?? body.teamId,
+      userId: body.userId ?? body.user_id,
+      conversationId: body.conversationId ?? body.conversation_id,
+    };
+    const failure = (err: any) => {
+      const status = Number(err?.status);
+      if (!(status >= 400 && status < 600)) console.error("[gaffa/chat]", err?.message || err);
+      return {
+        status: status >= 400 && status < 600 ? status : 502,
+        message: status >= 400 && status < 600 ? err.message || "Chat failed" : "Futbolpedia chat failed",
+        turnsLeft: typeof err?.turnsLeft === "number" ? err.turnsLeft : undefined,
+      };
+    };
+
+    if (body.stream === true) {
+      res.status(200);
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.flushHeaders?.();
+      const write = (event: unknown) => {
+        if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+      };
+      try {
+        const result = await runGaffaChatTurn(input, write);
+        write({ type: "done", ...result });
+      } catch (err: any) {
+        const f = failure(err);
+        write({ type: "error", message: f.message, status: f.status, ...(f.turnsLeft != null ? { turnsLeft: f.turnsLeft } : {}) });
+      }
+      return res.end();
+    }
+
     try {
-      const result = await runGaffaChatTurn({
-        message: body.message,
-        history: Array.isArray(body.history) ? body.history : [],
-        leagueId: body.leagueId ?? body.league_id,
-        clubId: body.clubId ?? body.club_id ?? body.teamId,
-        speed: body.speed === "fast" ? "fast" : "default",
-      });
-      return res.json(result);
+      return res.json(await runGaffaChatTurn(input));
+    } catch (err: any) {
+      const f = failure(err);
+      return res.status(f.status).json({ error: f.message, ...(f.turnsLeft != null ? { turnsLeft: f.turnsLeft } : {}) });
+    }
+  });
+
+  // Continue in Futbolpedia: Gaffa's thread becomes a shared conversation, opened at #/c/<code>.
+  app.post("/api/gaffa/share", async (req, res) => {
+    const { authorizeGaffaReadSecret, shareGaffaThread } = await import("./services/gaffaChatApi");
+    if (!authorizeGaffaReadSecret(req.headers["x-futbolpedia-secret"])) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      const { shareConversation } = await import("./services/dossierCache");
+      return res.json(await shareGaffaThread(req.body ?? {}, shareConversation));
     } catch (err: any) {
       const status = Number(err?.status);
-      if (status >= 400 && status < 600) {
-        return res.status(status).json({ error: err.message || "Chat failed" });
-      }
-      console.error("[gaffa/chat]", err?.message || err);
-      return res.status(502).json({ error: "Gaffa chat failed" });
+      if (status >= 400 && status < 500) return res.status(status).json({ error: err.message });
+      console.error("[gaffa/share]", err?.message || err);
+      return res.status(502).json({ error: "Could not create the conversation" });
+    }
+  });
+
+  // Which players have a shared card, as links into Futbolpedia (Gaffa's player pages). Public and
+  // read-only; no ratings.
+  app.get("/api/cards/lookup", async (req, res) => {
+    const { lookUpCardLinks, CARD_LOOKUP_LIMIT } = await import("./services/cardLinks");
+    const raw = typeof req.query.names === "string" ? req.query.names : "";
+    const names = raw.split(",").map((n) => n.trim()).filter(Boolean).slice(0, CARD_LOOKUP_LIMIT);
+    if (names.length === 0) return res.status(400).json({ error: "Missing names" });
+    try {
+      res.setHeader("Cache-Control", "public, max-age=600");
+      return res.json({ cards: await lookUpCardLinks(names) });
+    } catch (err: any) {
+      console.error("[cards/lookup]", err?.message || err);
+      return res.status(502).json({ error: "Card lookup failed" });
     }
   });
 

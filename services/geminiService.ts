@@ -185,6 +185,12 @@ export interface SendMessageOptions {
   gaffaBag?: GaffaContextBag;
   /** Called with a Gaffa trade scorecard before the reply streams. */
   onGaffaScorecard?: (scorecard: GaffaTradeScorecard) => void;
+  /** Keys the turn's follow-up state, so conversations never share each other's research. */
+  conversationId?: string;
+  /** Answer a rating request in prose instead of rating (Gaffa's panel, which can't show or pay for a card). */
+  noRating?: boolean;
+  /** Called with the route, so a caller can tell a rating request was answered in prose. */
+  onRoute?: (route: { intent: string; targetPlayers: string[] }) => void;
 }
 
 /** Logs each pipeline step's time to the console, unless `window.FUTBOLPEDIA_PERF` is false. */
@@ -740,13 +746,19 @@ export const sendMessageToAI = async (
   const questionSearch = imageData ? null : startQuestionSearch(message, liveToolset([]));
   // One that looks like it's about the past, in a new chat, starts its debate brief.
   const debateBrief = imageData || history.length ? null : startDebateBrief(message, { debates: liveDebateRecords });
-  const route = await classifyTurn({
+  let route = await classifyTurn({
     message,
     history,
     conversationDossiers,
     hasImage: Boolean(imageData),
   });
   perf(`turn router (${route.intent})`);
+  options?.onRoute?.(route);
+  // Where a card can't be shown (Gaffa's panel), a rating request is answered as a question about
+  // the player, from his card when one exists.
+  if (route.intent === 'single_dossier' && options?.noRating) {
+    route = { ...route, intent: 'tactical_chat', analyticalMode: 'player_qa' };
+  }
 
   // A prime re-rated since this thread or your dossiers got it is read from its new card. A
   // "rerate" starts from scratch and strips its own cards itself.
@@ -818,6 +830,7 @@ export const sendMessageToAI = async (
     onStageChange: options?.onStageChange,
     gaffaBag: options?.gaffaBag,
     onGaffaScorecard: options?.onGaffaScorecard,
+    conversationId: options?.conversationId,
     perf,
   });
   perf('conversational scout');

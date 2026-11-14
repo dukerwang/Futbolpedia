@@ -44,6 +44,8 @@ interface ScoutDeskProps {
   onClose: () => void;
   /** A new value focuses the field (the panel was opened to scout). */
   focusToken: number;
+  /** Names to put in the field, unrated until you press Rate (a new `id` applies them again). */
+  prefill?: { id: number; text: string } | null;
 }
 
 export const ScoutDesk: React.FC<ScoutDeskProps> = ({
@@ -58,6 +60,7 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
   onOpenHub,
   onClose,
   focusToken,
+  prefill,
 }) => {
   const [text, setText] = useState('');
   const [prime, setPrime] = useState(false);
@@ -79,6 +82,10 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
     const frame = requestAnimationFrame(() => inputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [focusToken]);
+
+  useEffect(() => {
+    if (prefill) setText(prefill.text);
+  }, [prefill?.id]);
 
   const running = jobs.some((j) => j.status === 'running');
   useEffect(() => {

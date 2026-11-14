@@ -56,15 +56,43 @@ import { standingsFor, type CardStanding } from './debateConsistency';
 import { liveDebateRecords, liveEraSnapshots } from './eraSnapshots';
 
 /**
- * Retains the most recent verified `<factual_foundation>` for the active conversation thread
- * so follow-up turns ("Which full-back is tucking in?", "What about their midfield?")
- * never lose the verified squad/transfer facts gathered on Turn 1.
+ * What a conversation's last turn found, so a follow-up ("Which full-back is tucking in?") keeps
+ * the verified facts and situation snapshot of the turn before. Kept per conversation: on the
+ * server, Gaffa managers' conversations run side by side, and one manager's research or club XI
+ * must never reach another's follow-up.
  */
-let lastThreadSignature = '';
-let lastThreadGrounding = '';
-/** The last situation snapshot and its thread, for a follow-up in the same thread that didn't build one. */
-let lastThreadSituation = '';
-let lastSituationSignature = '';
+export interface ThreadState {
+  signature: string;
+  grounding: string;
+  situationSignature: string;
+  situation: string;
+  touchedAt: number;
+}
+
+const THREAD_STATE_TTL_MS = 60 * 60 * 1000;
+const THREAD_STATE_LIMIT = 500;
+const threadStates = new Map<string, ThreadState>();
+
+/** The state for a conversation, new when it's unknown or an hour idle. Oldest dropped past the limit. */
+export function threadStateFor(conversationId: string, now = Date.now()): ThreadState {
+  const existing = threadStates.get(conversationId);
+  if (existing && now - existing.touchedAt < THREAD_STATE_TTL_MS) {
+    existing.touchedAt = now;
+    // Re-inserting keeps the map in least-recently-used order.
+    threadStates.delete(conversationId);
+    threadStates.set(conversationId, existing);
+    return existing;
+  }
+  const fresh: ThreadState = { signature: '', grounding: '', situationSignature: '', situation: '', touchedAt: now };
+  threadStates.delete(conversationId);
+  threadStates.set(conversationId, fresh);
+  while (threadStates.size > THREAD_STATE_LIMIT) {
+    const oldest = threadStates.keys().next().value;
+    if (oldest === undefined) break;
+    threadStates.delete(oldest);
+  }
+  return fresh;
+}
 
 /**
  * The thread's opening message, so a follow-up can tell it's in the same thread. On the opening
@@ -259,6 +287,8 @@ export interface ConversationalScoutParams {
   gaffaBag?: GaffaContextBag;
   /** Called with a Gaffa trade scorecard before the reply streams. */
   onGaffaScorecard?: (scorecard: GaffaTradeScorecard) => void;
+  /** Whose follow-up state this turn reads and writes (`threadStateFor`). */
+  conversationId?: string;
 }
 
 /**
@@ -430,6 +460,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   let verifiedManagers: VerifiedClubManager[] = [];
   let cardsInPlay: PlayerProfile[] = [];
   const isHistoricalThread = threadIsHistorical(route, history, message);
+  const thread = threadStateFor(params.conversationId ?? 'local');
   // A Gaffa club attached to the conversation. A question about its squad also researches the
   // Premier League clubs most of its starters play for.
   const gaffaBag = params.gaffaBag?.connected && !isHistoricalThread ? params.gaffaBag : undefined;
@@ -564,16 +595,16 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 
     // A follow-up in the same thread keeps what the last turn found, as a lower-priority entry.
     const currentSig = threadSignature;
-    const sameThread = Boolean(currentSig && currentSig === lastThreadSignature && lastThreadGrounding);
+    const sameThread = Boolean(currentSig && currentSig === thread.signature && thread.grounding);
     if (hasEvidence(ledger)) {
       const thisTurn = formatLedger(ledger!);
-      if (sameThread && !thisTurn.includes(lastThreadGrounding.slice(0, 120))) {
-        ledger = addEvidence(ledger!, { kind: 'prior_turn', label: 'Research from the previous turn', content: lastThreadGrounding.slice(0, 1400) });
+      if (sameThread && !thisTurn.includes(thread.grounding.slice(0, 120))) {
+        ledger = addEvidence(ledger!, { kind: 'prior_turn', label: 'Research from the previous turn', content: thread.grounding.slice(0, 1400) });
       }
-      lastThreadSignature = currentSig;
-      lastThreadGrounding = thisTurn;
+      thread.signature = currentSig;
+      thread.grounding = thisTurn;
     } else if (sameThread) {
-      ledger = addEvidence(ledger ?? emptyLedger(), { kind: 'prior_turn', label: 'Research from the previous turn', content: lastThreadGrounding });
+      ledger = addEvidence(ledger ?? emptyLedger(), { kind: 'prior_turn', label: 'Research from the previous turn', content: thread.grounding });
     }
   }
   const { seasonStartYear } = getCurrentSeasonInfo();
@@ -584,10 +615,10 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   let situationBlock = formatSituation(situation);
   const threadSig = threadSignature;
   if (situationBlock) {
-    lastThreadSituation = situationBlock;
-    lastSituationSignature = threadSig;
-  } else if (threadSig && threadSig === lastSituationSignature && !isHistoricalThread) {
-    situationBlock = lastThreadSituation;
+    thread.situation = situationBlock;
+    thread.situationSignature = threadSig;
+  } else if (threadSig && threadSig === thread.situationSignature && !isHistoricalThread) {
+    situationBlock = thread.situation;
   }
 
   // The attached club's blocks: the club and squad always; the lineup audit, market lock, bid math
