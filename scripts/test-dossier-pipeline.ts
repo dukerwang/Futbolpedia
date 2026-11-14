@@ -280,6 +280,36 @@ async function main() {
     assert.equal(synthesisPrompt(), '');
   });
 
+  await test('a manager who once played is rated as the player he was, even when current form is asked', async () => {
+    scenario = {
+      status: 'STATUS: RETIRED | KNOWN AS: Pep Guardiola | FULL NAME: Josep Guardiola Sala',
+      search: () => '- Manager on a sabbatical after leaving his club.',
+      name: 'Pep Guardiola',
+    };
+    const card = await rate('Rate Pep Guardiola right now');
+    assert.match(synthesisPrompt(), /HISTORICAL \/ PRIME/);
+    assert.doesNotMatch(synthesisPrompt(), /CURRENT FORM DATED CARD/);
+    assert.equal(card.version?.type, 'prime');
+  });
+
+  await test('an inconclusive status still finds a playing career that ended in the grounding', async () => {
+    scenario = {
+      status: 'STATUS: UNKNOWN',
+      search: (q) =>
+        q.includes('current club as of') ? '- Has coached since he ended his playing career in 2006.' : '- Summary of the player.',
+    };
+    const card = await rate('Rate Xabi Alonso right now');
+    assert.equal(card.version?.type, 'prime');
+  });
+
+  await test('a coach who never played professionally is never rated as a footballer', async () => {
+    scenario = { status: 'STATUS: NOT A PLAYER | KNOWN AS: André Villas-Boas | FULL NAME: Luís André de Pina Cabral e Villas-Boas', search: () => '- Coach news.' };
+    const reply = await rate('Rate André Villas-Boas');
+    assert.equal(typeof reply, 'string');
+    assert.match(reply as unknown as string, /never played professionally/);
+    assert.equal(synthesisPrompt(), '');
+  });
+
   await test('a named season gets a season card whatever his status', async () => {
     scenario = { status: 'RETIRED', search: () => '- That season in summary.' };
     const card = await rate('Rate Thierry Henry 2006');
