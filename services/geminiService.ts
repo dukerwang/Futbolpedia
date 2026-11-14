@@ -1,4 +1,4 @@
-import type { ChatMessage, GaffaContextBag, PlayerProfile, RatingRequest } from '../types';
+import type { ChatMessage, GaffaContextBag, GaffaTradeScorecard, PlayerProfile, RatingRequest } from '../types';
 import { ThinkingTier } from '../constants/modelProfiles';
 import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
 import {
@@ -181,6 +181,10 @@ export interface SendMessageOptions {
   onAttachments?: (attachments: ReplyAttachments) => void;
   onStreamChunk?: (accumulatedText: string) => void;
   onStageChange?: (stageLabel: string) => void;
+  /** The conversation's attached Gaffa club. Chat turns read it; ratings ignore it. */
+  gaffaBag?: GaffaContextBag;
+  /** Called with a Gaffa trade scorecard before the reply streams. */
+  onGaffaScorecard?: (scorecard: GaffaTradeScorecard) => void;
 }
 
 /** Logs each pipeline step's time to the console, unless `window.FUTBOLPEDIA_PERF` is false. */
@@ -812,6 +816,8 @@ export const sendMessageToAI = async (
     onDossierUpdated: options?.onDossierUpdated,
     onStreamChunk: options?.onStreamChunk,
     onStageChange: options?.onStageChange,
+    gaffaBag: options?.gaffaBag,
+    onGaffaScorecard: options?.onGaffaScorecard,
     perf,
   });
   perf('conversational scout');

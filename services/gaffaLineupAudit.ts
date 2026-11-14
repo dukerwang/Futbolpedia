@@ -627,3 +627,51 @@ export function buildGaffaBidValuationBlock(
   lines.push('</locked_bid_calculator>');
   return lines.join('\n');
 }
+
+/**
+ * Stop the model swapping in lookalike names or PL teammates
+ * (Mahamadou Sangaré, Bergvall/Fernandes).
+ */
+export function lockGaffaRosterNames(prose: string, bag: GaffaContextBag): string {
+  if (!bag.connected) return prose;
+
+  const lastNames = new Set<string>();
+  const byLast: { last: string; full: string; first: string }[] = [];
+  const lockedNames = [
+    ...(bag.roster ?? []).map((p) => p.name),
+    ...(bag.open_listings ?? []).map((l) => l.name),
+    ...(bag.open_auctions ?? []).map((a) => a.name),
+  ];
+  if (!lockedNames.length) return prose;
+
+  for (const raw of lockedNames) {
+    const full = (raw || '').trim();
+    if (!full) continue;
+    const parts = full.split(/\s+/);
+    const last = parts[parts.length - 1];
+    const first = parts.slice(0, -1).join(' ');
+    lastNames.add(last.toLowerCase());
+    if (first) byLast.push({ last, full, first });
+  }
+
+  let out = prose;
+  out = out.replace(
+    /(?<!\p{L})(\p{Lu}\p{L}*(?:['.-]\p{L}+)*)\/(\p{Lu}\p{L}*(?:['.-]\p{L}+)*)(?!\p{L})/gu,
+    (all, a: string, b: string) => {
+      const aOk = lastNames.has(a.toLowerCase());
+      const bOk = lastNames.has(b.toLowerCase());
+      if (aOk && !bOk) return a;
+      if (bOk && !aOk) return b;
+      return all;
+    },
+  );
+
+  for (const { last, full, first } of byLast) {
+    const re = new RegExp(
+      `(?<!\\p{L})(?!${escapeRegExp(first)}(?!\\p{L}))\\p{Lu}[\\p{L}'-]+\\s+${escapeRegExp(last)}(?!\\p{L})`,
+      'gu',
+    );
+    out = out.replace(re, full);
+  }
+  return out;
+}

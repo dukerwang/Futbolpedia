@@ -33,8 +33,36 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  // There is no browser-facing club-context route: it would attach the read secret for any caller
-  // holding two UUIDs. Signed-in managers read clubs in their own leagues over Gaffa's RLS instead.
+  // Connect with Gaffa: the browser holds a read-only grant token and these routes forward it to
+  // Gaffa. They never attach the shared read secret, which would let anyone read any club.
+  app.get("/api/gaffa/config", async (_req, res) => {
+    const { gaffaBaseUrl } = await import("./services/gaffaGrantProxy");
+    res.json({ baseUrl: gaffaBaseUrl() });
+  });
+  app.post("/api/gaffa/connect/token", async (req, res) => {
+    const { exchangeGaffaCode } = await import("./services/gaffaGrantProxy");
+    const out = await exchangeGaffaCode(req.body ?? {});
+    res.status(out.status).json(out.body);
+  });
+  app.get("/api/gaffa/clubs", async (req, res) => {
+    const { grantAuthorization, listGaffaClubs } = await import("./services/gaffaGrantProxy");
+    const out = await listGaffaClubs(grantAuthorization(req.headers.authorization));
+    res.status(out.status).json(out.body);
+  });
+  app.get("/api/gaffa/context", async (req, res) => {
+    const { grantAuthorization, readGaffaClubContext } = await import("./services/gaffaGrantProxy");
+    const out = await readGaffaClubContext(
+      grantAuthorization(req.headers.authorization),
+      req.query.leagueId,
+      req.query.teamId,
+    );
+    res.status(out.status).json(out.body);
+  });
+  app.delete("/api/gaffa/connect/grant", async (req, res) => {
+    const { grantAuthorization, revokeGaffaGrant } = await import("./services/gaffaGrantProxy");
+    const out = await revokeGaffaGrant(grantAuthorization(req.headers.authorization));
+    res.status(out.status).json(out.body);
+  });
 
   // In-app Gaffa chat: Gaffa (session-auth) proxies here with the read secret.
   // Always loads the live club bag (roster, listings, auctions, unowned FA pool, settings) before

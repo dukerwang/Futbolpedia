@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatMessage as ChatMessageType, ChatDomain, ChatDossierRef } from '../types';
+import type { ChatMessage as ChatMessageType, ChatDossierRef } from '../types';
 import { ChatMessage } from './ChatMessage';
+import { GaffaClubWelcome, type GaffaWelcomeClub } from './GaffaClubWelcome';
 
 interface ChatHistoryProps {
   messages: ChatMessageType[];
   isLoading: boolean;
   loadingMessage: string;
   conversationKey?: string;
-  domain?: ChatDomain;
+  /** The conversation's Gaffa club, which replaces the starters in a new chat. */
+  gaffaClub?: GaffaWelcomeClub | null;
   onSuggestion?: (prompt: string) => void;
   /** The "Build a dossier" starter opens Scout rather than sending a chat message. */
   onOpenScout?: () => void;
@@ -16,20 +18,12 @@ interface ChatHistoryProps {
   onRetry?: (messageId: string) => void;
 }
 
-const STARTER_PROMPTS: Record<ChatDomain, { icon: string; label: string; prompt: string }[]> = {
-  default: [
-    { icon: 'person_search', label: 'Build a dossier', prompt: 'Open Scout to rate any player' },
-    { icon: 'compare_arrows', label: 'Compare players', prompt: 'Compare Pedri and Vitinha as deep playmakers' },
-    { icon: 'travel_explore', label: 'Scout a shortlist', prompt: 'Best U21 centre-backs in Serie A right now' },
-    { icon: 'strategy', label: 'Tactical read', prompt: "Break down Arsenal's build-up shape this season" },
-  ],
-  gaffa: [
-    { icon: 'gavel', label: 'Rules check', prompt: 'How do auto-subs and out-of-position penalties work?' },
-    { icon: 'groups', label: 'Lineup audit', prompt: 'Audit my starting XI and bench cover' },
-    { icon: 'swap_horiz', label: 'Trade sense-check', prompt: 'What makes a trade worth taking in Gaffa?' },
-    { icon: 'payments', label: 'Auction math', prompt: 'How should I size a bid in a live auction?' },
-  ],
-};
+const STARTER_PROMPTS: { icon: string; label: string; prompt: string }[] = [
+  { icon: 'person_search', label: 'Build a dossier', prompt: 'Open Scout to rate any player' },
+  { icon: 'compare_arrows', label: 'Compare players', prompt: 'Compare Pedri and Vitinha as deep playmakers' },
+  { icon: 'travel_explore', label: 'Scout a shortlist', prompt: 'Best U21 centre-backs in Serie A right now' },
+  { icon: 'strategy', label: 'Tactical read', prompt: "Break down Arsenal's build-up shape this season" },
+];
 
 /** Distance from the bottom (px) within which scrolling back down re-pins the view to the latest message. */
 const PIN_THRESHOLD = 120;
@@ -41,7 +35,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   isLoading,
   loadingMessage,
   conversationKey,
-  domain = 'default',
+  gaffaClub,
   onSuggestion,
   onOpenScout,
   onScoutName,
@@ -175,9 +169,14 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                   </div>
                   <p className="new-chat-caption font-serif italic text-lg text-charcoal/35 dark:text-cream-400/40">Awaiting Query...</p>
 
-                  {onSuggestion && (
+                  {onSuggestion && gaffaClub && (
+                    <div className="new-chat-caption w-full flex justify-center">
+                      <GaffaClubWelcome club={gaffaClub} disabled={isLoading} onSuggestion={onSuggestion} />
+                    </div>
+                  )}
+                  {onSuggestion && !gaffaClub && (
                     <div className="new-chat-caption mt-8 grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-[560px]">
-                      {STARTER_PROMPTS[domain].map((s) => (
+                      {STARTER_PROMPTS.map((s) => (
                         <button
                           key={s.prompt}
                           type="button"

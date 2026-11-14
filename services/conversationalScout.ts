@@ -1,5 +1,5 @@
 import { Type } from '@google/genai';
-import type { ChatMessage, PlayerProfile } from '../types';
+import type { ChatMessage, GaffaContextBag, GaffaTradeScorecard, PlayerProfile } from '../types';
 import type { ThinkingTier } from '../constants/modelProfiles';
 import { ATTRIBUTE_KEYS } from '../constants/ratingTiers';
 import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
@@ -48,6 +48,8 @@ import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubMana
 import { reconcileDossierNumbers } from './dossierNumberGate';
 import { toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
+import { buildGaffaTurn, capGaffaTradeProse, leagueFocusOf, starterClubs, type GaffaTurn } from './gaffaTurn';
+import { lockGaffaRosterNames } from './gaffaLineupAudit';
 import { expandTables, gateUnsupportedFigures, type FigureClaim, type FigureGateOptions } from './figureGate';
 import { figureBudget, formatDebateBriefForWriter, runDebateResearch, type DebateBrief } from './debateBrief';
 import { standingsFor, type CardStanding } from './debateConsistency';
@@ -253,6 +255,10 @@ export interface ConversationalScoutParams {
   questionSearch?: Promise<ToolOutcome> | null;
   /** A debate brief started before routing (`startDebateBrief`), for a question about the past. */
   debateBrief?: Promise<DebateBrief | null> | null;
+  /** The Gaffa club attached to the conversation (`gaffaTurn.ts`). Ignored on a thread about the past. */
+  gaffaBag?: GaffaContextBag;
+  /** Called with a Gaffa trade scorecard before the reply streams. */
+  onGaffaScorecard?: (scorecard: GaffaTradeScorecard) => void;
 }
 
 /**
@@ -424,6 +430,13 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   let verifiedManagers: VerifiedClubManager[] = [];
   let cardsInPlay: PlayerProfile[] = [];
   const isHistoricalThread = threadIsHistorical(route, history, message);
+  // A Gaffa club attached to the conversation. A question about its squad also researches the
+  // Premier League clubs most of its starters play for.
+  const gaffaBag = params.gaffaBag?.connected && !isHistoricalThread ? params.gaffaBag : undefined;
+  const gaffaFocus = gaffaBag ? leagueFocusOf(message, history, gaffaBag) : 'none';
+  const gaffaClubs = gaffaBag && (gaffaFocus === 'squad' || gaffaFocus === 'lineup') ? starterClubs(gaffaBag) : [];
+  // Switching clubs mid-conversation starts the follow-up state afresh.
+  const threadSignature = getThreadSignature(history, message) + (gaffaBag ? `|${gaffaBag.club_id}` : '');
 
   if (!imageData && route.intent !== 'archive_inventory') {
     const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
@@ -446,10 +459,11 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     }
     cardsInPlay = lockedCards;
 
-    const targetClubs =
+    const routeClubs =
       route.targetClubs && route.targetClubs.length > 0
         ? route.targetClubs
         : extractThreadClubs(message, history);
+    const targetClubs = [...new Set([...routeClubs, ...gaffaClubs])];
 
     // Verified managers for the clubs in play, looked up alongside pre-grounding. Today's coaches
     // don't matter to a question about the past.
@@ -549,7 +563,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     verifiedManagers = await managersPromise;
 
     // A follow-up in the same thread keeps what the last turn found, as a lower-priority entry.
-    const currentSig = getThreadSignature(history, message);
+    const currentSig = threadSignature;
     const sameThread = Boolean(currentSig && currentSig === lastThreadSignature && lastThreadGrounding);
     if (hasEvidence(ledger)) {
       const thisTurn = formatLedger(ledger!);
@@ -568,13 +582,31 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       ? formatLedger(ledger, debate ? {} : { seasonStart: seasonStartDate(seasonStartYear) })
       : '';
   let situationBlock = formatSituation(situation);
-  const threadSig = getThreadSignature(history, message);
+  const threadSig = threadSignature;
   if (situationBlock) {
     lastThreadSituation = situationBlock;
     lastSituationSignature = threadSig;
   } else if (threadSig && threadSig === lastSituationSignature && !isHistoricalThread) {
     situationBlock = lastThreadSituation;
   }
+
+  // The attached club's blocks: the club and squad always; the lineup audit, market lock, bid math
+  // or a trade scorecard when the question is about those.
+  let gaffaTurn: GaffaTurn | null = null;
+  if (gaffaBag) {
+    onStageChange?.(gaffaFocus === 'trade' ? 'Scoring the trade...' : 'Reading your Gaffa club...');
+    gaffaTurn = await buildGaffaTurn({
+      message,
+      history,
+      bag: gaffaBag,
+      cards: mergeAllCalibratedDossiers(savedDossiers, conversationDossiers),
+      ongoingThread,
+      factualFoundation,
+    });
+    if (gaffaTurn.scorecard) params.onGaffaScorecard?.(gaffaTurn.scorecard);
+    perf?.(`gaffa club (${gaffaTurn.focus})`);
+  }
+  const gaffaBlock = gaffaTurn?.block ?? '';
 
   const analyticalMode =
     route.analyticalMode ??
@@ -617,6 +649,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     ? ` No stored card exists for ${missingCards.join(' or ')}; they were already checked, so don't look them up.`
     : '';
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+${gaffaBlock}
 ${ongoingThread}
 ${situationBlock}
 ${factualFoundation ? `<factual_foundation>\n${factualFoundation}\n</factual_foundation>` : ''}
@@ -673,6 +706,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squ
             peerLedgerBlock ?? '',
             savedDossiersBlock,
             formatVerifiedManagersBlock(verifiedManagers),
+            gaffaBlock,
             ongoingThread,
             message,
             ...cardsInPlay.map(serializeProfileForHistory),
@@ -719,6 +753,12 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squ
       return { shown: true };
     },
   };
+  // Gaffa squad and market names are copied exactly, and a scorecard reply stays short.
+  const finishGaffa = (text: string): string => {
+    if (!gaffaBag || !gaffaTurn || gaffaTurn.focus === 'none') return text;
+    const locked = lockGaffaRosterNames(text, gaffaBag);
+    return gaffaTurn.scorecard ? capGaffaTradeProse(locked) : locked;
+  };
   let firstChunk = true;
   const rawReply = await generateProseTurn({
     message: fullPrompt,
@@ -728,6 +768,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squ
     thinkingLevelOverride,
     toolMode,
     dossiersPool,
+    gaffaBag,
     dossierTools,
     onToolCalls: (names) => perf?.(`writer tool calls: ${names.join(', ')}`),
     onToolResult: (_name, result) => toolResults.push(typeof result === 'string' ? result : JSON.stringify(result)),
@@ -738,12 +779,12 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squ
             firstChunk = false;
             perf?.('first answer token');
           }
-          onStreamChunk(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay, figureCheck));
+          onStreamChunk(finishGaffa(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay, figureCheck)));
         }
       : undefined,
   });
 
-  return sanitizeScoutProse(
+  return finishGaffa(sanitizeScoutProse(
     rawReply,
     scoutManagerContext,
     cardsInPlay,
@@ -753,5 +794,5 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squ
         if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures (unsupported, or over a debate's budget): ${removed.map((r) => r.text).join('; ')}`);
       },
     },
-  );
+  ));
 }

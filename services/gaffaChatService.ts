@@ -25,10 +25,11 @@ import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
 import {
   buildGaffaBidValuationBlock,
   buildRosterCapacityNote,
-  escapeRegExp,
   formatLineupAuditPromptBlock,
   inferInvolvedGaffaSlots,
+  lockGaffaRosterNames,
 } from './gaffaLineupAudit';
+import { capGaffaTradeProse, looksLikeAssetTrade, looksLikeGaffaAvailabilityQuery, looksLikeGaffaMarketQuery } from './gaffaTurn';
 
 type GaffaTurnKind = 'rules' | 'strategy' | 'player_trade' | 'lineup_audit';
 
@@ -118,13 +119,6 @@ const TRADE_SCORE_SCHEMA = {
   ],
 };
 
-function looksLikeAssetTrade(message: string): boolean {
-  return (
-    /\b(trade|swap|package)\b/i.test(message) ||
-    (/€|\b\d+(\.\d+)?\s*m\b/i.test(message) && /\b(for|and|vs|versus)\b/i.test(message))
-  );
-}
-
 function isSlotPlayer(p: GaffaRosterPlayer, slot: string): boolean {
   return p.primary_position === slot || (p.secondary_positions ?? []).includes(slot);
 }
@@ -136,54 +130,6 @@ function slotCoverSummary(bag: GaffaContextBag, slot: string): string {
   const xi = (bag.lineup?.starters ?? []).filter((s) => s.slot === slot).map((s) => s.name);
   const bench = (bag.lineup?.bench ?? []).map((s) => `${s.name} (${s.slot})`);
   return `XI ${slot}: ${xi.join(', ') || 'none'}. Roster ${slot}: ${named.join(', ') || 'none listed'}. Bench: ${bench.join(', ') || 'none'}.`;
-}
-
-/**
- * Stop the model swapping in lookalike names or PL teammates
- * (Mahamadou Sangaré, Bergvall/Fernandes).
- */
-function lockGaffaRosterNames(prose: string, bag: GaffaContextBag): string {
-  if (!bag.connected) return prose;
-
-  const lastNames = new Set<string>();
-  const byLast: { last: string; full: string; first: string }[] = [];
-  const lockedNames = [
-    ...(bag.roster ?? []).map((p) => p.name),
-    ...(bag.open_listings ?? []).map((l) => l.name),
-    ...(bag.open_auctions ?? []).map((a) => a.name),
-  ];
-  if (!lockedNames.length) return prose;
-
-  for (const raw of lockedNames) {
-    const full = (raw || '').trim();
-    if (!full) continue;
-    const parts = full.split(/\s+/);
-    const last = parts[parts.length - 1];
-    const first = parts.slice(0, -1).join(' ');
-    lastNames.add(last.toLowerCase());
-    if (first) byLast.push({ last, full, first });
-  }
-
-  let out = prose;
-  out = out.replace(
-    /(?<!\p{L})(\p{Lu}\p{L}*(?:['.-]\p{L}+)*)\/(\p{Lu}\p{L}*(?:['.-]\p{L}+)*)(?!\p{L})/gu,
-    (all, a: string, b: string) => {
-      const aOk = lastNames.has(a.toLowerCase());
-      const bOk = lastNames.has(b.toLowerCase());
-      if (aOk && !bOk) return a;
-      if (bOk && !aOk) return b;
-      return all;
-    },
-  );
-
-  for (const { last, full, first } of byLast) {
-    const re = new RegExp(
-      `(?<!\\p{L})(?!${escapeRegExp(first)}(?!\\p{L}))\\p{Lu}[\\p{L}'-]+\\s+${escapeRegExp(last)}(?!\\p{L})`,
-      'gu',
-    );
-    out = out.replace(re, full);
-  }
-  return out;
 }
 
 function clipClause(s: string, maxWords: number): string {
@@ -227,7 +173,7 @@ function marketSpendSummary(bag: GaffaContextBag): string {
 const NOTE_MAX_WORDS = 22;
 const FLIP_MAX_WORDS = 36;
 
-async function buildTradeScorecard(params: {
+export async function buildTradeScorecard(params: {
   message: string;
   factualFoundation: string;
   bag: GaffaContextBag;
@@ -291,7 +237,7 @@ function cashSuffix(eurM: number | undefined): string {
   return eurM && eurM > 0 ? ` + €${eurM}m` : '';
 }
 
-function formatScorecardBlock(card: GaffaTradeScorecard): string {
+export function formatScorecardBlock(card: GaffaTradeScorecard): string {
   const outCash = cashSuffix(card.outgoing_cash_eur_m);
   const inCash = cashSuffix(card.incoming_cash_eur_m);
   return `<locked_scorecard>
@@ -313,101 +259,10 @@ Banned: outstanding, do not pull the trigger, obliterates, without hesitation, t
 </locked_scorecard>`;
 }
 
-const SCORECARD_FAILED_BLOCK = `<locked_scorecard>
+export const SCORECARD_FAILED_BLOCK = `<locked_scorecard>
 Scorecard failed. Treat this as toss_up with low confidence. Do not sound sure either way. Give both sides and what you would need to lock a call. Max 120 words.
 </locked_scorecard>`;
 
-const TRADE_PROSE_MAX_WORDS = 120;
-const TRADE_PROSE_MAX_PARAS = 2;
-
-/** Keep scorecard replies short so prose cannot out-talk the lock. */
-function capGaffaTradeProse(text: string): string {
-  const paras = text
-    .trim()
-    .split(/\n{2,}/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .slice(0, TRADE_PROSE_MAX_PARAS);
-  let limited = paras.join('\n\n');
-  const wordCount = limited.split(/\s+/).filter(Boolean).length;
-  if (wordCount <= TRADE_PROSE_MAX_WORDS) return limited;
-
-  const sentences = limited.match(/[^.!?]+[.!?]+(?:["')\]]+)?|[^.!?]+$/g) ?? [limited];
-  const kept: string[] = [];
-  let count = 0;
-  for (const raw of sentences) {
-    const sentence = raw.trim();
-    if (!sentence) continue;
-    const w = sentence.split(/\s+/).filter(Boolean).length;
-    if (count + w > TRADE_PROSE_MAX_WORDS && kept.length > 0) break;
-    kept.push(sentence);
-    count += w;
-  }
-  return kept.join(' ').trim();
-}
-
-/** FA / unowned / auction-board questions — Gaffa pool, never real-world free agency. */
-function looksLikeGaffaMarketQuery(message: string): boolean {
-  // "FA floor" is a league setting, not the auction board.
-  if (/\bfa\s+floor\b/i.test(message) && !/\b(unowned|waiver|auction|listings?)\b/i.test(message)) {
-    return false;
-  }
-  if (
-    /\b(free[-\s]?agenc(?:y|ies)|free[-\s]?agents?|unowned|un-owned|waiver(?:s| wire)?)\b/i.test(
-      message,
-    )
-  ) {
-    return true;
-  }
-  if (/\b(?:FA|FAs)\b/i.test(message)) return true;
-  if (/\b(auction board|live auctions?|on auction|open listings?)\b/i.test(message)) {
-    return true;
-  }
-  return (
-    /\b(highest|best|top)\b/i.test(message) &&
-    /\b(potential|upside|prospects?)\b/i.test(message) &&
-    /\b(available|unowned|market|sign|bid|buy|claim)\b/i.test(message)
-  );
-}
-
-function bagMarketNames(bag: GaffaContextBag): string[] {
-  const names: string[] = [];
-  for (const p of bag.free_agents ?? []) {
-    if (p.name) names.push(p.name);
-    if (p.display_name) names.push(p.display_name);
-  }
-  for (const l of bag.open_listings ?? []) {
-    if (l.name) names.push(l.name);
-  }
-  for (const a of bag.open_auctions ?? []) {
-    if (a.name) names.push(a.name);
-  }
-  return names;
-}
-
-function messageMentionsBagName(message: string, names: string[]): boolean {
-  for (const raw of names) {
-    const n = (raw || '').trim();
-    if (n.length < 4) continue;
-    const re = new RegExp(`(?<!\\p{L})${escapeRegExp(n)}(?!\\p{L})`, 'iu');
-    if (re.test(message)) return true;
-  }
-  return false;
-}
-
-/** Availability / buy-from-FA questions, including named unowned players. */
-function looksLikeGaffaAvailabilityQuery(message: string, bag: GaffaContextBag): boolean {
-  if (looksLikeGaffaMarketQuery(message)) return true;
-  if (!bag.connected) return false;
-  if (
-    !/\b(buy|sign|claim|bid|available|pickup|pick\s*up|nominate|acquire)\b/i.test(
-      message,
-    )
-  ) {
-    return false;
-  }
-  return messageMentionsBagName(message, bagMarketNames(bag));
-}
 
 /** Connected questions about the user's own squad or the live market are answered from the bag. */
 function shouldSkipGaffaWebResearch(
