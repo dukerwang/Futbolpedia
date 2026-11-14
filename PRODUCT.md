@@ -10,7 +10,7 @@ web
 
 Today: the owner and one friend, who rate players, compare cards and argue about them. Sessions are often a run of "rate X", "rate Y" with the occasional question. Use is split about evenly between phone (375-430px) and desktop.
 
-Next: anyone who finds futbolpedia.ai.studio. A newcomer has to understand what the product does and how to rate a player without being told.
+Next: anyone who finds futbolpedia.org. A newcomer has to understand what the product does and how to rate a player without being told.
 
 ## Product Purpose
 

@@ -22,7 +22,7 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `npm run build` on ev
 
 ## Deploying
 
-The live app (futbolpedia.ai.studio) is hosted by Google AI Studio and does not deploy from GitHub on its own. A change goes live in three steps, all of which are needed:
+The live app (futbolpedia.org, a custom domain on the Google AI Studio deployment; futbolpedia.ai.studio still serves it) is hosted by Google AI Studio and does not deploy from GitHub on its own. A change goes live in three steps, all of which are needed:
 
 1. **Push to GitHub and merge into `main`.** The pull script copies `main` only, so a pushed branch or an open PR is not live.
 2. **Run the pull script in Google AI Studio** (`sync.sh`: `degit` of `dukerwang/Futbolpedia` into the workspace, `npm install`, `npm run build`).
