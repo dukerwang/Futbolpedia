@@ -67,47 +67,19 @@ export function mapResponseToBag(res: GaffaClubContextResponse): GaffaContextBag
   };
 }
 
-/** Server proxy for Gaffa's read-secret context endpoint. */
-function fetchContextViaProxy(leagueId: string, teamId: string): Promise<Response> {
-  const qs = new URLSearchParams({ leagueId, teamId });
-  return fetch(`/api/gaffa/context?${qs.toString()}`);
-}
+export const GAFFA_SIGN_IN_REQUIRED = 'Sign in to Gaffa to load this club.';
 
-/** Signed-in managers read through Supabase RLS; everyone else (or a failed RLS read) uses the proxy. */
+/**
+ * A club's context, read with the signed-in manager's own Gaffa session, so RLS decides what they
+ * can see. There is no anonymous path: the old server proxy let anyone holding two UUIDs read a club.
+ */
 export async function fetchGaffaContext(
   leagueId: string,
   teamId: string,
 ): Promise<GaffaClubContextResponse> {
   const sessionUser = await getGaffaSessionUser();
-  if (sessionUser) {
-    try {
-      return await fetchGaffaContextFromSupabase(leagueId, teamId);
-    } catch (supabaseErr) {
-      // Fall back to server proxy if configured; otherwise surface the Supabase error
-      try {
-        const res = await fetchContextViaProxy(leagueId, teamId);
-        if (res.ok) {
-          return res.json();
-        }
-      } catch {
-        /* ignore proxy error when Supabase already reported why */
-      }
-      throw supabaseErr;
-    }
-  }
-
-  const res = await fetchContextViaProxy(leagueId, teamId);
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      if (body?.error) detail = body.error;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(detail || `Sync failed (${res.status})`);
-  }
-  return res.json();
+  if (!sessionUser) throw new Error(GAFFA_SIGN_IN_REQUIRED);
+  return fetchGaffaContextFromSupabase(leagueId, teamId);
 }
 
 function ageMs(iso?: string): number {

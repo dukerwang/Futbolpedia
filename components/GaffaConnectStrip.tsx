@@ -103,49 +103,6 @@ const AskButton: React.FC<{ label: string; prompt: string; onAsk: (prompt: strin
   </button>
 );
 
-const ManualIdForm: React.FC<{
-  leagueId: string;
-  clubId: string;
-  onLeagueIdChange: (value: string) => void;
-  onClubIdChange: (value: string) => void;
-  onSync: (leagueId: string, clubId: string) => void;
-  busy: boolean;
-  syncing: boolean;
-  /** Compact sits under a connected club; the full-size form replaces the sign-in row. */
-  compact: boolean;
-}> = ({ leagueId, clubId, onLeagueIdChange, onClubIdChange, onSync, busy, syncing, compact }) => {
-  const inputClass = compact
-    ? 'flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1 text-xs font-mono text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400'
-    : 'flex-1 min-w-0 bg-transparent border border-charcoal/20 dark:border-cream-400/20 px-2 py-1.5 text-sm font-sans text-charcoal dark:text-cream-50 outline-none focus:border-charcoal dark:focus:border-cream-400';
-  const buttonClass = compact
-    ? 'shrink-0 px-3 py-1 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[10px] font-sans uppercase tracking-wide disabled:opacity-40'
-    : 'shrink-0 px-3 py-1.5 bg-charcoal dark:bg-emerald-600 text-cream-50 text-[11px] font-sans uppercase tracking-wide disabled:opacity-40';
-  return (
-    <div className="mt-2 flex flex-col sm:flex-row gap-2">
-      <input
-        value={leagueId}
-        onChange={(e) => onLeagueIdChange(e.target.value)}
-        placeholder="League ID"
-        className={inputClass}
-      />
-      <input
-        value={clubId}
-        onChange={(e) => onClubIdChange(e.target.value)}
-        placeholder="Club ID"
-        className={inputClass}
-      />
-      <button
-        type="button"
-        disabled={busy || !leagueId.trim() || !clubId.trim()}
-        onClick={() => onSync(leagueId.trim(), clubId.trim())}
-        className={buttonClass}
-      >
-        {syncing ? 'Syncing…' : compact ? 'Sync IDs' : 'Sync'}
-      </button>
-    </div>
-  );
-};
-
 const SignInForm: React.FC<{
   email: string;
   password: string;
@@ -564,11 +521,8 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
   onSignInGoogle,
   onSignOut,
 }) => {
-  const [leagueId, setLeagueId] = useState(link?.league_id ?? '');
-  const [clubId, setClubId] = useState(link?.club_id ?? '');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [manualMode, setManualMode] = useState(false);
   const [selectedClubKey, setSelectedClubKey] = useState('');
   // Tab and filters live here so they survive the inspector closing and reopening.
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -577,8 +531,6 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
   const [squadFilter, setSquadFilter] = useState<SquadFilter>('ALL');
 
   useEffect(() => {
-    setLeagueId(link?.league_id ?? '');
-    setClubId(link?.club_id ?? '');
     if (link?.league_id && link?.club_id) {
       setSelectedClubKey(clubKey(link.league_id, link.club_id));
     }
@@ -677,15 +629,6 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
   };
 
   const busy = syncing || authLoading;
-  const manualIdProps = {
-    leagueId,
-    clubId,
-    onLeagueIdChange: setLeagueId,
-    onClubIdChange: setClubId,
-    onSync,
-    busy,
-    syncing,
-  };
 
   return (
     <div className="mb-3 border border-charcoal/15 dark:border-cream-400/15 bg-cream-50/85 dark:bg-charcoal-surface/85 px-3.5 py-2.5 transition-colors">
@@ -739,13 +682,6 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
               {syncing ? 'Syncing…' : 'Refresh'}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setManualMode((prev) => !prev)}
-            className="text-[10px] font-sans uppercase tracking-wide text-charcoal/50 dark:text-cream-400/50 hover:underline"
-          >
-            {manualMode ? (authUser ? 'Hide IDs' : 'Sign In') : 'Manual IDs'}
-          </button>
           {authUser && onSignOut ? (
             <button
               type="button"
@@ -838,7 +774,6 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
             ) : null}
           </div>
 
-          {manualMode && <ManualIdForm {...manualIdProps} compact />}
 
           {/* Proactive Roster-State & Lineup Alerts */}
           {alerts.length > 0 && <AlertList alerts={alerts} onAsk={onAsk} disabled={disabled} />}
@@ -917,12 +852,10 @@ export const GaffaConnectStrip: React.FC<GaffaConnectStripProps> = ({
             </div>
           )}
         </div>
-      ) : manualMode ? (
-        <ManualIdForm {...manualIdProps} compact={false} />
       ) : authUser ? (
         userClubs.length === 0 ? (
           <p className="mt-1.5 text-xs font-serif italic text-charcoal/60 dark:text-cream-400/60">
-            No clubs found on your Gaffa account. Join a league on Gaffa or switch to Manual IDs.
+            No clubs found on your Gaffa account. Join a league on Gaffa, then come back.
           </p>
         ) : null
       ) : (

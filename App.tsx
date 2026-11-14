@@ -491,7 +491,10 @@ const App: React.FC = () => {
         } catch (err) {
           console.error('Gaffa connect from hash failed:', err);
           setGaffaSyncError(err instanceof Error ? err.message : 'Sync failed');
-          setGaffaLink({ league_id: ids.leagueId, club_id: ids.clubId });
+          // Kept as the saved link, so signing in loads this club if it's one of the manager's.
+          const pending: GaffaLinkState = { league_id: ids.leagueId, club_id: ids.clubId };
+          saveGaffaLink(pending);
+          setGaffaLink(pending);
         } finally {
           setGaffaSyncing(false);
           setIsLoading(false);
