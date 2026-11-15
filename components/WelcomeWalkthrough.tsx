@@ -4,7 +4,7 @@ import { fetchCardIndex } from '../services/dossierStore';
 import { cardEdition, toBasePlayerSlug } from '../services/dossierCards';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { describeCardEdition } from './pills';
-import { GaffaMark, GAFFA_PUBLIC_URL } from './GaffaClubChip';
+import { GaffaMark, GaffaWordmark, GAFFA_PUBLIC_URL } from './GaffaClubChip';
 
 /**
  * The first-visit walkthrough: what Futbolpedia is, how to read a rating, how to use Scout, the
@@ -447,7 +447,7 @@ function buildSteps(cards: Showcase[], debate: typeof DEBATE, scoutKey: string):
                 <GaffaMark className="size-6" />
               </span>
               <div>
-                <div className="font-serif font-bold text-[16px] leading-none text-charcoal dark:text-white">Gaffa</div>
+                <GaffaWordmark className="block text-[15px] text-charcoal dark:text-white" />
                 <div className="text-[11px] text-charcoal/55 dark:text-cream-400 mt-1">Fantasy football, played like the real thing</div>
               </div>
             </div>
