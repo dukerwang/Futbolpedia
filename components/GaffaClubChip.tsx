@@ -210,7 +210,7 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
               {error && <p className="text-xs font-sans text-red-600 dark:text-red-400">{error}</p>}
               <div className="flex items-center justify-between text-xs font-sans">
                 <a
-                  href={`${gaffaBaseUrl ?? GAFFA_PUBLIC_URL}/guide`}
+                  href={gaffaBaseUrl ?? GAFFA_PUBLIC_URL}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
