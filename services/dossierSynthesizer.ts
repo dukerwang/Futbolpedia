@@ -240,6 +240,11 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
     attributes: OUTFIELD_ATTRIBUTES_SCHEMA,
     goalkeeperAttributes: GK_ATTRIBUTES_SCHEMA,
     shortBio: { type: Type.STRING },
+    shareLine: {
+      type: Type.STRING,
+      description:
+        'One sentence, at most 140 characters, saying what this card concludes about the player at this version. Read on its own as a link preview, so it must make sense without the card and quote no numbers.',
+    },
     playstyleAndRole: {
       type: Type.OBJECT,
       properties: {
@@ -412,6 +417,7 @@ interface RawSynthesizedProfile {
   attributes?: Partial<Attributes>;
   goalkeeperAttributes?: Partial<GoalkeeperAttributes>;
   shortBio?: string;
+  shareLine?: string;
   playstyleAndRole?: {
     playstyle?: { archetype?: string; description?: string };
     bestRoles?: string[];
@@ -449,6 +455,21 @@ export const createDefaultProfile = (): PlayerProfile => {
     },
     latestUpdate: 'Update not available.',
   };
+};
+
+/** The longest `shareLine` a card keeps; a longer one is dropped rather than cut mid-sentence. */
+export const SHARE_LINE_MAX_CHARS = 140;
+
+/** A card's share line, cleaned: no citation marks, wrapping quotes or extra spaces, never too long. */
+export const cleanShareLine = (raw: unknown): string | undefined => {
+  if (typeof raw !== 'string') return undefined;
+  const line = raw
+    .replace(/\s*\[[\d\s,]+\]\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^["'“‘]+|["'”’]+$/g, '')
+    .trim();
+  return line && line.length <= SHARE_LINE_MAX_CHARS ? line : undefined;
 };
 
 export const sanitizeProfileData = (
@@ -543,6 +564,9 @@ export const sanitizeProfileData = (
   const clean = (str: string): string => (str || '').replace(/\s*\[[\d\s,]+\]\s*/g, ' ').trim();
 
   sanitized.shortBio = clean(sanitized.shortBio);
+  const shareLine = cleanShareLine(raw.shareLine);
+  if (shareLine) sanitized.shareLine = shareLine;
+  else delete sanitized.shareLine;
   sanitized.latestUpdate = clean(sanitized.latestUpdate);
   sanitized.strengths = sanitized.strengths.map(clean);
   sanitized.weaknesses = sanitized.weaknesses.map(clean);

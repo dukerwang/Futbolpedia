@@ -46,6 +46,7 @@ export function findProfileManagerGroundingIssues(
 ): string[] {
   const prose = [
     profile.shortBio,
+    profile.shareLine,
     profile.latestUpdate,
     profile.playstyleAndRole?.playstyle?.description,
   ]
@@ -58,6 +59,7 @@ export function findProfileManagerGroundingIssues(
 const scrubProfileProse = (profile: PlayerProfile, ctx: ManagerVerificationContext): PlayerProfile => ({
   ...profile,
   shortBio: scrubUnverifiedManagerText(profile.shortBio, ctx),
+  ...(profile.shareLine ? { shareLine: scrubUnverifiedManagerText(profile.shareLine, ctx) } : {}),
   latestUpdate: scrubUnverifiedManagerText(profile.latestUpdate, ctx),
   playstyleAndRole: {
     ...profile.playstyleAndRole,

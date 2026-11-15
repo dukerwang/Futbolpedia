@@ -57,7 +57,7 @@ The app maps `#/p/<versioned-slug>` to the matching new address and replaces it 
 
 Both images are 1200×630 PNGs in the cream headline style: Futbolpedia's cream background, Playfair Display headings, the emerald accent and JetBrains Mono labels.
 
-**Card.** Top: the Futbolpedia mark and the edition label (`describeCardEdition`, such as "Current form · Nov 2026"). Then the Overall in large emerald type beside the player's name, their archetype (`playstyleAndRole.playstyle.archetype`) in italics, and a line with position, club and tier (`getShortTierLabel`). Then the card's `shareLine` as a quote. Bottom: a strip of chips with the first three strength titles (`traitTitle`), each cut with an ellipsis past one chip's width. A card without a `shareLine` leaves the quote out.
+**Card.** Top: the Futbolpedia mark and the edition label (`describeCardEdition`, such as "Current form · Nov 2026"). Then the Overall in large emerald type beside the player's name, their archetype (`playstyleAndRole.playstyle.archetype`) in italics, and a line with position, club and tier (`getShortTierLabel`). Then the card's `shareLine` as a quote. Bottom: one row of chips with the strength titles (`traitTitle`): the first three when they fit, otherwise the first two, cut at a word only when one title alone is too long. A card without a `shareLine` leaves the quote out.
 
 **Chat.** Top: the Futbolpedia mark and "Conversation · N replies". The opening question as the headline, the chat's title under it, and a bottom strip with a tile for each card the chat discusses (up to four): Overall, name and edition. A chat with no cards leaves the strip out.
 
