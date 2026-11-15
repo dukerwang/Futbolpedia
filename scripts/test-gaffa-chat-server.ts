@@ -141,7 +141,7 @@ await test('Continue in Futbolpedia shares the thread with the club attached', a
       return 'ABC234';
     },
   );
-  assert.deepEqual(out, { code: 'ABC234', path: '/#/c/ABC234' });
+  assert.deepEqual(out, { code: 'ABC234', path: '/c/ABC234' });
   assert.deepEqual(shared!.gaffaClub, { leagueId: LEAGUE, clubId: CLUB });
   assert.equal(shared!.title, 'Who should I start?');
   assert.deepEqual(shared!.messages.map((m) => m.sender), ['user', 'ai']);

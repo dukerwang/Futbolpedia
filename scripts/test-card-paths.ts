@@ -101,6 +101,7 @@ test('old hash links map to the new addresses', () => {
   assert.equal(legacyHashToPath('#/c/ab12cd'), '/c/AB12CD');
   assert.equal(legacyHashToPath('#/scout?name=Saka'), null);
   assert.equal(legacyHashToPath('#/p/'), null);
+  assert.equal(legacyHashToPath('#/p/bukayo-saka--current--2026-11-04--rev-abc12'), null);
 });
 
 test("a card's own address follows its edition and age", () => {

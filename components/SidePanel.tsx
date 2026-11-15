@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
 import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
-import { marked } from 'marked';
 import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS } from './pills';
-import DOMPurify from 'dompurify';
+import { AttributeLine, renderCardMarkdown as renderMarkdown } from './cardParts';
+import { cardPath } from '../services/cardPaths';
 import {
   getCardKey,
   isPrimeCard,
@@ -25,36 +25,6 @@ interface SidePanelProps {
   /** Goes back from a dossier to the Scout desk. */
   onBack?: () => void;
 }
-
-const getTierColorClass = (rating: number) => {
-    if (rating >= 90) return 'bg-emerald-500'; // 90+ Emerald (World-Class threshold)
-    if (rating >= 80) return 'bg-emerald-400'; // 80-89 Sage/Light Green
-    if (rating >= 70) return 'bg-charcoal/50 dark:bg-gray-400'; // 70-79 Charcoal Light
-    return 'bg-gray-200 dark:bg-gray-700'; // <70 Faint Grey
-};
-
-const renderMarkdown = (text: string) => {
-    if (!text) return { __html: '' };
-    return { __html: DOMPurify.sanitize(marked.parse(text) as string) };
-};
-
-const AttributeLine: React.FC<{ label: string; rating: number }> = ({ label: attrLabel, rating }) => {
-    return (
-        <div className="group">
-            <div className="flex justify-between text-xs mb-1.5 items-end">
-                <span className="text-charcoal/70 dark:text-cream-200 font-medium">{attrLabel}</span>
-                <span className={`font-mono text-sm leading-none font-bold ${rating >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-cream-100'}`}>{rating}</span>
-            </div>
-            <div className="h-[3px] w-full bg-cream-400/30 dark:bg-charcoal-light/50 rounded-full overflow-hidden">
-                <div 
-                    className={`h-full relative transition-all duration-1000 rounded-full ${getTierColorClass(rating)}`} 
-                    style={{ width: `${rating}%` }}
-                >
-                </div>
-            </div>
-        </div>
-    );
-};
 
 export const SidePanel: React.FC<SidePanelProps> = ({ 
   isOpen, 
@@ -101,7 +71,9 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     setShareStatus('saving');
     try {
         const slug = await shareDossierCard(profile);
-        const shareUrl = `${window.location.origin}/#/p/${slug}`;
+        // A shared card has its own page; a personal revision only has its archive slug.
+        const path = profile.revision ? null : cardPath(profile);
+        const shareUrl = `${window.location.origin}${path ?? `/#/p/${slug}`}`;
         await navigator.clipboard.writeText(shareUrl);
         setShareStatus('copied');
         setTimeout(() => setShareStatus('idle'), 2000);

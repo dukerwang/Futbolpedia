@@ -165,6 +165,8 @@ export function legacyHashToPath(hash: string): string | null {
   }
   if (!slug) return null;
   if (m[1] === 'c') return CODE_RE.test(slug) ? chatPath(slug) : null;
+  // A shared personal revision has no address of its own; the app opens it from the hash.
+  if (/--rev-[a-z0-9]+$/.test(slug)) return null;
 
   const versioned = slug.match(/^(.+?)--(current|prime|era|season_snapshot|retro)--(.+)$/);
   if (versioned) {

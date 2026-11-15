@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { cardPath } from '../services/cardPaths';
 import type { PlayerProfile } from '../types';
 import {
   fetchGlobalHubDossiers,
@@ -139,7 +140,8 @@ const DossierCard: React.FC<DossierCardProps> = ({
     setShareState('saving');
     try {
       const slug = await shareDossierCard(profile);
-      await navigator.clipboard.writeText(`${window.location.origin}/#/p/${slug}`);
+      const path = profile.revision ? null : cardPath(profile);
+      await navigator.clipboard.writeText(`${window.location.origin}${path ?? `/#/p/${slug}`}`);
       setShareState('copied');
       setTimeout(() => setShareState('idle'), 2000);
     } catch (err) {

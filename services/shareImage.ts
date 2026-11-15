@@ -16,6 +16,8 @@ import type { ChatPage } from './sharePages';
  * a 1200×630 PNG, so nothing depends on the host's native libraries. Server only.
  */
 
+/** Playfair's default figures are old-style (a 9 drops below the line); ratings use lining figures. */
+
 /** The app's own tokens (the Tailwind config in index.html). */
 const COLORS = {
   cream: '#F5F2E9',
@@ -144,7 +146,7 @@ export function cardImageTree(card: PlayerProfile): Node {
     h(
       'div',
       { alignItems: 'flex-end', marginTop: 'auto' },
-      h('div', { fontFamily: 'Playfair Display', fontWeight: 700, fontSize: 168, lineHeight: 0.82, color: COLORS.emerald, marginRight: 36, letterSpacing: -4 }, String(overall)),
+      h('div', { fontFamily: 'Playfair Display', fontWeight: 700, fontVariantNumeric: 'lining-nums', fontSize: 168, lineHeight: 0.82, color: COLORS.emerald, marginRight: 36, letterSpacing: -4 }, String(overall)),
       h(
         'div',
         { flexDirection: 'column', flex: 1, paddingBottom: 6 },
@@ -185,7 +187,7 @@ export function chatImageTree(page: Pick<ChatPage, 'title' | 'question' | 'repli
             h(
               'div',
               { alignItems: 'center', background: COLORS.creamLight, border: `2px solid ${COLORS.rule}`, borderRadius: 14, padding: '10px 18px 10px 12px', marginRight: 14 },
-              h('div', { fontFamily: 'Playfair Display', fontWeight: 700, fontSize: 36, color: COLORS.emerald, marginRight: 12, minWidth: 48, justifyContent: 'center' }, String(c.ratings?.overall ?? '')),
+              h('div', { fontFamily: 'Playfair Display', fontWeight: 700, fontVariantNumeric: 'lining-nums', fontSize: 36, color: COLORS.emerald, marginRight: 12, minWidth: 48, justifyContent: 'center' }, String(c.ratings?.overall ?? '')),
               h(
                 'div',
                 { flexDirection: 'column' },

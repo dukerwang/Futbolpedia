@@ -214,5 +214,5 @@ export async function shareGaffaThread(
     gaffaClub: { leagueId, clubId },
   };
   const code = await share(conv);
-  return { code, path: `/#/c/${code}` };
+  return { code, path: `/c/${code}` };
 }
