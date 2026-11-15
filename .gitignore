@@ -32,3 +32,6 @@ ds-bundle/
 *.njsproj
 *.sln
 *.sw?
+
+# Brainstorming companion mockups
+.superpowers/
