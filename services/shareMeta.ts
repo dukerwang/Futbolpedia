@@ -16,7 +16,7 @@ export const IMAGE_WIDTH = 1200;
 export const IMAGE_HEIGHT = 630;
 
 const DEFAULT_DESCRIPTION =
-  "Rate any footballer on one all-time scale, talk through any debate in depth, and know this weekend's team before kick-off.";
+  "Your AI football analyst: a scouting report on any player from any era, and a real opinion on anything you ask.";
 
 export function escapeHtml(value: string): string {
   return value
@@ -130,6 +130,12 @@ function tagBlock(v: TagValues): string {
     .join('\n    ');
 }
 
+/**
+ * The fallback preview. The version changes with its picture, since messaging apps keep an image
+ * they've fetched under its address.
+ */
+export const DEFAULT_IMAGE_PATH = '/og/default.png?v=2';
+
 const absolute = (origin: string, path: string): string => `${origin.replace(/\/$/, '')}${path}`;
 
 /**
@@ -142,7 +148,7 @@ export function cardMeta(page: Extract<CardPage, { kind: 'card' }>, origin: stri
     title: cardTitle(page.card),
     description: cardDescription(page.card),
     canonical: absolute(CANONICAL_ORIGIN, page.canonical),
-    image: absolute(origin, image ?? '/og/default.png'),
+    image: absolute(origin, image ?? DEFAULT_IMAGE_PATH),
   });
 }
 
@@ -162,7 +168,7 @@ export function notFoundMeta(path: string, origin: string, player?: string): str
     title: name ? `${name} · Not rated yet · Futbolpedia` : 'Not found · Futbolpedia',
     description: name ? `Nobody has rated ${name} on Futbolpedia yet. Scout them and they join the shared library.` : DEFAULT_DESCRIPTION,
     canonical: absolute(CANONICAL_ORIGIN, path),
-    image: absolute(origin, '/og/default.png'),
+    image: absolute(origin, DEFAULT_IMAGE_PATH),
     robots: 'noindex',
   });
 }
