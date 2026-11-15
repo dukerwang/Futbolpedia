@@ -14,6 +14,7 @@ import {
   runConversationalScout,
   showCard,
   threadIsHistorical,
+  wantsPrimeOf,
   type ReplyAttachments,
 } from './conversationalScout';
 import { lookUpDossier, replaceSupersededPrimes } from './dossierLookup';
@@ -843,7 +844,8 @@ export const sendMessageToAI = async (
     const lookups = await Promise.all(
       route.targetPlayers
         .slice(0, 4)
-        .map((name) => lookUpDossier(name, localCards, historical).catch(() => null)),
+        // A player whose prime the message names is looked up in his prime, however the turn routed.
+        .map((name) => lookUpDossier(name, localCards, wantsPrimeOf(message, name, historical)).catch(() => null)),
     );
     const asksAboutOne = route.analyticalMode === 'player_qa' && route.targetPlayers.length === 1;
     lookups.forEach((lookup, i) => {

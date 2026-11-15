@@ -199,5 +199,32 @@ await test('a follow-up about a prime with no card is answered plainly, not as a
   assert.deepEqual(offers, ['prime Rodri']);
 });
 
+for (const isHistorical of [true, false]) {
+  await test(`a question whether his current card is his prime is told the prime has no card (router: ${isHistorical ? 'past' : 'present'})`, async () => {
+    const current = {
+      ...prime('Rodri', 94, '2026-27'),
+      evaluationDate: '2026-11-04',
+      version: { id: 'rodri-current', type: 'current', label: 'Current Form (November 2026)', evaluationDate: '2026-11-04', seasonOrEra: '2026-27' },
+    } as unknown as PlayerProfile;
+    const redondo = prime('Fernando Redondo', 94, '1997-00');
+    ROUTE = { ...ROUTE, intent: 'tactical_chat', analyticalMode: 'player_qa', targetPlayers: ['Rodri'], isHistorical };
+    BRIEF = { ...BRIEF, kind: 'other', criteria: [], counterCase: '', verdict: '', calls: [] };
+    WRITER = 'No: his prime has never been rated.';
+    const history = [
+      { id: 'u1', sender: 'user', content: "who's better, prime rodri, or prime redondo", timestamp: 1 },
+      { id: 'a1', sender: 'ai', content: 'Both are rated 94; Rodri edges it.', timestamp: 2 },
+    ] as any;
+    let offers: string[] = [];
+    const message = "if current rodri is prime rodri, then wouldn't futbolpedia have given rodri the prime card when it rated him before?";
+    await quietly(() =>
+      sendMessageToAI(message, history, undefined, [], [current, redondo], { onAttachments: (a: any) => (offers = a.scoutOffers) } as any),
+    );
+    const writer = calls.filter((c) => !c.structured && c.prompt.includes('<task>')).at(-1)?.prompt ?? '';
+    assert.ok(writer.includes('No prime card exists for Rodri'), 'the writer is told his prime has no card');
+    assert.ok(writer.includes('How cards work'), 'the writer is told how cards work');
+    assert.deepEqual(offers, ['prime Rodri']);
+  });
+}
+
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

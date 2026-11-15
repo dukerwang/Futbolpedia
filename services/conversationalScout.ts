@@ -46,7 +46,7 @@ import {
 } from '../packages/engine/src/gates/managerMentions.ts';
 import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubManagers';
 import { reconcileDossierNumbers } from './dossierNumberGate';
-import { toBasePlayerSlug } from './dossierCards';
+import { cardEdition, toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
 import { buildGaffaTurn, capGaffaTradeProse, leagueFocusOf, starterClubs, type GaffaTurn } from './gaffaTurn';
 import { lockGaffaRosterNames } from './gaffaLineupAudit';
@@ -354,21 +354,30 @@ const asksOnlyCurrentFormOf = (text: string, name: string): boolean =>
   namesVersionOf(text, name, CURRENT_CUE) && !namesVersionOf(text, name, PRIME_CUE);
 
 /**
- * Players in a thread about primes whose only card rates their current form, with that card's
- * label. Without a note the writer reads that card as the prime it was asked about. A player the
- * message asks about in current form is left out; so is every card on a turn about the present
- * (a retired player's prime card is the right one there).
+ * Whether a turn is about a player's prime: a thread about primes, unless the message asks only for
+ * his current form; or any message that names his prime, however the router read the turn (a
+ * question setting his current form against his prime names both).
+ */
+export const wantsPrimeOf = (message: string, name: string, historical: boolean): boolean =>
+  historical ? !asksOnlyCurrentFormOf(message, name) : namesVersionOf(message, name, PRIME_CUE);
+
+/**
+ * Players asked about in their prime whose card in play rates their current form, and who have no
+ * prime card in `pool`, with that card's label. Without a note the writer reads the current card
+ * as the prime it was asked about.
  */
 export const editionGaps = (
   cards: PlayerProfile[],
   historical: boolean,
   message = '',
-): { name: string; label: string }[] =>
-  historical
-    ? cards
-        .filter((c) => c?.basicInfo?.name && !isPrimeCard(c) && !asksOnlyCurrentFormOf(message, c.basicInfo.name))
-        .map((c) => ({ name: c.basicInfo.name, label: c.version?.label?.trim() || 'current form' }))
-    : [];
+  pool: PlayerProfile[] = cards,
+): { name: string; label: string }[] => {
+  const hasPrime = (name: string) =>
+    pool.some((p) => cardEdition(p) === 'prime' && toBasePlayerSlug(p.basicInfo.name) === toBasePlayerSlug(name));
+  return cards
+    .filter((c) => c?.basicInfo?.name && !isPrimeCard(c) && wantsPrimeOf(message, c.basicInfo.name, historical) && !hasPrime(c.basicInfo.name))
+    .map((c) => ({ name: c.basicInfo.name, label: c.version?.label?.trim() || 'current form' }));
+};
 
 /** The writer's note for a player whose prime has no card. */
 export const editionGapNote = (gap: { name: string; label: string }): string =>
@@ -546,11 +555,18 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 
     // One card per player, in the edition this turn is about (current form vs. peak).
     const lockedCards = pickCardPerPlayer(matchedCards, isHistoricalThread);
+    // A message that names a player's prime on a turn read as about the present still gets his
+    // prime card, beside the current one.
+    if (!isHistoricalThread) {
+      for (const card of pickCardPerPlayer(matchedCards.filter((c) => cardEdition(c) === 'prime'), true)) {
+        if (namesVersionOf(message, card.basicInfo.name, PRIME_CUE) && !lockedCards.includes(card)) lockedCards.push(card);
+      }
+    }
     if (lockedCards.length > 0) {
       effectiveLockedBlock = buildLockedDossiersBlock(lockedCards);
     }
     cardsInPlay = lockedCards;
-    gaps = editionGaps(lockedCards, isHistoricalThread, message);
+    gaps = editionGaps(lockedCards, isHistoricalThread, message, matchedCards);
 
     const routeClubs =
       route.targetClubs && route.targetClubs.length > 0

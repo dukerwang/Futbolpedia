@@ -135,6 +135,9 @@ await test('a prime debate notes a player whose only card is his current form, u
   assert.equal(editionGaps([current], true, 'only current rodri is rated, is prime rodri the same as current?').length, 1);
   assert.deepEqual(editionGaps([current, prime], true, 'prime Redondo or current Rodri?'), []);
   assert.deepEqual(editionGaps([current], false, 'how good is rodri'), []);
+  // A message that names his prime counts however the turn was routed, unless his prime has a card.
+  assert.equal(editionGaps([current], false, 'if current rodri is prime rodri, why no prime card?').length, 1);
+  assert.deepEqual(editionGaps([current], false, 'if current rodri is prime rodri, why no prime card?', [current, card('Rodri', 'prime')]), []);
 });
 
 await test('a missing prime is offered beside the current card, and a prime offer queues a prime rating', () => {
