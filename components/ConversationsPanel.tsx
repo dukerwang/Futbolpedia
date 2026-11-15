@@ -76,7 +76,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
     setSharingId(conv.id);
     try {
       const code = await shareConversation(conv);
-      const url = `${window.location.origin}/#/c/${code}`;
+      const url = `${window.location.origin}/c/${code}`;
       await navigator.clipboard.writeText(url);
       setSharedId(conv.id);
       setTimeout(() => setSharedId(null), 2000);

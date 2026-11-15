@@ -7,6 +7,8 @@ import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import { WhatsNewPopup } from './components/WhatsNewPopup';
 import { DossierHub, type HubTab } from './components/DossierHub';
+import { CardPage } from './components/CardPage';
+import { cardPath, legacyHashToPath, parsePath } from './services/cardPaths';
 import { cardReference } from './components/pills';
 import type {
   ChatMessage,
@@ -140,6 +142,12 @@ const App: React.FC = () => {
   // Main view: the chat, or the dossier hub (the global hub and "Your dossiers" as tabs)
   const [view, setView] = useState<AppView>('chat');
   const [hubTab, setHubTab] = useState<HubTab>('global');
+  // The card page's address (`/p/…`) while the card view is open.
+  const [cardPagePath, setCardPagePath] = useState<string | null>(null);
+  // The view to return to when the card page is left by Back.
+  const lastListViewRef = useRef<Exclude<AppView, 'card'>>('chat');
+  // A question a card page asked, sent once the new conversation is in place.
+  const [pendingSend, setPendingSend] = useState<string | null>(null);
   // Text the hub's "Ask" puts in the chat box
   const [chatDraft, setChatDraft] = useState<{ id: number; text: string } | null>(null);
   // The left panel is the Scout desk or one open dossier.
@@ -440,83 +448,82 @@ const App: React.FC = () => {
     }
 
     // Handle shared content via URL hash (#/p/<slug> for dossiers, #/c/<code> for conversations)
-    const loadSharedProfile = async () => {
-      const hash = window.location.hash;
-
-      if (hash.startsWith('#/p/')) {
-        const slug = hash.slice(4);
-        if (!slug) return;
-        setIsLoading(true);
-        try {
-          const profile = await getCachedDossier(slug, false);
-          if (profile) {
-            setMessages(prev => [...prev, {
-              id: `shared-${Date.now()}`,
-              sender: 'ai',
-              content: `I've retrieved the archived dossier for **${profile.basicInfo.name}**.`,
-              timestamp: Date.now(),
-            }]);
-            setActiveProfile(profile);
-            const profileWithDate = { ...profile, createdAt: profile.createdAt || Date.now() };
-            setGlobalDossiers(prev => {
-              const updated = addMissingCards(prev, [profileWithDate]);
-              if (updated !== prev) saveGlobalDossiers(updated);
-              return updated;
-            });
-            setAllProfiles(prev => addMissingCards(prev, [profileWithDate]));
-            setIsPanelOpen(true);
-            window.history.replaceState({}, '', window.location.pathname);
-          }
-        } catch (err) {
-          console.error("Shared profile fetch failed:", err);
-        } finally {
-          setIsLoading(false);
+    // A shared conversation (`/c/<code>`) becomes a new conversation of your own. The address
+    // stays until you send a message in it (handleSendMessage).
+    const importSharedConversation = async (code: string) => {
+      const sharedConv = await getSharedConversation(code);
+      if (sharedConv) {
+        // Fork into a new local conversation
+        const importedId = generateId();
+        const importedConv: Conversation = {
+          ...sharedConv,
+          id: importedId,
+          title: sharedConv.title ? `${sharedConv.title} (shared)` : 'Shared Briefing',
+          createdAt: Date.now(),
+        };
+        setConversations(prev => {
+          const updated = [importedConv, ...prev];
+          localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
+          return updated;
+        });
+        setActiveConversationId(importedId);
+        localStorage.setItem('futbolpedia-active-conversation-id', importedId);
+        setMessages(importedConv.messages);
+        setActiveProfile(importedConv.activeProfile);
+        setAllProfiles(importedConv.allProfiles);
+        setGaffaClub(importedConv.gaffaClub ?? null);
+        // Merge any dossiers from the shared conversation
+        if (importedConv.allProfiles?.length > 0) {
+          setGlobalDossiers(prev => {
+            const updated = addMissingCards(
+              prev,
+              importedConv.allProfiles.map(prof => ({ ...prof, createdAt: prof.createdAt || Date.now() })),
+            );
+            saveGlobalDossiers(updated);
+            return updated;
+          });
         }
+        setIsConversationsOpen(true);
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    };
 
-      } else if (hash.startsWith('#/c/')) {
-        const code = hash.slice(4);
-        if (!code) return;
+    const loadSharedProfile = async () => {
+      // Old share links (`#/p/<slug>`, `#/c/<code>`) move to their real addresses.
+      const legacy = legacyHashToPath(window.location.hash);
+      if (legacy) window.history.replaceState({}, '', legacy);
+      const hash = window.location.hash;
+      const address = parsePath(window.location.pathname);
+
+      if (address?.kind === 'card') {
+        setCardPagePath(window.location.pathname);
+        setView('card');
+      } else if (address?.kind === 'chat') {
+        const code = address.code;
         setIsLoading(true);
         try {
-          const sharedConv = await getSharedConversation(code);
-          if (sharedConv) {
-            // Fork into a new local conversation
-            const importedId = generateId();
-            const importedConv: Conversation = {
-              ...sharedConv,
-              id: importedId,
-              title: sharedConv.title ? `${sharedConv.title} (shared)` : 'Shared Briefing',
-              createdAt: Date.now(),
-            };
-            setConversations(prev => {
-              const updated = [importedConv, ...prev];
-              localStorage.setItem('futbolpedia-conversations', JSON.stringify(updated));
-              return updated;
-            });
-            setActiveConversationId(importedId);
-            localStorage.setItem('futbolpedia-active-conversation-id', importedId);
-            setMessages(importedConv.messages);
-            setActiveProfile(importedConv.activeProfile);
-            setAllProfiles(importedConv.allProfiles);
-            setGaffaClub(importedConv.gaffaClub ?? null);
-            // Merge any dossiers from the shared conversation
-            if (importedConv.allProfiles?.length > 0) {
-              setGlobalDossiers(prev => {
-                const updated = addMissingCards(
-                  prev,
-                  importedConv.allProfiles.map(prof => ({ ...prof, createdAt: prof.createdAt || Date.now() })),
-                );
-                saveGlobalDossiers(updated);
-                return updated;
-              });
-            }
-            setIsConversationsOpen(true);
-            window.history.replaceState({}, '', window.location.pathname);
-          }
+          await importSharedConversation(code);
         } catch (err) {
           console.error("Shared conversation fetch failed:", err);
         } finally {
           setIsLoading(false);
+        }
+      } else if (hash.startsWith('#/p/')) {
+        // A shared personal revision (no address of its own) opens in the side panel.
+        const slug = decodeURIComponent(hash.slice(4));
+        window.history.replaceState({}, '', window.location.pathname);
+        const profile = slug ? await getCachedDossier(slug, false).catch(() => null) : null;
+        if (profile) {
+          const dated = { ...profile, createdAt: profile.createdAt || Date.now() };
+          setActiveProfile(dated);
+          setGlobalDossiers(prev => {
+            const updated = addMissingCards(prev, [dated]);
+            if (updated !== prev) saveGlobalDossiers(updated);
+            return updated;
+          });
+          setAllProfiles(prev => addMissingCards(prev, [dated]));
+          setPanelMode('dossier');
+          setIsPanelOpen(true);
         }
       } else if (hash.startsWith('#/scout')) {
         // Scout on Futbolpedia (from Gaffa): Scout opens with the name in its field. Nothing is
@@ -668,6 +675,8 @@ const App: React.FC = () => {
     mentions: Mention[] = [],
   ) => {
     if (!userMessageText.trim() && !imageData) return;
+    // A shared conversation's address (`/c/<code>`) stops describing it once you add to it.
+    if (parsePath(window.location.pathname)?.kind === 'chat') window.history.replaceState({}, '', '/');
 
     // Mentioned cards join the conversation, so the model reads them in full. A shared card picked
     // from the suggestions is only an outline until the pipeline serves it (a cache hit).
@@ -1188,13 +1197,66 @@ const App: React.FC = () => {
     });
   }, [activeConversationId]);
 
+  // The card page has a real address: opening a card pushes `/p/…`, Back returns to where you were.
+  const openCardPage = useCallback((path: string, options?: { replace?: boolean }) => {
+    if (options?.replace) window.history.replaceState({ card: true }, '', path);
+    else if (window.location.pathname !== path) window.history.pushState({ card: true }, '', path);
+    setCardPagePath(path);
+    setView(prev => {
+      if (prev !== 'card') lastListViewRef.current = prev;
+      return 'card';
+    });
+  }, []);
+
+  /** Leaves the card page for the chat or the hub, giving the address back to `/`. */
+  const changeView = useCallback((next: AppView) => {
+    if (next !== 'card') {
+      lastListViewRef.current = next;
+      if (parsePath(window.location.pathname)?.kind === 'card') window.history.pushState({}, '', '/');
+    }
+    setView(next);
+  }, []);
+
+  useEffect(() => {
+    const onPop = () => {
+      const address = parsePath(window.location.pathname);
+      if (address?.kind === 'card') {
+        setCardPagePath(window.location.pathname);
+        setView('card');
+      } else {
+        setView(prev => (prev === 'card' ? lastListViewRef.current : prev));
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   const handleSelectHubDossier = useCallback((profile: PlayerProfile, from: HubTab) => {
-    // A global card opened from the hub joins your dossiers, as before.
-    if (from === 'global') saveAndSetActiveProfile(profile);
-    else handleSelectProfile(profile);
+    // A shared card opens its own page. Your own list keeps the side panel: it can hold personal
+    // revisions, which have no address of their own.
+    const path = from === 'global' ? cardPath(profile) : null;
+    if (path) {
+      openCardPage(path);
+      return;
+    }
+    handleSelectProfile(profile);
     setPanelMode('dossier');
     setIsPanelOpen(true);
-  }, [saveAndSetActiveProfile, handleSelectProfile]);
+  }, [handleSelectProfile, openCardPage]);
+
+  const handleCardPageSave = useCallback((profile: PlayerProfile) => {
+    const dated = stampDossier(profile, Date.now());
+    setGlobalDossiers(prev => {
+      const updated = fileCard(prev, dated);
+      saveGlobalDossiers(updated);
+      return updated;
+    });
+  }, []);
+
+  const isCardSaved = useCallback(
+    (profile: PlayerProfile) => globalDossiers.some(d => getCardKey(d) === getCardKey(profile)),
+    [globalDossiers],
+  );
 
   // "Ask" on a hub card: the card joins this conversation as a stub (so the model reads the full
   // card, as with a generated dossier) and the chat box starts with a reference to that exact
@@ -1217,6 +1279,27 @@ const App: React.FC = () => {
     setChatDraft({ id: Date.now(), text: `${reference}: ` });
     setView('chat');
   }, [saveAndSetActiveProfile]);
+
+  // "Ask" on a card page: a new conversation with the card in it. A question (a starter, or one
+  // typed on the page) is sent once the conversation is in place; with none, the box is ready.
+  const handleCardPageAsk = useCallback((profile: PlayerProfile, question?: string) => {
+    handleNewConversation();
+    handleAskAboutDossier(profile);
+    if (question) {
+      setChatDraft({ id: Date.now() + 1, text: '' });
+      setPendingSend(`${cardReference(profile)}: ${question}`);
+    }
+    lastListViewRef.current = 'chat';
+    if (parsePath(window.location.pathname)?.kind === 'card') window.history.pushState({}, '', '/');
+  }, [handleNewConversation, handleAskAboutDossier]);
+
+
+  useEffect(() => {
+    if (!pendingSend || isLoading || view !== 'chat') return;
+    const text = pendingSend;
+    setPendingSend(null);
+    handleSendMessage(text);
+  }, [pendingSend, isLoading, view, handleSendMessage]);
 
   // The panel shows the Scout desk, or one dossier (and is closed when none is active).
   const showPanel = isPanelOpen && (panelMode === 'scout' || activeProfile !== null);
@@ -1241,7 +1324,7 @@ const App: React.FC = () => {
         onViewChange={(next) => {
           // The header's Dossiers button always opens on the global hub.
           if (next === 'hub') setHubTab('global');
-          setView(next);
+          changeView(next);
         }}
         onToggleConversations={toggleConversations}
         isConversationsOpen={isConversationsOpen}
@@ -1306,6 +1389,21 @@ const App: React.FC = () => {
               onScout={(name) => (name ? handleScoutName(name) : openScout())}
             />
           </div>
+
+          {/* A card's page (`/p/…`), layered like the hub */}
+          {view === 'card' && cardPagePath && (
+            <div className={`absolute inset-0 z-40 flex flex-col transition-[padding] duration-500 ease-ios-ease ${showPanel ? 'md:pl-[450px]' : ''} ${isConversationsOpen ? 'md:pr-[350px]' : ''}`}>
+              <CardPage
+                path={cardPagePath}
+                onNavigate={openCardPage}
+                onAsk={handleCardPageAsk}
+                onSave={handleCardPageSave}
+                isSaved={isCardSaved}
+                onScout={(name) => (name ? handleScoutName(name) : openScout())}
+                onOpenLibrary={() => { setHubTab('global'); changeView('hub'); }}
+              />
+            </div>
+          )}
 
           {/* Main Chat Area */}
           <main className="flex-1 flex flex-col w-full h-full relative min-h-0" inert={view !== 'chat'}>

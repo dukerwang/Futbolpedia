@@ -143,6 +143,11 @@ export interface PlayerProfile {
   attributes: Attributes;
   goalkeeperAttributes?: GoalkeeperAttributes;
   shortBio: string;
+  /**
+   * One sentence (at most SHARE_LINE_MAX_CHARS) saying what the card concludes about the player,
+   * read on its own as a link preview. Optional: cards rated before it existed have none.
+   */
+  shareLine?: string;
   playstyleAndRole: PlaystyleAndRole;
   latestUpdate: string;
   /** YYYY-MM-DD of the last Latest Update refresh; absent means it dates from the card itself. */

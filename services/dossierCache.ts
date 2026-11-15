@@ -94,6 +94,24 @@ export const getCachedDossier = async (
 };
 
 /**
+ * One shared row by slug for a share page, undated legacy cards included. Unlike
+ * getCachedDossier, a failed read throws, so an outage is never mistaken for a missing card.
+ */
+export const readSharedCardRow = async (slug: string): Promise<PlayerProfile | null> => {
+  if (!supabase) throw new Error('Supabase is not available');
+  const { data, error } = await supabase
+    .from('player_profiles')
+    .select('player_data, updated_at')
+    .eq('player_slug', slug)
+    .maybeSingle();
+  if (error) throw new Error(error.message || 'player_profiles read failed');
+  if (!data?.player_data) return null;
+  const profile = data.player_data as PlayerProfile;
+  const at = rowTimeMs(data.updated_at);
+  return ensureDossierDated(profile, at) ?? { ...profile, createdAt: profile.createdAt || at };
+};
+
+/**
  * The player's shared historical cards (season, prime and era), oldest published first, so
  * whichever card was published first for a season or window is the card. Re-rated primes are
  * dropped, so their old numbers can't come back as a season or era card.

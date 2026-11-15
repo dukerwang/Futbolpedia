@@ -1,9 +1,10 @@
 import type { PlayerProfile } from '../types';
 import { describeCardEdition } from '../components/pills';
+import { cardPath } from './cardPaths';
 import { cardEdition, ensureDossierDated, fetchCardIndex, isPrimeCard, toBasePlayerSlug, toVersionedSlug } from './dossierStore';
 
 /**
- * A shared card as a link into Futbolpedia (`#/p/<slug>`), for Gaffa: the player, which version
+ * A shared card as a link into Futbolpedia (`/p/<player>…`, with the old `#/p/<slug>` kept as `slug`), for Gaffa: the player, which version
  * the card rates, and where it opens. No rating: Futbolpedia's numbers stay on Futbolpedia for now.
  */
 export interface CardLink {
@@ -11,13 +12,16 @@ export interface CardLink {
   edition: string;
   label: string;
   slug: string;
+  /** The card's own address (`/p/<player>…`). Gaffa's older builds still use `slug`. */
+  path: string;
 }
 
 export function cardLinkFor(card: PlayerProfile): CardLink | null {
   const dated = ensureDossierDated(card, Date.now()) ?? card;
   const slug = toVersionedSlug(dated);
   if (!slug || !card.basicInfo?.name) return null;
-  return { name: card.basicInfo.name, edition: cardEdition(card), label: describeCardEdition(card).label, slug };
+  const path = cardPath(dated) ?? `/#/p/${slug}`;
+  return { name: card.basicInfo.name, edition: cardEdition(card), label: describeCardEdition(card).label, slug, path };
 }
 
 export const CARD_LOOKUP_LIMIT = 25;

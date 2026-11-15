@@ -779,15 +779,24 @@ async function startServer() {
     }
   });
 
+  // Shareable links (/p/…, /c/<code>) and their preview images (/og/…). Registered before the
+  // app's own files, so a card's address gets its own tags in index.html.
+  const { registerShareRoutes, builtIndexHtml } = await import("./services/shareServer");
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
+    registerShareRoutes(app, {
+      html: async (req) =>
+        vite.transformIndexHtml(req.originalUrl, await fs.readFile(path.join(process.cwd(), "index.html"), "utf8")),
+    });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
+    registerShareRoutes(app, { html: builtIndexHtml(distPath) });
     app.use(express.static(distPath));
     app.get('*all', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

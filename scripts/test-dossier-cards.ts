@@ -393,9 +393,21 @@ async function main() {
       'signatureSpikes',
       'genuineFlaws',
       'peerBenchmark',
+      'shareLine',
     ] as const) {
       assert.equal(p[field], undefined, field);
     }
+  });
+
+  await test("sanitize keeps a share line, cleaned, and drops one that's empty or too long", () => {
+    const kept = sanitizeProfileData({
+      basicInfo: { name: 'Joshua Kimmich' },
+      shareLine: '  “A midfielder who sets the tempo [3] for everyone around him.”  ',
+    });
+    assert.equal(kept.shareLine, 'A midfielder who sets the tempo for everyone around him.');
+    assert.equal(sanitizeProfileData({ basicInfo: { name: 'A' }, shareLine: '   ' }).shareLine, undefined);
+    assert.equal(sanitizeProfileData({ basicInfo: { name: 'A' }, shareLine: 'x'.repeat(141) }).shareLine, undefined);
+    assert.equal(sanitizeProfileData({ basicInfo: { name: 'A' }, shareLine: 7 as unknown as string }).shareLine, undefined);
   });
 
   await test('sanitize normalizes confidence, tags, age curve and moments', () => {

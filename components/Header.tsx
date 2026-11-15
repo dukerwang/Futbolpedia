@@ -1,6 +1,7 @@
 import React from 'react';
 
-export type AppView = 'chat' | 'hub';
+/** The chat, the dossier hub, or one card's page (`/p/…`). */
+export type AppView = 'chat' | 'hub' | 'card';
 
 interface HeaderProps {
     /** Opens or closes the Scout desk. */
@@ -44,7 +45,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="material-symbols-outlined text-[22px]">sports_soccer</span>
             </div>
             <div className="hidden sm:flex flex-col">
-                <h1 className="text-charcoal dark:text-cream-50 text-xl font-serif font-bold tracking-tight leading-none">Futbolpedia AI 3.6</h1>
+                <h1 className="text-charcoal dark:text-cream-50 text-xl font-serif font-bold tracking-tight leading-none">Futbolpedia</h1>
                 <span className="text-[10px] text-cream-800 dark:text-cream-400 uppercase tracking-[0.2em] mt-0.5">Analysis Tool</span>
             </div>
         </button>
