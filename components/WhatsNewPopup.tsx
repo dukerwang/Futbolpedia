@@ -4,8 +4,8 @@ interface WhatsNewPopupProps {
   onClose?: () => void;
 }
 
-/** Bump when the popup describes a new release, so everyone sees it once more. */
-const SEEN_KEY = 'futbolpedia-whats-new-seen-fp36b';
+/** Bump when the overview changes enough that everyone should see it once more. */
+const SEEN_KEY = 'futbolpedia-overview-seen-v1';
 
 interface FeatureGroup {
   id: string;
@@ -13,173 +13,160 @@ interface FeatureGroup {
   title: string;
   kicker: string;
   items: Array<{ title: string; body: string }>;
-  /** Full width: the headline of the briefing. */
-  featured?: boolean;
-  /** Half width on large screens: a release's own highlights. */
+  /** Half width on large screens: the four things Futbolpedia is for. */
   wide?: boolean;
 }
 
 const scoutShortcut = (): string =>
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl+K';
 
-/** Everything that's changed since Futbolpedia 2: the library first, then 3.6 and 3.5, then the rest by what you do with it. */
+/** What Futbolpedia is, for a fan opening it for the first time: the four big things, then the rest. */
 const featureGroups = (): FeatureGroup[] => [
   {
-    id: 'library',
-    icon: 'public',
-    title: 'The Global Dossier Library',
-    kicker: 'The heart of Futbolpedia 3',
-    featured: true,
-    items: [
-      {
-        title: 'Scouted once, shared with everyone',
-        body: 'Every dossier anyone creates joins one library the whole community shares. You never start from a blank page, and the library grows with every player scouted.',
-      },
-      {
-        title: 'Instant cards',
-        body: 'Look up a player who is already in the library and the card opens in under a second, whatever name you type.',
-      },
-      {
-        title: 'Everyone argues about the same numbers',
-        body: "There's one card for each version of a player, so your rating is everyone's rating. When enough people make the same good case against a card, it gets re-rated.",
-      },
-      {
-        title: 'Explore the whole game',
-        body: "Browse every card, filter by position, rating and edition, find the biggest risers, and jump from a player's current form to their prime, eras and single seasons.",
-      },
-    ],
-  },
-  {
-    id: 'past',
-    icon: 'history_edu',
-    title: 'Settle Any Debate',
-    kicker: 'New in 3.6',
+    id: 'chat',
+    icon: 'forum',
+    title: 'Conversations and Debates',
+    kicker: 'Chat',
     wide: true,
     items: [
       {
-        title: 'Greatest-ever questions, answered properly',
-        body: 'Who was better at their peak? Who is the best ever in a position? Get a clear verdict, argued point by point, that takes the other side’s best case seriously.',
+        title: 'Talk football properly',
+        body: 'Tactics, transfers, rankings, form, who was better: ask anything and keep going. The analyst remembers the whole conversation and answers with a point of view.',
       },
       {
-        title: 'Grounded in the record',
-        body: 'Past seasons and careers are checked against the historical record, so every fact is right and sits in the right season.',
+        title: 'Arguments that go somewhere',
+        body: 'Ask who was better at their peak or who is the best ever in a position, and get the case argued point by point, the other side’s best answer, and a clear verdict.',
       },
       {
-        title: 'Consistent with the ratings',
-        body: 'Verdicts follow the library’s ratings, so your argument and your cards tell the same story.',
+        title: 'Bring the cards in',
+        body: 'Type @ to pull any player card into the chat. The analyst quotes its exact numbers, so the argument and the ratings tell the same story.',
       },
       {
-        title: 'Stats you can quote',
-        body: 'Numbers come with their competition and seasons attached, ready for your next argument.',
+        title: 'Facts in the right season',
+        body: 'Past seasons and careers are checked against the record, and statistics come with their competition and seasons attached.',
       },
     ],
   },
   {
-    id: 'present',
+    id: 'cards',
+    icon: 'workspace_premium',
+    title: 'Player Cards',
+    kicker: 'Ratings',
+    wide: true,
+    items: [
+      {
+        title: 'One scale for every era',
+        body: "A 1970s legend and today's breakout star are rated on the same all-time scale, so comparing them finally means something.",
+      },
+      {
+        title: 'Every version of a player',
+        body: 'Rate a player’s current form, their prime, a spell at one club or a single season, each with its own card.',
+      },
+      {
+        title: 'Ratings with receipts',
+        body: 'Each card shows who the player was better than, level with and behind, what they did best, where they fell short, and how strong the evidence is.',
+      },
+      {
+        title: 'Disagree and make your case',
+        body: 'Challenge a rating in chat. Win the argument and your revised card is yours to keep.',
+      },
+    ],
+  },
+  {
+    id: 'today',
     icon: 'stadium',
-    title: 'Football As It Is Today',
-    kicker: 'New in 3.5',
+    title: 'Football Today',
+    kicker: 'This season',
     wide: true,
     items: [
       {
         title: "This weekend's team",
-        body: 'Ask about any club and get the players who are actually starting and who is injured, not last season’s lineup.',
+        body: 'Ask about any club and get the players who are actually starting and who is out, not last season’s lineup.',
       },
       {
-        title: "What's new, first",
-        body: 'Answers lead with what has changed: the signings, the new shape, the player who has taken over a role.',
+        title: "What's changed",
+        body: 'Answers start with what is different this season: the signings, the new shape, the player who has taken over a role.',
       },
       {
-        title: 'A real opinion',
-        body: 'The analyst picks one starter for every position and takes a clear stance, the way a scout would.',
+        title: 'Cards that keep up',
+        body: 'Current-form cards pick up each week’s news and are re-rated every month.',
       },
       {
-        title: 'Facts it can back up',
-        body: 'Answers are built on live match data, and anything that can’t be checked is left out instead of made up.',
-      },
-    ],
-  },
-  {
-    id: 'ratings',
-    icon: 'workspace_premium',
-    title: 'One Scale for Every Era',
-    kicker: 'Ratings',
-    items: [
-      {
-        title: 'Compare anyone with anyone',
-        body: "A 1970s legend and today's breakout star are rated on the same all-time scale, so comparisons across eras finally mean something.",
-      },
-      {
-        title: 'Every version of a player',
-        body: 'Rate current form, a prime, a named era such as a spell at one club, or a single season.',
-      },
-      {
-        title: 'Ratings with receipts',
-        body: 'Each card shows who a player was better than, level with and behind, how strong the evidence is, and the case for rating them higher or lower.',
-      },
-      {
-        title: 'Always up to date',
-        body: 'Current-form cards are re-rated every month and refreshed every week. Prime and history cards stay fixed.',
-      },
-    ],
-  },
-  {
-    id: 'scout',
-    icon: 'person_search',
-    title: 'Scout at Speed',
-    kicker: 'Scout',
-    items: [
-      {
-        title: 'Scout a whole squad',
-        body: `Open Scout from the header or with ${scoutShortcut()} and paste a list of names. Players are rated in the background while you keep chatting.`,
-      },
-      {
-        title: 'Your shortlist, saved',
-        body: 'Every card you scout or open is kept in Your dossiers, ready to share with a link.',
-      },
-      {
-        title: 'Make your case',
-        body: 'Disagree with a rating? Challenge it in chat. Win the argument and you keep your revised card.',
-      },
-    ],
-  },
-  {
-    id: 'chat',
-    icon: 'forum',
-    title: 'An Analyst Who Knows Your Cards',
-    kicker: 'Chat',
-    items: [
-      {
-        title: 'Bring any card into the chat',
-        body: 'Type @ to pull in any card from the library, and the analyst quotes its exact numbers.',
-      },
-      {
-        title: 'Beyond scouting',
-        body: 'Tactics, club form, rankings, transfers: ask anything about football and get an answer with a point of view.',
-      },
-      {
-        title: 'Pick up where you left off',
-        body: 'Conversations are saved and titled for you, and you can share a whole chat, cards included.',
+        title: 'Nothing made up',
+        body: 'Answers are built on live match data, and anything that can’t be checked is left out.',
       },
     ],
   },
   {
     id: 'gaffa',
     icon: 'sports',
-    title: 'Gaffa Mode',
-    kicker: 'Fantasy league',
+    title: 'Your Gaffa Club',
+    kicker: 'Fantasy',
+    wide: true,
     items: [
       {
-        title: 'Your league, your rules',
-        body: 'Switch on Gaffa in the chat box for answers drawn from your league’s own rules.',
-      },
-      {
         title: 'Connect your club',
-        body: 'Sign in and pick your club. Gaffa reads your roster, budget, standings, matchup and lineup, plus live listings, auctions and free agents.',
+        body: 'Tap Gaffa in the chat box and allow access. Futbolpedia reads your squad, budget, table and matchup, and never changes anything.',
       },
       {
-        title: 'Smarter decisions',
-        body: 'Audit your starting XI, get a scored verdict on any trade, and know your bid ceiling before an auction.',
+        title: 'Pick the right XI',
+        body: 'Get your lineup checked against who is actually starting in the Premier League this week.',
+      },
+      {
+        title: 'Trades and auctions',
+        body: 'Get a scored verdict on any trade, and know your bid ceiling before an auction closes.',
+      },
+      {
+        title: 'Your league’s rules',
+        body: 'Answers follow your league’s own rules, and you can ask about them directly.',
+      },
+    ],
+  },
+  {
+    id: 'scout',
+    icon: 'person_search',
+    title: 'Scout',
+    kicker: 'Rate players',
+    items: [
+      {
+        title: 'Rate a whole squad',
+        body: `Open Scout from the header or with ${scoutShortcut()} and paste a list of names. Cards are rated in the background while you keep chatting.`,
+      },
+    ],
+  },
+  {
+    id: 'library',
+    icon: 'public',
+    title: 'The Shared Library',
+    kicker: 'Dossiers',
+    items: [
+      {
+        title: 'Scouted once, there for everyone',
+        body: 'Every card joins one library the whole community shares. Browse by position, rating and edition, or find the biggest risers.',
+      },
+    ],
+  },
+  {
+    id: 'smarter',
+    icon: 'bolt',
+    title: 'Sharper Answers',
+    kicker: 'Under the hood',
+    items: [
+      {
+        title: 'A smarter analyst',
+        body: 'Futbolpedia now runs on a newer, more capable model: deeper reasoning in debates, better judgment on ratings, and fewer slips on the facts.',
+      },
+    ],
+  },
+  {
+    id: 'share',
+    icon: 'ios_share',
+    title: 'Saved and Shared',
+    kicker: 'Yours to keep',
+    items: [
+      {
+        title: 'Pick up where you left off',
+        body: 'Conversations and cards are saved for you. Share a card, or a whole chat with its cards, with a link.',
       },
     ],
   },
@@ -236,15 +223,15 @@ export const WhatsNewPopup: React.FC<WhatsNewPopupProps> = ({ onClose }) => {
               <span className="material-symbols-outlined text-[18px]">sports_soccer</span>
             </div>
             <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-emerald-600 dark:text-emerald-400 font-bold">
-              Update Briefing • v3.6
+              futbolpedia.org
             </span>
           </div>
 
           <h2 id="whats-new-title" className="text-2xl md:text-4xl font-serif font-bold text-charcoal dark:text-cream-100 tracking-tight leading-tight">
-            Welcome to Futbolpedia 3.6
+            Welcome to Futbolpedia
           </h2>
           <p className="text-xs md:text-sm text-cream-800 dark:text-cream-400 mt-1 md:mt-2 font-sans font-light">
-            Your AI scout for every era of football. Since Futbolpedia 2, every player has one rating on a single all-time scale, every dossier joins a library the whole community shares, and the analyst knows this weekend's lineup as well as the great sides of history.
+            Your football analyst for every era. Talk through any question in depth, rate any player on one all-time scale, and know this weekend's team before kick-off.
           </p>
         </div>
 
@@ -255,9 +242,7 @@ export const WhatsNewPopup: React.FC<WhatsNewPopupProps> = ({ onClose }) => {
               <div
                 key={group.id}
                 className={`flex flex-col space-y-4 p-5 rounded-xl bg-cream-200/50 dark:bg-charcoal/40 border ${
-                  group.featured
-                    ? 'md:col-span-2 xl:col-span-4 border-emerald-500/30 dark:border-emerald-500/25'
-                    : group.wide
+                  group.wide
                       ? 'md:col-span-2 border-emerald-500/30 dark:border-emerald-500/25'
                       : 'border-cream-300/30 dark:border-charcoal-border/30'
                 }`}
@@ -275,7 +260,7 @@ export const WhatsNewPopup: React.FC<WhatsNewPopupProps> = ({ onClose }) => {
 
                 <div
                   className={
-                    group.featured ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4' : group.wide ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : 'space-y-4'
+                    group.wide ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : 'space-y-4'
                   }
                 >
                   {group.items.map((item) => (
@@ -304,7 +289,7 @@ export const WhatsNewPopup: React.FC<WhatsNewPopupProps> = ({ onClose }) => {
             className="w-full sm:w-auto px-6 py-3 bg-emerald-500 hover:bg-emerald-600 dark:bg-emerald-500 dark:hover:bg-emerald-600 text-white font-sans font-medium text-sm rounded-lg shadow-sm hover:shadow transition-all duration-200 flex items-center justify-center gap-2 group cursor-pointer"
             id="whats-new-cta-btn"
           >
-            Start Scouting
+            Get Started
             <span className="material-symbols-outlined text-[16px] group-hover:translate-x-0.5 transition-transform">arrow_forward</span>
           </button>
         </div>
