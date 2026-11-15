@@ -8,9 +8,12 @@ import {
   type ProseToolMode,
 } from './aiClient';
 import {
+  editionGaps,
+  offerPrimeScout,
   offerScout,
   runConversationalScout,
   showCard,
+  threadIsHistorical,
   type ReplyAttachments,
 } from './conversationalScout';
 import { lookUpDossier, replaceSupersededPrimes } from './dossierLookup';
@@ -191,7 +194,23 @@ export interface SendMessageOptions {
   noRating?: boolean;
   /** Called with the route, so a caller can tell a rating request was answered in prose. */
   onRoute?: (route: { intent: string; targetPlayers: string[] }) => void;
+  /**
+   * The card the user chose to challenge (Challenge on the card), by card key. Only then can a turn
+   * revise a rating; without it, pushback on a card is answered as a question.
+   */
+  challengeCardKey?: string;
 }
+
+/**
+ * The card a challenge is about, by its key; else the same player's card in the same edition, since
+ * a re-rated prime comes back under a new key.
+ */
+const findCard = (key: string, cards: PlayerProfile[]): PlayerProfile | undefined => {
+  const exact = cards.find((c) => getCardKey(c) === key);
+  if (exact) return exact;
+  const [player, edition] = key.split(':');
+  return cards.find((c) => toBasePlayerSlug(c.basicInfo.name) === player && cardEdition(c) === edition);
+};
 
 /** Logs each pipeline step's time to the console, unless `window.FUTBOLPEDIA_PERF` is false. */
 const createPerfLogger = (): ((label: string) => void) => {
@@ -782,6 +801,26 @@ export const sendMessageToAI = async (
     }
   }
 
+  // A rating is revised only when the user chose to challenge it. Without that, pushback on a card
+  // is a question to answer, never an argument the card is put on trial for.
+  const challengeCard = options?.challengeCardKey
+    ? findCard(options.challengeCardKey, [...conversationDossiers, ...savedDossiers])
+    : undefined;
+  if (challengeCard && route.intent !== 'single_dossier') {
+    route = {
+      ...route,
+      intent: 'challenge_or_revise',
+      analyticalMode: 'debate_or_verdict',
+      targetPlayers: [challengeCard.basicInfo.name],
+      isHistorical: isPrimeCard(challengeCard),
+    };
+    if (!conversationDossiers.some((c) => getCardKey(c) === getCardKey(challengeCard))) {
+      conversationDossiers = [...conversationDossiers, challengeCard];
+    }
+  } else if (route.intent === 'challenge_or_revise') {
+    route = { ...route, intent: 'tactical_chat', analyticalMode: route.targetPlayers.length === 1 ? 'player_qa' : 'debate_or_verdict' };
+  }
+
   // 2. Single-Player Dossier Pipeline
   if (route.intent === 'single_dossier') {
     const context = buildTurnContext(message, route, conversationDossiers, savedDossiers);
@@ -798,16 +837,23 @@ export const sendMessageToAI = async (
     (route.intent === 'tactical_chat' || route.intent === 'compare')
   ) {
     const localCards = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+    // The edition the conversation is about, as the writer reads it: a follow-up in a prime debate
+    // that names no timeframe is still about primes.
+    const historical = threadIsHistorical(route, history, message);
     const lookups = await Promise.all(
       route.targetPlayers
         .slice(0, 4)
-        .map((name) => lookUpDossier(name, localCards, route.isHistorical).catch(() => null)),
+        .map((name) => lookUpDossier(name, localCards, historical).catch(() => null)),
     );
     const asksAboutOne = route.analyticalMode === 'player_qa' && route.targetPlayers.length === 1;
     lookups.forEach((lookup, i) => {
       if (lookup?.status === 'found') {
         if (!localCards.includes(lookup.card)) turnDossiers = [...turnDossiers, lookup.card];
         if (asksAboutOne) showCard(attachments, lookup.card);
+        // His prime was asked about but only his current form is rated: offer to scout the prime.
+        if (editionGaps([lookup.card], historical, message).length) {
+          offerPrimeScout(attachments, lookup.card.basicInfo.name);
+        }
       } else if (lookup?.status === 'missing') {
         offerScout(attachments, route.targetPlayers[i]);
       }
@@ -834,6 +880,7 @@ export const sendMessageToAI = async (
     savedDossiersBlock,
     peerLedgerBlock,
     attachments,
+    challengeCard,
     onDossierUpdated: options?.onDossierUpdated,
     onStreamChunk: options?.onStreamChunk,
     onStageChange: options?.onStageChange,

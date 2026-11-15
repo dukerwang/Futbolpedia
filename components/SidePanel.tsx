@@ -24,6 +24,8 @@ interface SidePanelProps {
   scout?: React.ReactNode;
   /** Goes back from a dossier to the Scout desk. */
   onBack?: () => void;
+  /** Starts a challenge of this card's rating in the chat. */
+  onChallenge?: (profile: PlayerProfile) => void;
 }
 
 export const SidePanel: React.FC<SidePanelProps> = ({ 
@@ -36,6 +38,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   mode = 'dossier',
   scout,
   onBack,
+  onChallenge,
 }) => {
   const [shareStatus, setShareStatus] = useState<'idle' | 'saving' | 'copied'>('idle');
   const [isDesktop, setIsDesktop] = useState(false);
@@ -300,6 +303,17 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             >
                                 <span className="material-symbols-outlined text-[18px] block">grid_view</span>
                                 <span className="text-[10px] font-sans font-bold uppercase tracking-wider">All dossiers</span>
+                            </button>
+                        )}
+
+                        {onChallenge && (
+                            <button
+                                onClick={() => onChallenge(profile)}
+                                className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center gap-1 rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 px-2 py-1"
+                                title="Think the rating is off? Make your case in the chat"
+                            >
+                                <span className="material-symbols-outlined text-[18px] block">rate_review</span>
+                                <span className="text-[10px] font-sans font-bold uppercase tracking-wider">Challenge</span>
                             </button>
                         )}
 

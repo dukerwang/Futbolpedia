@@ -115,7 +115,7 @@ const recentThreadText = (history: ChatMessage[], count = 6): string =>
  * Whether the thread is about players' primes. A follow-up such as "he wasn't better than him"
  * names no timeframe, but continues a prime-versus-prime debate.
  */
-const threadIsHistorical = (route: TurnRoute, history: ChatMessage[], message = ''): boolean =>
+export const threadIsHistorical = (route: TurnRoute, history: ChatMessage[], message = ''): boolean =>
   route.isHistorical ||
   (!route.wantsCurrentForm && /\b(prime|peak|all[- ]time|(?:19|20)\d0s)\b/i.test(`${recentThreadText(history)}\n${message}`));
 
@@ -252,13 +252,29 @@ export const offerScout = (attachments: ReplyAttachments, name: string): void =>
   if (!known) attachments.scoutOffers.push(name);
 };
 
-/** Adds a card to show under the reply, once. */
+const PRIME_OFFER = /^prime\s+/i;
+
+/**
+ * Offers a player's prime to Scout, for a reply about his prime when only his current form is
+ * rated. It sits beside his current card, so it's kept apart from his plain offer.
+ */
+export const offerPrimeScout = (attachments: ReplyAttachments, name: string): void => {
+  const slug = toBasePlayerSlug(name);
+  if (!slug) return;
+  const held = attachments.scoutOffers.some((n) => PRIME_OFFER.test(n) && toBasePlayerSlug(n) === slug);
+  const shown = attachments.cards.some((c) => isPrimeCard(c) && toBasePlayerSlug(c.basicInfo.name) === slug);
+  if (!held && !shown) attachments.scoutOffers.push(`prime ${name}`);
+};
+
+/** Adds a card to show under the reply, once. A current card leaves an offer of his prime in place. */
 export const showCard = (attachments: ReplyAttachments, card: PlayerProfile): void => {
   const key = getCardKey(card);
   if (attachments.cards.some((c) => getCardKey(c) === key)) return;
   attachments.cards.push(card);
   const slug = toBasePlayerSlug(card.basicInfo.name);
-  attachments.scoutOffers = attachments.scoutOffers.filter((n) => toBasePlayerSlug(n) !== slug);
+  attachments.scoutOffers = attachments.scoutOffers.filter(
+    (n) => toBasePlayerSlug(n) !== slug || (PRIME_OFFER.test(n) && !isPrimeCard(card)),
+  );
 };
 
 export interface ConversationalScoutParams {
@@ -274,6 +290,8 @@ export interface ConversationalScoutParams {
   peerLedgerBlock?: string;
   /** Filled with the cards the model shows and the players it found no card for. */
   attachments?: ReplyAttachments;
+  /** The card the user chose to challenge; a challenge turn revises this one. */
+  challengeCard?: PlayerProfile;
   onDossierUpdated?: (updatedProfile: PlayerProfile) => void;
   onStreamChunk?: (accumulatedText: string) => void;
   onStageChange?: (stageLabel: string) => void;
@@ -309,11 +327,52 @@ const RECENT_TEAM_RULES =
   'Build the team from the first-choice XI in <situation_snapshot>, and otherwise from the recent starting XIs and the injury list in <factual_foundation>, never from the registered squad or memory. Name one player for each role and commit to him; mention another only where the snapshot marks an even split, as the alternative, never as a joint holder of the role or a pair of names in a heading. A player listed as out is unavailable and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes override what you remember of the club. If neither block has recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
 
 /**
- * How the writer argues a question about the past from the debate brief. Descriptive, like every
- * prompt here: no players, ratings or sample phrases.
+ * How the writer answers a question about the past from the debate brief. The brief is its
+ * reasoning (what the question turns on, the evidence, a judgment held to the cards), not a layout:
+ * the reply reads as a knowledgeable person answering, never as a formal debate. Descriptive, like
+ * every prompt here: no players, ratings or sample phrases.
  */
 const PAST_DEBATE_RULES =
-  'Answer from <debate_brief>. Take its criteria in order: for each, say what the evidence shows for each side (from <factual_foundation> and the stored cards) and which side it favours. Then answer the strongest counter-case directly, conceding what it gets right. For a ranking, give each entry its place and the criterion that separates it from the entry below; for a question about one season, team or player, use the criteria as the structure and end with a clear judgment. Close with the verdict or order the brief settled, in one plain sentence, and why it holds; where the brief says it was held to the stored cards, say so in a sentence. Judge from criteria and evidence, never from reputation alone. Stay consistent with the ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.';
+  "First decide what the user's latest message actually asks, in the light of the conversation, and answer that. Write the way a knowledgeable person talks football with a friend: plain, warm, direct prose, never a formal debate. Use <debate_brief> as your reasoning, not as a layout. Where the user asked who was better, for an order, or how good a season or player was, give your answer early and plainly, the one the brief settled (for a ranking, its order), and explain it through the things that decide it, using the evidence from <factual_foundation> and the stored cards. Give the other side its due in a sentence or two where it matters, as part of the explanation. Don't write labelled sections for criteria, a counter-case or a verdict, and don't frame the answer as an argument to win; use headings only for a long answer that covers several players or seasons. Where the brief says the answer was held to the stored cards, say so in a sentence. Judge from evidence, never from reputation alone. Where the message questions your last answer, the cards or versions it used, or a fact, or asks something narrower, answer that point directly, admit a mistake in a sentence where you made one, and stop when it's answered. Stay consistent with the ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.";
+
+/** A message in a thread about the past that asks for no judgment (the brief's kind is `other`). */
+const PAST_CONVERSATION_RULES =
+  "The user's latest message isn't asking for a new judgment: it questions the last answer, the cards or versions it used, or a fact, or asks something narrower. Reply the way a knowledgeable person would in conversation: answer exactly what was asked, directly and at the length it needs, in plain prose. Where your last answer got something wrong, say so in a sentence and correct it. No section headings, criterion sections, counter-case or verdict. Use <debate_brief> and the evidence only as background. Stay consistent with the ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.";
+
+const CURRENT_CUE = "(?:current|currently|now|today(?:'s)?|this season(?:'s)?|present[- ]day)";
+const PRIME_CUE = '(?:prime|peak|at (?:his|their) best)';
+
+/** Whether the text names a version of a player beside his name ("current X", "X at his peak"). */
+const namesVersionOf = (text: string, name: string, cue: string): boolean => {
+  const surname = name.trim().split(/\s+/).pop()?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!surname) return false;
+  return new RegExp(`\\b${cue}\\W+(?:\\w+\\W+){0,2}${surname}\\b|\\b${surname}\\b\\W+(?:\\w+\\W+){0,2}${cue}\\b`, 'i').test(text);
+};
+
+/** A message that wants a player's current form, and not his prime too ("prime Henry vs current X"). */
+const asksOnlyCurrentFormOf = (text: string, name: string): boolean =>
+  namesVersionOf(text, name, CURRENT_CUE) && !namesVersionOf(text, name, PRIME_CUE);
+
+/**
+ * Players in a thread about primes whose only card rates their current form, with that card's
+ * label. Without a note the writer reads that card as the prime it was asked about. A player the
+ * message asks about in current form is left out; so is every card on a turn about the present
+ * (a retired player's prime card is the right one there).
+ */
+export const editionGaps = (
+  cards: PlayerProfile[],
+  historical: boolean,
+  message = '',
+): { name: string; label: string }[] =>
+  historical
+    ? cards
+        .filter((c) => c?.basicInfo?.name && !isPrimeCard(c) && !asksOnlyCurrentFormOf(message, c.basicInfo.name))
+        .map((c) => ({ name: c.basicInfo.name, label: c.version?.label?.trim() || 'current form' }))
+    : [];
+
+/** The writer's note for a player whose prime has no card. */
+export const editionGapNote = (gap: { name: string; label: string }): string =>
+  `No prime card exists for ${gap.name}. His only card, in <locked_dossiers>, rates a different version: ${gap.label}. Don't present its Overall or attributes as his prime's, and don't claim it reflects his prime. Say plainly that his prime hasn't been rated and can be scouted, and judge his prime in words from the evidence.`;
 
 /** What a question about the past may state as fact. */
 const PAST_FACT_RULES =
@@ -355,6 +414,7 @@ export async function runConversationalScout(
     );
     const candidates = referenced.length > 0 ? referenced : conversationDossiers;
     const targetDossier =
+      params.challengeCard ??
       (route.isHistorical ? pickCardPerPlayer(candidates, true).find(isPrimeCard) : undefined) ??
       mostRecentlyShownCard(history, candidates) ??
       referenced[0] ??
@@ -459,6 +519,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   let effectiveLockedBlock = lockedDossiersBlock;
   let verifiedManagers: VerifiedClubManager[] = [];
   let cardsInPlay: PlayerProfile[] = [];
+  let gaps: { name: string; label: string }[] = [];
   const isHistoricalThread = threadIsHistorical(route, history, message);
   const thread = threadStateFor(params.conversationId ?? 'local');
   // A Gaffa club attached to the conversation. A question about its squad also researches the
@@ -489,6 +550,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       effectiveLockedBlock = buildLockedDossiersBlock(lockedCards);
     }
     cardsInPlay = lockedCards;
+    gaps = editionGaps(lockedCards, isHistoricalThread, message);
 
     const routeClubs =
       route.targetClubs && route.targetClubs.length > 0
@@ -553,6 +615,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
             message,
             thread: history.length ? ongoingThread.slice(-3000) : '',
             cards: debateCards,
+            editionGaps: gaps.map((g) => `${g.name}: only his ${g.label} card exists; his prime has never been rated`),
             hints: { clubs: targetClubs, players: [...new Set([...route.targetPlayers, ...playerNamesForGrounding])] },
             season: route.requestedSeason ?? null,
           },
@@ -651,7 +714,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 
   let modeGuidance: string;
   if (debate && analyticalMode !== 'archive' && route.intent !== 'archive_inventory') {
-    modeGuidance = PAST_DEBATE_RULES;
+    modeGuidance = debate.kind === 'other' ? PAST_CONVERSATION_RULES : PAST_DEBATE_RULES;
   } else if (route.intent === 'compare' || analyticalMode === 'head_to_head') {
     modeGuidance = `Write a detailed, scout-grade head-to-head comparison covering every player named (${route.targetPlayers.join(', ') || 'all named players'}). Contrast their footballing identity/mould directly across concrete phases of play (build-up/progression, final-third creation or box threat, out-of-possession/rest-defense, and transition) rather than writing two isolated bios. Highlight key separators across the 25-attribute framework, genuine limitations, and relative tier on the Section III scale. For any player present in <locked_dossiers>, use their exact locked Overall, Potential, and 25 attributes. Conclude with a definitive verdict on who holds the higher current standing, who has the higher ceiling, and which tactical setup favors each player. Never output a JSON dossier object.`;
   } else if (route.intent === 'archive_inventory' || analyticalMode === 'archive') {
@@ -665,7 +728,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   } else if (analyticalMode === 'squad_or_recruitment') {
     modeGuidance = `Analyze the squad structure, lineup balance, or recruitment question like a Sporting Director and Chief Scout. ${RECENT_TEAM_RULES} Name the specific current starters and rotational options, diagnose the specific functional profile the squad lacks, evaluate how candidate profiles complement existing starters, and pin player quality to the Section III tier scale and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
   } else if (analyticalMode === 'debate_or_verdict') {
-    modeGuidance = `Engage the football debate with dialectical depth: (1) steelman the strongest tactical and statistical case for each side, (2) decouple intrinsic player quality from system/environment tax (how role, surrounding talent, or league tempo inflates or suppresses box-score output), (3) evaluate through the 25-attribute framework, big-game knockout translation, and Section III tiers, and (4) finish with a clear, non-fence-sitting verdict. If the user is challenging a prior factual or tactical claim, verify the facts against <factual_foundation> first, correct any prior slip concisely in one sentence without theatrical self-flagellation, and deliver the grounded analysis. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
+    modeGuidance = `Answer the question the way a knowledgeable person talks football: plain, direct prose with a clear view, never a formal debate. Give your view early, explain it through the evidence and the 25-attribute framework, separate a player's own quality from what his team and system did for his numbers where that matters, and give the other side its due in a sentence or two. If the user is questioning a fact or an earlier claim, check it against <factual_foundation>, correct a slip in one sentence, and answer what they asked. Match the length to the question. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
   } else {
     modeGuidance = `Respond conversationally in Markdown prose as the Chief Scout and Senior Tactical Columnist. Match the depth and structure of your answer to the user's question, and tie every tactical claim to specific named players and their actual traits rather than generic tactical buzzwords. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_club_recent_team\` for a club's live results, starting XIs and availability, \`get_player_season\` for a Premier League player's season, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
   }
@@ -679,6 +742,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   const missingNote = missingCards.length
     ? ` No stored card exists for ${missingCards.join(' or ')}; they were already checked, so don't look them up.`
     : '';
+  const gapNote = gaps.length ? ` ${gaps.map(editionGapNote).join(' ')}` : '';
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${gaffaBlock}
 ${ongoingThread}
@@ -691,7 +755,7 @@ ${peerLedgerBlock ?? ''}
 ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
-1. ${modeGuidance}${shownNote}${missingNote}
+1. ${modeGuidance}${shownNote}${missingNote}${gapNote}
 ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from <situation_snapshot>, the numbered entries in <factual_foundation>, tool calls (\`get_club_recent_team\`, \`get_player_season\`, \`get_league_table\`, Google Search), or existing dossiers, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach. A precise figure (a statistic, fee, percentage, table position, points total, the minute of an event, a shirt number, a quotation) goes in only when one of those sources gives it; for standings call \`get_league_table\`, and otherwise describe the pattern without a number.
 3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.`}
 4. ${CONTINUITY_REMINDER}

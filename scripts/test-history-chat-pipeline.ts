@@ -5,7 +5,9 @@
  * It checks that a prime-versus-prime debate gets a debate brief whose verdict is held to the
  * stored cards, the career lookup reaches the writer as evidence, an invented figure is cut
  * while a sourced one and a past coach stand, and the same question asked again reuses the
- * settled debate without another brief call.
+ * settled debate without another brief call. A follow-up that questions the cards used, about a
+ * player whose prime has no card, is answered as a conversation, told his only card is his current
+ * form, and offers his prime to Scout.
  *
  * Usage:
  *   npx tsx scripts/test-history-chat-pipeline.ts
@@ -47,7 +49,7 @@ const prime = (name: string, overall: number, season: string): PlayerProfile =>
 const ZIDANE = prime('Zinedine Zidane', 96, '1999-02');
 const KAKA = prime('Kaká', 95, '2005-07');
 
-const ROUTE = {
+let ROUTE: Record<string, unknown> = {
   intent: 'compare',
   analyticalMode: 'head_to_head',
   targetPlayers: ['Zinedine Zidane', 'Kaká'],
@@ -166,6 +168,35 @@ await test('an answer quotes the figures its brief chose: a mislabelled total is
     reply,
     'Kaká scored 8 league goals in 2006-07. He made 31 league appearances. He scored 18 goals in all competitions. His runs from deep decided the big nights.',
   );
+});
+
+await test('a follow-up about a prime with no card is answered plainly, not as a debate', async () => {
+  const current = {
+    ...prime('Rodri', 94, '2026-27'),
+    evaluationDate: '2026-11-04',
+    version: { id: 'rodri-current', type: 'current', label: 'Current Form (November 2026)', evaluationDate: '2026-11-04', seasonOrEra: '2026-27' },
+  } as unknown as PlayerProfile;
+  const redondo = prime('Fernando Redondo', 94, '1997-00');
+  ROUTE = { ...ROUTE, intent: 'tactical_chat', analyticalMode: 'player_qa', targetPlayers: ['Rodri'], isHistorical: true };
+  BRIEF = { ...BRIEF, understanding: 'Whether the last answer used a prime card', kind: 'other', criteria: [], counterCase: '', verdict: '', calls: [] };
+  WRITER = "You're right: that was his current-form card, not his prime.";
+  const history = [
+    { id: 'u1', sender: 'user', content: "who's better, prime rodri, or prime redondo", timestamp: 1 },
+    { id: 'a1', sender: 'ai', content: 'Both are rated 94; Rodri edges it.', timestamp: 2 },
+  ] as any;
+  let offers: string[] = [];
+  const message = 'well only current rodri is rated, prime rodri has never been scouted before. or are you saying prime rodri is the same as current?';
+  await quietly(() =>
+    sendMessageToAI(message, history, undefined, [], [current, redondo], { onAttachments: (a: any) => (offers = a.scoutOffers) } as any),
+  );
+  const brief = calls.filter((c) => c.structured && c.prompt.includes('question about the past')).at(-1)?.prompt ?? '';
+  assert.ok(brief.includes('Versions with no card of their own'));
+  assert.ok(brief.includes('Rodri: only his Current Form (November 2026) card exists'));
+  const writer = calls.filter((c) => !c.structured && c.prompt.includes('<task>')).at(-1)?.prompt ?? '';
+  assert.ok(writer.includes('No prime card exists for Rodri'));
+  assert.ok(writer.includes("isn't asking for a new judgment"));
+  assert.ok(!writer.includes('Take its criteria in order'));
+  assert.deepEqual(offers, ['prime Rodri']);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

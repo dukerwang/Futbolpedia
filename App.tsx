@@ -33,7 +33,7 @@ import {
   stampDossier,
   type ReplyAttachments,
 } from './services/geminiService';
-import { isFullCard, ratingTask, requestForCard } from './services/ratingCommand';
+import { isFullCard, ratingTask, requestForCard, scoutOfferRequest } from './services/ratingCommand';
 import { fetchSharedEditions } from './services/dossierStore';
 import { autoTitle, generateChatTitle, hasAutoTitle, titleBrief } from './services/chatTitle';
 import { LEGACY_PURGE_KEY, isLegacyShape, orphanKeys, withoutCards } from './services/legacyDossiers';
@@ -155,6 +155,9 @@ const App: React.FC = () => {
   const [pendingSend, setPendingSend] = useState<string | null>(null);
   // Text the hub's "Ask" puts in the chat box
   const [chatDraft, setChatDraft] = useState<{ id: number; text: string } | null>(null);
+  // The card whose rating the user chose to challenge. Only then can a reply revise a rating; it
+  // lasts until they end it or leave the conversation.
+  const [challengeCard, setChallengeCard] = useState<PlayerProfile | null>(null);
   // The left panel is the Scout desk or one open dossier.
   const [panelMode, setPanelMode] = useState<'scout' | 'dossier'>('dossier');
   const [scoutJobs, setScoutJobs] = useState<ScoutJob[]>([]);
@@ -477,6 +480,7 @@ const App: React.FC = () => {
         setActiveProfile(importedConv.activeProfile);
         setAllProfiles(importedConv.allProfiles);
         setGaffaClub(importedConv.gaffaClub ?? null);
+        setChallengeCard(null);
         // Merge any dossiers from the shared conversation
         if (importedConv.allProfiles?.length > 0) {
           setGlobalDossiers(prev => {
@@ -789,6 +793,7 @@ const App: React.FC = () => {
           onStageChange: (label) => setLoadingMessage(label),
           gaffaBag: clubBag?.connected ? clubBag : undefined,
           conversationId: activeConversationId ?? undefined,
+          challengeCardKey: challengeCard ? getCardKey(challengeCard) : undefined,
           onGaffaScorecard: (card) => {
             scorecard = card;
             streamStarted = true;
@@ -868,7 +873,7 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [messages, allProfiles, globalDossiers, gaffaClub, gaffaGrant, activeConversationId, saveAndSetActiveProfile, dossierReply]);
+  }, [messages, allProfiles, globalDossiers, gaffaClub, gaffaGrant, activeConversationId, saveAndSetActiveProfile, dossierReply, challengeCard]);
 
   // The Rate command: a rating without a chat turn to route. It lands in the chat like a typed one.
   const handleRate = useCallback(async (request: RatingRequest) => {
@@ -967,7 +972,7 @@ const App: React.FC = () => {
 
   const handleScoutName = useCallback((name: string) => {
     openScout();
-    handleScout([{ name, edition: 'auto' }]);
+    handleScout([scoutOfferRequest(name)]);
   }, [openScout, handleScout]);
 
   const isPhone = () => !window.matchMedia('(min-width: 768px)').matches;
@@ -1084,6 +1089,7 @@ const App: React.FC = () => {
     setActiveProfile(target.activeProfile);
     setAllProfiles(target.allProfiles);
     setGaffaClub(target.gaffaClub ?? null);
+    setChallengeCard(null);
   }, [conversations]);
 
   const handleNewConversation = useCallback(() => {
@@ -1115,6 +1121,7 @@ const App: React.FC = () => {
     setActiveProfile(null);
     setAllProfiles([]);
     setGaffaClub(newConv.gaffaClub ?? null);
+    setChallengeCard(null);
     setIsPanelOpen(false);
   }, []);
 
@@ -1285,6 +1292,25 @@ const App: React.FC = () => {
     setView('chat');
   }, [saveAndSetActiveProfile]);
 
+  // "Challenge" on a card: the user chose to argue its rating. The card joins the conversation and
+  // the next messages may revise it, until the challenge ends.
+  const handleChallengeDossier = useCallback((profile: PlayerProfile) => {
+    saveAndSetActiveProfile(profile);
+    const reference = cardReference(profile);
+    const key = getCardKey(profile);
+    setMessages(prev => [...prev, {
+      id: `challenge-${Date.now()}`,
+      sender: 'ai',
+      content: `Challenging the rating on **${reference}**. Tell me what you think the card gets wrong and why. If the evidence backs you, I'll revise it, and the revised card is yours to keep.`,
+      timestamp: Date.now(),
+      dossierKey: key,
+    }]);
+    setChallengeCard(profile);
+    setChatDraft({ id: Date.now(), text: '' });
+    setView('chat');
+    if (isPhone()) setIsPanelOpen(false);
+  }, [saveAndSetActiveProfile]);
+
   // "Ask" on a card page: a new conversation with the card in it. A question (a starter, or one
   // typed on the page) is sent once the conversation is in place; with none, the box is ready.
   const handleCardPageAsk = useCallback((profile: PlayerProfile, question?: string) => {
@@ -1351,6 +1377,7 @@ const App: React.FC = () => {
           onOpenHub={view === 'hub' ? undefined : () => setView('hub')}
           mode={panelMode}
           onBack={() => setPanelMode('scout')}
+          onChallenge={handleChallengeDossier}
           scout={
             <ScoutDesk
               jobs={scoutJobs}
@@ -1457,6 +1484,7 @@ const App: React.FC = () => {
                         localCards={globalDossiers}
                         mentionRequest={mentionRequest}
                         onScoutName={handleScoutName}
+                        challenge={challengeCard ? { label: cardReference(challengeCard), onEnd: () => setChallengeCard(null) } : null}
                     />
                 </div>
             </div>

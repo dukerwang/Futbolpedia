@@ -555,6 +555,19 @@ await test('the debate brief prompt names the cards and their order, and no exam
   assert.ok(prompt.includes('club_season (subject: club name; season: YYYY-YY)'));
 });
 
+await test('the brief is told which players have no prime card, and that a follow-up can ask for no judgment', () => {
+  const prompt = buildDebateBriefPrompt({
+    message: 'is prime him the same as current?',
+    thread: '',
+    cards: [kaka],
+    editionGaps: ['Rodri: only his Current Form (November 2026) card exists; his prime has never been rated'],
+    hints: { clubs: [], players: [] },
+  });
+  assert.ok(prompt.includes('Versions with no card of their own:\n- Rodri: only his Current Form'));
+  assert.ok(prompt.includes('a follow-up that questions the last answer'));
+  assert.ok(!buildDebateBriefPrompt({ message: 'q', thread: '', cards: [kaka], hints: { clubs: [], players: [] } }).includes('Versions with no card'));
+});
+
 await test('a brief is read defensively and its verdict held to the cards', () => {
   const brief = readDebateBrief(rawBrief, { message: 'q' });
   assert.equal(brief.calls.length, 2);
@@ -573,7 +586,7 @@ await test('a brief is read defensively and its verdict held to the cards', () =
   assert.ok(formatDebateBriefForWriter(withFigure).includes('The only precise figures to quote'));
   assert.deepEqual(figureBudget(brief), { max: 2, slots: [] });
   assert.ok(text.includes('The order, settled before writing (keep it): 1. Zidane 2. Kaká'));
-  assert.ok(text.includes('The strongest case against the verdict'));
+  assert.ok(text.includes('The best point for the other side'));
 });
 
 const careerFacts: ToolOutcome = {
