@@ -107,3 +107,32 @@ export const requestForCard = (card: PlayerProfile): RatingRequest => {
 
 /** A shared-index outline carries only what a suggestion shows; the full card has attributes. */
 export const isFullCard = (card: PlayerProfile): boolean => Boolean(card.attributes && card.shortBio);
+
+/** The version Scout's switch asks for. */
+export type ScoutVersion = 'current' | 'prime' | 'era' | 'season';
+
+/** A season typed into Scout's season field, as YYYY-YY, or null unless it's a whole past season. */
+export const scoutSeason = (text: string): string | null => {
+  const season = pastSeasonIn(text.trim());
+  return season && /^\d{4}-\d{2}$/.test(season) ? season : null;
+};
+
+/**
+ * A Scout request from a typed name and the switch. A version typed with the name ("PSG Neymar",
+ * "Henry 2003-04", "prime Kaká") wins, as it always has. Otherwise Era and Season take their
+ * field: an empty era or an unreadable season gives null, so the panel can't send it.
+ */
+export const scoutRequest = (text: string, version: ScoutVersion, detail = ''): RatingRequest | null => {
+  const typed = ratingRequestFromText(text, false);
+  if (typed.edition !== 'auto') return typed;
+  if (version === 'prime') return { name: typed.name, edition: 'prime' };
+  if (version === 'era') {
+    const era = detail.trim().replace(/\s+/g, ' ');
+    return era.length >= 2 ? { name: typed.name, edition: 'era', era } : null;
+  }
+  if (version === 'season') {
+    const season = scoutSeason(detail);
+    return season ? { name: typed.name, edition: 'season', season } : null;
+  }
+  return typed;
+};

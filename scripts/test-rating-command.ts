@@ -281,6 +281,21 @@ async function main() {
     });
   }
 
+  const { scoutRequest, scoutSeason } = await import('../services/ratingCommand');
+  await test("Scout's Era and Season options take their field; a version typed with the name wins", async () => {
+    assert.deepEqual(scoutRequest('Neymar', 'era', 'PSG'), { name: 'Neymar', edition: 'era', era: 'PSG' });
+    assert.equal(scoutRequest('Neymar', 'era', ' '), null);
+    assert.deepEqual(scoutRequest('Thierry Henry', 'season', '2003-04'), { name: 'Thierry Henry', edition: 'season', season: '2003-04' });
+    assert.deepEqual(scoutRequest('Thierry Henry', 'season', '2003/2004'), { name: 'Thierry Henry', edition: 'season', season: '2003-04' });
+    assert.equal(scoutRequest('Thierry Henry', 'season', '2004'), null);
+    assert.equal(scoutRequest('Thierry Henry', 'season', 'soon'), null);
+    assert.deepEqual(scoutRequest('Kaká', 'prime'), { name: 'Kaká', edition: 'prime' });
+    assert.deepEqual(scoutRequest('Pedri', 'current'), { name: 'Pedri', edition: 'auto' });
+    assert.deepEqual(scoutRequest('PSG Neymar', 'current'), { name: 'Neymar', edition: 'era', era: 'PSG' });
+    assert.deepEqual(scoutRequest('prime Ronaldinho', 'season', ''), { name: 'Ronaldinho', edition: 'prime' });
+    assert.equal(scoutSeason('2099-00'), null);
+  });
+
   await test('a season typed in the Scout panel is rated as that season, not his prime', async () => {
     const served = await rate(ratingRequestFromText('1997-1998 zinedine zidane', false));
     assert.equal(served.version?.type, 'season_snapshot');
