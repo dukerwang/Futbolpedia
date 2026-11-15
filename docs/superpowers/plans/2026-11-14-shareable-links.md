@@ -164,7 +164,7 @@
 - Create: a mockup screen in the brainstorming companion (`.superpowers/`, not committed)
 
 **Details:**
-1. Build the card page in layout B at desktop width and at 375 px, in light and dark themes. Use real shared cards, for example a current card with history, an era card and a retired player's prime, rendered with the app's own type, colours and the look of `PlayerProfileDisplay`.
+1. Build the card page in layout B at desktop width and at 375 px, in light and dark themes. Use real shared cards, for example a current card with history, an era card and a retired player's prime, rendered with the app's own type, colours and the look of the side panel's card.
 2. Include the side column's starter questions, earlier ratings, Scout button and both banners.
 3. Include the not-found page.
 4. **Stop and get the owner's approval.** Revise until approved. Task 8 starts only after that.
@@ -184,7 +184,7 @@
 1. `starterQuestions(card)`: three questions from the card's edition, position and tier. Every phrasing is a template filled by code; there's no model call. Write templates per edition (current form, prime, era, season) that cover comparison with peers at the position, the case for a higher or lower rating, and the player's role. Questions about the present apply only to current cards.
 2. `CardPage` props: the resolved page from `sharePages` (reused in the browser through the same resolver with the browser's Supabase client), `onAsk(card, question?)`, `onSave(card)`, `onScout(name?)`, `onNavigate(path)`. It renders:
    - Version chips (blue for eras, as in the Hub).
-   - `PlayerProfileDisplay`, with "Rated <date>" beside the name.
+   - The card: extract `SidePanel`'s header and sections into `components/CardBody.tsx` (a `layout: 'panel' | 'page'` prop for the wider page arrangement), used by both, with "Rated <date>" under the name. `PlayerProfileDisplay` is unused; leave it alone.
    - The banners.
    - The side column: starter questions, a free-text box, earlier ratings and Scout.
    - The not-found state.

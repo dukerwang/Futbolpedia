@@ -73,7 +73,7 @@ Existing cards get it from a backfill script modelled on `scripts/backfill-card-
 
 `components/CardPage.tsx`, opened by the app's new `card` view. On desktop it has two columns; on a phone the side column moves below the card.
 
-- **Main column.** Chips for the player's other versions (current form, prime, eras, seasons; era chips blue, as in the Hub), then the card itself through `PlayerProfileDisplay`, with "Rated <date>" beside the name.
+- **Main column.** Chips for the player's other versions (current form, prime, eras, seasons; era chips blue, as in the Hub), then the card itself, with "Rated <date>" under the name. The card's sections come out of `SidePanel` into a shared `CardBody` component that both use (`PlayerProfileDisplay` is no longer rendered anywhere). On a phone, Ask about <player> sits right after the card's header and the rating history after the card.
 - **Side column.** Ask about <player>: three starter questions and a box to ask your own. Earlier ratings: date and Overall for each earlier card of this edition, from `fetchPriorDossiersForPlayer`, each linking to its dated address. Then a Scout another player button.
 
 Starter questions are written by code from the card's edition, position and tier, with no model call. Clicking one starts a new conversation with the card as a mention (as the Hub's Ask button does, through `cardReference`) and sends the question. **Ask about <player>** and the free-text box do the same but leave sending to you. Opening a page doesn't add the card to Your dossiers; asking about it or pressing **Save** does.
