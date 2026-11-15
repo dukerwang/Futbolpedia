@@ -45,6 +45,9 @@ interface GaffaClubChipProps {
   onDisconnect: () => void;
 }
 
+/** Gaffa's public site, for the explainer's links before the server has said where Gaffa lives. */
+export const GAFFA_PUBLIC_URL = 'https://www.gaffa.live';
+
 const MENU_ROW =
   'w-full text-left px-3 py-2 min-h-10 flex items-center gap-2 text-sm font-serif text-charcoal dark:text-cream-100 hover:bg-cream-200/70 dark:hover:bg-charcoal-light/70 disabled:opacity-50';
 
@@ -165,9 +168,16 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
                 <GaffaMark className="size-5" />
                 <span className="font-serif text-base font-semibold">Gaffa</span>
               </div>
-              <p className="text-sm font-serif text-charcoal/75 dark:text-cream-200/75 leading-snug">
-                Bring your Gaffa club into the chat. Futbolpedia reads your squad, lineup, Club Balance and league
-                market, and can&apos;t change any of them.
+              <p className="text-sm font-serif text-charcoal dark:text-cream-100 leading-snug">
+                A fantasy Premier League game, played like the real thing.
+              </p>
+              <p className="text-[12.5px] font-sans text-charcoal/70 dark:text-cream-300 leading-relaxed">
+                Players score on how their match actually went. You win them in open auctions as real transfers
+                happen, and play your league for four trophies a season.
+              </p>
+              <p className="text-[12.5px] font-sans text-charcoal/70 dark:text-cream-300 leading-relaxed">
+                Play already? Connect your club and Futbolpedia helps with your lineup, trades and bids. It can read
+                your club, never change it.
               </p>
               <button
                 type="button"
@@ -181,6 +191,26 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
                 {connecting ? 'Waiting for Gaffa…' : 'Connect Gaffa'}
               </button>
               {error && <p className="text-xs font-sans text-red-600 dark:text-red-400">{error}</p>}
+              <div className="flex items-center justify-between text-xs font-sans">
+                <a
+                  href={`${gaffaBaseUrl ?? GAFFA_PUBLIC_URL}/guide`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
+                >
+                  What&apos;s Gaffa?
+                  <span className="material-symbols-outlined text-[14px]" aria-hidden="true">north_east</span>
+                </a>
+                <a
+                  href={`${gaffaBaseUrl ?? GAFFA_PUBLIC_URL}/signup`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
+                >
+                  Start a league
+                  <span className="material-symbols-outlined text-[14px]" aria-hidden="true">north_east</span>
+                </a>
+              </div>
             </div>
           ) : (
             <div className="py-1.5 max-h-[60vh] overflow-y-auto">

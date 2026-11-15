@@ -5,7 +5,7 @@ import { searchPlayers } from '../services/playerSearch';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { PlayerPicker, cardRows, type PickerRow } from './PlayerPicker';
 import { describeCardEdition, pillClass } from './pills';
-import { ratingRequestFromText, ratingVersionLabel } from '../services/ratingCommand';
+import { ratingRequestFromText, ratingVersionLabel, scoutRequest, type ScoutVersion } from '../services/ratingCommand';
 
 /** A rating the Scout desk is working on. Finished ratings leave the queue for your dossiers. */
 export interface ScoutJob {
@@ -17,6 +17,14 @@ export interface ScoutJob {
   startedAt?: number;
   error?: string;
 }
+
+/** The versions Scout rates, with the hint shown beside the switch. */
+const SCOUT_VERSIONS: Array<{ value: ScoutVersion; label: string; hint: string }> = [
+  { value: 'current', label: 'Current', hint: 'Prime, if retired' },
+  { value: 'prime', label: 'Prime', hint: 'Their best three seasons' },
+  { value: 'era', label: 'Era', hint: 'One chapter: a club or a spell' },
+  { value: 'season', label: 'Season', hint: 'One season of their career' },
+];
 
 /** Scout keeps a short shelf of recent cards; the Dossiers hub holds the whole library. */
 const RECENT_LIMIT = 8;
@@ -63,8 +71,12 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
   prefill,
 }) => {
   const [text, setText] = useState('');
-  const [prime, setPrime] = useState(false);
+  const [version, setVersion] = useState<ScoutVersion>('current');
+  // The era or season the Era and Season options rate.
+  const [detail, setDetail] = useState('');
   const [highlighted, setHighlighted] = useState<number | null>(null);
+  // Suggestions show while the name field has focus, so they never cover the version switch.
+  const [nameFocused, setNameFocused] = useState(false);
   const [sharedCards, setSharedCards] = useState<PlayerProfile[]>([]);
   const [now, setNow] = useState(Date.now());
   const inputRef = useRef<HTMLInputElement>(null);
@@ -95,11 +107,28 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
   }, [running]);
 
   const names = namesIn(text);
+  const requests = names.map((name) => scoutRequest(name, version, detail));
+  const ready = names.length > 0 && requests.every(Boolean);
   // Suggestions only make sense for one name; a pasted list goes straight to the queue.
-  const single = names.length === 1 && !/[,;\n]/.test(text) ? ratingRequestFromText(names[0], prime) : null;
+  const single = names.length === 1 && !/[,;\n]/.test(text) ? ratingRequestFromText(names[0], version === 'prime') : null;
   // A season, era or edition typed with the name searches the name; the label says which version.
   const query = single?.name ?? '';
-  const version = single ? ratingVersionLabel(single) : null;
+  const versionLabel = requests.length === 1 && requests[0] ? ratingVersionLabel(requests[0]) : null;
+
+  // A version typed with the name ("PSG Neymar", "Henry 2003-04") sets the switch and its field,
+  // so the shortcut shows what it did.
+  const typedEdition = single?.edition;
+  const typedDetail = single?.edition === 'era' ? single.era : single?.edition === 'season' ? single.season : undefined;
+  useEffect(() => {
+    if (typedEdition === 'era' || typedEdition === 'season') {
+      setVersion(typedEdition);
+      setDetail(typedDetail ?? '');
+    } else if (typedEdition === 'prime') {
+      setVersion('prime');
+    } else if (typedEdition === 'current') {
+      setVersion('current');
+    }
+  }, [typedEdition, typedDetail]);
   const rows = useMemo<PickerRow[]>(() => {
     if (!query) return [];
     const matches = cardRows(searchPlayers(query, dossiers, sharedCards, 4));
@@ -109,17 +138,17 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
         kind: 'action',
         id: 'scout-new',
         icon: 'person_search',
-        label: `Scout “${query}”${version ? ` · ${version}` : ''}`,
+        label: `Scout “${query}”${versionLabel ? ` · ${versionLabel}` : ''}`,
         hint: 'New card',
       },
     ];
-  }, [query, version, dossiers, sharedCards]);
+  }, [query, versionLabel, dossiers, sharedCards]);
 
   useEffect(() => setHighlighted(null), [query]);
 
   const submit = () => {
-    if (names.length === 0) return;
-    onScout(names.map((name) => ratingRequestFromText(name, prime)));
+    if (!ready) return;
+    onScout(requests.filter((r): r is RatingRequest => r !== null));
     setText('');
   };
 
@@ -195,6 +224,9 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={onKeyDown}
+              onFocus={() => setNameFocused(true)}
+              // A tap on a suggestion lands before the blur clears them.
+              onBlur={() => window.setTimeout(() => setNameFocused(false), 150)}
               onPaste={(e) => {
                 // A pasted column of names arrives as one list.
                 const pasted = e.clipboardData.getData('text');
@@ -206,7 +238,7 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
               placeholder="Player name, or a list"
               aria-label="Players to scout"
               role="combobox"
-              aria-expanded={rows.length > 0}
+              aria-expanded={nameFocused && rows.length > 0}
               aria-controls="scout-suggestions"
               aria-autocomplete="list"
               aria-activedescendant={highlighted !== null ? `scout-suggestions-row-${highlighted}` : undefined}
@@ -218,7 +250,7 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
             <button
               type="button"
               onClick={submit}
-              disabled={names.length === 0}
+              disabled={!ready}
               aria-label={names.length > 1 ? `Scout ${names.length} players` : 'Scout'}
               className="shrink-0 flex items-center gap-1.5 pl-3 pr-1 text-[11px] font-sans font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-400 disabled:text-charcoal/25 dark:disabled:text-cream-400/25 transition-colors"
             >
@@ -226,17 +258,6 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
               <span aria-hidden="true" className="material-symbols-outlined text-[18px]">arrow_forward</span>
             </button>
           </div>
-          {rows.length > 0 && (
-            <PlayerPicker
-              id="scout-suggestions"
-              title="Already rated"
-              placement="below"
-              rows={rows}
-              highlighted={highlighted}
-              onHighlight={setHighlighted}
-              onPick={pick}
-            />
-          )}
         </div>
 
         <div className="mt-3 flex items-center justify-between gap-3">
@@ -245,18 +266,15 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
             aria-label="Version to rate"
             className="flex shrink-0 border border-charcoal/25 dark:border-cream-400/30 text-[10px] font-sans font-bold uppercase tracking-[0.18em]"
           >
-            {[
-              { value: false, label: 'Current' },
-              { value: true, label: 'Prime' },
-            ].map((option) => (
+            {SCOUT_VERSIONS.map((option) => (
               <button
-                key={option.label}
+                key={option.value}
                 type="button"
                 role="radio"
-                aria-checked={prime === option.value}
-                onClick={() => setPrime(option.value)}
+                aria-checked={version === option.value}
+                onClick={() => setVersion(option.value)}
                 className={`px-3 py-1.5 transition-colors ${
-                  prime === option.value
+                  version === option.value
                     ? 'bg-charcoal text-cream-50 dark:bg-cream-200 dark:text-charcoal'
                     : 'text-charcoal/50 dark:text-cream-400/60 hover:text-charcoal dark:hover:text-cream-100'
                 }`}
@@ -266,8 +284,48 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
             ))}
           </div>
           <span className="truncate text-[12px] font-serif italic text-charcoal/50 dark:text-cream-400/55">
-            {prime ? 'His best three seasons' : 'Prime, if retired'}
+            {SCOUT_VERSIONS.find((o) => o.value === version)?.hint}
           </span>
+        </div>
+        {(version === 'era' || version === 'season') && (
+          <label className="mt-4 block">
+            <span className="text-[10px] font-sans font-bold uppercase tracking-[0.18em] text-charcoal/50 dark:text-cream-400">
+              {version === 'era' ? 'Which era' : 'Which season'}
+            </span>
+            <input
+              value={detail}
+              onChange={(e) => setDetail(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder={version === 'era' ? 'A club, or a stretch of their career' : 'e.g. 2003-04'}
+              autoComplete="off"
+              spellCheck={false}
+              className="mt-1.5 w-full rounded-lg border border-cream-300 dark:border-charcoal-border bg-white dark:bg-charcoal px-3 py-2 text-[14px] font-sans text-charcoal dark:text-cream-100 placeholder:text-charcoal/35 dark:placeholder:text-cream-400/50 outline-none focus:border-emerald-500/60"
+            />
+            {version === 'season' && detail.trim() && !requests[0] && names.length > 0 && (
+              <span className="mt-1.5 block text-[12px] font-sans text-charcoal/55 dark:text-cream-400">
+                A past season, written like 2003-04.
+              </span>
+            )}
+          </label>
+        )}
+        {/* Suggestions open below the switch, so they never cover it. */}
+        <div className="relative">
+            {nameFocused && rows.length > 0 && (
+              <PlayerPicker
+                id="scout-suggestions"
+                title="Already rated"
+                placement="below"
+                rows={rows}
+                highlighted={highlighted}
+                onHighlight={setHighlighted}
+                onPick={pick}
+              />
+            )}
         </div>
       </div>
 

@@ -17,6 +17,8 @@ interface HeaderProps {
     onViewChange: (view: AppView) => void;
     onToggleConversations: () => void;
     isConversationsOpen: boolean;
+    /** Reopens the welcome walkthrough. */
+    onOpenGuide: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -31,6 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
     onViewChange,
     onToggleConversations,
     isConversationsOpen,
+    onOpenGuide,
 }) => {
   return (
     <header className="sticky top-0 w-full flex items-center justify-between gap-3 px-4 sm:px-8 pt-[calc(0.75rem+env(safe-area-inset-top))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] pb-3 sm:pb-5 bg-cream-200 dark:bg-charcoal z-50 shrink-0 border-b border-cream-300 dark:border-charcoal-border select-none transition-colors duration-300">
@@ -107,6 +110,15 @@ export const Header: React.FC<HeaderProps> = ({
                 aria-label={isConversationsOpen ? "Close past chats" : "Past chats"}
             >
                 <span aria-hidden="true" className="material-symbols-outlined text-[20px] block">forum</span>
+            </button>
+
+            <button
+                onClick={onOpenGuide}
+                className="p-2 text-charcoal dark:text-cream-400 hover:bg-cream-300 dark:hover:bg-charcoal-light rounded-full transition-colors"
+                title="How Futbolpedia works"
+                aria-label="How Futbolpedia works"
+            >
+                <span aria-hidden="true" className="material-symbols-outlined text-[20px] block">help</span>
             </button>
 
             <button 

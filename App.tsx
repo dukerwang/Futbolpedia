@@ -5,7 +5,7 @@ import { ChatInput, type Mention } from './components/ChatInput';
 import { ScoutDesk, type ScoutJob } from './components/ScoutDesk';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
-import { WhatsNewPopup } from './components/WhatsNewPopup';
+import { WelcomeWalkthrough, hasSeenWelcome } from './components/WelcomeWalkthrough';
 import { DossierHub, type HubTab } from './components/DossierHub';
 import { CardPage } from './components/CardPage';
 import { cardPath, legacyHashToPath, parsePath } from './services/cardPaths';
@@ -142,6 +142,11 @@ const App: React.FC = () => {
   // Main view: the chat, or the dossier hub (the global hub and "Your dossiers" as tabs)
   const [view, setView] = useState<AppView>('chat');
   const [hubTab, setHubTab] = useState<HubTab>('global');
+  // The welcome walkthrough: shown once on a first visit to the chat (not over a shared card or
+  // chat someone came to see), and again from the header's guide button.
+  const [welcomeOpen, setWelcomeOpen] = useState<boolean>(
+    () => !hasSeenWelcome() && !parsePath(window.location.pathname) && !/^#\/(p|c)\//.test(window.location.hash),
+  );
   // The card page's address (`/p/…`) while the card view is open.
   const [cardPagePath, setCardPagePath] = useState<string | null>(null);
   // The view to return to when the card page is left by Back.
@@ -1310,7 +1315,12 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-cream-200 dark:bg-charcoal text-charcoal dark:text-cream-100 transition-colors duration-300 relative">
-      <WhatsNewPopup />
+      <WelcomeWalkthrough
+        open={welcomeOpen}
+        onClose={() => setWelcomeOpen(false)}
+        onStartTalking={() => changeView('chat')}
+        onRatePlayer={() => openScout()}
+      />
       
       <Header 
         onOpenScout={() => (showPanel && panelMode === 'scout' ? setIsPanelOpen(false) : openScout())}
@@ -1328,6 +1338,7 @@ const App: React.FC = () => {
         }}
         onToggleConversations={toggleConversations}
         isConversationsOpen={isConversationsOpen}
+        onOpenGuide={() => setWelcomeOpen(true)}
       />
       
       {/* Slide-out Dossier Panel - LEFT SIDED */}
