@@ -45,6 +45,19 @@ interface GaffaClubChipProps {
   onDisconnect: () => void;
 }
 
+/**
+ * Gaffa's name as Gaffa sets it beside its mark: Newsreader, bold, in capitals with open tracking
+ * (Gaffa's TopBar `.brandName`). Size and colour come from the caller.
+ */
+export const GaffaWordmark: React.FC<{ className?: string }> = ({ className = 'text-sm' }) => (
+  <span
+    className={`font-bold uppercase leading-none ${className}`}
+    style={{ fontFamily: "'Newsreader', Georgia, 'Times New Roman', serif", letterSpacing: '0.12em' }}
+  >
+    Gaffa
+  </span>
+);
+
 /** Gaffa's public site, for the explainer's links before the server has said where Gaffa lives. */
 export const GAFFA_PUBLIC_URL = 'https://www.gaffa.live';
 
@@ -151,7 +164,11 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
         }`}
       >
         <GaffaMark className="size-[18px] shrink-0" />
-        <span className="truncate text-xs font-sans font-semibold">{label}</span>
+        {connected ? (
+          <span className="truncate text-xs font-sans font-semibold">{label}</span>
+        ) : (
+          <GaffaWordmark className="text-[12px] translate-y-px" />
+        )}
         <span className="material-symbols-outlined text-[16px] shrink-0">{open ? 'expand_more' : 'expand_less'}</span>
       </button>
 
@@ -166,7 +183,7 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
             <div className="p-4 flex flex-col gap-3">
               <div className="flex items-center gap-2 text-charcoal dark:text-cream-100">
                 <GaffaMark className="size-5" />
-                <span className="font-serif text-base font-semibold">Gaffa</span>
+                <GaffaWordmark className="text-[15px] translate-y-px" />
               </div>
               <p className="text-sm font-serif text-charcoal dark:text-cream-100 leading-snug">
                 A fantasy Premier League game, played like the real thing.
