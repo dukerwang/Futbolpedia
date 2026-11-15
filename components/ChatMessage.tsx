@@ -91,6 +91,9 @@ interface ChatMessageProps {
 /** A player the reply discussed who has no card yet: one tap sends him to Scout. */
 const ScoutOffer: React.FC<{ name: string; onScout: (name: string) => void }> = ({ name, onScout }) => {
     const [sent, setSent] = useState(false);
+    // "prime <name>" offers his prime when only his current form is rated (`scoutOfferRequest`).
+    const prime = /^prime\s+/i.test(name);
+    const player = prime ? name.replace(/^prime\s+/i, '') : name;
     return (
         <button
             type="button"
@@ -102,7 +105,7 @@ const ScoutOffer: React.FC<{ name: string; onScout: (name: string) => void }> = 
                 {sent ? 'check' : 'person_search'}
             </span>
             <span className="min-w-0 text-[13px] font-sans text-charcoal/60 dark:text-cream-400/70">
-                No dossier on <span className="font-serif font-bold text-[15px] text-charcoal dark:text-cream-50">{name}</span>
+                {prime ? 'No prime dossier on ' : 'No dossier on '}<span className="font-serif font-bold text-[15px] text-charcoal dark:text-cream-50">{player}</span>
             </span>
             <span className="ml-auto shrink-0 flex items-center gap-1 text-[11px] font-sans font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-400">
                 {sent ? 'On the desk' : 'Scout'}

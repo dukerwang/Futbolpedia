@@ -69,6 +69,8 @@ interface ChatInputProps {
   mentionRequest?: { id: number; card: PlayerProfile } | null;
   /** Opens Scout with this name, for a player @ found no dossier for. */
   onScoutName: (name: string) => void;
+  /** The card being challenged, shown as a chip until the user ends the challenge. */
+  challenge?: { label: string; onEnd: () => void } | null;
 }
 
 // The text box and the mention tint behind it share every metric that decides where text wraps.
@@ -84,6 +86,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   localCards,
   mentionRequest,
   onScoutName,
+  challenge,
 }) => {
   const [message, setMessage] = useState('');
   const [caret, setCaret] = useState(0);
@@ -300,6 +303,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     )}
     <div className="relative group bg-cream-50 dark:bg-charcoal-surface rounded-none shadow-float dark:shadow-dark-float border-t-2 border-charcoal dark:border-cream-400 overflow-hidden transition-colors duration-300">
       <div className="flex flex-col relative z-10">
+        {challenge && (
+          <div className="px-4 sm:px-6 pt-3 sm:pt-4 pb-0 flex items-center gap-2 min-w-0">
+            <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-emerald-600 dark:text-emerald-400">rate_review</span>
+            <span className="min-w-0 truncate text-xs font-sans text-charcoal/70 dark:text-cream-300">
+              Challenging the rating on <span className="font-bold text-charcoal dark:text-cream-50">{challenge.label}</span>
+            </span>
+            <button
+              type="button"
+              onClick={challenge.onEnd}
+              className="ml-auto shrink-0 flex items-center gap-1 min-h-8 px-2 text-[11px] font-sans font-bold uppercase tracking-widest text-charcoal/60 dark:text-cream-400 hover:text-red-600 dark:hover:text-red-400"
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-[14px]">close</span>
+              End
+            </button>
+          </div>
+        )}
         {image && (
           <div className="px-4 sm:px-6 pt-3 sm:pt-4 pb-0 flex items-center gap-3">
             <div className="relative">

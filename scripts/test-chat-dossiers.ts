@@ -13,7 +13,8 @@ import { formatIsoDate } from '../services/dossierStore';
 import { classifyTurn } from '../services/turnRouter';
 import { asksToSeeMentions } from '../services/chatIntent';
 import { lookUpDossier } from '../services/dossierLookup';
-import { offerScout, showCard, type ReplyAttachments } from '../services/conversationalScout';
+import { editionGaps, offerPrimeScout, offerScout, showCard, type ReplyAttachments } from '../services/conversationalScout';
+import { scoutOfferRequest } from '../services/ratingCommand';
 
 const now = Date.now();
 const today = formatIsoDate(now);
@@ -124,6 +125,31 @@ await test('a reply offers each player once, and never one whose card it shows',
   offerScout(attachments, 'Wirtz');
   assert.deepEqual(attachments.scoutOffers, ['Pedri', 'Wirtz']);
   assert.equal(attachments.cards.length, 1);
+});
+
+await test('a prime debate notes a player whose only card is his current form, unless only his current form was asked for', () => {
+  const current = card('Rodri', 'current');
+  const prime = card('Fernando Redondo', 'prime');
+  assert.deepEqual(editionGaps([current, prime], true, 'who is better, prime rodri or prime redondo'), [{ name: 'Rodri', label: 'current' }]);
+  // Naming both versions is still a question about his prime.
+  assert.equal(editionGaps([current], true, 'only current rodri is rated, is prime rodri the same as current?').length, 1);
+  assert.deepEqual(editionGaps([current, prime], true, 'prime Redondo or current Rodri?'), []);
+  assert.deepEqual(editionGaps([current], false, 'how good is rodri'), []);
+});
+
+await test('a missing prime is offered beside the current card, and a prime offer queues a prime rating', () => {
+  const attachments: ReplyAttachments = { cards: [], scoutOffers: [] };
+  const current = card('Rodri', 'current');
+  showCard(attachments, current);
+  offerPrimeScout(attachments, 'Rodri');
+  offerPrimeScout(attachments, 'Rodri');
+  showCard(attachments, card('Pedri', 'current'));
+  assert.deepEqual(attachments.scoutOffers, ['prime Rodri']);
+  // His prime card shown later takes the offer's place.
+  showCard(attachments, card('Rodri', 'prime'));
+  assert.deepEqual(attachments.scoutOffers, []);
+  assert.deepEqual(scoutOfferRequest('prime Rodri'), { name: 'Rodri', edition: 'prime' });
+  assert.deepEqual(scoutOfferRequest('Florian Wirtz'), { name: 'Florian Wirtz', edition: 'auto' });
 });
 
 console.log(`${passes} passed, ${failures} failed`);

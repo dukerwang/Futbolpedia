@@ -220,7 +220,7 @@ const debateHistory: ChatMessage[] = [
 const PUSHBACK =
   "no, they're not identical footballers, but it's quite literally near blasphemous to say ronaldinho wasn't better than salah. like that is a laughable take come on...";
 
-await test('a challenge sees every card in the debate and its own earlier verdict', async () => {
+await test('a challenge the user started sees every card in the debate and its own earlier verdict', async () => {
   calls = [];
   route = {
     intent: 'challenge_or_revise',
@@ -236,7 +236,7 @@ await test('a challenge sees every card in the debate and its own earlier verdic
   challengeReply =
     "Salah didn't have Ronaldinho's elastico or street improvisation (Flair 99 vs. 88), but Ronaldinho never matched Salah's off-ball menace.";
   const reply = await quietly(() =>
-    sendMessageToAI(PUSHBACK, debateHistory, undefined, [RONALDINHO, SALAH], []),
+    sendMessageToAI(PUSHBACK, debateHistory, undefined, [RONALDINHO, SALAH], [], { challengeCardKey: getCardKey(RONALDINHO) }),
   );
   const challengePrompt = calls.find((c) => c.structured && c.prompt.includes('active_dossier'))?.prompt ?? '';
   assert.ok(challengePrompt, 'the challenge path ran');
@@ -245,6 +245,16 @@ await test('a challenge sees every card in the debate and its own earlier verdic
   assert.ok(challengePrompt.includes('Ronaldinho holds the higher intrinsic footballing ceiling'));
   assert.equal(typeof reply, 'string');
   assert.match(reply as string, /\(Flair 99 vs\. 89\)/);
+});
+
+await test('pushback without a challenge is answered as a question and never revises the card', async () => {
+  calls = [];
+  proseReply = 'Fair point: the cards have them level, and here is why.';
+  const reply = await quietly(() =>
+    sendMessageToAI(PUSHBACK, debateHistory, undefined, [RONALDINHO, SALAH], []),
+  );
+  assert.ok(!calls.some((c) => c.structured && c.prompt.includes('active_dossier')), 'no challenge ran');
+  assert.equal(reply, proseReply);
 });
 
 await test('a debate turn locks both prime cards and corrects misquotes', async () => {

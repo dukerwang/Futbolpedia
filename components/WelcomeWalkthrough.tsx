@@ -396,7 +396,7 @@ function buildSteps(cards: Showcase[], debate: typeof DEBATE, scoutKey: string):
         'Ask the analyst anything: who was better at their peak, who starts this weekend, whether a transfer makes sense. It answers with a real opinion, and backs it with the cards.',
       points: [
         { icon: 'alternate_email', title: 'Bring in a card', body: <>Type <b>@</b> and a name. The analyst reads that exact card.</> },
-        { icon: 'gavel', title: 'Disagree with a rating', body: 'Make your case in the chat. If you win the argument, your revised card is yours to keep.' },
+        { icon: 'rate_review', title: 'Think a rating is off?', body: 'Ask about it in the chat any time. To have it changed, press Challenge on the card and say why; if the evidence backs you, you keep a revised card.' },
         { icon: 'stadium', title: 'Football this season', body: 'Who’s starting this weekend, who’s injured, and what has changed at a club since last season.' },
       ],
       visual: (

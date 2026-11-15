@@ -93,6 +93,11 @@ export interface DebateContext {
   thread: string;
   /** The stored cards in play, one per player, in the turn's edition. */
   cards: CardStanding[];
+  /**
+   * Players whose only card rates a different version from the one the thread is about (a
+   * current-form card in a debate about primes), as notes for the brief.
+   */
+  editionGaps?: string[];
   hints: { clubs: string[]; players: string[] };
   /** A past season the message names, from the router. */
   season?: string | null;
@@ -179,7 +184,7 @@ export const buildDebateBriefPrompt = (ctx: DebateContext): string => {
 
 Keep every field short: a sentence or two at most. Work out:
 1. understanding: what the user wants settled, read in the light of the conversation.
-2. kind: "head_to_head" for two sides compared, "ranking" for an order of several, "single" for one season, player or team examined, "other" for anything else.
+2. kind: "head_to_head" for two sides compared, "ranking" for an order of several, "single" for one season, player or team examined, "other" for a message that asks for no judgment: in a conversation, a follow-up that questions the last answer, the cards or versions it used, or one of its facts, or asks for a clarification. Read the latest message for what it asks, not the thread's topic: a thread about a comparison can carry a follow-up that is no comparison. For "other", leave criteria, counterCase, verdict and ranking empty, and plan calls only for a fact the reply needs.
 3. criterion: what the question turns on. "peak_level" is how good a version was at its best; "sustained_level" is how long it held a high level; "output" is goals, assists and numbers; "influence" is its effect on results and on the team; "versatility" is range of roles; "mixed" when the question is how good overall and no one of these decides it. Read it from the words the user chose.
 4. criteria: two to four criteria that settle this question, most important first, each with why it matters here. They should be things evidence can speak to. For each, figure: the one precise figure, if any, that decides it, described by what it counts, its competition (league, all competitions, a named cup or European competition, international) and its span (a named season, the window, a career), without the number itself. Leave it empty when the criterion is judged without numbers; most are. The answer quotes no other figures.
 5. versions: what is being compared, each with its period: a player's window (use the window on his card when he has one) or a club's season (YYYY-YY).
@@ -202,7 +207,7 @@ ${formatCardOrder(ctx.cards)}
 ${ctx.cards.map((s) => (placementText(s) ? `- ${s.name}${placementText(s)}` : '')).filter(Boolean).join('\n')}
 `
     : 'No stored cards are in play.\n'
-}${ctx.season ? `Season named in the message: ${ctx.season}\n` : ''}${ctx.hints.clubs.length || ctx.hints.players.length ? `Names spotted in the message: ${[...ctx.hints.clubs, ...ctx.hints.players].join(', ')}\n` : ''}
+}${ctx.editionGaps?.length ? `Versions with no card of their own:\n${ctx.editionGaps.map((g) => `- ${g}`).join('\n')}\n` : ''}${ctx.season ? `Season named in the message: ${ctx.season}\n` : ''}${ctx.hints.clubs.length || ctx.hints.players.length ? `Names spotted in the message: ${[...ctx.hints.clubs, ...ctx.hints.players].join(', ')}\n` : ''}
 ${ctx.thread ? `${ctx.thread}\n` : ''}
 <user_message>${ctx.message}</user_message>`;
 };
@@ -490,7 +495,7 @@ export const formatDebateBriefForWriter = (brief: DebateBrief, cards: CardStandi
   );
   if (brief.versions.length) lines.push(`The versions compared: ${brief.versions.map((v) => `${v.subject}${v.period ? ` (${v.period})` : ''}`).join('; ')}`);
   if (brief.disagreement) lines.push(`Where the honest disagreement lies: ${brief.disagreement}`);
-  if (brief.counterCase) lines.push(`The strongest case against the verdict, to answer directly: ${brief.counterCase}`);
+  if (brief.counterCase) lines.push(`The best point for the other side, to give its due where it matters: ${brief.counterCase}`);
   if (brief.ranking.length) lines.push(`The order, settled before writing (keep it): ${brief.ranking.map((r, i) => `${i + 1}. ${r}`).join(' ')}`);
   else if (brief.verdict) lines.push(`The verdict, settled before writing (keep it): ${brief.verdict}`);
   if (brief.cardNotes.length) lines.push(`Held to the stored cards: ${brief.cardNotes.join(' ')}`);

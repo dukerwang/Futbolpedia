@@ -70,6 +70,15 @@ export const ratingRequestFromText = (text: string, prime: boolean): RatingReque
   return { name, edition: prime ? 'prime' : 'auto' };
 };
 
+/**
+ * The rating a chat reply's Scout offer queues. An offer is a player's name, or "prime <name>"
+ * when the reply discussed his prime and only his current form is rated.
+ */
+export const scoutOfferRequest = (offer: string): RatingRequest => {
+  const prime = offer.trim().match(/^prime\s+(.+)$/i);
+  return prime ? { name: prime[1].trim(), edition: 'prime' } : { name: offer.trim(), edition: 'auto' };
+};
+
 /** The route the turn router gives a typed rating of the same version, built without routing. */
 export const routeForRating = (request: RatingRequest): TurnRoute => {
   const season = request.edition === 'season' ? request.season?.trim() || null : null;
