@@ -206,7 +206,7 @@ export function defaultImageTree(): Node {
     { justifyContent: 'center', padding: '0 96px' },
     mono(22, COLORS.emerald, 'futbolpedia.org'),
     h('div', { fontFamily: 'Playfair Display', fontWeight: 700, fontSize: 96, marginTop: 18 }, 'Futbolpedia'),
-    h('div', { fontSize: 32, marginTop: 18, color: COLORS.muted, lineHeight: 1.35 }, 'Every player on one all-time scale, and an analyst to argue it with.'),
+    h('div', { fontSize: 32, marginTop: 18, color: COLORS.muted, lineHeight: 1.35 }, 'Your AI football analyst. Scout any player, then talk it through.'),
   );
 }
 
