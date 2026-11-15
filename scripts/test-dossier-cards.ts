@@ -559,6 +559,17 @@ async function main() {
     assert.equal(extractCandidatePlayerName('Ronaldo 2007/08'), 'Ronaldo');
   });
 
+  await test('a name is read without the chat words around it or the version asked for', async () => {
+    assert.equal(extractCandidatePlayerName('okay rate prime rodri'), 'rodri');
+    assert.equal(extractCandidatePlayerName('alright, scout prime Zidane please'), 'Zidane');
+    assert.equal(extractCandidatePlayerName('ok rate rodri then'), 'rodri');
+    assert.equal(extractCandidatePlayerName('rate Son Heung-min'), 'Son Heung-min');
+    const route = await classifyTurn({ message: 'okay rate prime rodri', history: [], conversationDossiers: [], hasImage: false });
+    assert.equal(route.intent, 'single_dossier');
+    assert.deepEqual(route.targetPlayers, ['rodri']);
+    assert.equal(route.isHistorical, true);
+  });
+
   await test('career status: retired players are recognized, active ones are not', () => {
     assert.equal(parseCareerStatus('RETIRED'), 'retired');
     assert.equal(parseCareerStatus('He is RETIRED.'), 'retired');

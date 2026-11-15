@@ -282,8 +282,18 @@ const stripEraPhrase = (message: string): string => {
   return message;
 };
 
+/**
+ * Words a chat message wraps a request in, which are never part of a name: a lead-in ("okay",
+ * "alright then", "go ahead and"), a trailing "then" or "please", and the version words a route
+ * reads separately ("prime", "peak").
+ */
+const CHAT_LEAD_IN = /^(?:(?:ok(?:ay)?|alright|aight|right|so|well|yeah|yes|yep|sure|cool|fine|great|nice|hey|now|then|just|go ahead and|let['\u2019]?s|lets|could you|would you|can u|pls|plz)\b[\s,!.]*)+/i;
+const CHAT_TAIL = /(?:[\s,]+(?:then|too|as well|pls|plz|please|thanks|thx))+[\s?!.]*$/i;
+const VERSION_WORDS = /\b(?:prime|peak|at (?:his|their) (?:best|peak))\b/gi;
+
 const stripClubAndDossierQualifiers = (message: string): string =>
-  stripEraPhrase(message)
+  stripEraPhrase(message.trim().replace(CHAT_LEAD_IN, '').replace(CHAT_TAIL, ''))
+    .replace(VERSION_WORDS, '')
     .replace(/\b(give me a?n?|create|generate|can you|please|show me|pull up|what is|what's)\b/gi, '')
     .replace(
       /\b(rate|rating|profile|scout(?:ing)?(?: report)?|evaluate|dossier|how good is|rank(?:ing)?|tier|analyze|analysis|breakdown|report|brief(?:ing)?)\b/gi,
