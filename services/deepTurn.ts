@@ -25,6 +25,8 @@ import {
   presentFactRules,
   proseModeGuidance,
   sanitizeScoutProse,
+  sanitizeScoutProseDetailed,
+  stripScoutMarkup,
   threadStateFor,
   type FigureCheck,
 } from './conversationalScout';
@@ -38,6 +40,7 @@ import {
   type EvidenceLedger,
 } from './evidenceLedger';
 import { expandTables, type FigureClaim } from './figureGate';
+import { correctReply, formatGateFeedback, gateFeedbackEnabled, GATE_FEEDBACK_STAGE_LABEL, type CorrectionModel, type GateFeedbackStats } from './gateFeedback';
 import { REPLY_BLOCKS, ReplyComposer, runViewTool, viewToolDeclarations } from './replyBlocks';
 import {
   executeCall,
@@ -511,6 +514,8 @@ export interface DeepTurnDeps {
   now?: () => number;
   /** Called once with what the loop did, for tests and the eval. */
   onStats?: (stats: DeepStats) => void;
+  /** The gate feedback round's model, for tests. */
+  gateFeedback?: CorrectionModel;
 }
 
 export interface DeepStats {
@@ -522,6 +527,8 @@ export interface DeepStats {
   toolCalls: string[];
   /** Why research ended. */
   stop: 'answered' | 'time' | 'calls' | 'searches' | 'rounds';
+  /** The gate feedback round's counts (`gateFeedback.ts`); null when no round finished. A round that ran is also counted in `calls`. */
+  gateFeedback: GateFeedbackStats | null;
 }
 
 /** The promise's value, or null once `ms` has passed. */
@@ -794,9 +801,38 @@ ${params.savedDossiersBlock}
   verified = await within(managers(), 5_000).then((m) => m ?? verified);
   // A short answer held back while it might have been a preamble streams now.
   if (!streamed) onText(reply.text, true);
-  const stats: DeepStats = { rounds, calls, searches, toolCalls, stop };
+
+  // The gates check the reply against the turn's evidence. When they flag something and the budget
+  // isn't spent, the model gets one call to fix it first; a round that runs counts as a lookup.
+  const finalFigures: FigureCheck = {
+    ...figureCheck,
+    onRemoved: (removed: FigureClaim[]) => {
+      if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures from a deep reply: ${removed.map((r) => r.text).join('; ')}`);
+    },
+  };
+  let finalText: string;
+  let feedback: GateFeedbackStats | null = null;
+  const spent = left();
+  if (gateFeedbackEnabled() && spent.calls > 0 && spent.ms > 0) {
+    const corrected = await correctReply({
+      raw: reply.text,
+      sanitize: (text) => sanitizeScoutProseDetailed(text, managerContext(), cardsInPlay, finalFigures),
+      strip: stripScoutMarkup,
+      correct: deps.gateFeedback,
+      onCorrecting: () => params.onStageChange?.(GATE_FEEDBACK_STAGE_LABEL),
+      now,
+    });
+    if (corrected.called) calls++;
+    feedback = corrected.stats;
+    finalText = corrected.text;
+    if (feedback) perf?.(`gate feedback: ${formatGateFeedback(feedback)}`);
+  } else {
+    finalText = sanitizeScoutProse(reply.text, managerContext(), cardsInPlay, finalFigures);
+  }
+
+  const stats: DeepStats = { rounds, calls, searches, toolCalls, stop, gateFeedback: feedback };
   deps.onStats?.(stats);
-  perf?.(`deep turn: ${rounds} rounds, ${calls} lookups (${searches} searches), stop ${stop}, tools ${toolCalls.join(', ') || 'none'}`);
+  perf?.(`deep turn: ${rounds} rounds, ${calls} lookups (${searches} searches), stop ${stop}, tools ${toolCalls.join(', ') || 'none'}, gate feedback ${feedback ? formatGateFeedback(feedback) : 'none'}`);
 
   // A normal follow-up reads this turn's research the way it reads research's.
   const thisTurn = formatLedger({ ...ledger, entries: ledger.entries.filter((e) => e.kind !== 'prior_turn') }, { seasonStart: seasonStartDate(seasonStartYear) });
@@ -805,10 +841,5 @@ ${params.savedDossiersBlock}
     thread.grounding = thisTurn;
   }
 
-  return sanitizeScoutProse(reply.text, managerContext(), cardsInPlay, {
-    ...figureCheck,
-    onRemoved: (removed: FigureClaim[]) => {
-      if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures from a deep reply: ${removed.map((r) => r.text).join('; ')}`);
-    },
-  });
+  return finalText;
 }

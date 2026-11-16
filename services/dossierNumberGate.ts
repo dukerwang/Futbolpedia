@@ -21,6 +21,19 @@ export interface DossierNumberCorrection {
   to: number;
 }
 
+/**
+ * One misquoted attribute with where it sits: the player's card, the number as the reply stated it,
+ * the number the card stores, and the sentence (or table row) that quoted it.
+ */
+export interface DossierNumberFinding extends DossierNumberCorrection {
+  /** The attribute as the card labels it. */
+  label: string;
+  /** The sentence or table row holding the number, as the text read. */
+  sentence: string;
+  /** Offset of the stated number in the text the gate read. */
+  at: number;
+}
+
 const RATING_LABELS = Object.entries(ATTRIBUTE_LABELS) as Array<[RatedKey, string]>;
 
 // Longest first, so "Offensive Positioning" wins over a shorter label it contains.
@@ -82,6 +95,8 @@ interface Edit {
   length: number;
   to: number;
   correction: DossierNumberCorrection;
+  /** The sentence or table row the number sits in. */
+  sentence: string;
 }
 
 interface Mention {
@@ -151,6 +166,7 @@ function resolveSpan(
         length: String(m.value).length,
         to,
         correction: { player: card.basicInfo.name, key, from: m.value, to },
+        sentence: sentence.trim(),
       });
     }
   }
@@ -242,6 +258,7 @@ function resolveTable(
         length: m[2].length,
         to,
         correction: { player: card.basicInfo.name, key, from: value, to },
+        sentence: row.text.trim(),
       });
     });
   }
@@ -251,9 +268,9 @@ function resolveTable(
 export function reconcileDossierNumbers(
   text: string,
   cards: PlayerProfile[],
-): { text: string; corrections: DossierNumberCorrection[] } {
+): { text: string; corrections: DossierNumberCorrection[]; findings: DossierNumberFinding[] } {
   const inPlay = cards.filter((c) => c?.basicInfo?.name && c.ratings);
-  if (!text || inPlay.length === 0) return { text, corrections: [] };
+  if (!text || inPlay.length === 0) return { text, corrections: [], findings: [] };
 
   const edits: Edit[] = [];
 
@@ -284,10 +301,16 @@ export function reconcileDossierNumbers(
     }
   }
 
-  if (edits.length === 0) return { text, corrections: [] };
+  if (edits.length === 0) return { text, corrections: [], findings: [] };
   let out = text;
   for (const e of [...edits].sort((a, b) => b.start - a.start)) {
     out = out.slice(0, e.start) + String(e.to) + out.slice(e.start + e.length);
   }
-  return { text: out, corrections: edits.map((e) => e.correction) };
+  return {
+    text: out,
+    corrections: edits.map((e) => e.correction),
+    findings: [...edits]
+      .sort((a, b) => a.start - b.start)
+      .map((e) => ({ ...e.correction, label: ATTRIBUTE_LABELS[e.correction.key], sentence: e.sentence, at: e.start })),
+  };
 }

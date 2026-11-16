@@ -72,6 +72,10 @@ const respond = (text: string) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+/** What the gate feedback round's fake answers: the replacements for the flagged sentences, or nothing. */
+let correct: ((flagged: string[]) => { original: string; replacement: string }[]) | null = null;
+let corrections = 0;
+
 let snapshots: import('../services/snapshotServer').SnapshotServer | undefined;
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
@@ -103,6 +107,12 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const search = raw.includes('googleSearch') && !raw.includes('functionDeclarations');
   calls.push({ prompt, structured, search });
 
+  if (structured && prompt.includes('Automatic checks flagged some of its sentences')) {
+    corrections++;
+    const text: string = (body.contents ?? []).flatMap((c: any) => c.parts ?? []).map((p: any) => p.text ?? '').join('\n');
+    const flagged = [...text.matchAll(/Sentence: ("[^\n]*?")\n/g)].map((m) => JSON.parse(m[1]) as string);
+    return respond(JSON.stringify({ replacements: correct ? correct(flagged) : [] }));
+  }
   if (prompt.includes('first-team head coach')) return respond('COACH: UNKNOWN | SINCE: UNKNOWN | PREVIOUS: UNKNOWN | SOURCE_DATE: UNKNOWN');
   if (search) {
     if (prompt.includes('tactical analysis')) return respond(STALE_ANALYSIS);
@@ -214,6 +224,30 @@ await test('a question about the present researches facts, then analysis, and th
   // The club's research pass and the search on the question went in with the turn's own lookups.
   assert.match(writer, /Web search — Southside transfers in and out and coaching changes since last season/);
   assert.match(writer, /Web search — Break down Southside's build-up shape this season/);
+});
+
+await test('on the stage path, a flagged figure gets one correction round before the gates cut it', async () => {
+  correct = (flagged) => flagged.map((original) => ({ original, replacement: 'They press from a back four.' }));
+  corrections = 0;
+  const stages: string[] = [];
+  const perf: string[] = [];
+  const { log, info, warn } = console;
+  console.log = (...a: unknown[]) => void perf.push(a.map(String).join(' '));
+  console.info = console.warn = () => {};
+  let reply: string | import('../types').PlayerProfile;
+  try {
+    reply = await sendMessageToAI("Break down Southside's build-up shape this season", [], undefined, [], [], {
+      fast: true,
+      onStageChange: (s) => stages.push(s),
+    });
+  } finally {
+    Object.assign(console, { log, info, warn });
+    correct = null;
+  }
+  assert.equal(corrections, 1, 'one round');
+  assert.equal(reply, 'New Fullback starts at left-back in a back four. They press from a back four. Main Nine leads the line.');
+  assert.ok(stages.includes('Checking the figures...'));
+  assert.ok(perf.some((l) => l.startsWith('[Perf] gate feedback: flagged 1, fixed 1, dropped 0, removed 0')), perf.join('\n'));
 });
 
 console.log(`${passes} passed, ${failures} failed`);

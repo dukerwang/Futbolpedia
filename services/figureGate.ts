@@ -339,6 +339,25 @@ export interface FigureGateResult {
   trimmed: FigureClaim[];
 }
 
+/**
+ * One unsupported figure with where it sits: the sentence (or table cell) that carries it, where
+ * that unit starts in the text the gate read, and the lines of the evidence closest to it in kind.
+ */
+export interface FigureFinding {
+  claim: FigureClaim;
+  /** The unit as the reply wrote it: a sentence without its list marker, or a table cell as split on pipes. */
+  sentence: string;
+  /** Offset of `sentence` in the text the gate read. */
+  at: number;
+  /** Evidence lines that hold a figure of the same kind about similar words, nearest first; none when the evidence has none. */
+  evidence: string[];
+}
+
+export interface FigureGateFindings extends FigureGateResult {
+  /** Each unsupported figure with its sentence, in reply order. Supported figures cut for a budget aren't listed. */
+  findings: FigureFinding[];
+}
+
 export interface FigureGateOptions {
   /** Check each figure's qualifier and span too (`scopeOf`), as answers about past seasons need. */
   scoped?: boolean;
@@ -347,6 +366,14 @@ export interface FigureGateOptions {
    * words) are kept first; beyond the budget, sentences with other figures go, the last first.
    */
   budget?: { max: number; slots: string[] };
+  /**
+   * Sentences (or table cells) to cut whatever they hold, matched as written after trimming. A cut
+   * leaves no fragment, exactly as for an unsupported figure. Used when a correction round dropped
+   * a sentence.
+   */
+  drop?: string[];
+  /** With `drop`: cut only those units, and leave every figure unchecked. */
+  dropOnly?: boolean;
 }
 
 /** A tally from one match, or one tie, rather than a season or a span. */
@@ -372,6 +399,49 @@ export function matchesSlot(claim: FigureClaim, slots: string[], chunk: string =
   });
 }
 
+/** Words too common to say two lines are about the same thing. */
+const PLAIN_WORDS = new Set(['this', 'that', 'with', 'from', 'have', 'been', 'were', 'they', 'their', 'there', 'than', 'then', 'also', 'more', 'most', 'will', 'would', 'about', 'which', 'while', 'where', 'season', 'league']);
+const contentWords = (s: string): Set<string> =>
+  new Set(fold(s).split(/[^a-z0-9']+/).filter((w) => w.length >= 4 && !PLAIN_WORDS.has(w) && !/^\d+$/.test(w)));
+
+/** Evidence lines held to this length in a finding, so one long source line doesn't swamp a prompt. */
+const EVIDENCE_LINE_CHARS = 240;
+/** Lines of the evidence read for a finding. */
+const EVIDENCE_LINES_READ = 4_000;
+
+/**
+ * The lines of the evidence closest to an unsupported figure: lines that hold a figure of the same
+ * kind (for a count, beside the same noun) and share words with the sentence, the most words first.
+ * A quote has no counterpart, and a line that shares nothing with the sentence is no help, so the
+ * answer may be none.
+ */
+export function nearestEvidence(claim: FigureClaim, sentence: string, evidence: string, limit = 3): string[] {
+  if (claim.kind === 'quote') return [];
+  const wanted = contentWords(sentence);
+  if (wanted.size === 0) return [];
+  const scored: { line: string; score: number; order: number }[] = [];
+  evidence
+    .split('\n')
+    .slice(0, EVIDENCE_LINES_READ)
+    .forEach((raw, order) => {
+      const line = raw.trim();
+      if (line.length < 4) return;
+      // Numbers written as words are read only where the claim itself is one (a name like "Main Nine" isn't a count).
+      const kinds = findFigures(line, { past: Boolean(claim.word) }).filter((c) => c.kind === claim.kind);
+      if (kinds.length === 0) return;
+      const sameNoun = claim.near.length === 0 || kinds.some((c) => c.near.some((w) => claim.near.includes(w))) || claim.near.some((w) => new RegExp(w, 'i').test(line));
+      if (!sameNoun) return;
+      const words = contentWords(line);
+      let score = 0;
+      for (const w of wanted) if (words.has(w)) score++;
+      if (score > 0) scored.push({ line, score, order });
+    });
+  return scored
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .slice(0, limit)
+    .map((s) => (s.line.length > EVIDENCE_LINE_CHARS ? `${s.line.slice(0, EVIDENCE_LINE_CHARS)}...` : s.line));
+}
+
 /** A sentence that opens on a word pointing back at a subject named before it ("He", "Their", "The 26-year-old"). */
 const LEANS_BACK = /^(?:\*\*|\*|_)?(?:he|she|they|it|his|her|their|its|him|them|this|that|these|those|the \d{2}-year-old)\b/i;
 
@@ -394,11 +464,54 @@ const sentences = (line: string): string[] => line.split(/(?<=[.!?])\s+(?=\S)/);
 
 interface Unit {
   text: string;
-  /** Index of the line and, for a table, of the cell. */
-  line: number;
-  cell: number | null;
+  /** Offset of the unit in the text. */
+  at: number;
   kept: FigureClaim[];
   gone: boolean;
+}
+
+type Piece = { text: string; at: number };
+type Shape =
+  | { kind: 'fixed'; line: string }
+  | { kind: 'table'; cells: Piece[] }
+  | { kind: 'prose'; marker: string; parts: Piece[] };
+
+/**
+ * A reply as the gate reads it, line by line: headings and blank lines as they are, a table's cells,
+ * and a paragraph or list item's sentences, each with its offset in the text. A correction round
+ * uses the same split, so the sentences it is given are the ones the gate would cut.
+ */
+export function segmentReply(text: string): Shape[] {
+  let offset = 0;
+  return text.split('\n').map((line) => {
+    const lineAt = offset;
+    offset += line.length + 1;
+    if (/^\s*#/.test(line) || !line.trim()) return { kind: 'fixed' as const, line };
+    // A table keeps its shape: only the cell with an unsupported figure is blanked.
+    if (/^\s*\|/.test(line)) {
+      let cursor = lineAt;
+      return {
+        kind: 'table' as const,
+        cells: line.split('|').map((cell) => {
+          const piece = { text: cell, at: cursor };
+          cursor += cell.length + 1;
+          return piece;
+        }),
+      };
+    }
+    const marker = line.match(/^(\s*(?:[-*+]|\d+\.)\s+)/)?.[1] ?? '';
+    let cursor = lineAt + marker.length;
+    return {
+      kind: 'prose' as const,
+      marker,
+      parts: sentences(line.slice(marker.length)).map((sentence) => {
+        // The split drops the whitespace between sentences, so each one is found after the last.
+        const at = text.indexOf(sentence, cursor);
+        cursor = at + sentence.length;
+        return { text: sentence, at };
+      }),
+    };
+  });
 }
 
 /**
@@ -406,29 +519,50 @@ interface Unit {
  * returned with citations; a sentence inside it stands.
  */
 export function gateUnsupportedFigures(text: string, evidence: string, grounded: string[] = [], options: FigureGateOptions = {}): FigureGateResult {
+  const { text: out, removed, trimmed } = runGate(text, evidence, grounded, options, false);
+  return { text: out, removed, trimmed };
+}
+
+/**
+ * The same gate, also returning what it found: each unsupported figure with its sentence and the
+ * evidence nearest to it. The text, `removed` and `trimmed` are exactly what `gateUnsupportedFigures`
+ * returns.
+ */
+export function gateFigureFindings(text: string, evidence: string, grounded: string[] = [], options: FigureGateOptions = {}): FigureGateFindings {
+  return runGate(text, evidence, grounded, options, true);
+}
+
+function runGate(text: string, evidence: string, grounded: string[], options: FigureGateOptions, collect: boolean): FigureGateFindings {
   const removed: FigureClaim[] = [];
   const trimmed: FigureClaim[] = [];
+  const findings: FigureFinding[] = [];
+  const dropped = new Set((options.drop ?? []).map((d) => d.trim()).filter(Boolean));
+  let cutByDrop = false;
   const groundedFolded = grounded.map((g) => fold(g).replace(/\n/g, ' ')).filter((g) => g.length > 20);
   const isGrounded = (sentence: string) => {
     const s = fold(sentence).trim();
     return s.length > 0 && groundedFolded.some((g) => g.includes(s) || (s.length > 40 && s.includes(g)));
   };
   const units: Unit[] = [];
-  const check = (chunk: string, line: number, cell: number | null): Unit => {
+  const check = (piece: Piece): Unit => {
+    const chunk = piece.text;
     const figures = findFigures(chunk, { past: options.scoped });
-    const bad = isGrounded(chunk) ? [] : figures.filter((c) => !isSupported(c, evidence, options.scoped ? scopeOf(c, chunk) : undefined));
+    const bad = options.dropOnly || isGrounded(chunk) ? [] : figures.filter((c) => !isSupported(c, evidence, options.scoped ? scopeOf(c, chunk) : undefined));
     removed.push(...bad);
-    const unit = { text: chunk, line, cell, kept: bad.length ? [] : figures, gone: bad.length > 0 };
+    if (collect) {
+      for (const claim of bad) findings.push({ claim, sentence: chunk.trim(), at: piece.at + (chunk.length - chunk.trimStart().length), evidence: nearestEvidence(claim, chunk, evidence) });
+    }
+    const cut = dropped.size > 0 && dropped.has(chunk.trim());
+    if (cut && bad.length === 0) cutByDrop = true;
+    const unit = { text: chunk, at: piece.at, kept: bad.length || cut ? [] : figures, gone: bad.length > 0 || cut };
     units.push(unit);
     return unit;
   };
 
-  const shapes = text.split('\n').map((line, li) => {
-    if (/^\s*#/.test(line) || !line.trim()) return { kind: 'fixed' as const, line };
-    // A table keeps its shape: only the cell with an unsupported figure is blanked.
-    if (/^\s*\|/.test(line)) return { kind: 'table' as const, cells: line.split('|').map((cell, ci) => check(cell, li, ci)) };
-    const marker = line.match(/^(\s*(?:[-*+]|\d+\.)\s+)/)?.[1] ?? '';
-    return { kind: 'prose' as const, marker, parts: sentences(line.slice(marker.length)).map((s) => check(s, li, null)) };
+  const shapes = segmentReply(text).map((shape) => {
+    if (shape.kind === 'fixed') return shape;
+    if (shape.kind === 'table') return { kind: 'table' as const, cells: shape.cells.map(check) };
+    return { kind: 'prose' as const, marker: shape.marker, parts: shape.parts.map(check) };
   });
 
   // Over budget: the figures nobody chose go first, from the end of the reply back.
@@ -487,5 +621,5 @@ export function gateUnsupportedFigures(text: string, evidence: string, grounded:
     .filter((l): l is string => l !== null)
     .join('\n')
     .replace(/\n{3,}/g, '\n\n');
-  return { text: removed.length || trimmed.length ? out.trim() : text, removed, trimmed };
+  return { text: removed.length || trimmed.length || cutByDrop ? out.trim() : text, removed, trimmed, findings };
 }

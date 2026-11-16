@@ -79,6 +79,18 @@ export function sameCoach(a: string | null | undefined, b: string | null | undef
   return shorter.length >= 4 && new RegExp(`(^| )${shorter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( |$)`).test(longer);
 }
 
+/** A coach name the scrub replaced, and who prose may name instead. */
+export interface ManagerReplacement {
+  /** The name as the text wrote it. */
+  name: string;
+  /** The verified coach the name was replaced with, or null when the turn verified none and the name was neutralised. */
+  verifiedCoach: string | null;
+  /** The club whose coach the name was a former one of, for a former-coach rewrite. */
+  club?: string;
+  /** `former`: the club's predecessor, rewritten to its current coach. `unverified`: a name nothing verified. */
+  kind: 'former' | 'unverified';
+}
+
 const clubMentionNames = (club: string): string[] => {
   const name = foldName(club).replace(/\b(fc|cf|afc)\b/g, '').replace(/\s+/g, ' ').trim();
   return name ? [name] : [];
@@ -91,7 +103,16 @@ const clubMentionNames = (club: string): string[] => {
  * now at Manchester City).
  */
 export function scrubFormerCoaches(text: string, managers: VerifiedClubManager[] = []): string {
-  if (!text || managers.length === 0) return text;
+  return scrubFormerCoachesDetailed(text, managers).text;
+}
+
+/** `scrubFormerCoaches`, also returning each former coach it rewrote and the coach it put in his place. */
+export function scrubFormerCoachesDetailed(
+  text: string,
+  managers: VerifiedClubManager[] = [],
+): { text: string; replaced: ManagerReplacement[] } {
+  const replaced: ManagerReplacement[] = [];
+  if (!text || managers.length === 0) return { text, replaced };
   const foldedText = foldName(text);
   let result = text;
 
@@ -100,15 +121,24 @@ export function scrubFormerCoaches(text: string, managers: VerifiedClubManager[]
     if (!clubMentionNames(club).some((name) => foldedText.includes(name))) continue;
     if (managers.some((m) => sameCoach(m.coach, previousCoach))) continue;
     const escaped = previousCoach.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const note = () => {
+      if (!replaced.some((r) => r.name === previousCoach && r.club === club)) replaced.push({ name: previousCoach, verifiedCoach: coach, club, kind: 'former' });
+    };
 
     // 1. "Under [Previous]" -> "Under [Coach]"
     result = result.replace(
       new RegExp(`\\b(under)\\s+(?:manager\\s+|head\\s+coach\\s+|coach\\s+)?${escaped}\\b`, 'gi'),
-      (_match, prefix: string) => `${prefix[0] === 'U' ? 'Under' : 'under'} ${coach}`,
+      (_match, prefix: string) => {
+        note();
+        return `${prefix[0] === 'U' ? 'Under' : 'under'} ${coach}`;
+      },
     );
 
     // 2. "[Previous]'s" -> "[Coach]'s"
-    result = result.replace(new RegExp(`\\b${escaped}['’]s\\b`, 'gi'), `${coach}'s`);
+    result = result.replace(new RegExp(`\\b${escaped}['’]s\\b`, 'gi'), () => {
+      note();
+      return `${coach}'s`;
+    });
 
     // 3. "[Previous] deploys / uses / fields" -> "[Coach] deploys / uses / fields"
     result = result.replace(
@@ -116,17 +146,23 @@ export function scrubFormerCoaches(text: string, managers: VerifiedClubManager[]
         `\\b${escaped}\\s+(deploys|uses|fields|plays|favours|favors|prefers|relies on)\\b`,
         'gi',
       ),
-      (_match, verb) => `${coach} ${verb}`,
+      (_match, verb) => {
+        note();
+        return `${coach} ${verb}`;
+      },
     );
 
     // 4. "managed by [Previous]" / "coached by [Previous]" -> "managed by [Coach]"
     result = result.replace(
       new RegExp(`\\b(managed by|coached by)\\s+${escaped}\\b`, 'gi'),
-      (_match, prefix) => `${prefix} ${coach}`,
+      (_match, prefix) => {
+        note();
+        return `${prefix} ${coach}`;
+      },
     );
   }
 
-  return result;
+  return { text: result, replaced };
 }
 
 const UNDER_MANAGER_PATTERN =
@@ -334,10 +370,23 @@ export function scrubUnverifiedManagerText(
   text: string,
   ctx: ManagerVerificationContext,
 ): string {
-  if (!text) return text;
+  return scrubUnverifiedManagerTextDetailed(text, ctx).text;
+}
+
+/**
+ * `scrubUnverifiedManagerText`, also returning each name it replaced and the verified coach (if
+ * any) it put in the name's place. The text is exactly what the plain form returns.
+ */
+export function scrubUnverifiedManagerTextDetailed(
+  text: string,
+  ctx: ManagerVerificationContext,
+): { text: string; replaced: ManagerReplacement[] } {
+  if (!text) return { text, replaced: [] };
 
   // 1. Rewrite a club's previous coach to its verified current coach.
-  let out = scrubFormerCoaches(text, ctx.clubManagers ?? []);
+  const former = scrubFormerCoachesDetailed(text, ctx.clubManagers ?? []);
+  let out = former.text;
+  const replaced: ManagerReplacement[] = [...former.replaced];
 
   const corpus = verificationCorpus(ctx);
   const verifiedCoach = ctx.currentHeadCoach?.trim() ?? null;
@@ -353,6 +402,7 @@ export function scrubUnverifiedManagerText(
     (fullMatch, prefix: string, name: string) => {
       const cleaned = cleanCandidateName(name);
       if (isAllowed(cleaned)) return fullMatch;
+      replaced.push({ name: cleaned, verifiedCoach: verifiedCoach || null, kind: 'unverified' });
       // Keep any lowercase words the case-insensitive capture swallowed after the name.
       const tail = cleaned ? name.slice(name.indexOf(cleaned) + cleaned.length) : '';
       const isCapital = prefix[0] === prefix[0].toUpperCase();
@@ -370,11 +420,12 @@ export function scrubUnverifiedManagerText(
     (fullMatch, name: string, rest: string) => {
       const cleaned = cleanCandidateName(name);
       if (isAllowed(cleaned)) return fullMatch;
+      replaced.push({ name: cleaned, verifiedCoach: verifiedCoach || null, kind: 'unverified' });
       // Keep a leading word the case-insensitive capture swallowed ("in Maresca's system").
       const lead = cleaned ? name.slice(0, name.indexOf(cleaned)) : '';
       return lead + (verifiedCoach ? `${verifiedCoach}'s ${rest}` : `the team's ${rest}`);
     },
   );
 
-  return out;
+  return { text: out, replaced };
 }

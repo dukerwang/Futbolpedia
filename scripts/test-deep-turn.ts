@@ -298,7 +298,7 @@ await test('tool results land in the ledger, and the figure gate removes an unsu
   const streamed: string[] = [];
   const conversationId = 'deep-ledger';
   const reply = await quietly(() =>
-    runDeepTurn({ ...baseParams("How are Southside doing?"), conversationId, onStreamChunk: (t) => streamed.push(t) }, { model: fake.model, tools, snapshots: null, managers: async () => [] }),
+    runDeepTurn({ ...baseParams("How are Southside doing?"), conversationId, onStreamChunk: (t) => streamed.push(t) }, { model: fake.model, tools, snapshots: null, managers: async () => [], gateFeedback: async () => ({ replacements: [] }) }),
   );
   assert.equal(reply, 'Main Nine has scored 9 league goals this season. New Fullback starts at left-back.');
   assert.ok(!streamed.some((t) => t.includes('8.4')), 'the stream never shows the removed figure');
