@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { formatClubReport, type ClubMatch, type LiveClubReport } from '../services/liveFootball';
 import type { ResearchToolset, ToolOutcome } from '../services/researchTools';
-
+import { ReplyComposer } from '../services/replyBlocks';
 process.env.API_KEY = 'offline-test-key';
 
 let passes = 0;
@@ -161,7 +161,7 @@ const route = (): import('../services/turnRouter').TurnRoute => ({
   needsSearch: true,
 });
 
-const baseParams = (message: string, attachments = { cards: [], scoutOffers: [] } as import('../services/conversationalScout').ReplyAttachments) => ({
+const baseParams = (message: string, composer = new ReplyComposer()) => ({
   message,
   route: route(),
   history: [],
@@ -170,7 +170,7 @@ const baseParams = (message: string, attachments = { cards: [], scoutOffers: [] 
   savedDossiers: [],
   lockedDossiersBlock: '',
   savedDossiersBlock: '',
-  attachments,
+  composer,
   conversationId: `test-${Math.random()}`,
 });
 
@@ -326,7 +326,7 @@ await test('a follow-up in the same thread starts from the last turn\'s research
 });
 
 await test('show_pitch attaches the club\'s XI, reading its live data when the turn hasn\'t', async () => {
-  const attachments = { cards: [], scoutOffers: [] } as import('../services/conversationalScout').ReplyAttachments;
+  const attachments = new ReplyComposer();
   const fake = fakeModel([callsReply(call('show_pitch', { club: 'Southside' })), answer('Here is how Southside line up.')]);
   const stages: string[] = [];
   let stats: import('../services/deepTurn').DeepStats | null = null;
@@ -339,8 +339,8 @@ await test('show_pitch attaches the club\'s XI, reading its live data when the t
       onStats: (s) => (stats = s),
     }),
   );
-  assert.equal(attachments.lineups?.length, 1);
-  const view = attachments.lineups![0];
+  assert.equal(attachments.viewsOf('pitch').length, 1);
+  const view = attachments.viewsOf('pitch')[0].data;
   assert.equal(view.club, 'Southside');
   assert.equal(view.formation, '4-3-3');
   assert.equal(view.xi.length, 11);

@@ -94,7 +94,7 @@ await test('a turn streams its events, returns card links, and asks to continue 
           options.onRoute({ intent: 'single_dossier', targetPlayers: ['Bukayo Saka'] });
           options.onStageChange('Reading your Gaffa club...');
           options.onStreamChunk('Saka is');
-          options.onAttachments({ cards: [card('Bukayo Saka')], scoutOffers: [] });
+          options.onBlocks([], { cards: [card('Bukayo Saka')] });
           return 'Saka is your best player.';
         }) as any,
       },

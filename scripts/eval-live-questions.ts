@@ -186,11 +186,14 @@ interface Research {
 function researchOf(
   perf: string[],
   stats: import('../services/deepTurn').DeepStats | null,
-  attached: { lineups?: unknown[]; cards?: unknown[] } | null,
+  attached: import('../types').ReplyBlock[] | null,
   path: import('../services/deepTurn').PathInfo | null,
 ): Research {
   const lookupLines = perf.filter((l) => l.startsWith('[Perf] lookup '));
-  const shown = { lineupsShown: attached?.lineups?.length ?? 0, cardsShown: attached?.cards?.length ?? 0 };
+  const shown = {
+    lineupsShown: (attached ?? []).filter((b) => b.kind === 'pitch').length,
+    cardsShown: (attached ?? []).filter((b) => b.kind === 'card').length,
+  };
   if (stats && path?.path !== 'stage') {
     return { path: 'deep', lookups: lookupLines.length, searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length, rounds: stats.rounds, toolCalls: stats.toolCalls, stop: stats.stop, ...shown };
   }
@@ -210,15 +213,15 @@ async function ask(question: string): Promise<RunResult> {
   const start = Date.now();
   let firstTokenMs: number | null = null;
   let stats: import('../services/deepTurn').DeepStats | null = null;
-  let attached: { lineups?: unknown[]; cards?: unknown[] } | null = null;
+  let attached: import('../types').ReplyBlock[] | null = null;
   let path: import('../services/deepTurn').PathInfo | null = null;
   try {
     const reply = await sendMessageToAI(question, [], undefined, [], [], {
       onStreamChunk: () => {
         firstTokenMs ??= Date.now() - start;
       },
-      onAttachments: (a) => {
-        attached = a;
+      onBlocks: (blocks) => {
+        attached = blocks;
       },
       onPath: (p) => {
         path = p;

@@ -254,7 +254,51 @@ export interface ChatMessage {
   ask?: AskPrompt;
   /** A reply whose question deserved a longer look: a chip reruns the message in deep mode. */
   goDeeper?: GoDeeper;
+  /**
+   * A new reply as an ordered list of blocks (`services/replyBlocks`). The legacy fields above
+   * (`gaffaScorecard`, `cards`, `scoutOffers`, `lineups`, `ask`, `goDeeper`) stay for conversations
+   * stored before blocks; `blocksOf` reads either. `content` stays the reply's full prose.
+   */
+  blocks?: ReplyBlock[];
 }
+
+/** What each kind of reply block carries. Adding a kind is one line here plus its registry entry. */
+export interface ReplyBlockData {
+  pitch: LineupView;
+  card: ChatDossierRef;
+  scoutOffer: { name: string };
+  ask: AskPrompt;
+  goDeeper: GoDeeper;
+  scorecard: GaffaTradeScorecard;
+}
+
+export type ReplyBlockKind = keyof ReplyBlockData;
+
+/** `pending` while a view's data loads, then `ready`, or `failed` (drawn as nothing, never stored). */
+export type ReplyBlockStatus = 'pending' | 'ready' | 'failed';
+
+/** A stretch of the reply's prose (markdown). */
+export interface ProseBlock {
+  kind: 'prose';
+  id: string;
+  text: string;
+}
+
+/**
+ * A block of kind `K` other than prose. A `pending` or `failed` block carries no data; only a
+ * `ready` one does.
+ */
+export type DataBlock<K extends ReplyBlockKind = ReplyBlockKind> = {
+  [P in K]:
+    | { kind: P; id: string; status: 'ready'; data: ReplyBlockData[P] }
+    | { kind: P; id: string; status: 'pending' | 'failed'; data?: undefined };
+}[K];
+
+/** A block whose data has arrived. */
+export type ReadyBlock<K extends ReplyBlockKind = ReplyBlockKind> = Extract<DataBlock<K>, { status: 'ready' }>;
+
+/** One piece of a reply, in the order the reader sees it. */
+export type ReplyBlock = ProseBlock | DataBlock;
 
 /** What the writer asks when a message reads two ways that would change the answer. */
 export interface AskPrompt {

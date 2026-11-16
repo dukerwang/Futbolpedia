@@ -2,6 +2,7 @@ import type { Content, Part } from '@google/genai';
 import type { Attributes, ChatMessage, GoalkeeperAttributes, PlayerProfile } from '../types';
 import { ATTRIBUTE_LABELS, GK_ATTRIBUTE_LABELS } from '../constants/ratingTiers';
 import { dataUrlToInlinePart } from './aiClient';
+import { blockHistory } from './replyBlocks/registry';
 import {
   formatIsoDate,
   foldPlayerName,
@@ -323,6 +324,12 @@ export const buildHistoryContents = (
     if (announced) {
       parts.push({ text: serializeProfileForHistory(announced) });
       covered.add(getCardKey(announced));
+    } else if (msg.blocks && !isUser) {
+      // A reply stored as blocks is read in the order the reader saw it: each view as its stub.
+      for (const block of msg.blocks) {
+        const text = blockHistory(block);
+        if (text) parts.push({ text });
+      }
     } else if (typeof msg.content === 'string') {
       parts.push({ text: msg.content });
     } else if (isPlayerProfile(msg.content) && !isUser) {
