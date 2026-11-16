@@ -168,9 +168,22 @@ const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
 
 await test('a question about the present researches facts, then analysis, and the writer argues from a dated snapshot', async () => {
   const stages: string[] = [];
+  let attached: import('../services/conversationalScout').ReplyAttachments | null = null;
   const reply = await quietly(() =>
-    sendMessageToAI("Break down Southside's build-up shape this season", [], undefined, [], [], { onStageChange: (s) => stages.push(s) }),
+    sendMessageToAI("Break down Southside's build-up shape this season", [], undefined, [], [], {
+      onStageChange: (s) => stages.push(s),
+      onAttachments: (a) => (attached = a),
+    }),
   );
+  // The reply carries the club's first-choice XI for the pitch view, from the same snapshot.
+  const lineup = (attached as import('../services/conversationalScout').ReplyAttachments | null)?.lineups?.[0];
+  assert.equal(attached && (attached as any).lineups.length, 1);
+  assert.equal(lineup?.club, 'Southside');
+  assert.equal(lineup?.formation, '4-3-3');
+  assert.equal(lineup?.matchesRead, 3);
+  assert.equal(lineup?.xi.length, 11);
+  assert.ok(lineup?.xi.some((s) => s.role === 'LB' && s.name === 'New Fullback'));
+  assert.deepEqual(lineup?.out, [{ name: 'Eight Two', note: 'ankle (2026-10-28)' }]);
   // The pressing figure was never looked up, so its sentence goes; the rest stands.
   assert.equal(reply, 'New Fullback starts at left-back in a back four. Main Nine leads the line.');
   assert.ok(liveAsked.some((u) => u.includes('name=Southside')), 'the club was looked up live');

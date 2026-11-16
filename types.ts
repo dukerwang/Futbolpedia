@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { LineupView } from './services/lineupView';
 
 export interface BasicInfo {
   name: string;
@@ -241,6 +242,8 @@ export interface ChatMessage {
   cards?: ChatDossierRef[];
   /** Players a chat reply discussed who have no card yet, offered to Scout. */
   scoutOffers?: string[];
+  /** First-choice XIs a reply about the present draws under its prose (`PitchView`). */
+  lineups?: LineupView[];
 }
 
 /**

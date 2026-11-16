@@ -48,6 +48,7 @@ import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubMana
 import { reconcileDossierNumbers } from './dossierNumberGate';
 import { cardEdition, toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
+import { lineupsForTurn, type LineupView } from './lineupView';
 import { buildGaffaTurn, capGaffaTradeProse, leagueFocusOf, starterClubs, type GaffaTurn } from './gaffaTurn';
 import { lockGaffaRosterNames } from './gaffaLineupAudit';
 import { expandTables, gateUnsupportedFigures, type FigureClaim, type FigureGateOptions } from './figureGate';
@@ -66,6 +67,8 @@ export interface ThreadState {
   grounding: string;
   situationSignature: string;
   situation: string;
+  /** The structured snapshot behind `situation`, so a follow-up can draw the same XI. */
+  situationData: Situation | null;
   touchedAt: number;
 }
 
@@ -83,7 +86,7 @@ export function threadStateFor(conversationId: string, now = Date.now()): Thread
     threadStates.set(conversationId, existing);
     return existing;
   }
-  const fresh: ThreadState = { signature: '', grounding: '', situationSignature: '', situation: '', touchedAt: now };
+  const fresh: ThreadState = { signature: '', grounding: '', situationSignature: '', situation: '', situationData: null, touchedAt: now };
   threadStates.delete(conversationId);
   threadStates.set(conversationId, fresh);
   while (threadStates.size > THREAD_STATE_LIMIT) {
@@ -239,6 +242,8 @@ export interface ReplyAttachments {
   cards: PlayerProfile[];
   /** Players the reply discussed who have no card yet. */
   scoutOffers: string[];
+  /** First-choice XIs to draw under the reply, for the clubs a question about the present is about. */
+  lineups?: LineupView[];
 }
 
 /** Adds a scout offer unless the player is already offered or carded in this reply. */
@@ -524,6 +529,8 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   let debate: DebateBrief | null = null;
   let debateCards: CardStanding[] = [];
   let situation: Situation | null = null;
+  // The clubs the router spotted (or the thread carries), not those the Gaffa club adds.
+  let targetClubsInPlay: string[] = [];
   let researched = false;
   let effectiveLockedBlock = lockedDossiersBlock;
   let verifiedManagers: VerifiedClubManager[] = [];
@@ -572,6 +579,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       route.targetClubs && route.targetClubs.length > 0
         ? route.targetClubs
         : extractThreadClubs(message, history);
+    targetClubsInPlay = routeClubs;
     const targetClubs = [...new Set([...routeClubs, ...gaffaClubs])];
 
     // Verified managers for the clubs in play, looked up alongside pre-grounding. Today's coaches
@@ -692,12 +700,15 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       ? formatLedger(ledger, debate ? {} : { seasonStart: seasonStartDate(seasonStartYear) })
       : '';
   let situationBlock = formatSituation(situation);
+  let situationData = situation;
   const threadSig = threadSignature;
   if (situationBlock) {
     thread.situation = situationBlock;
+    thread.situationData = situation;
     thread.situationSignature = threadSig;
   } else if (threadSig && threadSig === thread.situationSignature && !isHistoricalThread) {
     situationBlock = thread.situation;
+    situationData = thread.situationData;
   }
 
   // The attached club's blocks: the club and squad always; the lineup audit, market lock, bid math
@@ -717,6 +728,18 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     perf?.(`gaffa club (${gaffaTurn.focus})`);
   }
   const gaffaBlock = gaffaTurn?.block ?? '';
+
+  // The clubs' first-choice XIs, drawn under the reply from the snapshot the writer argues from.
+  if (attachments) {
+    const lineups = lineupsForTurn({
+      situation: situationData,
+      clubs: targetClubsInPlay,
+      players: route.targetPlayers,
+      historical: isHistoricalThread,
+      scorecard: Boolean(gaffaTurn?.scorecard),
+    });
+    if (lineups.length > 0) attachments.lineups = lineups;
+  }
 
   const analyticalMode =
     route.analyticalMode ??

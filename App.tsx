@@ -837,7 +837,7 @@ const App: React.FC = () => {
       if (typeof aiResponse === 'object' && 'basicInfo' in aiResponse) {
         newAiMessage = dossierReply(aiResponse as PlayerProfile, streamingMessageId);
       } else {
-        const { cards = [], scoutOffers = [] } = (attachments ?? {}) as Partial<ReplyAttachments>;
+        const { cards = [], scoutOffers = [], lineups = [] } = (attachments ?? {}) as Partial<ReplyAttachments>;
         // Cards chat showed join the conversation and your dossiers, as mentioned ones do.
         if (cards.length > 0) {
           const stamped = cards.map(card => stampDossier(card, Date.now()));
@@ -857,6 +857,7 @@ const App: React.FC = () => {
           ...(revisedProfile ? { dossier: toChatDossierRef(revisedProfile) } : {}),
           ...(cards.length > 0 ? { cards: cards.map(toChatDossierRef) } : {}),
           ...(scoutOffers.length > 0 ? { scoutOffers } : {}),
+          ...(lineups.length > 0 ? { lineups } : {}),
           ...(scorecard ? { gaffaScorecard: scorecard } : {}),
         };
       }
