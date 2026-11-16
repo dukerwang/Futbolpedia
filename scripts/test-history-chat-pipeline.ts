@@ -187,7 +187,7 @@ await test('a follow-up about a prime with no card is answered plainly, not as a
   let offers: string[] = [];
   const message = 'well only current rodri is rated, prime rodri has never been scouted before. or are you saying prime rodri is the same as current?';
   await quietly(() =>
-    sendMessageToAI(message, history, undefined, [], [current, redondo], { onAttachments: (a: any) => (offers = a.scoutOffers) } as any),
+    sendMessageToAI(message, history, undefined, [], [current, redondo], { onBlocks: (blocks: any[]) => (offers = blocks.filter((b) => b.kind === 'scoutOffer').map((b) => b.data.name)) } as any),
   );
   const brief = calls.filter((c) => c.structured && c.prompt.includes('question about the past')).at(-1)?.prompt ?? '';
   assert.ok(brief.includes('Versions with no card of their own'));
@@ -217,7 +217,7 @@ for (const isHistorical of [true, false]) {
     let offers: string[] = [];
     const message = "if current rodri is prime rodri, then wouldn't futbolpedia have given rodri the prime card when it rated him before?";
     await quietly(() =>
-      sendMessageToAI(message, history, undefined, [], [current, redondo], { onAttachments: (a: any) => (offers = a.scoutOffers) } as any),
+      sendMessageToAI(message, history, undefined, [], [current, redondo], { onBlocks: (blocks: any[]) => (offers = blocks.filter((b) => b.kind === 'scoutOffer').map((b) => b.data.name)) } as any),
     );
     const writer = calls.filter((c) => !c.structured && c.prompt.includes('<task>')).at(-1)?.prompt ?? '';
     assert.ok(writer.includes('No prime card exists for Rodri'), 'the writer is told his prime has no card');

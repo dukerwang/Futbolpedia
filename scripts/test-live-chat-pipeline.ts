@@ -178,16 +178,17 @@ const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
 
 await test('a question about the present researches facts, then analysis, and the writer argues from a dated snapshot', async () => {
   const stages: string[] = [];
-  let attached: import('../services/conversationalScout').ReplyAttachments | null = null;
+  let attached: import('../types').ReplyBlock[] | null = null;
   const reply = await quietly(() =>
     sendMessageToAI("Break down Southside's build-up shape this season", [], undefined, [], [], {
       onStageChange: (s) => stages.push(s),
-      onAttachments: (a) => (attached = a),
+      onBlocks: (blocks) => (attached = blocks),
     }),
   );
   // The reply carries the club's first-choice XI for the pitch view, from the same snapshot.
-  const lineup = (attached as import('../services/conversationalScout').ReplyAttachments | null)?.lineups?.[0];
-  assert.equal(attached && (attached as any).lineups.length, 1);
+  const lineups = (attached ?? []).filter((b) => b.kind === 'pitch' && b.status === 'ready').map((b: any) => b.data);
+  const lineup = lineups[0];
+  assert.equal(lineups.length, 1);
   assert.equal(lineup?.club, 'Southside');
   assert.equal(lineup?.formation, '4-3-3');
   assert.equal(lineup?.matchesRead, 3);

@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import type { Attributes, PlayerProfile } from '../types';
 import { formatClubReport, type ClubMatch, type LiveClubReport } from '../services/liveFootball';
 import type { ResearchToolset, ToolOutcome } from '../services/researchTools';
+import { ReplyComposer } from '../services/replyBlocks';
 
 process.env.API_KEY = 'offline-test-key';
 
@@ -391,7 +392,7 @@ const deepParams = (extra: object = {}) => ({
   savedDossiers: [],
   lockedDossiersBlock: '',
   savedDossiersBlock: '',
-  attachments: { cards: [], scoutOffers: [] } as import('../services/conversationalScout').ReplyAttachments,
+  composer: new ReplyComposer(),
   conversationId: `gate-feedback-${Math.random()}`,
   ...extra,
 });

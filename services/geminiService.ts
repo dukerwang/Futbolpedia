@@ -1,4 +1,4 @@
-import type { ChatMessage, GaffaContextBag, GaffaTradeScorecard, PlayerProfile, RatingRequest } from '../types';
+import type { ChatMessage, GaffaContextBag, GaffaTradeScorecard, PlayerProfile, RatingRequest, ReplyBlock } from '../types';
 import { ThinkingTier } from '../constants/modelProfiles';
 import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
 import {
@@ -15,9 +15,9 @@ import {
   showCard,
   threadIsHistorical,
   wantsPrimeOf,
-  type ReplyAttachments,
 } from './conversationalScout';
 import { lookUpDossier, replaceSupersededPrimes } from './dossierLookup';
+import { ReplyComposer, type ComposerExtras } from './replyBlocks';
 import { DEEP_BY_DEFAULT, runDeepTurn, runDeepWithFallback, takesDeepPath, wantsDeep, type DeepTurnDeps, type PathInfo } from './deepTurn';
 import {
   CALIBRATION_EPOCH_MS,
@@ -178,12 +178,15 @@ export const sendProseChatMessage = async (
   });
 };
 
-export type { ReplyAttachments } from './conversationalScout';
+export type { ComposerExtras } from './replyBlocks';
 
 export interface SendMessageOptions {
   onDossierUpdated?: (updatedProfile: PlayerProfile) => void;
-  /** Called before a chat reply returns when it shows cards or offers to rate players. */
-  onAttachments?: (attachments: ReplyAttachments) => void;
+  /**
+   * Called whenever a chat reply's blocks change (its prose growing, a view or card placed) and
+   * once more with the final blocks. `extras.cards` are the profiles behind the card blocks.
+   */
+  onBlocks?: (blocks: ReplyBlock[], extras: ComposerExtras) => void;
   onStreamChunk?: (accumulatedText: string) => void;
   onStageChange?: (stageLabel: string) => void;
   /** The conversation's attached Gaffa club. Chat turns read it; ratings ignore it. */
@@ -857,7 +860,19 @@ export const sendMessageToAI = async (
 
   // 3. Chat reads the cards of the players it is asked about, yours or shared. A question about
   // one player shows his card; a player nobody has rated is offered to Scout.
-  const attachments: ReplyAttachments = { cards: [], scoutOffers: [] };
+  const composer = new ReplyComposer({ onChange: options?.onBlocks });
+  // The running text and a Gaffa scorecard reach the composer on their way to the caller.
+  // A turn whose caller doesn't stream stays non-streaming: passing a handler would change how the model is called.
+  const onStreamChunk = options?.onStreamChunk
+    ? (text: string) => {
+        composer.setText(text);
+        options.onStreamChunk!(text);
+      }
+    : undefined;
+  const onGaffaScorecard = (card: GaffaTradeScorecard) => {
+    composer.setScorecard(card);
+    options?.onGaffaScorecard?.(card);
+  };
   let turnDossiers = savedDossiers;
   if (
     !imageData &&
@@ -878,13 +893,13 @@ export const sendMessageToAI = async (
     lookups.forEach((lookup, i) => {
       if (lookup?.status === 'found') {
         if (!localCards.includes(lookup.card)) turnDossiers = [...turnDossiers, lookup.card];
-        if (asksAboutOne) showCard(attachments, lookup.card);
+        if (asksAboutOne) showCard(composer, lookup.card);
         // His prime was asked about but only his current form is rated: offer to scout the prime.
         if (editionGaps([lookup.card], historical, message).length) {
-          offerPrimeScout(attachments, lookup.card.basicInfo.name);
+          offerPrimeScout(composer, lookup.card.basicInfo.name);
         }
       } else if (lookup?.status === 'missing') {
-        offerScout(attachments, route.targetPlayers[i]);
+        offerScout(composer, route.targetPlayers[i]);
       }
     });
     perf('dossier lookup');
@@ -926,13 +941,13 @@ export const sendMessageToAI = async (
       lockedDossiersBlock,
       savedDossiersBlock,
       peerLedgerBlock,
-      attachments,
+      composer,
       challengeCard,
       onDossierUpdated: options?.onDossierUpdated,
-      onStreamChunk: options?.onStreamChunk,
+      onStreamChunk,
       onStageChange: options?.onStageChange,
       gaffaBag: options?.gaffaBag,
-      onGaffaScorecard: options?.onGaffaScorecard,
+      onGaffaScorecard,
       conversationId: options?.conversationId,
       initiative: stageInitiative,
       perf,
@@ -941,7 +956,7 @@ export const sendMessageToAI = async (
   let reply: string;
   if (deep) {
     // What the loop attached before it gave up goes with it; the stage run builds its own.
-    const before = { cards: [...attachments.cards], scoutOffers: [...attachments.scoutOffers], lineups: attachments.lineups ? [...attachments.lineups] : undefined };
+    const before = composer.snapshot();
     reply = await runDeepWithFallback(
       () =>
         runDeepTurn(
@@ -955,8 +970,8 @@ export const sendMessageToAI = async (
             lockedDossiersBlock,
             savedDossiersBlock,
             peerLedgerBlock,
-            attachments,
-            onStreamChunk: options?.onStreamChunk,
+            composer,
+            onStreamChunk,
             onStageChange: options?.onStageChange,
             conversationId: options?.conversationId,
             perf,
@@ -965,8 +980,7 @@ export const sendMessageToAI = async (
         ),
       () => {
         fellBack = true;
-        Object.assign(attachments, before);
-        if (!before.lineups) delete attachments.lineups;
+        composer.restore(before);
         return runStage(initiativeFor(false));
       },
       { onStageChange: options?.onStageChange, onPath: options?.onPath },
@@ -976,15 +990,8 @@ export const sendMessageToAI = async (
     reply = await runStage(initiative);
   }
   perf(deep && !fellBack ? 'deep turn' : 'conversational scout');
-  if (
-    attachments.cards.length > 0 ||
-    attachments.scoutOffers.length > 0 ||
-    (attachments.lineups?.length ?? 0) > 0 ||
-    attachments.ask ||
-    attachments.goDeeper
-  ) {
-    options?.onAttachments?.(attachments);
-  }
+  // The reply's blocks, with its final text: what the app stores.
+  composer.finish(reply);
   return reply;
 };
 

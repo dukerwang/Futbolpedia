@@ -154,8 +154,8 @@ export async function runGaffaChatTurn(
         scorecard = card;
         emit({ type: 'scorecard', scorecard: card });
       },
-      onAttachments: (a) => {
-        shown = a.cards;
+      onBlocks: (_blocks, extras) => {
+        shown = extras.cards;
       },
     });
     const prose = typeof reply === 'string' ? reply : '';
