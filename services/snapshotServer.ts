@@ -1,4 +1,4 @@
-import { createClubSnapshotStore, researchClub, summarizeClub, type ClubResearch, type SnapshotRow } from './clubSnapshots';
+import { SNAPSHOT_VERSION, createClubSnapshotStore, researchClub, rowToSnapshot, summarizeClub, type ClubResearch, type SnapshotRow } from './clubSnapshots';
 import { buildEraSnapshot, createEraSnapshotStore, isMissingTable, type EraKind, type EraRow, type EraSnapshot } from './eraSnapshots';
 import type { createHistoryFootball } from './historyFootball';
 import type { createLiveFootball } from './liveFootball';
@@ -27,6 +27,9 @@ export function inProcessGet(routes: { live: LiveFootball; history: HistoryFootb
           return { data: (await routes.live.club(q('name'))) as T };
         case '/api/live/player':
           return { data: (await routes.live.player(q('name'))) as T };
+        // In-process only: there is no HTTP route for it. Scores XI predictions (services/xiPredictions.ts).
+        case '/api/live/match':
+          return { data: (await routes.live.matchLineup(q('name'), q('match'))) as T };
         case '/api/live/table':
           return { data: (await routes.live.table(q('league'), q('country') || undefined)) as T };
         case '/api/history/club-season':
@@ -46,6 +49,8 @@ export function inProcessGet(routes: { live: LiveFootball; history: HistoryFootb
 export interface SnapshotDb {
   readClub(key: string): Promise<SnapshotRow | null>;
   writeClub(row: SnapshotRow): Promise<void>;
+  /** Every club snapshot built since `sinceIso`, under the current version. */
+  listClubs(sinceIso: string): Promise<SnapshotRow[]>;
   readEra(key: string): Promise<EraRow | null>;
   writeEra(row: EraRow): Promise<void>;
   /** Whether the `era_snapshots` table exists (its migration has been applied). */
@@ -63,6 +68,11 @@ export function supabaseSnapshotDb(client: any): SnapshotDb {
     async writeClub(row) {
       const { error } = await client.from('club_snapshots').upsert(row, { onConflict: 'club_key' });
       if (error) console.warn('[snapshots] club upsert failed:', error.message ?? error);
+    },
+    async listClubs(sinceIso) {
+      const { data, error } = await client.from('club_snapshots').select('*').eq('version', SNAPSHOT_VERSION).gte('built_at', sinceIso);
+      if (error) console.warn('[snapshots] club list failed:', error.message ?? error);
+      return data ?? [];
     },
     async readEra(key) {
       const { data, error } = await client.from('era_snapshots').select('*').eq('snapshot_key', key).maybeSingle();
@@ -88,6 +98,13 @@ export interface SnapshotServer {
   clubResearch(club: string): Promise<ClubResearch | null>;
   /** A club's stored snapshot, else a new build that is stored for everyone. */
   club(club: string): Promise<ClubSnapshot | null>;
+  /** A club's stored snapshot only, never a build. */
+  stored(club: string): Promise<ClubSnapshot | null>;
+  /**
+   * Every club with a stored snapshot built within `maxAgeMs`: the table's rows, or, without the
+   * secret key, the ones this process built.
+   */
+  listStored(maxAgeMs: number): Promise<ClubSnapshot[]>;
   /** A club season's or a player window's stored snapshot, else a new build. */
   era(kind: EraKind, subject: string, period: string): Promise<EraSnapshot | null>;
 }
@@ -110,6 +127,12 @@ export function createSnapshotServer(deps: { get: LiveGet; db: SnapshotDb | null
   return {
     clubResearch: (club) => clubs.research(club, tools.clubRecentTeam(club)),
     club: (club) => clubs.get(club, tools.clubRecentTeam(club)),
+    stored: (club) => clubs.stored(club, tools.clubRecentTeam(club)),
+    async listStored(maxAgeMs) {
+      if (!db) return clubs.known().filter((s) => Date.now() - Date.parse(s.builtAt) < maxAgeMs);
+      const rows = await db.listClubs(new Date(Date.now() - maxAgeMs).toISOString());
+      return rows.map(rowToSnapshot).filter((s): s is ClubSnapshot => s !== null);
+    },
     era: (kind, subject, period) =>
       eras.get({ kind, subject, period, facts: kind === 'club_season' ? tools.clubSeason(subject, period) : tools.playerCareer(subject) }),
   };

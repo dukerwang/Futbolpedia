@@ -7,7 +7,8 @@ export type AITask =
   | 'synthesis'
   | 'chat'
   /** Deep mode's loop (`services/deepTurn.ts`): the chat model deciding its own research. */
-  | 'deep';
+  | 'deep'
+  | 'prediction';
 
 export interface TaskTuning {
   thinkingLevel: ThinkingTier;
@@ -79,6 +80,7 @@ const GEMINI_3_8_FLASH_PROFILE: ModelCapabilityProfile = {
     synthesis: { thinkingLevel: 'low', temperature: 0.35 },
     chat: { thinkingLevel: 'low', temperature: 0.55 },
     deep: { thinkingLevel: 'low', temperature: 0.5 },
+    prediction: { thinkingLevel: 'low', temperature: 0.2 },
   },
 };
 
@@ -102,6 +104,7 @@ const GEMINI_4_HYDROGEN_PROFILE: ModelCapabilityProfile = {
     chat: { thinkingLevel: 'low', temperature: 0.55 },
     // Starts at low, like chat; the deep-mode eval decides whether medium earns its latency.
     deep: { thinkingLevel: 'low', temperature: 0.5 },
+    prediction: { thinkingLevel: 'low', temperature: 0.2 },
   },
 };
 
@@ -119,6 +122,7 @@ const GEMINI_4_ARGON_PROFILE: ModelCapabilityProfile = {
     synthesis: { thinkingLevel: 'medium', temperature: 0.3 },
     chat: { thinkingLevel: 'medium', temperature: 0.5 },
     deep: { thinkingLevel: 'medium', temperature: 0.5 },
+    prediction: { thinkingLevel: 'low', temperature: 0.2 },
   },
 };
 
