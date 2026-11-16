@@ -22,6 +22,7 @@ import {
   type ToolOutcome,
 } from './researchTools';
 import type { ClubResearch, SnapshotSource } from './clubSnapshots';
+import { fileScoutNotes, liveScoutNotes, type ScoutNoteSource } from './scoutNotes';
 import {
   buildSituation,
   coresFromLedger,
@@ -339,6 +340,8 @@ export async function runResearch(
     situationModel?: SituationModel;
     /** Shared club snapshots; without one, research builds everything itself. */
     snapshots?: SnapshotSource | null;
+    /** The scout's notes for the clubs and players the turn opens; the stored table by default. */
+    scoutNotes?: ScoutNoteSource | null;
     onStage?: (label: string) => void;
     perf?: (label: string) => void;
     now?: () => number;
@@ -589,6 +592,12 @@ export async function runResearch(
     const late = [...latePassResults.flatMap((p) => p?.outcomes ?? []), ...lateOutcomes.map((o) => o ?? TOO_SLOW)];
     ledger = fileOutcomes(ledger, lateCalls, late);
     options.perf?.(`late research (${lateOutcomes.filter(Boolean).length + latePassResults.filter(Boolean).length} of ${lateRuns.length + latePasses.length} arrived)`);
+  }
+  // The scout's notes for the clubs and players this turn opened, filed beside their snapshots so
+  // the writer reads them and the figure gate counts their figures as supported.
+  if (isLive) {
+    const subjects = [...jobs.map((j) => j.name), ...ledger.entries.flatMap((e) => (e.club ? [e.club.team] : [])), ...players];
+    ledger = await fileScoutNotes(ledger, subjects, options.scoutNotes === undefined ? liveScoutNotes(now) : options.scoutNotes ?? { forSubjects: async () => [] }, new Date(now()).toISOString().slice(0, 10));
   }
   return { brief, ledger, situation };
 }

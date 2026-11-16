@@ -16,7 +16,8 @@ export type EvidenceKind =
   | 'prior_turn'
   | 'season_record'
   | 'career_record'
-  | 'era_snapshot';
+  | 'era_snapshot'
+  | 'scout_note';
 
 /** Facts are the present (who plays, results, transfers, dates); analysis is read against them. */
 export type ResearchStage = 'facts' | 'analysis';
@@ -140,6 +141,7 @@ const KIND_NAMES: Record<EvidenceKind, string> = {
   season_record: 'Past season record (Wikipedia, ESPN)',
   career_record: 'Career record (Wikipedia)',
   era_snapshot: 'Era snapshot (built from the sources and stored)',
+  scout_note: "The scout's note (a web search run between conversations)",
 };
 
 const GAP_HEADINGS: Record<GapStatus, string> = {

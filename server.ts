@@ -19,9 +19,12 @@ import {
 import { createLiveFootball } from "./services/liveFootball";
 import { createHistoryFootball, type PermanentStore } from "./services/historyFootball";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
-import { supabaseUrl } from "./services/dossierCache";
+import { supabasePublishableKey, supabaseUrl } from "./services/dossierCache";
 import { createSnapshotServer, inProcessGet, supabaseSnapshotDb } from "./services/snapshotServer";
 import { createXiPredictions, memoryXiStore, supabaseXiStore } from "./services/xiPredictions";
+import { SCOUT_DAY_DEFAULT_CALLS, createScoutDay, createScoutTally, liveScoutActors, liveScoutSources, memoryScoutStores, scoutJournalHandler, supabaseScoutStores } from "./services/scoutDay";
+import { subjectFromTitle } from "./services/eraSnapshots";
+import { liveToolset } from "./services/researchTools";
 
 /**
  * Local runs: Vite reads `.env.local` for the browser, but the server process didn't, so server
@@ -60,6 +63,10 @@ async function startServer() {
 
   app.use(cors());
   app.use(express.json({ limit: "10mb" }));
+
+  // What the routes below resolved, counted for the scout's day (services/scoutDay.ts). Only names
+  // the live data resolved are recorded, never what a user typed; a restart loses the counts.
+  const scoutTally = createScoutTally();
 
   // API Routes
   app.get("/api/health", (_req, res) => {
@@ -105,6 +112,7 @@ async function startServer() {
     if (!authorizeGaffaReadSecret(req.headers["x-futbolpedia-secret"])) {
       return res.status(401).json({ error: "Unauthorized" });
     }
+    scoutTally.gaffaTurn();
     const body = req.body ?? {};
     const input = {
       message: body.message,
@@ -609,7 +617,11 @@ async function startServer() {
       const result = await live.club(name);
       console.log(`[live] club "${name}": ${result.found ? `${result.team}, ${result.league}` : "not found"} (${Date.now() - start}ms)${result.missing.length ? `; missing: ${result.missing.map((m) => `${m.item} [${m.status}]`).join("; ")}` : ""}`);
       // A club somebody asks about gets its XI predicted before the next sweep (fire and forget).
-      if (result.found) xiLazy(result.team);
+      if (result.found) {
+        xiLazy(result.team);
+        scoutTally.club(result.team);
+        result.missing.forEach((m) => scoutTally.gap(m.item, m.status));
+      }
       return res.json(result);
     } catch (error: any) {
       console.warn(`[live] club "${name}" failed:`, error?.message || error);
@@ -623,6 +635,7 @@ async function startServer() {
     try {
       const result = await live.player(name);
       console.log(`[live] player "${name}": ${"reason" in result ? result.reason : `${result.name}, ${result.team}`}`);
+      if (result.found) scoutTally.player(result.name);
       return res.json(result);
     } catch (error: any) {
       console.warn(`[live] player "${name}" failed:`, error?.message || error);
@@ -682,6 +695,10 @@ async function startServer() {
     const start = Date.now();
     try {
       const result = await history.clubSeason(club, season);
+      if (result.found) {
+        scoutTally.season(subjectFromTitle(result.title, "club_season"), season);
+        result.missing.forEach((m) => scoutTally.gap(m.item, m.status));
+      }
       console.log(`[history] club season "${club}" ${season}: ${"reason" in result ? result.reason : result.title} (${Date.now() - start}ms)${result.missing.length ? `; missing: ${result.missing.map((m) => `${m.item} [${m.status}]`).join("; ")}` : ""}`);
       return res.json(result);
     } catch (error: any) {
@@ -696,6 +713,7 @@ async function startServer() {
     const start = Date.now();
     try {
       const result = await history.playerCareer(name);
+      if (result.found) result.missing.forEach((m) => scoutTally.gap(m.item, m.status));
       console.log(`[history] player "${name}": ${"reason" in result ? result.reason : result.title} (${Date.now() - start}ms)`);
       return res.json(result);
     } catch (error: any) {
@@ -733,9 +751,11 @@ async function startServer() {
     windowMs: Number(process.env.XI_PREDICTION_WINDOW_HOURS) > 0 ? Number(process.env.XI_PREDICTION_WINDOW_HOURS) * 3_600_000 : undefined,
   });
   console.log(`[startup] XI predictions: ${xiOn ? "on" : "off"}`);
+  // The scout's day runs after the first sweep; with predictions off there is nothing to wait for.
+  let firstSweep: Promise<unknown> = Promise.resolve();
   if (xiOn) {
     xiLazy = (club) => void predictions.lazy(club);
-    predictions.start();
+    firstSweep = predictions.start().firstSweep;
   }
 
   app.get("/api/predictions/club", async (req, res) => {
@@ -743,6 +763,7 @@ async function startServer() {
     if (!name) return res.status(400).json({ error: "Missing club" });
     const record = await predictions.record(name).catch(() => null);
     if (!record) return res.status(404).json({ error: "No such club" });
+    scoutTally.club(record.club);
     res.set("Cache-Control", "public, max-age=300");
     return res.json(record);
   });
@@ -752,6 +773,11 @@ async function startServer() {
     if (!club) return res.status(400).json({ error: "Missing club" });
     const start = Date.now();
     const research = await snapshots.clubResearch(club).catch(() => null);
+    // The research pass names no club; the live data (cached by now) says which one this was.
+    if (research) {
+      const resolved = await live.club(club).catch(() => null);
+      if (resolved?.found) scoutTally.club(resolved.team);
+    }
     console.log(`[snapshots] club research "${club}": ${research ? `${research.calls.length} searches` : "none"} (${Date.now() - start}ms)`);
     return res.json({ research });
   });
@@ -762,7 +788,10 @@ async function startServer() {
     const start = Date.now();
     const snapshot = await snapshots.club(club).catch(() => null);
     console.log(`[snapshots] club "${club}": ${snapshot ? `${snapshot.club}, built ${snapshot.builtAt}` : "none"} (${Date.now() - start}ms)`);
-    if (snapshot) xiLazy(snapshot.club);
+    if (snapshot) {
+      xiLazy(snapshot.club);
+      scoutTally.club(snapshot.club);
+    }
     return res.json({ snapshot });
   });
 
@@ -776,6 +805,28 @@ async function startServer() {
     console.log(`[snapshots] era ${kind} "${subject}" ${period}: ${snapshot ? snapshot.key : "none"} (${Date.now() - start}ms)`);
     return res.json({ snapshot });
   });
+
+  // The scout's day (services/scoutDay.ts): once a day, after the first prediction sweep, one
+  // planning call chooses what to research from what people asked about, where the XI record shows
+  // a club's story is stale, who plays soon, which cards are ageing and which lookups keep failing.
+  // Code runs the plan within SCOUT_DAY_CALLS model calls (default 30) and writes a journal row.
+  // SCOUT_DAY=off stops it; without the secret key nothing it finds could be kept, so it doesn't run.
+  const publicClient = createSupabaseClient(supabaseUrl, supabasePublishableKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const scoutStores = secretClient ? supabaseScoutStores(secretClient, secretClient) : { ...supabaseScoutStores(null, publicClient), notes: memoryScoutStores().notes };
+  const scoutCalls = Number(process.env.SCOUT_DAY_CALLS) > 0 ? Math.floor(Number(process.env.SCOUT_DAY_CALLS)) : SCOUT_DAY_DEFAULT_CALLS;
+  const scoutDay = createScoutDay({
+    sources: liveScoutSources({ tally: scoutTally, snapshots, get: liveGet, record: (club) => predictions.record(club), client: secretClient ?? publicClient }),
+    actors: liveScoutActors({ snapshots, tools: liveToolset([], liveGet), notes: scoutStores.notes, client: secretClient }),
+    journal: scoutStores.journal,
+    budget: scoutCalls,
+    enabled: (process.env.SCOUT_DAY ?? "").toLowerCase() !== "off",
+    canWrite: !!secretClient,
+    afterSweep: firstSweep,
+  });
+  scoutDay.start();
+
+  // The journal of recent passes: what the scout looked at, why, and what it spent. Public and read-only.
+  app.get("/api/scout/journal", scoutJournalHandler(scoutDay));
 
   // AI Studio's service worker intercepts browser requests to generativelanguage.googleapis.com
   // and redirects them here. This route forwards them back to Google using the server-side
