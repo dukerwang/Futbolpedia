@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { formatClubReport, type ClubMatch, type LiveClubReport } from '../services/liveFootball';
 import type { ResearchToolset, ToolOutcome } from '../services/researchTools';
-
+import { ReplyComposer } from '../services/replyBlocks';
 process.env.API_KEY = 'offline-test-key';
 
 let passes = 0;
@@ -161,7 +161,7 @@ const route = (): import('../services/turnRouter').TurnRoute => ({
   needsSearch: true,
 });
 
-const baseParams = (message: string, attachments = { cards: [], scoutOffers: [] } as import('../services/conversationalScout').ReplyAttachments) => ({
+const baseParams = (message: string, composer = new ReplyComposer()) => ({
   message,
   route: route(),
   history: [],
@@ -170,7 +170,7 @@ const baseParams = (message: string, attachments = { cards: [], scoutOffers: [] 
   savedDossiers: [],
   lockedDossiersBlock: '',
   savedDossiersBlock: '',
-  attachments,
+  composer,
   conversationId: `test-${Math.random()}`,
 });
 
@@ -326,7 +326,7 @@ await test('a follow-up in the same thread starts from the last turn\'s research
 });
 
 await test('show_pitch attaches the club\'s XI, reading its live data when the turn hasn\'t', async () => {
-  const attachments = { cards: [], scoutOffers: [] } as import('../services/conversationalScout').ReplyAttachments;
+  const attachments = new ReplyComposer();
   const fake = fakeModel([callsReply(call('show_pitch', { club: 'Southside' })), answer('Here is how Southside line up.')]);
   const stages: string[] = [];
   let stats: import('../services/deepTurn').DeepStats | null = null;
@@ -339,8 +339,8 @@ await test('show_pitch attaches the club\'s XI, reading its live data when the t
       onStats: (s) => (stats = s),
     }),
   );
-  assert.equal(attachments.lineups?.length, 1);
-  const view = attachments.lineups![0];
+  assert.equal(attachments.viewsOf('pitch').length, 1);
+  const view = attachments.viewsOf('pitch')[0].data;
   assert.equal(view.club, 'Southside');
   assert.equal(view.formation, '4-3-3');
   assert.equal(view.xi.length, 11);
@@ -434,7 +434,9 @@ await test('only a deep question about the present takes the deep path', () => {
   const r = (intent: string) => ({ intent }) as any;
   assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false }), true);
   assert.equal(takesDeepPath({ deep: true, route: r('compare'), historical: false }), true);
-  assert.equal(takesDeepPath({ deep: false, route: r('tactical_chat'), historical: false }), false);
+  // With the constant on, a present-day turn with no flag takes the loop; Fast sends it to the stage pipeline.
+  assert.equal(takesDeepPath({ deep: false, route: r('tactical_chat'), historical: false }), true);
+  assert.equal(takesDeepPath({ fast: true, route: r('tactical_chat'), historical: false }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: true }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('single_dossier'), historical: false }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('challenge_or_revise'), historical: false }), false);
@@ -471,8 +473,8 @@ await test('with the toggle, a historical question and a rating take the normal 
 
 // --- Deep by default --------------------------------------------------------------------------
 
-await test('the constant ships off', () => {
-  assert.equal(DEEP_BY_DEFAULT, false);
+await test('the constant is on: deep mode is the default path', () => {
+  assert.equal(DEEP_BY_DEFAULT, true);
 });
 
 await test('a turn asks for deep through its flag or the default, and fast always says no', () => {
@@ -505,7 +507,7 @@ await test('with the default on, every turn the entry rule accepts takes the loo
 await test('with the default off, an unflagged turn never takes the loop and the Deep flag still does', () => {
   const r = (intent: string) => ({ intent }) as any;
   assert.equal(takesDeepPath({ byDefault: false, route: r('tactical_chat'), historical: false }), false);
-  assert.equal(takesDeepPath({ route: r('tactical_chat'), historical: false }), false);
+  assert.equal(takesDeepPath({ route: r('tactical_chat'), historical: false }), DEEP_BY_DEFAULT, 'an unflagged turn follows the constant');
   assert.equal(takesDeepPath({ byDefault: false, deep: true, route: r('tactical_chat'), historical: false }), true);
 });
 
@@ -659,7 +661,7 @@ await test('with the default off, an unflagged message takes the stage pipeline 
   assert.equal(plain.opened, false);
   assert.deepEqual(plain.paths, [{ path: 'stage' }]);
   const unset = await sendTurn(PRESENT, {}, DEEP_ANSWER);
-  assert.equal(unset.opened, false, 'the shipped constant is off');
+  assert.equal(unset.opened, DEEP_BY_DEFAULT, 'an unflagged message follows the constant');
   const deep = await sendTurn(PRESENT, { deepByDefault: false, deep: true }, DEEP_ANSWER);
   assert.ok(deep.opened);
   assert.deepEqual(deep.paths, [{ path: 'deep' }]);

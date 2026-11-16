@@ -1,41 +1,10 @@
 import React, { useState } from 'react';
 import type { ChatMessage as ChatMessageType, ChatDossierRef } from '../types';
-import { useTypewriter } from './useTypewriter';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
-import { GaffaTradeScorecardView, formatScorecardCopy } from './GaffaTradeScorecard';
-import { DossierChatCard, getLegacyDossierRef } from './DossierChatCard';
-import { AskChips, GoDeeperChip } from './ReplyChips';
-import { PitchView } from './PitchView';
+import { ReplyBody } from './ReplyBody';
+import { blocksOf, copyTextOf, LEGACY_ERROR_PREFIX } from '../services/replyBlocks';
+import { getLegacyDossierRef } from '../services/dossierRefs';
 import { pillClass, type PillTone } from './pills';
 import { ratingVersionLabel } from '../services/ratingCommand';
-
-// External links in model prose should never navigate away from an in-progress chat.
-DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-    if (node.tagName === 'A' && node.getAttribute('href')) {
-        node.setAttribute('target', '_blank');
-        node.setAttribute('rel', 'noopener noreferrer');
-    }
-});
-
-const LEGACY_ERROR_PREFIX = "Editor's Note: I encountered an issue.";
-
-/** Legacy chats may still store old comparison objects — render summary as prose. */
-const getLegacyComparisonSummary = (content: unknown): string | null => {
-    if (typeof content !== 'object' || content === null) return null;
-    if (!('summary' in content) || !('players' in content)) return null;
-    const summary = (content as { summary?: unknown }).summary;
-    return typeof summary === 'string' ? summary : null;
-};
-
-const renderMarkdown = (text: string) => {
-    const rawMarkup = marked.parse(text, { gfm: true, breaks: true }) as string;
-    // Wrap tables so wide comparisons scroll inside the bubble instead of the whole page.
-    const html = DOMPurify.sanitize(rawMarkup)
-        .replace(/<table>/g, '<div class="chat-table-wrap"><table>')
-        .replace(/<\/table>/g, '</table></div>');
-    return { __html: html };
-};
 
 const copyText = async (text: string): Promise<boolean> => {
     try {
@@ -94,33 +63,6 @@ interface ChatMessageProps {
     onGoDeeper?: (messageId: string) => void;
 }
 
-/** A player the reply discussed who has no card yet: one tap sends him to Scout. */
-const ScoutOffer: React.FC<{ name: string; onScout: (name: string) => void }> = ({ name, onScout }) => {
-    const [sent, setSent] = useState(false);
-    // "prime <name>" offers his prime when only his current form is rated (`scoutOfferRequest`).
-    const prime = /^prime\s+/i.test(name);
-    const player = prime ? name.replace(/^prime\s+/i, '') : name;
-    return (
-        <button
-            type="button"
-            disabled={sent}
-            onClick={() => { setSent(true); onScout(name); }}
-            className="group/offer flex items-center gap-3 min-h-11 pl-3 pr-3.5 border border-cream-300 dark:border-charcoal-border bg-cream-50/60 dark:bg-charcoal-surface/60 hover:border-emerald-600 dark:hover:border-emerald-500 disabled:hover:border-cream-300 dark:disabled:hover:border-charcoal-border transition-colors text-left"
-        >
-            <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-emerald-600 dark:text-emerald-400">
-                {sent ? 'check' : 'person_search'}
-            </span>
-            <span className="min-w-0 text-[13px] font-sans text-charcoal/60 dark:text-cream-400/70">
-                {prime ? 'No prime dossier on ' : 'No dossier on '}<span className="font-serif font-bold text-[15px] text-charcoal dark:text-cream-50">{player}</span>
-            </span>
-            <span className="ml-auto shrink-0 flex items-center gap-1 text-[11px] font-sans font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-400">
-                {sent ? 'On the desk' : 'Scout'}
-                {!sent && <span aria-hidden="true" className="material-symbols-outlined text-[16px] group-hover/offer:translate-x-0.5 transition-transform">arrow_forward</span>}
-            </span>
-        </button>
-    );
-};
-
 export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier, onScoutName, onRetry, onAsk, onGoDeeper }) => {
     const { sender, content, timestamp } = message;
     const isUser = sender === 'user';
@@ -133,35 +75,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
         !isUser && (message.isError || (typeof content === 'string' && content.startsWith(LEGACY_ERROR_PREFIX)));
     const dossier = message.dossier ?? (isUser ? null : getLegacyDossierRef(content));
 
-    // Get the base text to render
-    let textToRender = '';
-    if (typeof content === 'string') {
-        textToRender = isError ? content.replace(LEGACY_ERROR_PREFIX, '').trim() : content;
-    } else if (typeof content === 'object' && content !== null && 'basicInfo' in content) {
-        textToRender = `**Dossier Generated: ${content.basicInfo.name}**\n\n${content.shortBio}`;
-    } else {
-        const legacySummary = getLegacyComparisonSummary(content);
-        if (legacySummary) textToRender = legacySummary;
-    }
-    // The dossier card carries the name and ratings, so drop the redundant "see the side panel" notice.
-    if (dossier && typeof content === 'string' && getLegacyDossierRef(content)) textToRender = '';
-
-    // Call typewriter hook at top level
-    const typedText = useTypewriter(textToRender, isNew, 8, 6);
-
-    const getCopyText = () => {
-        let textToCopy = '';
-        if (typeof content === 'string') textToCopy = content;
-        else if (typeof content === 'object' && content !== null && 'basicInfo' in content) textToCopy = `Player Profile: ${content.basicInfo.name}\n${content.shortBio}`;
-        else {
-            const legacySummary = getLegacyComparisonSummary(content);
-            if (legacySummary) textToCopy = legacySummary;
-        }
-        if (message.gaffaScorecard) {
-            textToCopy = [formatScorecardCopy(message.gaffaScorecard), textToCopy].filter(Boolean).join('\n\n');
-        }
-        return textToCopy;
-    };
+    const blocks = blocksOf(message);
+    const getCopyText = () => copyTextOf(blocks);
 
     const handleCopy = async () => {
         if (!(await copyText(getCopyText()))) return;
@@ -218,8 +133,6 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
         );
     }
 
-    const isTyping = isNew && typedText.length < textToRender.length;
-
     return (
         <div className="flex items-start gap-3 sm:gap-6 w-full py-3 sm:py-6 animate-fade-in group">
             <div className="hidden sm:flex size-10 rounded-full bg-charcoal dark:bg-cream-400 text-cream-50 dark:text-charcoal items-center justify-center shrink-0 mt-1 shadow-md">
@@ -229,71 +142,23 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
                 <div className="flex items-center justify-between gap-2 border-b border-cream-300 dark:border-charcoal-border pb-2">
                     <span className="flex items-center gap-2 text-[10px] font-sans font-bold text-charcoal/60 dark:text-cream-400 uppercase tracking-widest">
                         <span className="sm:hidden size-5 rounded-full bg-charcoal dark:bg-cream-400 text-cream-50 dark:text-charcoal flex items-center justify-center font-serif italic text-[11px] normal-case tracking-normal">F</span>
-                        {isError ? "Editor's note" : message.gaffaScorecard ? 'Gaffa Briefing' : dossier ? 'Dossier Filed' : 'Analysis Report'}
+                        {isError ? "Editor's note" : blocks.some(b => b.kind === 'scorecard') ? 'Gaffa Briefing' : dossier ? 'Dossier Filed' : 'Analysis Report'}
                     </span>
                     {timestamp ? (
                         <span className="text-[10px] font-sans text-charcoal/40 dark:text-cream-400/50 tabular-nums">{formatTime(timestamp)}</span>
                     ) : null}
                 </div>
 
-                {message.gaffaScorecard ? (
-                    <GaffaTradeScorecardView card={message.gaffaScorecard} />
-                ) : null}
-
-                {dossier ? <DossierChatCard dossier={dossier} onOpen={onOpenDossier} /> : null}
-
-                {isError ? (
-                    <div role="alert" className="flex flex-col sm:flex-row sm:items-center gap-3 border border-amber-500/30 bg-amber-500/[0.06] px-4 py-3">
-                        <span className="material-symbols-outlined text-[20px] text-amber-600 dark:text-amber-400 shrink-0">report</span>
-                        <p className="flex-1 text-sm font-sans leading-relaxed text-charcoal/80 dark:text-cream-200/85 break-words">
-                            {textToRender || 'Something went wrong while preparing this report.'}
-                        </p>
-                        {onRetry && (
-                            <button
-                                type="button"
-                                onClick={() => onRetry(message.id)}
-                                className="shrink-0 self-start sm:self-auto min-h-9 px-3 flex items-center gap-1.5 bg-charcoal dark:bg-cream-200 text-cream-50 dark:text-charcoal text-[11px] font-sans font-bold uppercase tracking-widest hover:opacity-90 transition-opacity"
-                            >
-                                <span className="material-symbols-outlined text-[16px]">refresh</span>
-                                Retry
-                            </button>
-                        )}
-                    </div>
-                ) : typedText ? (
-                    <div
-                        className={`chat-prose prose max-w-none text-charcoal dark:text-cream-100 text-[16px] font-light font-sans ${isTyping ? 'is-typing' : ''}`}
-                        dangerouslySetInnerHTML={renderMarkdown(typedText)}
-                    />
-                ) : null}
-
-                {!isError && !isTyping && message.lineups?.length ? (
-                    <div className="animate-fade-in">
-                        <PitchView lineups={message.lineups} />
-                    </div>
-                ) : null}
-
-                {!isError && !isTyping && (message.cards?.length || (onScoutName && message.scoutOffers?.length)) ? (
-                    <div className="flex flex-col gap-2 animate-fade-in">
-                        {message.cards?.map(card => (
-                            <DossierChatCard key={card.cardKey || card.name} dossier={card} onOpen={onOpenDossier} />
-                        ))}
-                        {onScoutName && message.scoutOffers?.map(name => (
-                            <ScoutOffer key={name} name={name} onScout={onScoutName} />
-                        ))}
-                    </div>
-                ) : null}
-
-                {!isError && !isTyping && onAsk && message.ask?.options.length ? (
-                    <div className="animate-fade-in">
-                        <AskChips options={message.ask.options} onAsk={onAsk} />
-                    </div>
-                ) : null}
-
-                {!isError && !isTyping && onGoDeeper && message.goDeeper?.reason ? (
-                    <div className="animate-fade-in">
-                        <GoDeeperChip reason={message.goDeeper.reason} onGoDeeper={() => onGoDeeper(message.id)} />
-                    </div>
-                ) : null}
+                <ReplyBody
+                    message={message}
+                    isNew={isNew}
+                    isError={Boolean(isError)}
+                    onRetry={onRetry}
+                    onOpenDossier={onOpenDossier}
+                    onScoutName={onScoutName}
+                    onAsk={onAsk}
+                    onGoDeeper={onGoDeeper}
+                />
 
                 {!isError && (
                     <div className="flex items-center gap-5 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-within:opacity-100">

@@ -50,7 +50,8 @@ import { reconcileDossierNumbers } from './dossierNumberGate';
 import { cardEdition, toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
 import { askedDirectly, cleanReason, createPreparer, validateAsk } from './initiative';
-import { lineupsForTurn, type LineupView } from './lineupView';
+import { lineupsForTurn } from './lineupView';
+import { ReplyComposer } from './replyBlocks';
 import { buildGaffaTurn, capGaffaTradeProse, leagueFocusOf, starterClubs, type GaffaTurn } from './gaffaTurn';
 import { lockGaffaRosterNames } from './gaffaLineupAudit';
 import { expandTables, gateUnsupportedFigures, type FigureClaim, type FigureGateOptions } from './figureGate';
@@ -239,54 +240,17 @@ const CHALLENGE_TURN_SCHEMA: Record<string, unknown> = {
   required: ['replyProse', 'revisedDossier'],
 };
 
-/** What a chat reply carries besides its prose: cards to show under it, players to offer to rate. */
-export interface ReplyAttachments {
-  cards: PlayerProfile[];
-  /** Players the reply discussed who have no card yet. */
-  scoutOffers: string[];
-  /** First-choice XIs to draw under the reply, for the clubs a question about the present is about. */
-  lineups?: LineupView[];
-  /** The question the writer asked instead of answering; its options are chips under the reply. */
-  ask?: AskPrompt;
-  /** Set when the writer judged the question deserved more research than the fast path allows. */
-  goDeeper?: GoDeeper;
-}
-
 /** Adds a scout offer unless the player is already offered or carded in this reply. */
-export const offerScout = (attachments: ReplyAttachments, name: string): void => {
-  const slug = toBasePlayerSlug(name);
-  if (!slug) return;
-  const known = [
-    ...attachments.scoutOffers,
-    ...attachments.cards.map((c) => c.basicInfo.name),
-  ].some((n) => toBasePlayerSlug(n) === slug);
-  if (!known) attachments.scoutOffers.push(name);
-};
-
-const PRIME_OFFER = /^prime\s+/i;
+export const offerScout = (composer: ReplyComposer, name: string): void => composer.offerScout(name);
 
 /**
  * Offers a player's prime to Scout, for a reply about his prime when only his current form is
  * rated. It sits beside his current card, so it's kept apart from his plain offer.
  */
-export const offerPrimeScout = (attachments: ReplyAttachments, name: string): void => {
-  const slug = toBasePlayerSlug(name);
-  if (!slug) return;
-  const held = attachments.scoutOffers.some((n) => PRIME_OFFER.test(n) && toBasePlayerSlug(n) === slug);
-  const shown = attachments.cards.some((c) => isPrimeCard(c) && toBasePlayerSlug(c.basicInfo.name) === slug);
-  if (!held && !shown) attachments.scoutOffers.push(`prime ${name}`);
-};
+export const offerPrimeScout = (composer: ReplyComposer, name: string): void => composer.offerPrimeScout(name);
 
 /** Adds a card to show under the reply, once. A current card leaves an offer of his prime in place. */
-export const showCard = (attachments: ReplyAttachments, card: PlayerProfile): void => {
-  const key = getCardKey(card);
-  if (attachments.cards.some((c) => getCardKey(c) === key)) return;
-  attachments.cards.push(card);
-  const slug = toBasePlayerSlug(card.basicInfo.name);
-  attachments.scoutOffers = attachments.scoutOffers.filter(
-    (n) => toBasePlayerSlug(n) !== slug || (PRIME_OFFER.test(n) && !isPrimeCard(card)),
-  );
-};
+export const showCard = (composer: ReplyComposer, card: PlayerProfile): void => composer.showCard(card);
 
 export interface ConversationalScoutParams {
   message: string;
@@ -300,7 +264,7 @@ export interface ConversationalScoutParams {
   savedDossiersBlock: string;
   peerLedgerBlock?: string;
   /** Filled with the cards the model shows and the players it found no card for. */
-  attachments?: ReplyAttachments;
+  composer?: ReplyComposer;
   /** The card the user chose to challenge; a challenge turn revises this one. */
   challengeCard?: PlayerProfile;
   onDossierUpdated?: (updatedProfile: PlayerProfile) => void;
@@ -477,7 +441,7 @@ export function createDossierTools(args: {
   cardsInPlay: PlayerProfile[];
   localCards: PlayerProfile[];
   historical: boolean;
-  attachments?: ReplyAttachments;
+  composer?: ReplyComposer;
   /** Called with each card the model reads. */
   onRead?: (card: PlayerProfile) => void;
   /**
@@ -487,7 +451,7 @@ export function createDossierTools(args: {
    */
   offerMissing?: (name: string) => boolean;
 }): DossierToolHandlers {
-  const { cardsInPlay, localCards, historical: isHistoricalThread, attachments } = args;
+  const { cardsInPlay, localCards, historical: isHistoricalThread, composer } = args;
   const readCards = new Map<string, PlayerProfile>();
   return {
     lookUp: async ({ name, edition }) => {
@@ -496,8 +460,8 @@ export function createDossierTools(args: {
       const result = await lookUpDossier(name, [...cardsInPlay, ...localCards], historical);
       if (result.status === 'ambiguous') return { found: false, matchingPlayers: result.names };
       if (result.status === 'missing') {
-        const offered = Boolean(attachments) && (args.offerMissing?.(name) ?? true);
-        if (attachments && offered) offerScout(attachments, name);
+        const offered = Boolean(composer) && (args.offerMissing?.(name) ?? true);
+        if (composer && offered) composer.offerScout(name);
         return offered || !args.offerMissing
           ? { found: false }
           : { found: false, note: 'No card yet. If his card matters to your answer, call offer_rating so the user can have him scouted.' };
@@ -516,7 +480,7 @@ export function createDossierTools(args: {
         readCards.get(toBasePlayerSlug(name)) ??
         pickCardPerPlayer(findReferencedDossiers(name, cardsInPlay, [name]), isHistoricalThread)[0];
       if (!card) return { shown: false, reason: 'No card in this turn for that player; look it up first.' };
-      if (attachments) showCard(attachments, card);
+      if (composer) composer.showCard(card);
       return { shown: true };
     },
   };
@@ -530,11 +494,11 @@ export interface InitiativeOptions {
 
 /**
  * The writer's initiative tools for one turn (`initiative.ts` has the rules behind them), written
- * onto the reply's attachments. `endTurn` is what the model loop checks after each round of tool
+ * onto the reply's composer. `endTurn` is what the model loop checks after each round of tool
  * calls: once the writer has asked a valid question, the question is the reply.
  */
 export function createInitiativeTools(args: {
-  attachments: ReplyAttachments;
+  composer: ReplyComposer;
   cardsInPlay: PlayerProfile[];
   localCards: PlayerProfile[];
   historical: boolean;
@@ -545,7 +509,7 @@ export function createInitiativeTools(args: {
   /** Starts a club's build; defaults to the server's snapshot route. */
   startBuild?: (club: string) => void;
 }): { tools: InitiativeToolHandlers; endTurn: () => string | null } {
-  const { attachments } = args;
+  const { composer } = args;
   let asked: AskPrompt | null = null;
   const prepare = createPreparer(args.conversationId, args.clubsInPlay, args.startBuild);
   const tools: InitiativeToolHandlers = {
@@ -555,10 +519,7 @@ export function createInitiativeTools(args: {
       if ('error' in checked) return { asked: false, error: checked.error };
       asked = checked.ask;
       // The question is the whole reply: nothing drawn for an answer stays under it.
-      attachments.ask = asked;
-      attachments.cards = [];
-      delete attachments.lineups;
-      delete attachments.goDeeper;
+      composer.setAsk(asked);
       return { asked: true, note: 'Your reply is this question. Write nothing else.' };
     },
     prepare,
@@ -566,18 +527,18 @@ export function createInitiativeTools(args: {
       const player = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : '';
       if (!player || player.length > 80) return { offered: false, error: 'Missing or unusable player name' };
       const prime = edition === 'prime';
-      const pool = [...attachments.cards, ...args.cardsInPlay, ...args.localCards];
+      const pool = [...composer.cards, ...args.cardsInPlay, ...args.localCards];
       const result = await lookUpDossier(player, pool, prime);
       if (result.status === 'ambiguous') return { offered: false, matchingPlayers: result.names };
       if (result.status === 'found') {
         // He has a card for this version: nothing to offer. A card of the other version doesn't count.
         if (isPrimeCard(result.card) === prime) return { offered: false, reason: 'He already has a card for that version.' };
-        if (prime) offerPrimeScout(attachments, result.card.basicInfo.name);
-        else offerScout(attachments, result.card.basicInfo.name);
+        if (prime) composer.offerPrimeScout(result.card.basicInfo.name);
+        else composer.offerScout(result.card.basicInfo.name);
         return { offered: true };
       }
-      if (prime) offerPrimeScout(attachments, player);
-      else offerScout(attachments, player);
+      if (prime) composer.offerPrimeScout(player);
+      else composer.offerScout(player);
       return { offered: true };
     },
     ...(args.deeper
@@ -585,7 +546,7 @@ export function createInitiativeTools(args: {
           deeper: ({ reason }: { reason?: unknown }) => {
             const text = cleanReason(reason);
             if (!text) return { flagged: false, error: 'Give the reason in one sentence.' };
-            if (!asked) attachments.goDeeper = { reason: text };
+            if (!asked) composer.setGoDeeper({ reason: text });
             return { flagged: true };
           },
         }
@@ -633,7 +594,7 @@ export async function runConversationalScout(
     lockedDossiersBlock,
     savedDossiersBlock,
     peerLedgerBlock,
-    attachments,
+    composer,
     onDossierUpdated,
     onStreamChunk,
     onStageChange,
@@ -937,7 +898,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   const gaffaBlock = gaffaTurn?.block ?? '';
 
   // The clubs' first-choice XIs, drawn under the reply from the snapshot the writer argues from.
-  if (attachments) {
+  if (composer) {
     const lineups = lineupsForTurn({
       situation: situationData,
       clubs: targetClubsInPlay,
@@ -945,7 +906,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
       historical: isHistoricalThread,
       scorecard: Boolean(gaffaTurn?.scorecard),
     });
-    if (lineups.length > 0) attachments.lineups = lineups;
+    if (lineups.length > 0) composer.setLineups(lineups);
   }
 
   const analyticalMode =
@@ -960,19 +921,19 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 
   const modeGuidance = proseModeGuidance(route, analyticalMode, currentSeason, debate);
 
-  const shownNames = (attachments?.cards ?? []).map((c) => c.basicInfo.name);
+  const shownNames = (composer?.cards ?? []).map((c) => c.basicInfo.name);
   const shownNote = shownNames.length
     ? ` The user sees the dossier card of ${shownNames.join(' and ')} under your reply, so answer from it without reciting its attributes.`
     : '';
   // Cards this turn already looked for and didn't find, so the writer doesn't spend a tool round on them.
-  const missingCards = attachments?.scoutOffers ?? [];
+  const missingCards = composer?.scoutOffers ?? [];
   const missingNote = missingCards.length
     ? ` No stored card exists for ${missingCards.join(' or ')}; they were already checked, so don't look them up.`
     : '';
   const gapNote = gaps.length ? ` ${gaps.map(editionGapNote).join(' ')}` : '';
   // The initiative tools (ask, prepare, offer, go deeper) are the default chat path's; a challenge
   // turn that fell back to prose never gets them.
-  const offersInitiative = Boolean(params.initiative && attachments && route.intent !== 'challenge_or_revise');
+  const offersInitiative = Boolean(params.initiative && composer && route.intent !== 'challenge_or_revise');
   const initiativeNote = offersInitiative ? initiativeRules(params.initiative!) : '';
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${gaffaBlock}
@@ -1054,7 +1015,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
   const initiative =
     offersInitiative
       ? createInitiativeTools({
-          attachments: attachments!,
+          composer: composer!,
           cardsInPlay,
           localCards: writerCards,
           historical: isHistoricalThread,
@@ -1067,7 +1028,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
     cardsInPlay,
     localCards: writerCards,
     historical: isHistoricalThread,
-    attachments,
+    composer,
     // With the offer tool, a missing player is offered by rule only when the user named him.
     ...(initiative ? { offerMissing: (name: string) => askedDirectly(name, route.targetPlayers, message) } : {}),
   });

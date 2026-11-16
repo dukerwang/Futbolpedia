@@ -13,7 +13,8 @@ import { formatIsoDate } from '../services/dossierStore';
 import { classifyTurn } from '../services/turnRouter';
 import { asksToSeeMentions } from '../services/chatIntent';
 import { lookUpDossier } from '../services/dossierLookup';
-import { editionGaps, offerPrimeScout, offerScout, showCard, type ReplyAttachments } from '../services/conversationalScout';
+import { editionGaps, offerPrimeScout, offerScout, showCard } from '../services/conversationalScout';
+import { ReplyComposer } from '../services/replyBlocks';
 import { scoutOfferRequest } from '../services/ratingCommand';
 
 const now = Date.now();
@@ -116,7 +117,7 @@ await test('a lookup never rates: no card, or no published card behind an outlin
 });
 
 await test('a reply offers each player once, and never one whose card it shows', () => {
-  const attachments: ReplyAttachments = { cards: [], scoutOffers: [] };
+  const attachments = new ReplyComposer();
   offerScout(attachments, 'Pedri');
   offerScout(attachments, 'pedri');
   offerScout(attachments, 'Florian Wirtz');
@@ -141,7 +142,7 @@ await test('a prime debate notes a player whose only card is his current form, u
 });
 
 await test('a missing prime is offered beside the current card, and a prime offer queues a prime rating', () => {
-  const attachments: ReplyAttachments = { cards: [], scoutOffers: [] };
+  const attachments = new ReplyComposer();
   const current = card('Rodri', 'current');
   showCard(attachments, current);
   offerPrimeScout(attachments, 'Rodri');
