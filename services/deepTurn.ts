@@ -184,8 +184,13 @@ export const liveDeepModel: DeepModel = {
           for (const c of chunk.functionCalls ?? []) calls.push({ name: String(c.name), args: (c.args as Record<string, unknown>) ?? {} });
           const finish = chunk.candidates?.[0]?.finishReason;
           if (finish) finishReason = finish;
-          if (typeof chunk.text === 'string' && chunk.text && calls.length === 0) {
-            text += chunk.text;
+          // Text parts read directly: chunk.text warns on every chunk that also carries a call.
+          const piece = (chunk.candidates?.[0]?.content?.parts ?? [])
+            .filter((p) => typeof p.text === 'string' && !p.thought)
+            .map((p) => p.text)
+            .join('');
+          if (piece && calls.length === 0) {
+            text += piece;
             onText?.(text);
           }
         }

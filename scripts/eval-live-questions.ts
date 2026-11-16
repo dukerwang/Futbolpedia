@@ -16,6 +16,7 @@
  *   npm run eval:live -- --warm      # answer each question once first, so the graded run reuses today's club snapshots
  *   npm run eval:live -- --set historical   # the historical set, each question twice (--repeat 1 to run once)
  *   npm run eval:live -- --set historical --only 2,3 --repeat 1 --no-builds   # a small, cheap subset
+ *   npm run eval:live -- --deep --only 1,3 --label deep   # the live set through deep mode (services/deepTurn.ts)
  *
  * The live routes run in-process, so no server is needed. Supabase isn't loaded outside the
  * browser, so club snapshots are built fresh in memory for each run rather than read from the
@@ -55,9 +56,11 @@ const argValue = (flag: string) => {
 };
 const only = argValue('--only')?.split(',').map((n) => Number(n.trim()));
 const warm = args.includes('--warm');
+/** `--deep`: send every question with the Deep toggle on, so questions about the present go through deep mode. */
+const deep = args.includes('--deep');
 const set = argValue('--set') === 'historical' ? 'historical' : 'live';
 const repeat = Math.max(1, Number(argValue('--repeat') ?? (set === 'historical' ? 2 : 1)) || 1);
-const label = (argValue('--label') ?? (warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
+const label = (argValue('--label') ?? (deep ? 'deep' : warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
 const history = await import('./eval-history');
 if (set === 'historical') history.installReadOnlySupabase();
 
@@ -145,6 +148,35 @@ interface RunResult {
   firstTokenMs: number | null;
   totalMs: number;
   perf: string[];
+  /** What the turn looked up and showed, so default and deep runs compare. */
+  research?: Research;
+}
+
+interface Research {
+  path: 'default' | 'deep';
+  /** Lookups the turn ran (live feeds, history routes, web searches, cards), snapshot builds included. */
+  lookups: number;
+  searches: number;
+  /** Model rounds that called tools: research rounds and writer tool rounds, or deep rounds. */
+  rounds: number;
+  /** Deep mode only: every tool the model called, in order. */
+  toolCalls?: string[];
+  /** Deep mode only: why research ended. */
+  stop?: string;
+  lineupsShown: number;
+  cardsShown: number;
+}
+
+/** The turn's research, from its perf lines and, in deep mode, the loop's own count. */
+function researchOf(perf: string[], stats: import('../services/deepTurn').DeepStats | null, attached: { lineups?: unknown[]; cards?: unknown[] } | null): Research {
+  const lookupLines = perf.filter((l) => l.startsWith('[Perf] lookup '));
+  const shown = { lineupsShown: attached?.lineups?.length ?? 0, cardsShown: attached?.cards?.length ?? 0 };
+  if (stats) {
+    return { path: 'deep', lookups: lookupLines.length, searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length, rounds: stats.rounds, toolCalls: stats.toolCalls, stop: stats.stop, ...shown };
+  }
+  const researched = perf.some((l) => l.includes(' brief ('));
+  const rounds = (researched ? 1 : 0) + perf.filter((l) => l.includes('research round 2')).length + perf.filter((l) => l.includes('writer tool calls')).length;
+  return { path: 'default', lookups: lookupLines.length, searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length, rounds, ...shown };
 }
 
 async function ask(question: string): Promise<RunResult> {
@@ -157,16 +189,22 @@ async function ask(question: string): Promise<RunResult> {
   console.info = console.warn = () => {};
   const start = Date.now();
   let firstTokenMs: number | null = null;
+  let stats: import('../services/deepTurn').DeepStats | null = null;
+  let attached: { lineups?: unknown[]; cards?: unknown[] } | null = null;
   try {
     const reply = await sendMessageToAI(question, [], undefined, [], [], {
       onStreamChunk: () => {
         firstTokenMs ??= Date.now() - start;
       },
+      onAttachments: (a) => {
+        attached = a;
+      },
+      ...(deep ? { deep: true, deepDeps: { onStats: (s) => (stats = s) } } : {}),
     });
     const answer = typeof reply === 'string' ? reply : `[Rated a card instead of answering: ${reply.basicInfo.name}]`;
-    return { answer, firstTokenMs, totalMs: Date.now() - start, perf };
+    return { answer, firstTokenMs, totalMs: Date.now() - start, perf, research: researchOf(perf, stats, attached) };
   } catch (e: any) {
-    return { answer: '', error: String(e?.message ?? e), firstTokenMs, totalMs: Date.now() - start, perf };
+    return { answer: '', error: String(e?.message ?? e), firstTokenMs, totalMs: Date.now() - start, perf, research: researchOf(perf, stats, attached) };
   } finally {
     Object.assign(console, { log, info, warn });
   }
@@ -349,7 +387,7 @@ const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math
 
 const report = `# Live question eval: ${today}, ${label}
 
-Ran ${results.length} questions through the chat pipeline${warm ? ', each answered once beforehand so club snapshots were already built' : ', cold: every club snapshot built during the run'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
+Ran ${results.length} questions through the ${deep ? 'deep mode loop (`--deep`)' : 'chat pipeline'}${warm ? ', each answered once beforehand so club snapshots were already built' : ', cold: every club snapshot built during the run'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
 
 The grader is the same model that writes the answers, so it can share their blind spots and misjudge facts its own search doesn't reach. Compare runs with each other rather than reading any score as absolute.
 
@@ -359,14 +397,16 @@ The grader is the same model that writes the answers, so it can share their blin
 - Mean decisiveness: ${graded.length ? (sum((g) => g.decisiveness) / graded.length).toFixed(1) : '–'} / 5
 - Median first token: ${secs(median(results.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s
 
-| # | Stale | Invented | What changed | Decisive | Hedged roles | Gaps admitted | First token (s) | Total (s) | Notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| # | Stale | Invented | What changed | Decisive | Hedged roles | Gaps admitted | Lookups | Searches | Rounds | Shown | First token (s) | Total (s) | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${results
-  .map((r) =>
-    r.grade
-      ? `| ${r.q.n} | ${r.grade.staleFacts.length} | ${r.grade.inventedFacts.length} | ${r.grade.saysWhatChanged} | ${r.grade.decisiveness} | ${r.grade.hedgedRoles} | ${r.grade.gapsAdmitted} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.grade.notes.replace(/\|/g, '/').replace(/\n/g, ' ')} |`
-      : `| ${r.q.n} | – | – | – | – | – | – | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${r.run.error}` : 'Grading failed'} |`,
-  )
+  .map((r) => {
+    const x = r.run.research;
+    const research = x ? `${x.lookups} | ${x.searches} | ${x.rounds} | ${[x.lineupsShown && `${x.lineupsShown} XI`, x.cardsShown && `${x.cardsShown} card`].filter(Boolean).join(', ') || '–'}` : '– | – | – | –';
+    return r.grade
+      ? `| ${r.q.n} | ${r.grade.staleFacts.length} | ${r.grade.inventedFacts.length} | ${r.grade.saysWhatChanged} | ${r.grade.decisiveness} | ${r.grade.hedgedRoles} | ${r.grade.gapsAdmitted} | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.grade.notes.replace(/\|/g, '/').replace(/\n/g, ' ')} |`
+      : `| ${r.q.n} | – | – | – | – | – | – | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${r.run.error}` : 'Grading failed'} |`;
+  })
   .join('\n')}
 
 ${results
@@ -377,7 +417,7 @@ ${r.q.tests}
 
 ${r.grade?.staleFacts.length ? `Stale facts:\n${r.grade.staleFacts.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${
       r.grade?.inventedFacts.length ? `Invented facts:\n${r.grade.inventedFacts.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''
-    }<details><summary>Answer</summary>
+    }${r.run.research?.toolCalls ? `Deep tool calls (${r.run.research.stop}): ${r.run.research.toolCalls.join(', ') || 'none'}\n\n` : ''}<details><summary>Answer</summary>
 
 ${r.run.answer || r.run.error || '(empty)'}
 
