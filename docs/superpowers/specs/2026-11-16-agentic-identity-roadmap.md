@@ -53,7 +53,7 @@ constant and an off switch, and every eval estimates before it runs.
   `docs/superpowers/evals/reports/2026-11-16-2010-deep-full.md`: twelve questions, no stale facts,
   two invented, "what changed" on ten of eleven, at about half the calls of a cold stage turn.
 
-- **Gates as feedback** (PR PRNUM): when the figure gate, the attribute check or the manager scrub
+- **Gates as feedback** (PR 84): when the figure gate, the attribute check or the manager scrub
   flags a reply and the turn has time, the model gets one call to fix the flagged sentences before
   anything is cut (`services/gateFeedback.ts`). Code applies the replacements to the reply, so
   unflagged sentences stay byte-identical, and the gates run again; what is still unsupported is
