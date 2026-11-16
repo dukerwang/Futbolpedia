@@ -25,6 +25,7 @@ import { createXiPredictions, memoryXiStore, supabaseXiStore } from "./services/
 import { SCOUT_DAY_DEFAULT_CALLS, createScoutDay, createScoutTally, liveScoutActors, liveScoutSources, memoryScoutStores, scoutJournalHandler, supabaseScoutStores } from "./services/scoutDay";
 import { subjectFromTitle } from "./services/eraSnapshots";
 import { liveToolset } from "./services/researchTools";
+import { CARD_REVIEW_DEFAULT_CALLS, liveCardReview, memoryCardReviewStore, supabaseCardReviewStore } from "./services/cardReview";
 
 /**
  * Local runs: Vite reads `.env.local` for the browser, but the server process didn't, so server
@@ -185,7 +186,10 @@ async function startServer() {
     if (names.length === 0) return res.status(400).json({ error: "Missing names" });
     try {
       res.setHeader("Cache-Control", "public, max-age=600");
-      return res.json({ cards: await lookUpCardLinks(names) });
+      const cards = await lookUpCardLinks(names);
+      // Only names that resolved to a stored card count for card review.
+      for (const [name, link] of Object.entries(cards)) if (link) scoutTally.cardView(name);
+      return res.json({ cards });
     } catch (err: any) {
       console.error("[cards/lookup]", err?.message || err);
       return res.status(502).json({ error: "Card lookup failed" });
@@ -732,6 +736,12 @@ async function startServer() {
   const secretClient = SUPABASE_SECRET_KEY
     ? createSupabaseClient(supabaseUrl, SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
     : null;
+  // Card review (services/cardReview.ts) rates and publishes cards on the server, so the shared
+  // cache writes with the secret key's client; reads stay on the publishable one.
+  if (secretClient) {
+    const { useServerSupabaseWriter } = await import("./services/dossierCache");
+    useServerSupabaseWriter(secretClient);
+  }
   const liveGet = inProcessGet({ live, history });
   const snapshots = createSnapshotServer({
     get: liveGet,
@@ -814,11 +824,50 @@ async function startServer() {
   const publicClient = createSupabaseClient(supabaseUrl, supabasePublishableKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const scoutStores = secretClient ? supabaseScoutStores(secretClient, secretClient) : { ...supabaseScoutStores(null, publicClient), notes: memoryScoutStores().notes };
   const scoutCalls = Number(process.env.SCOUT_DAY_CALLS) > 0 ? Math.floor(Number(process.env.SCOUT_DAY_CALLS)) : SCOUT_DAY_DEFAULT_CALLS;
+  // Card review (services/cardReview.ts): the scout's day for players, on its own budget line
+  // (CARD_REVIEW_CALLS, default 24; 0 turns it off). It re-rates current cards past their window,
+  // fills historical cards' data gaps from stored records, and drafts prime re-rates that a
+  // separate reviewer call must accept before they publish. It needs the secret key to write.
+  const cardCalls = process.env.CARD_REVIEW_CALLS !== undefined && Number.isFinite(Number(process.env.CARD_REVIEW_CALLS))
+    ? Math.max(0, Math.floor(Number(process.env.CARD_REVIEW_CALLS)))
+    : CARD_REVIEW_DEFAULT_CALLS;
+  const historyEntries = async () => {
+    const files = await fs.readdir(historyDir).catch(() => [] as string[]);
+    const out: { key: string; title: string; builtAt: string }[] = [];
+    for (const file of files.filter((f) => f.endsWith(".json"))) {
+      try {
+        const full = path.join(historyDir, file);
+        const [stat, kept] = await Promise.all([fs.stat(full), fs.readFile(full, "utf8").then(JSON.parse)]);
+        if (kept?.value?.found && typeof kept.value.title === "string") out.push({ key: String(kept.key), title: kept.value.title, builtAt: stat.mtime.toISOString() });
+      } catch {
+        // An unreadable entry is no record.
+      }
+    }
+    return out;
+  };
+  const cardReview = secretClient && cardCalls > 0
+    ? liveCardReview({
+        client: secretClient,
+        get: liveGet,
+        storedSnapshots: () => snapshots.listStored(14 * 24 * 3_600_000),
+        recentJournal: (days) => scoutStores.journal.recent(days),
+        history: {
+          entries: historyEntries,
+          async text(key) {
+            const kept = await historyStore.get(key);
+            return typeof kept?.value?.text === "string" ? kept.value.text : null;
+          },
+        },
+        reviews: secretClient ? supabaseCardReviewStore(secretClient) : memoryCardReviewStore(),
+      })
+    : null;
+  console.log(`[startup] card review: ${cardReview ? `on, ${cardCalls} calls a day` : "off"}`);
   const scoutDay = createScoutDay({
-    sources: liveScoutSources({ tally: scoutTally, snapshots, get: liveGet, record: (club) => predictions.record(club), client: secretClient ?? publicClient }),
-    actors: liveScoutActors({ snapshots, tools: liveToolset([], liveGet), notes: scoutStores.notes, client: secretClient }),
+    sources: liveScoutSources({ tally: scoutTally, snapshots, get: liveGet, record: (club) => predictions.record(club), client: secretClient ?? publicClient, ...(cardReview ? { cardReview: cardReview.sources } : {}) }),
+    actors: liveScoutActors({ snapshots, tools: liveToolset([], liveGet), notes: scoutStores.notes, client: secretClient, ...(cardReview ? { cards: cardReview.actors } : {}) }),
     journal: scoutStores.journal,
     budget: scoutCalls,
+    cardBudget: cardCalls,
     enabled: (process.env.SCOUT_DAY ?? "").toLowerCase() !== "off",
     canWrite: !!secretClient,
     afterSweep: firstSweep,
@@ -876,13 +925,14 @@ async function startServer() {
       appType: "spa",
     });
     registerShareRoutes(app, {
+      onCardPage: (name) => scoutTally.cardView(name),
       html: async (req) =>
         vite.transformIndexHtml(req.originalUrl, await fs.readFile(path.join(process.cwd(), "index.html"), "utf8")),
     });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    registerShareRoutes(app, { html: builtIndexHtml(distPath) });
+    registerShareRoutes(app, { html: builtIndexHtml(distPath), onCardPage: (name) => scoutTally.cardView(name) });
     app.use(express.static(distPath));
     app.get('*all', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

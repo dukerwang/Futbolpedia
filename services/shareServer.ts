@@ -37,6 +37,8 @@ export interface ShareServerOptions {
   /** Where images are kept between restarts; null keeps them in memory only. */
   cacheDir?: string | null;
   now?: () => number;
+  /** Called with the player's name when a card page is served, for the scout's demand count. */
+  onCardPage?: (player: string) => void;
 }
 
 const IMAGE_CACHE_MAX = 300;
@@ -181,6 +183,7 @@ export function registerShareRoutes(app: Express, options: ShareServerOptions): 
       const page = await cardPages.get(canonicalPath, () => resolveCardPage(parsed.address, reads, now()), keep, now());
       switch (page.kind) {
         case 'card':
+          options.onCardPage?.(page.card.basicInfo.name);
           return sendPage(req, res, 200, cardMeta(page, origin), 'card');
         case 'redirect':
           console.log(`[share] ${req.path} → ${page.to}`);

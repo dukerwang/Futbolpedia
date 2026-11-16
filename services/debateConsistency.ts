@@ -1,5 +1,5 @@
 import type { PlayerProfile } from '../types';
-import { cardEdition, isPrimeCard, toBasePlayerSlug } from './dossierCards';
+import { cardEdition, getCardKey, isPrimeCard, toBasePlayerSlug } from './dossierCards';
 
 /**
  * Keeps a debate's verdict and a ranking's order consistent with the stored cards, before the
@@ -28,6 +28,8 @@ export interface CardStanding {
   edition: string;
   period: string | null;
   placement: { betterThan: string[]; levelWith: string[]; notAsGoodAs: string[] } | null;
+  /** The card's key, so its latest published review can be filed as evidence. */
+  cardKey?: string;
 }
 
 export const toStanding = (card: PlayerProfile): CardStanding => ({
@@ -37,6 +39,7 @@ export const toStanding = (card: PlayerProfile): CardStanding => ({
   edition: cardEdition(card),
   period: card.version?.seasonOrEra ?? null,
   placement: card.peerPlacement ?? null,
+  cardKey: getCardKey(card),
 });
 
 /**

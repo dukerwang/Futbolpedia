@@ -9,6 +9,7 @@ import {
   type LiveTableResult,
 } from './liveFootball';
 import type { HistoryResult } from './historyFootball';
+import { getCardKey } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
 import { serializeProfileForHistory } from './dossierContext';
 import {
@@ -169,7 +170,7 @@ export const liveToolset = (cardPool: PlayerProfile[], get: LiveGet = getLive): 
   async card(name, edition) {
     const hit = await lookUpDossier(name, cardPool, edition === 'prime').catch(() => null);
     return hit?.status === 'found'
-      ? found({ kind: 'card', label: `${hit.card.basicInfo.name} (stored card)`, content: serializeProfileForHistory(hit.card) })
+      ? found({ kind: 'card', label: `${hit.card.basicInfo.name} (stored card)`, content: serializeProfileForHistory(hit.card), cardKey: getCardKey(hit.card) })
       : none('empty', 'no stored card');
   },
   async clubSeason(club, season) {

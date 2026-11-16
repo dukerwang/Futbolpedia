@@ -26,6 +26,7 @@ import {
   type EraSnapshotSource,
 } from './eraSnapshots';
 import { addEvidence, emptyLedger, type EvidenceLedger } from './evidenceLedger';
+import { fileCardReviews, liveCardReviews, type CardReviewSource } from './cardReviewNotes';
 import {
   executeCall,
   fileOutcomes,
@@ -367,6 +368,8 @@ export async function runDebateResearch(
     early?: Promise<DebateBrief | null> | null;
     searchBudgetMs?: number;
     briefWaitMs?: number;
+    /** Published card reviews for the cards in play and the named players; the stored table by default. */
+    cardReviews?: CardReviewSource | null;
     onStage?: (label: string) => void;
     perf?: (label: string) => void;
   } = {},
@@ -414,7 +417,19 @@ export async function runDebateResearch(
       });
     }
   }
-  if (!brief.calls.length) return { brief, ledger: emptyLedger() };
+  // The latest published review of each card in play and each named player, so a question about
+  // why a rating changed is answered from the record.
+  const reviewSource = options.cardReviews === undefined ? liveCardReviews() : options.cardReviews ?? { published: async () => [] };
+  const fileReviews = (l: EvidenceLedger) =>
+    fileCardReviews(
+      l,
+      {
+        cardKeys: [...ctx.cards.flatMap((c) => (c.cardKey ? [c.cardKey] : [])), ...l.entries.flatMap((e) => (e.kind === 'card' && e.cardKey ? [e.cardKey] : []))],
+        players: [...ctx.hints.players, ...ctx.cards.map((c) => c.name)],
+      },
+      reviewSource,
+    );
+  if (!brief.calls.length) return { brief, ledger: await fileReviews(emptyLedger()) };
 
   options.onStage?.(`Checking ${brief.calls.length} ${brief.calls.length === 1 ? 'record' : 'records'}...`);
   const runs = brief.calls.map((c) => prefetched.take(c) ?? executeCall(c, tools));
@@ -447,6 +462,7 @@ export async function runDebateResearch(
   let ledger = fileOutcomes(emptyLedger(), brief.calls, outcomes);
   const snapshots = (await Promise.all(eraRuns.map((r) => within(r, ERA_PEEK_MS)))).filter((s): s is EraSnapshot => s !== null);
   for (const s of snapshots) ledger = addEvidence(ledger, eraEntry(s));
+  ledger = await fileReviews(ledger);
   options.perf?.(
     `debate research (${ledger.entries.length} found, ${ledger.gaps.length} missing; ${snapshots.length} era snapshots, ${builds} building)`,
   );

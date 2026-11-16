@@ -17,7 +17,8 @@ export type EvidenceKind =
   | 'season_record'
   | 'career_record'
   | 'era_snapshot'
-  | 'scout_note';
+  | 'scout_note'
+  | 'card_review';
 
 /** Facts are the present (who plays, results, transfers, dates); analysis is read against them. */
 export type ResearchStage = 'facts' | 'analysis';
@@ -34,6 +35,8 @@ export interface EvidenceEntry {
   club?: LiveClubReport;
   /** The club a player record says he plays for, so research can look at that club too. */
   team?: string;
+  /** A card entry's card key, so the card's latest published review can be filed beside it. */
+  cardKey?: string;
 }
 
 /**
@@ -142,6 +145,7 @@ const KIND_NAMES: Record<EvidenceKind, string> = {
   career_record: 'Career record (Wikipedia)',
   era_snapshot: 'Era snapshot (built from the sources and stored)',
   scout_note: "The scout's note (a web search run between conversations)",
+  card_review: "The scout's card review (a re-rating, with why it was opened)",
 };
 
 const GAP_HEADINGS: Record<GapStatus, string> = {

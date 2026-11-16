@@ -23,6 +23,7 @@ import {
 } from './researchTools';
 import type { ClubResearch, SnapshotSource } from './clubSnapshots';
 import { fileScoutNotes, liveScoutNotes, type ScoutNoteSource } from './scoutNotes';
+import { fileCardReviews, liveCardReviews, type CardReviewSource } from './cardReviewNotes';
 import {
   buildSituation,
   coresFromLedger,
@@ -342,6 +343,8 @@ export async function runResearch(
     snapshots?: SnapshotSource | null;
     /** The scout's notes for the clubs and players the turn opens; the stored table by default. */
     scoutNotes?: ScoutNoteSource | null;
+    /** Published card reviews for the cards and players the turn looks at; the stored table by default. */
+    cardReviews?: CardReviewSource | null;
     onStage?: (label: string) => void;
     perf?: (label: string) => void;
     now?: () => number;
@@ -599,6 +602,14 @@ export async function runResearch(
     const subjects = [...jobs.map((j) => j.name), ...ledger.entries.flatMap((e) => (e.club ? [e.club.team] : [])), ...players];
     ledger = await fileScoutNotes(ledger, subjects, options.scoutNotes === undefined ? liveScoutNotes(now) : options.scoutNotes ?? { forSubjects: async () => [] }, new Date(now()).toISOString().slice(0, 10));
   }
+  // The latest published review of each card research filed, and of the players it looked at, so
+  // a question about why a rating changed is answered from the record.
+  ledger = await fileCardReviews(
+    ledger,
+    { cardKeys: ledger.entries.flatMap((e) => (e.kind === 'card' && e.cardKey ? [e.cardKey] : [])), players },
+    options.cardReviews === undefined ? liveCardReviews(now) : options.cardReviews ?? { published: async () => [] },
+    now(),
+  );
   return { brief, ledger, situation };
 }
 
