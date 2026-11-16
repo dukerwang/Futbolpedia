@@ -27,7 +27,6 @@ import {
   sanitizeScoutProse,
   threadStateFor,
   type FigureCheck,
-  type ReplyAttachments,
 } from './conversationalScout';
 import { buildHistoryContents, grepDossiers, mergeAllCalibratedDossiers, serializeProfileForHistory, type DossierGrepParams } from './dossierStore';
 import {
@@ -39,7 +38,7 @@ import {
   type EvidenceLedger,
 } from './evidenceLedger';
 import { expandTables, type FigureClaim } from './figureGate';
-import { lineupViewOf, MAX_LINEUPS, type LineupView } from './lineupView';
+import { REPLY_BLOCKS, ReplyComposer, runViewTool, viewToolDeclarations } from './replyBlocks';
 import {
   executeCall,
   fileOutcomes,
@@ -326,15 +325,7 @@ const DEEP_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
       required: ['name'],
     },
   },
-  {
-    name: 'show_pitch',
-    description: `Draws a club's first-choice XI under your reply, worked out by code from its recent starting XIs and injury list (the data get_club_recent_team returns), with who is out. Use it when the answer is about who plays for the club or how it lines up. At most ${MAX_LINEUPS} per reply. Free: it doesn't count against your lookups.`,
-    parameters: {
-      type: Type.OBJECT,
-      properties: { club: { type: Type.STRING, description: 'The club name.' } },
-      required: ['club'],
-    },
-  },
+  ...viewToolDeclarations(),
 ];
 
 /** Every tool the deep loop offers, the writer's and research's together. */
@@ -502,7 +493,8 @@ export interface DeepTurnParams {
   lockedDossiersBlock: string;
   savedDossiersBlock: string;
   peerLedgerBlock?: string;
-  attachments?: ReplyAttachments;
+  /** What the reply shows besides its prose; a turn run without one keeps its views to itself. */
+  composer?: ReplyComposer;
   onStreamChunk?: (accumulatedText: string) => void;
   onStageChange?: (stageLabel: string) => void;
   perf?: (label: string) => void;
@@ -545,7 +537,8 @@ const within = <T>(p: Promise<T>, ms: number): Promise<T | null> => {
 const noLive: Promise<ToolOutcome> = Promise.resolve({ status: 'empty', result: null, missing: [] });
 
 export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {}): Promise<string> {
-  const { message, route, history, attachments, perf } = params;
+  const { message, route, history, perf } = params;
+  const composer = params.composer ?? new ReplyComposer();
   const model = deps.model ?? liveDeepModel;
   const now = deps.now ?? Date.now;
   const budget: DeepBudget = { ...DEFAULT_DEEP_BUDGET, ...deps.budget };
@@ -590,11 +583,11 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
 
   const ongoingThread = buildOngoingThreadBlock(history);
   const analyticalMode = route.analyticalMode ?? (route.intent === 'compare' ? 'head_to_head' : route.targetPlayers.length === 1 ? 'player_qa' : 'debate_or_verdict');
-  const shownNames = (attachments?.cards ?? []).map((c) => c.basicInfo.name);
+  const shownNames = composer.cards.map((c) => c.basicInfo.name);
   const shownNote = shownNames.length
     ? ` The user sees the dossier card of ${shownNames.join(' and ')} under your reply, so answer from it without reciting its attributes.`
     : '';
-  const missingCards = attachments?.scoutOffers ?? [];
+  const missingCards = composer.scoutOffers;
   const missingNote = missingCards.length
     ? ` No stored card exists for ${missingCards.join(' or ')}; they were already checked, so don't look them up.`
     : '';
@@ -661,35 +654,22 @@ ${params.savedDossiersBlock}
   const managerContext = () => ({ verifiedFacts: [formatLedger(ledger)].filter(Boolean), clubManagers: verified });
   const clean = (text: string) => sanitizeScoutProse(text, managerContext(), cardsInPlay, figureCheck);
 
-  const dossierTools = createDossierTools({ cardsInPlay, localCards: allCalibrated, historical: false, attachments });
+  const dossierTools = createDossierTools({ cardsInPlay, localCards: allCalibrated, historical: false, composer });
   const dossiersPool = [...params.savedDossiers, ...params.conversationDossiers];
 
-  /** Draws a club's XI from its live report, reading the feed when this turn hasn't. */
-  const showPitch = async (club: string): Promise<Record<string, unknown>> => {
-    if (!club) return { shown: false, reason: 'Missing club' };
-    const lineups = (attachments ? (attachments.lineups ??= []) : []) as LineupView[];
-    if (lineups.some((v) => sameClubName(v.club, club))) return { shown: true, note: 'Already shown.' };
-    if (lineups.length >= MAX_LINEUPS) return { shown: false, reason: `At most ${MAX_LINEUPS} XIs per reply.` };
-    let entry = ledger.entries.find((e) => e.club && sameClubName(e.club.team, club));
-    if (!entry) {
-      const call: ResearchCall = { tool: 'club_recent_team', subject: club, stage: 'facts' };
-      const outcome = await executeCall(call, tools);
-      ledger = fileOutcomes(ledger, [call], [outcome]);
-      entry = ledger.entries.find((e) => e.club && sameClubName(e.club.team, club));
-    }
-    if (!entry?.club) return { shown: false, reason: 'No live data for that club, so no XI to draw.' };
-    const story = stored.find((s) => sameClubName(s.club, entry!.club!.team))?.story;
-    const view = lineupViewOf(applyStory(deriveClubCore(entry.club), story));
-    if (!view) return { shown: false, reason: 'No recent lineups or season starts to work an XI out from.' };
-    lineups.push(view);
-    return {
-      shown: true,
-      club: view.club,
-      formation: view.formation,
-      xi: view.xi.map((s) => `${s.role} ${s.name ?? 'unknown'}${s.rotation ? ` (even split with ${s.rotation})` : ''}`).join(', '),
-      out: view.out.map((o) => o.name).join(', ') || 'nobody listed',
-    };
-  };
+  /** Draws a club's XI through the registry's `pitch` entry, which reads the feed when this turn hasn't. */
+  const showPitch = (club: string): Promise<Record<string, unknown>> =>
+    runViewTool(
+      REPLY_BLOCKS.pitch,
+      { club },
+      {
+        tools,
+        ledger: { read: () => ledger, write: (next) => { ledger = next; } },
+        stored,
+        now,
+      },
+      composer,
+    );
 
   /** The model's view of a lookup's outcome. */
   const describe = (outcome: ToolOutcome): Record<string, unknown> => ({

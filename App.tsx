@@ -19,6 +19,7 @@ import type {
   GaffaUserClub,
   ChatDossierRef,
   RatingRequest,
+  ReplyBlock,
 } from './types';
 import { toChatDossierRef } from './components/DossierChatCard';
 import {
@@ -31,8 +32,8 @@ import {
   getCardKey,
   renameDossierCard,
   stampDossier,
-  type ReplyAttachments,
 } from './services/geminiService';
+import { withDossierBlock } from './services/replyBlocks';
 import { isFullCard, ratingTask, requestForCard, scoutOfferRequest } from './services/ratingCommand';
 import { fetchSharedEditions } from './services/dossierStore';
 import { autoTitle, generateChatTitle, hasAutoTitle, titleBrief } from './services/chatTitle';
@@ -776,9 +777,21 @@ const App: React.FC = () => {
       // The conversation's Gaffa club, read again if it's over ten minutes old.
       const clubBag = gaffaClub && gaffaGrant ? await loadClubBag(gaffaClub) : null;
       if (clubBag?.connected) setGaffaBag(clubBag);
-      let scorecard: GaffaTradeScorecard | null = null;
 
-      let attachments: ReplyAttachments | null = null;
+      // The reply's blocks as the composer last announced them, and the cards behind its card blocks.
+      let replyBlocks: ReplyBlock[] | null = null;
+      let shownCards: PlayerProfile[] = [];
+      const upsertStreaming = (patch: Partial<ChatMessage>) => {
+        if (!streamStarted) {
+          streamStarted = true;
+          setIsLoading(false);
+        }
+        setMessages(prev =>
+          prev.some(m => m.id === streamingMessageId)
+            ? prev.map(m => (m.id === streamingMessageId ? { ...m, ...patch } : m))
+            : [...prev, { id: streamingMessageId, sender: 'ai', content: '', timestamp: Date.now(), ...patch }],
+        );
+      };
       const aiResponse = await sendMessageToAI(
         modelText,
         messages,
@@ -786,7 +799,14 @@ const App: React.FC = () => {
         conversationCards,
         globalDossiers,
         {
-          onAttachments: (a) => { attachments = a; },
+          onBlocks: (blocks, extras) => {
+            replyBlocks = blocks;
+            shownCards = extras.cards;
+            // The message appears with its first prose or scorecard; a view alone waits for the text.
+            if (streamStarted || blocks.some(b => b.kind === 'prose' || b.kind === 'scorecard')) {
+              upsertStreaming({ blocks });
+            }
+          },
           onDossierUpdated: (updatedProfile) => {
             saveAndSetActiveProfile(updatedProfile);
             revisedProfile = updatedProfile;
@@ -797,40 +817,11 @@ const App: React.FC = () => {
           challengeCardKey: challengeCard ? getCardKey(challengeCard) : undefined,
           deep: sendOptions?.deep,
           fast: sendOptions?.fast,
-          onGaffaScorecard: (card) => {
-            scorecard = card;
-            streamStarted = true;
-            setIsLoading(false);
-            setMessages(prev => [
-              ...prev.filter(m => m.id !== streamingMessageId),
-              { id: streamingMessageId, sender: 'ai', content: '', timestamp: Date.now(), gaffaScorecard: card },
-            ]);
-          },
           onStreamChunk: (accumulatedText) => {
             const now = Date.now();
             if (streamStarted && now - lastStreamFlushAt < 45) return;
             lastStreamFlushAt = now;
-            if (!streamStarted) {
-              streamStarted = true;
-              setIsLoading(false);
-            }
-            setMessages(prev => {
-              const exists = prev.some(m => m.id === streamingMessageId);
-              if (exists) {
-                return prev.map(m =>
-                  m.id === streamingMessageId ? { ...m, content: accumulatedText } : m,
-                );
-              }
-              return [
-                ...prev,
-                {
-                  id: streamingMessageId,
-                  sender: 'ai',
-                  content: accumulatedText,
-                  timestamp: now,
-                },
-              ];
-            });
+            upsertStreaming({ content: accumulatedText });
           },
         },
       );
@@ -840,10 +831,9 @@ const App: React.FC = () => {
       if (typeof aiResponse === 'object' && 'basicInfo' in aiResponse) {
         newAiMessage = dossierReply(aiResponse as PlayerProfile, streamingMessageId);
       } else {
-        const { cards = [], scoutOffers = [], lineups = [], ask, goDeeper } = (attachments ?? {}) as Partial<ReplyAttachments>;
         // Cards chat showed join the conversation and your dossiers, as mentioned ones do.
-        if (cards.length > 0) {
-          const stamped = cards.map(card => stampDossier(card, Date.now()));
+        if (shownCards.length > 0) {
+          const stamped = shownCards.map(card => stampDossier(card, Date.now()));
           setGlobalDossiers(prev => {
             const updated = stamped.reduce(fileCard, prev);
             saveGlobalDossiers(updated);
@@ -851,19 +841,15 @@ const App: React.FC = () => {
           });
           setAllProfiles(prev => stamped.reduce(upsertCard, prev));
         }
+        // A challenge that revised the card shows the new numbers in the thread, ahead of the prose.
+        const revisedRef = revisedProfile ? toChatDossierRef(revisedProfile) : null;
         newAiMessage = {
           id: streamingMessageId,
           sender: 'ai',
           content: aiResponse,
           timestamp: Date.now(),
-          // A challenge that revised the card shows the new numbers in the thread.
-          ...(revisedProfile ? { dossier: toChatDossierRef(revisedProfile) } : {}),
-          ...(cards.length > 0 ? { cards: cards.map(toChatDossierRef) } : {}),
-          ...(scoutOffers.length > 0 ? { scoutOffers } : {}),
-          ...(lineups.length > 0 ? { lineups } : {}),
-          ...(ask ? { ask } : {}),
-          ...(goDeeper ? { goDeeper } : {}),
-          ...(scorecard ? { gaffaScorecard: scorecard } : {}),
+          ...(revisedRef ? { dossier: revisedRef } : {}),
+          ...(replyBlocks ? { blocks: revisedRef ? withDossierBlock(replyBlocks, revisedRef) : replyBlocks } : {}),
         };
       }
 
