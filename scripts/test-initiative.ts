@@ -164,6 +164,8 @@ async function runTurn(
   const reply = await quietly(() =>
     sendMessageToAI(message, [], undefined, opts.cards ?? [card('Florian Wirtz')], [], {
       conversationId: 'conv-default',
+      // These tests exercise the stage pipeline's writer tools, whatever `DEEP_BY_DEFAULT` says.
+      deepByDefault: false,
       ...opts.options,
       onAttachments: (a) => (attached = a),
       ...(opts.stream ? { onStreamChunk: () => {} } : {}),
@@ -199,6 +201,7 @@ await test('ask_user ends a streamed turn too, and the stream carries the questi
   const reply = await quietly(() =>
     sendMessageToAI(playerQuestion, [], undefined, [card('Florian Wirtz')], [], {
       conversationId: 'conv-stream',
+      deepByDefault: false,
       onAttachments: (a) => (attached = a),
       onStreamChunk: (text) => chunks.push(text),
     }),
