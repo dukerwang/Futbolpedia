@@ -5,6 +5,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { GaffaTradeScorecardView, formatScorecardCopy } from './GaffaTradeScorecard';
 import { DossierChatCard, getLegacyDossierRef } from './DossierChatCard';
+import { PitchView } from './PitchView';
 import { pillClass, type PillTone } from './pills';
 import { ratingVersionLabel } from '../services/ratingCommand';
 
@@ -258,6 +259,12 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
                         className={`chat-prose prose max-w-none text-charcoal dark:text-cream-100 text-[16px] font-light font-sans ${isTyping ? 'is-typing' : ''}`}
                         dangerouslySetInnerHTML={renderMarkdown(typedText)}
                     />
+                ) : null}
+
+                {!isError && !isTyping && message.lineups?.length ? (
+                    <div className="animate-fade-in">
+                        <PitchView lineups={message.lineups} />
+                    </div>
                 ) : null}
 
                 {!isError && !isTyping && (message.cards?.length || (onScoutName && message.scoutOffers?.length)) ? (

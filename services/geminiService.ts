@@ -892,7 +892,7 @@ export const sendMessageToAI = async (
     perf,
   });
   perf('conversational scout');
-  if (attachments.cards.length > 0 || attachments.scoutOffers.length > 0) {
+  if (attachments.cards.length > 0 || attachments.scoutOffers.length > 0 || (attachments.lineups?.length ?? 0) > 0) {
     options?.onAttachments?.(attachments);
   }
   return reply;
