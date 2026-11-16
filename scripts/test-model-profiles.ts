@@ -31,7 +31,7 @@ function test(name: string, fn: () => void): void {
   }
 }
 
-const TASKS: AITask[] = ['routing', 'grounding', 'extraction', 'synthesis', 'chat'];
+const TASKS: AITask[] = ['routing', 'grounding', 'extraction', 'synthesis', 'chat', 'deep'];
 
 test('Hydrogen resolves to its own profile, not the high-reasoning Argon one', () => {
   assert.equal(getModelProfile(GEMINI_4_HYDROGEN).family, 'gemini-4-hydrogen');

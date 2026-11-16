@@ -18,6 +18,7 @@ import {
   type ReplyAttachments,
 } from './conversationalScout';
 import { lookUpDossier, replaceSupersededPrimes } from './dossierLookup';
+import { runDeepTurn, takesDeepPath, type DeepTurnDeps } from './deepTurn';
 import {
   CALIBRATION_EPOCH_MS,
   buildHistoryContents,
@@ -200,6 +201,14 @@ export interface SendMessageOptions {
    * revise a rating; without it, pushback on a card is answered as a question.
    */
   challengeCardKey?: string;
+  /**
+   * Sent with the composer's Deep toggle: the turn goes through deep mode (`deepTurn.ts`), one
+   * model loop that decides its own research, when it is a question about the present. Every
+   * other turn ignores it.
+   */
+  deep?: boolean;
+  /** Fakes and overrides for deep mode's model, tools and budget, for tests and the eval. */
+  deepDeps?: DeepTurnDeps;
 }
 
 /**
@@ -772,7 +781,8 @@ export const sendMessageToAI = async (
   // 1. Classify turn via Structured Turn Router (warm Supabase pool in background without blocking routing).
   // A question that looks like it's about the present starts its web search now, while routing runs.
   void fetchSupabaseCalibratedPool();
-  const questionSearch = imageData ? null : startQuestionSearch(message, liveToolset([]));
+  // A deep turn decides its own searches, so nothing is started for it.
+  const questionSearch = imageData || options?.deep ? null : startQuestionSearch(message, liveToolset([]));
   // One that looks like it's about the past, in a new chat, starts its debate brief.
   const debateBrief = imageData || history.length ? null : startDebateBrief(message, { debates: liveDebateRecords });
   let route = await classifyTurn({
@@ -867,8 +877,35 @@ export const sendMessageToAI = async (
   const context = buildTurnContext(message, route, conversationDossiers, turnDossiers);
   const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock } = context;
 
-  // 5. Conversational Scout Pipeline (Comparisons, Live Dossier Revisions, Tactical Q&A, Archive)
-  const reply = await runConversationalScout({
+  // 5. Deep mode: one model loop decides the research, for a question about the present sent with
+  // the Deep toggle. Every other turn, deep or not, takes the conversational scout.
+  const deep = takesDeepPath({
+    deep: options?.deep,
+    route,
+    historical: threadIsHistorical(route, history, message),
+    noRating: options?.noRating,
+    gaffa: Boolean(options?.gaffaBag?.connected),
+    image: Boolean(imageData),
+  });
+  // 6. Conversational Scout Pipeline (Comparisons, Live Dossier Revisions, Tactical Q&A, Archive)
+  const reply = deep
+    ? await runDeepTurn({
+        message,
+        route,
+        history,
+        isEAFCRequest,
+        conversationDossiers,
+        savedDossiers: turnDossiers,
+        lockedDossiersBlock,
+        savedDossiersBlock,
+        peerLedgerBlock,
+        attachments,
+        onStreamChunk: options?.onStreamChunk,
+        onStageChange: options?.onStageChange,
+        conversationId: options?.conversationId,
+        perf,
+      }, options?.deepDeps)
+    : await runConversationalScout({
     message,
     route,
     history,
@@ -891,7 +928,7 @@ export const sendMessageToAI = async (
     conversationId: options?.conversationId,
     perf,
   });
-  perf('conversational scout');
+  perf(deep ? 'deep turn' : 'conversational scout');
   if (attachments.cards.length > 0 || attachments.scoutOffers.length > 0 || (attachments.lineups?.length ?? 0) > 0) {
     options?.onAttachments?.(attachments);
   }

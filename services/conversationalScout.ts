@@ -101,7 +101,7 @@ export function threadStateFor(conversationId: string, now = Date.now()): Thread
  * The thread's opening message, so a follow-up can tell it's in the same thread. On the opening
  * turn the history is empty and the message itself opens the thread.
  */
-function getThreadSignature(history: ChatMessage[], message: string): string {
+export function getThreadSignature(history: ChatMessage[], message: string): string {
   const first = history[0];
   if (!first) return message.slice(0, 60);
   return typeof first.content === 'string' ? first.content.slice(0, 60) : 'dossier';
@@ -332,6 +332,38 @@ const RECENT_TEAM_RULES =
   'Build the team from the first-choice XI in <situation_snapshot>, and otherwise from the recent starting XIs and the injury list in <factual_foundation>, never from the registered squad or memory. Name one player for each role and commit to him; mention another only where the snapshot marks an even split, as the alternative, never as a joint holder of the role or a pair of names in a heading. A player listed as out is unavailable and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes override what you remember of the club. If neither block has recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
 
 /**
+ * The writer's guidance for the kind of answer the turn asks for. Deep mode passes its own rules
+ * for building a team, since it reads recent lineups from its tool results rather than a snapshot.
+ */
+export function proseModeGuidance(
+  route: TurnRoute,
+  analyticalMode: string,
+  currentSeason: string,
+  debate: DebateBrief | null = null,
+  teamRules: string = RECENT_TEAM_RULES,
+): string {
+  if (debate && analyticalMode !== 'archive' && route.intent !== 'archive_inventory') {
+    return debate.kind === 'other' ? PAST_CONVERSATION_RULES : PAST_DEBATE_RULES;
+  } else if (route.intent === 'compare' || analyticalMode === 'head_to_head') {
+    return `Write a detailed, scout-grade head-to-head comparison covering every player named (${route.targetPlayers.join(', ') || 'all named players'}). Contrast their footballing identity/mould directly across concrete phases of play (build-up/progression, final-third creation or box threat, out-of-possession/rest-defense, and transition) rather than writing two isolated bios. Highlight key separators across the 25-attribute framework, genuine limitations, and relative tier on the Section III scale. For any player present in <locked_dossiers>, use their exact locked Overall, Potential, and 25 attributes. Conclude with a definitive verdict on who holds the higher current standing, who has the higher ceiling, and which tactical setup favors each player. Never output a JSON dossier object.`;
+  } else if (route.intent === 'archive_inventory' || analyticalMode === 'archive') {
+    return `Summarize or query the user's saved dossier archive clearly using <saved_dossier_archive> or the \`grep_saved_dossiers\` tool.`;
+  } else if (analyticalMode === 'player_qa') {
+    return `Answer the user's specific question about ${route.targetPlayers.join(', ') || 'the player'} directly with Chief-Scout granularity. Break down the exact on-pitch mechanics involved, explain how their 25-attribute spikes and limitations interact in that role or match state, and separate intrinsic class from tactical environment/system tax. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Match the length and structure of your answer to the user's question without forcing unnecessary debate boilerplate. Never output a JSON dossier object.`;
+  } else if (analyticalMode === 'ranking_or_tierlist') {
+    return `Build a rigorous, scout-grade positional ranking or tier breakdown tied explicitly to the Section III Rating Tier Scale (\`93–95 World-Class Elite\`, \`90–92 World-Class\`, \`87–89 Borderline World-Class\`, \`84–86 High-End Starter\`). Honor every player rating already established in <calibrated_peer_ledger> and <locked_dossiers>. For each ranked player, cite their approximate Overall tier, signature attributes, and the exact on-pitch separator that places them ahead of or behind their peers. Never output a JSON dossier object.`;
+  } else if (analyticalMode === 'tactical_or_system') {
+    return `Deliver a concrete, player-specific tactical breakdown — NEVER write from an aerial, nameless theoretical template. ${teamRules} Name the player in every role you describe, attackers included, and explain how their individual profiles dictate the team's actual build-up and out-of-possession geometry and the matchup trade-offs those personnel choices create. Every paragraph must pass the Swap Test. Ground all current squad, starter, and head-coach references strictly in verified ${currentSeason} facts. Never output a JSON dossier object.`;
+  } else if (analyticalMode === 'squad_or_recruitment') {
+    return `Analyze the squad structure, lineup balance, or recruitment question like a Sporting Director and Chief Scout. ${teamRules} Name the specific current starters and rotational options, diagnose the specific functional profile the squad lacks, evaluate how candidate profiles complement existing starters, and pin player quality to the Section III tier scale and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
+  } else if (analyticalMode === 'debate_or_verdict') {
+    return `Answer the question the way a knowledgeable person talks football: plain, direct prose with a clear view, never a formal debate. Give your view early, explain it through the evidence and the 25-attribute framework, separate a player's own quality from what his team and system did for his numbers where that matters, and give the other side its due in a sentence or two. If the user is questioning a fact or an earlier claim, check it against <factual_foundation>, correct a slip in one sentence, and answer what they asked. Match the length to the question. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
+  } else {
+    return `Respond conversationally in Markdown prose as the Chief Scout and Senior Tactical Columnist. Match the depth and structure of your answer to the user's question, and tie every tactical claim to specific named players and their actual traits rather than generic tactical buzzwords. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_club_recent_team\` for a club's live results, starting XIs and availability, \`get_player_season\` for a Premier League player's season, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
+  }
+}
+
+/**
  * How the writer answers a question about the past from the debate brief. The brief is its
  * reasoning (what the question turns on, the evidence, a judgment held to the cards), not a layout:
  * the reply reads as a knowledgeable person answering, never as a formal debate. Descriptive, like
@@ -391,6 +423,99 @@ export const editionGapNote = (gap: { name: string; label: string }): string =>
 /** What a question about the past may state as fact. */
 const PAST_FACT_RULES =
   "Quote a precise figure (goals, appearances, points, trophies, records, dates, fees) only where it decides a criterion, as <debate_brief> lists it, and only as <factual_foundation> or a stored card gives it; make every other point in words. A quoted figure keeps the competition and span its source gives: a league figure stays a league figure, a total across all competitions stays a total, and a count for named seasons is never a career total. Keep every fact to the season or spell it belongs to: never move a player, a coach, a trophy or a number into a season or side it wasn't part of, and name the season when a fact from outside the compared window matters. Don't repeat a claim that an era snapshot lists as often misstated, or an anecdote no source here supports. Name a past season's coach only as <factual_foundation> gives him; otherwise describe the side's setup without naming its coach.";
+
+/**
+ * The cards a turn is about: each target player's cards and those the message names, then one per
+ * player in the edition the turn is about. A message that names a player's prime on a turn about
+ * the present still gets his prime card, beside the current one.
+ */
+export function cardsForTurn(
+  message: string,
+  targetPlayers: string[],
+  allCalibrated: PlayerProfile[],
+  historical: boolean,
+): { matchedCards: PlayerProfile[]; unratedPlayers: string[]; lockedCards: PlayerProfile[] } {
+  const matchedCards: PlayerProfile[] = [];
+  const unratedPlayers: string[] = [];
+
+  for (const targetName of targetPlayers) {
+    const hits = findReferencedDossiers(targetName, allCalibrated, [targetName]);
+    if (hits.length > 0) matchedCards.push(...hits);
+    else unratedPlayers.push(targetName);
+  }
+
+  // Also include any referenced dossiers found directly in the raw message
+  matchedCards.push(...findReferencedDossiers(message, allCalibrated, targetPlayers));
+
+  // One card per player, in the edition this turn is about (current form vs. peak).
+  const lockedCards = pickCardPerPlayer(matchedCards, historical);
+  if (!historical) {
+    for (const card of pickCardPerPlayer(matchedCards.filter((c) => cardEdition(c) === 'prime'), true)) {
+      if (namesVersionOf(message, card.basicInfo.name, PRIME_CUE) && !lockedCards.includes(card)) lockedCards.push(card);
+    }
+  }
+  return { matchedCards, unratedPlayers, lockedCards };
+}
+
+/**
+ * The handlers behind `look_up_dossier` and `show_dossier`. A card the model reads joins
+ * `cardsInPlay` (so the number gate checks it); a player with no card is offered to Scout.
+ */
+export function createDossierTools(args: {
+  cardsInPlay: PlayerProfile[];
+  localCards: PlayerProfile[];
+  historical: boolean;
+  attachments?: ReplyAttachments;
+  /** Called with each card the model reads. */
+  onRead?: (card: PlayerProfile) => void;
+}): DossierToolHandlers {
+  const { cardsInPlay, localCards, historical: isHistoricalThread, attachments } = args;
+  const readCards = new Map<string, PlayerProfile>();
+  return {
+    lookUp: async ({ name, edition }) => {
+      if (!name) return { error: 'Missing name' };
+      const historical = edition ? edition === 'prime' : isHistoricalThread;
+      const result = await lookUpDossier(name, [...cardsInPlay, ...localCards], historical);
+      if (result.status === 'ambiguous') return { found: false, matchingPlayers: result.names };
+      if (result.status === 'missing') {
+        if (attachments) offerScout(attachments, name);
+        return { found: false };
+      }
+      readCards.set(toBasePlayerSlug(name), result.card);
+      readCards.set(toBasePlayerSlug(result.card.basicInfo.name), result.card);
+      if (!cardsInPlay.some((c) => getCardKey(c) === getCardKey(result.card))) {
+        cardsInPlay.push(result.card);
+      }
+      args.onRead?.(result.card);
+      return { found: true, card: serializeProfileForHistory(result.card) };
+    },
+    show: async ({ name }) => {
+      if (!name) return { error: 'Missing name' };
+      const card =
+        readCards.get(toBasePlayerSlug(name)) ??
+        pickCardPerPlayer(findReferencedDossiers(name, cardsInPlay, [name]), isHistoricalThread)[0];
+      if (!card) return { shown: false, reason: 'No card in this turn for that player; look it up first.' };
+      if (attachments) showCard(attachments, card);
+      return { shown: true };
+    },
+  };
+}
+
+/**
+ * What a turn about the present may state as fact, and how precise figures are sourced: facts
+ * only from the turn's evidence, tools or cards, judgment left to the scout. Shared by the
+ * researched writer and deep mode (`deepTurn.ts`), so both keep the same code of conduct.
+ * `sources` names where this turn's facts sit.
+ */
+export const presentFactRules = (
+  currentSeason: string,
+  sources = "<situation_snapshot>, the numbered entries in <factual_foundation>, tool calls (`get_club_recent_team`, `get_player_season`, `get_league_table`, Google Search), or existing dossiers",
+): string =>
+  `Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from ${sources}, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach. A precise figure (a statistic, fee, percentage, table position, points total, the minute of an event, a shirt number, a quotation) goes in only when one of those sources gives it; for standings call \`get_league_table\`, and otherwise describe the pattern without a number.`;
+
+/** Who may be named as a club's coach. Shared with deep mode, which also accepts a tool result's verified coach. */
+export const MANAGER_FIDELITY_RULE =
+  "CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.";
 
 export async function runConversationalScout(
   params: ConversationalScoutParams,
@@ -548,27 +673,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 
   if (!imageData && route.intent !== 'archive_inventory') {
     const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
-    const matchedCards: PlayerProfile[] = [];
-    const unratedPlayers: string[] = [];
-
-    for (const targetName of route.targetPlayers) {
-      const hits = findReferencedDossiers(targetName, allCalibrated, [targetName]);
-      if (hits.length > 0) matchedCards.push(...hits);
-      else unratedPlayers.push(targetName);
-    }
-
-    // Also include any referenced dossiers found directly in the raw message
-    matchedCards.push(...findReferencedDossiers(message, allCalibrated, route.targetPlayers));
-
-    // One card per player, in the edition this turn is about (current form vs. peak).
-    const lockedCards = pickCardPerPlayer(matchedCards, isHistoricalThread);
-    // A message that names a player's prime on a turn read as about the present still gets his
-    // prime card, beside the current one.
-    if (!isHistoricalThread) {
-      for (const card of pickCardPerPlayer(matchedCards.filter((c) => cardEdition(c) === 'prime'), true)) {
-        if (namesVersionOf(message, card.basicInfo.name, PRIME_CUE) && !lockedCards.includes(card)) lockedCards.push(card);
-      }
-    }
+    const { matchedCards, unratedPlayers, lockedCards } = cardsForTurn(message, route.targetPlayers, allCalibrated, isHistoricalThread);
     if (lockedCards.length > 0) {
       effectiveLockedBlock = buildLockedDossiersBlock(lockedCards);
     }
@@ -751,26 +856,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
           ? 'player_qa'
           : 'debate_or_verdict');
 
-  let modeGuidance: string;
-  if (debate && analyticalMode !== 'archive' && route.intent !== 'archive_inventory') {
-    modeGuidance = debate.kind === 'other' ? PAST_CONVERSATION_RULES : PAST_DEBATE_RULES;
-  } else if (route.intent === 'compare' || analyticalMode === 'head_to_head') {
-    modeGuidance = `Write a detailed, scout-grade head-to-head comparison covering every player named (${route.targetPlayers.join(', ') || 'all named players'}). Contrast their footballing identity/mould directly across concrete phases of play (build-up/progression, final-third creation or box threat, out-of-possession/rest-defense, and transition) rather than writing two isolated bios. Highlight key separators across the 25-attribute framework, genuine limitations, and relative tier on the Section III scale. For any player present in <locked_dossiers>, use their exact locked Overall, Potential, and 25 attributes. Conclude with a definitive verdict on who holds the higher current standing, who has the higher ceiling, and which tactical setup favors each player. Never output a JSON dossier object.`;
-  } else if (route.intent === 'archive_inventory' || analyticalMode === 'archive') {
-    modeGuidance = `Summarize or query the user's saved dossier archive clearly using <saved_dossier_archive> or the \`grep_saved_dossiers\` tool.`;
-  } else if (analyticalMode === 'player_qa') {
-    modeGuidance = `Answer the user's specific question about ${route.targetPlayers.join(', ') || 'the player'} directly with Chief-Scout granularity. Break down the exact on-pitch mechanics involved, explain how their 25-attribute spikes and limitations interact in that role or match state, and separate intrinsic class from tactical environment/system tax. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Match the length and structure of your answer to the user's question without forcing unnecessary debate boilerplate. Never output a JSON dossier object.`;
-  } else if (analyticalMode === 'ranking_or_tierlist') {
-    modeGuidance = `Build a rigorous, scout-grade positional ranking or tier breakdown tied explicitly to the Section III Rating Tier Scale (\`93–95 World-Class Elite\`, \`90–92 World-Class\`, \`87–89 Borderline World-Class\`, \`84–86 High-End Starter\`). Honor every player rating already established in <calibrated_peer_ledger> and <locked_dossiers>. For each ranked player, cite their approximate Overall tier, signature attributes, and the exact on-pitch separator that places them ahead of or behind their peers. Never output a JSON dossier object.`;
-  } else if (analyticalMode === 'tactical_or_system') {
-    modeGuidance = `Deliver a concrete, player-specific tactical breakdown — NEVER write from an aerial, nameless theoretical template. ${RECENT_TEAM_RULES} Name the player in every role you describe, attackers included, and explain how their individual profiles dictate the team's actual build-up and out-of-possession geometry and the matchup trade-offs those personnel choices create. Every paragraph must pass the Swap Test. Ground all current squad, starter, and head-coach references strictly in verified ${currentSeason} facts. Never output a JSON dossier object.`;
-  } else if (analyticalMode === 'squad_or_recruitment') {
-    modeGuidance = `Analyze the squad structure, lineup balance, or recruitment question like a Sporting Director and Chief Scout. ${RECENT_TEAM_RULES} Name the specific current starters and rotational options, diagnose the specific functional profile the squad lacks, evaluate how candidate profiles complement existing starters, and pin player quality to the Section III tier scale and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
-  } else if (analyticalMode === 'debate_or_verdict') {
-    modeGuidance = `Answer the question the way a knowledgeable person talks football: plain, direct prose with a clear view, never a formal debate. Give your view early, explain it through the evidence and the 25-attribute framework, separate a player's own quality from what his team and system did for his numbers where that matters, and give the other side its due in a sentence or two. If the user is questioning a fact or an earlier claim, check it against <factual_foundation>, correct a slip in one sentence, and answer what they asked. Match the length to the question. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
-  } else {
-    modeGuidance = `Respond conversationally in Markdown prose as the Chief Scout and Senior Tactical Columnist. Match the depth and structure of your answer to the user's question, and tie every tactical claim to specific named players and their actual traits rather than generic tactical buzzwords. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_club_recent_team\` for a club's live results, starting XIs and availability, \`get_player_season\` for a Premier League player's season, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
-  }
+  const modeGuidance = proseModeGuidance(route, analyticalMode, currentSeason, debate);
 
   const shownNames = (attachments?.cards ?? []).map((c) => c.basicInfo.name);
   const shownNote = shownNames.length
@@ -795,8 +881,8 @@ ${effectiveLockedBlock}
 ${savedDossiersBlock}
 <instructions>
 1. ${modeGuidance}${shownNote}${missingNote}${gapNote}
-${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from <situation_snapshot>, the numbered entries in <factual_foundation>, tool calls (\`get_club_recent_team\`, \`get_player_season\`, \`get_league_table\`, Google Search), or existing dossiers, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach. A precise figure (a statistic, fee, percentage, table position, points total, the minute of an event, a shirt number, a quotation) goes in only when one of those sources gives it; for standings call \`get_league_table\`, and otherwise describe the pattern without a number.
-3. CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.`}
+${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
+3. ${MANAGER_FIDELITY_RULE}`}
 4. ${CONTINUITY_REMINDER}
 </instructions>
 <task>${message}</task>`;
@@ -858,35 +944,12 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. Current-state facts (club, manager, squ
   }
 
   // The model reads any player's card, yours or shared, and shows the ones that answer the user.
-  const localCards = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
-  const readCards = new Map<string, PlayerProfile>();
-  const dossierTools: DossierToolHandlers = {
-    lookUp: async ({ name, edition }) => {
-      if (!name) return { error: 'Missing name' };
-      const historical = edition ? edition === 'prime' : isHistoricalThread;
-      const result = await lookUpDossier(name, [...cardsInPlay, ...localCards], historical);
-      if (result.status === 'ambiguous') return { found: false, matchingPlayers: result.names };
-      if (result.status === 'missing') {
-        if (attachments) offerScout(attachments, name);
-        return { found: false };
-      }
-      readCards.set(toBasePlayerSlug(name), result.card);
-      readCards.set(toBasePlayerSlug(result.card.basicInfo.name), result.card);
-      if (!cardsInPlay.some((c) => getCardKey(c) === getCardKey(result.card))) {
-        cardsInPlay.push(result.card);
-      }
-      return { found: true, card: serializeProfileForHistory(result.card) };
-    },
-    show: async ({ name }) => {
-      if (!name) return { error: 'Missing name' };
-      const card =
-        readCards.get(toBasePlayerSlug(name)) ??
-        pickCardPerPlayer(findReferencedDossiers(name, cardsInPlay, [name]), isHistoricalThread)[0];
-      if (!card) return { shown: false, reason: 'No card in this turn for that player; look it up first.' };
-      if (attachments) showCard(attachments, card);
-      return { shown: true };
-    },
-  };
+  const dossierTools = createDossierTools({
+    cardsInPlay,
+    localCards: mergeAllCalibratedDossiers(savedDossiers, conversationDossiers),
+    historical: isHistoricalThread,
+    attachments,
+  });
   // Gaffa squad and market names are copied exactly, and a scorecard reply stays short.
   const finishGaffa = (text: string): string => {
     if (!gaffaBag || !gaffaTurn || gaffaTurn.focus === 'none') return text;
