@@ -94,7 +94,10 @@ const FAILED_RETRY_MS = 10 * 60 * 1000;
  * resolves it to, so "Spurs" and "Tottenham Hotspur" share a snapshot. Concurrent requests for a
  * club share one read, one research pass and one build.
  */
-export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource {
+export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource & {
+  /** The snapshots this store holds in memory, built or read within the last day. */
+  known(): ClubSnapshot[];
+} {
   const now = deps.now ?? Date.now;
   const memory = new Map<string, { snapshot: ClubSnapshot | null; expiresAt: number }>();
   const reads = new Map<string, Promise<ClubSnapshot | null>>();
@@ -188,7 +191,10 @@ export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource
     return job;
   }
 
-  return { stored, research, get };
+  const known = (): ClubSnapshot[] =>
+    [...memory.values()].filter((v) => v.snapshot && v.expiresAt > now()).map((v) => v.snapshot as ClubSnapshot);
+
+  return { stored, research, get, known };
 }
 
 /**

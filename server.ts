@@ -21,6 +21,7 @@ import { createHistoryFootball, type PermanentStore } from "./services/historyFo
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { supabaseUrl } from "./services/dossierCache";
 import { createSnapshotServer, inProcessGet, supabaseSnapshotDb } from "./services/snapshotServer";
+import { createXiPredictions, memoryXiStore, supabaseXiStore } from "./services/xiPredictions";
 
 /**
  * Local runs: Vite reads `.env.local` for the browser, but the server process didn't, so server
@@ -596,6 +597,8 @@ async function startServer() {
     });
     return res.data;
   });
+  // Filled in once the snapshots and predictions below exist; a no-op until then.
+  let xiLazy: (club: string) => void = () => {};
   const liveQuery = (v: unknown) => (typeof v === "string" ? v.trim().slice(0, 80) : "");
 
   app.get("/api/live/club", async (req, res) => {
@@ -605,6 +608,8 @@ async function startServer() {
     try {
       const result = await live.club(name);
       console.log(`[live] club "${name}": ${result.found ? `${result.team}, ${result.league}` : "not found"} (${Date.now() - start}ms)${result.missing.length ? `; missing: ${result.missing.map((m) => `${m.item} [${m.status}]`).join("; ")}` : ""}`);
+      // A club somebody asks about gets its XI predicted before the next sweep (fire and forget).
+      if (result.found) xiLazy(result.team);
       return res.json(result);
     } catch (error: any) {
       console.warn(`[live] club "${name}" failed:`, error?.message || error);
@@ -706,11 +711,40 @@ async function startServer() {
   if (GEMINI_API_KEY) process.env.API_KEY = GEMINI_API_KEY; // services/aiClient.ts reads API_KEY
   const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
   console.log(`[startup] SUPABASE_SECRET_KEY set: ${!!SUPABASE_SECRET_KEY}`);
+  const secretClient = SUPABASE_SECRET_KEY
+    ? createSupabaseClient(supabaseUrl, SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+    : null;
+  const liveGet = inProcessGet({ live, history });
   const snapshots = createSnapshotServer({
-    get: inProcessGet({ live, history }),
-    db: SUPABASE_SECRET_KEY
-      ? supabaseSnapshotDb(createSupabaseClient(supabaseUrl, SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } }))
-      : null,
+    get: liveGet,
+    db: secretClient ? supabaseSnapshotDb(secretClient) : null,
+  });
+
+  // The XI track record (services/xiPredictions.ts): before each match of a club with a stored
+  // snapshot, two predictions of its XI; after the match, both scored against ESPN's lineup. A
+  // sweep runs now and hourly, and a club somebody asks about is checked at once. Each adjusted
+  // prediction is one Gemini call, at most a few dozen an hour; XI_PREDICTIONS=off stops them all.
+  const xiOn = (process.env.XI_PREDICTIONS ?? "").toLowerCase() !== "off";
+  const predictions = createXiPredictions({
+    get: liveGet,
+    store: secretClient ? supabaseXiStore(secretClient) : memoryXiStore(),
+    listSnapshots: (maxAgeMs) => snapshots.listStored(maxAgeMs),
+    snapshotFor: (club) => snapshots.stored(club),
+    windowMs: Number(process.env.XI_PREDICTION_WINDOW_HOURS) > 0 ? Number(process.env.XI_PREDICTION_WINDOW_HOURS) * 3_600_000 : undefined,
+  });
+  console.log(`[startup] XI predictions: ${xiOn ? "on" : "off"}`);
+  if (xiOn) {
+    xiLazy = (club) => void predictions.lazy(club);
+    predictions.start();
+  }
+
+  app.get("/api/predictions/club", async (req, res) => {
+    const name = liveQuery(req.query.name);
+    if (!name) return res.status(400).json({ error: "Missing club" });
+    const record = await predictions.record(name).catch(() => null);
+    if (!record) return res.status(404).json({ error: "No such club" });
+    res.set("Cache-Control", "public, max-age=300");
+    return res.json(record);
   });
 
   app.get("/api/snapshots/club/research", async (req, res) => {
@@ -728,6 +762,7 @@ async function startServer() {
     const start = Date.now();
     const snapshot = await snapshots.club(club).catch(() => null);
     console.log(`[snapshots] club "${club}": ${snapshot ? `${snapshot.club}, built ${snapshot.builtAt}` : "none"} (${Date.now() - start}ms)`);
+    if (snapshot) xiLazy(snapshot.club);
     return res.json({ snapshot });
   });
 

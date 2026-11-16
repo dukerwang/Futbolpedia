@@ -5,7 +5,8 @@ export type AITask =
   | 'grounding'
   | 'extraction'
   | 'synthesis'
-  | 'chat';
+  | 'chat'
+  | 'prediction';
 
 export interface TaskTuning {
   thinkingLevel: ThinkingTier;
@@ -76,6 +77,7 @@ const GEMINI_3_8_FLASH_PROFILE: ModelCapabilityProfile = {
     // while the explicit schema `calibration` block handles tier & peer reasoning in output tokens.
     synthesis: { thinkingLevel: 'low', temperature: 0.35 },
     chat: { thinkingLevel: 'low', temperature: 0.55 },
+    prediction: { thinkingLevel: 'low', temperature: 0.2 },
   },
 };
 
@@ -97,6 +99,7 @@ const GEMINI_4_HYDROGEN_PROFILE: ModelCapabilityProfile = {
     extraction: { thinkingLevel: 'low', temperature: 0.1 },
     synthesis: { thinkingLevel: 'low', temperature: 0.35 },
     chat: { thinkingLevel: 'low', temperature: 0.55 },
+    prediction: { thinkingLevel: 'low', temperature: 0.2 },
   },
 };
 
@@ -113,6 +116,7 @@ const GEMINI_4_ARGON_PROFILE: ModelCapabilityProfile = {
     extraction: { thinkingLevel: 'minimal', temperature: 0.1 },
     synthesis: { thinkingLevel: 'medium', temperature: 0.3 },
     chat: { thinkingLevel: 'medium', temperature: 0.5 },
+    prediction: { thinkingLevel: 'low', temperature: 0.2 },
   },
 };
 

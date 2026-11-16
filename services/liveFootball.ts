@@ -113,6 +113,21 @@ export function nameScore(query: string, names: string[]): number {
   return best;
 }
 
+/**
+ * Whether two names mean the same player: the same words, one name's words inside the other's
+ * ("Raya" in "David Raya Martín"), or the shorter name's words in order with the same surname
+ * ("Gabriel Magalhães" for "Gabriel dos Santos Magalhães"). FPL keeps formal names and ESPN the
+ * ones coverage uses, so a prediction built from one is scored against a lineup from the other.
+ */
+export function samePlayerName(a: string, b: string): boolean {
+  const ta = nameTokens(a);
+  const tb = nameTokens(b);
+  if (ta.length === 0 || tb.length === 0) return false;
+  if (sameTokens(ta, tb) || containsRun(ta, tb) || containsRun(tb, ta)) return true;
+  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  return short.length > 1 && short[short.length - 1] === long[long.length - 1] && inOrder(long, short);
+}
+
 // ---------------------------------------------------------------------------------------------
 // ESPN: clubs, matches, lineups
 
@@ -156,6 +171,8 @@ export function findClub(query: string, teams: EspnTeam[]): EspnTeam | null {
 export interface ClubMatch {
   id: string;
   date: string | null;
+  /** ESPN's full kickoff timestamp (ISO, UTC), where `date` keeps only the day. */
+  kickoff?: string | null;
   competition: string;
   leagueSlug: string | null;
   home: boolean;
@@ -196,6 +213,7 @@ export function parseClubSchedule(json: any, teamId: string): ClubMatch[] {
     matches.push({
       id: String(e.id),
       date: typeof e.date === 'string' ? e.date.slice(0, 10) : null,
+      kickoff: typeof e.date === 'string' && !Number.isNaN(Date.parse(e.date)) ? new Date(e.date).toISOString() : null,
       competition: competitionName(e),
       leagueSlug: slug,
       home: us.homeAway === 'home',
@@ -560,6 +578,10 @@ export type LiveClubResult =
 export type LivePlayerResult =
   | { found: true; name: string; team: string; text: string }
   | { found: false; status: LiveStatus; reason: string };
+/** A finished match's lineup for one club, read from ESPN's match summary. */
+export type LiveMatchResult =
+  | { found: true; lineup: LiveLineup }
+  | { found: false; status: LiveStatus | 'pending'; reason: string };
 export type LiveTableResult =
   | { found: true; league: string; season: string | null; text: string }
   | { found: false; status: LiveStatus; reason: string };
@@ -657,5 +679,27 @@ export function createLiveFootball(getJson: GetJson, now: () => number = Date.no
     return { found: true, league: league.name, season, text: formatLeagueTable(rows) };
   }
 
-  return { club, player, table };
+  /**
+   * A club's starting XI in one finished match, found by the match id its schedule gives. Used to
+   * score XI predictions, so a missing lineup is retried: nothing is kept for a miss.
+   */
+  async function matchLineup(name: string, matchId: string): Promise<LiveMatchResult> {
+    const index = await teamIndex();
+    const team = index.length ? findClub(name, index) : null;
+    if (!team) return { found: false, status: index.length ? 'not_covered' : 'failed', reason: `no club named ${name}` };
+    const schedule = await settle(cached(`${ESPN_SITE}/all/teams/${team.id}/schedule`, 20 * MINUTE));
+    if (!schedule) return { found: false, status: 'failed', reason: "ESPN's schedule didn't answer" };
+    const match = parseClubSchedule(schedule, team.id).find((m) => m.id === matchId);
+    if (!match) return { found: false, status: 'empty', reason: `${team.name} has no match ${matchId} in its schedule` };
+    if (!match.completed) return { found: false, status: 'pending', reason: 'the match has not finished' };
+    const url = `${ESPN_SITE}/all/summary?event=${matchId}`;
+    const lineup = parseMatchLineup(await settle(cached(url, 30 * MINUTE)), team.id, match);
+    if (!lineup) {
+      cache.delete(url);
+      return { found: false, status: 'empty', reason: 'ESPN has no lineup for the match yet' };
+    }
+    return { found: true, lineup };
+  }
+
+  return { club, player, table, matchLineup };
 }
