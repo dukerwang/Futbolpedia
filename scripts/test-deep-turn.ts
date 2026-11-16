@@ -434,7 +434,9 @@ await test('only a deep question about the present takes the deep path', () => {
   const r = (intent: string) => ({ intent }) as any;
   assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false }), true);
   assert.equal(takesDeepPath({ deep: true, route: r('compare'), historical: false }), true);
-  assert.equal(takesDeepPath({ deep: false, route: r('tactical_chat'), historical: false }), false);
+  // With the constant on, a present-day turn with no flag takes the loop; Fast sends it to the stage pipeline.
+  assert.equal(takesDeepPath({ deep: false, route: r('tactical_chat'), historical: false }), true);
+  assert.equal(takesDeepPath({ fast: true, route: r('tactical_chat'), historical: false }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: true }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('single_dossier'), historical: false }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('challenge_or_revise'), historical: false }), false);
@@ -471,8 +473,8 @@ await test('with the toggle, a historical question and a rating take the normal 
 
 // --- Deep by default --------------------------------------------------------------------------
 
-await test('the constant ships off', () => {
-  assert.equal(DEEP_BY_DEFAULT, false);
+await test('the constant is on: deep mode is the default path', () => {
+  assert.equal(DEEP_BY_DEFAULT, true);
 });
 
 await test('a turn asks for deep through its flag or the default, and fast always says no', () => {
@@ -505,7 +507,7 @@ await test('with the default on, every turn the entry rule accepts takes the loo
 await test('with the default off, an unflagged turn never takes the loop and the Deep flag still does', () => {
   const r = (intent: string) => ({ intent }) as any;
   assert.equal(takesDeepPath({ byDefault: false, route: r('tactical_chat'), historical: false }), false);
-  assert.equal(takesDeepPath({ route: r('tactical_chat'), historical: false }), false);
+  assert.equal(takesDeepPath({ route: r('tactical_chat'), historical: false }), DEEP_BY_DEFAULT, 'an unflagged turn follows the constant');
   assert.equal(takesDeepPath({ byDefault: false, deep: true, route: r('tactical_chat'), historical: false }), true);
 });
 
@@ -659,7 +661,7 @@ await test('with the default off, an unflagged message takes the stage pipeline 
   assert.equal(plain.opened, false);
   assert.deepEqual(plain.paths, [{ path: 'stage' }]);
   const unset = await sendTurn(PRESENT, {}, DEEP_ANSWER);
-  assert.equal(unset.opened, false, 'the shipped constant is off');
+  assert.equal(unset.opened, DEEP_BY_DEFAULT, 'an unflagged message follows the constant');
   const deep = await sendTurn(PRESENT, { deepByDefault: false, deep: true }, DEEP_ANSWER);
   assert.ok(deep.opened);
   assert.deepEqual(deep.paths, [{ path: 'deep' }]);
