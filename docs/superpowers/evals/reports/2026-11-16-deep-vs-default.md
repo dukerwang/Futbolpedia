@@ -54,7 +54,7 @@ Deep mode's tool calls, in order:
 
 **Presentation tools.** The model drew the XI with `show_pitch` on the two questions about how a club lines up (1 and 4) and not elsewhere, which is the right call. It never called `show_dossier`: no cards were in play, since the eval can't read the shared card store.
 
-**Accuracy and decisiveness.** No stale facts in deep mode against one on the default path, and decisiveness at least as high. Both invented facts were in question 5. One is a fact swap (a player's starts at left-back and right-back exchanged). The other comes from the figure gate, which both paths share: it removed a sentence with an unsupported figure from a bullet, leaving the next sentence's "He" pointing at the wrong player and another bullet cut mid-sentence. Deep answers quote more feed figures (minutes, starts, expected goals), so they expose that gate behaviour more often.
+**Accuracy and decisiveness.** No stale facts in deep mode against one on the default path, and decisiveness at least as high. Both invented facts were in question 5. One is a fact swap (a player's starts at left-back and right-back exchanged). The other comes from the figure gate, which both paths share: it removed a list item's first sentence, which carried the item's bold label and an unsupported figure, and left the item opening on "He", so the grader read it as the previous player. (An earlier draft of this report also described a bullet cut mid-sentence; that was a display truncation while reading the report, not in the answer.) The gate now keeps the label's name on the rest of the item. Deep answers quote more feed figures (minutes, starts, expected goals), so they expose that gate behaviour more often.
 
 **Time.** Deep mode was faster: about 8 s sooner to the first token and 12 s sooner overall on the shared questions, because it skips the brief, reflect and situation calls and the cold snapshot builds. About 1.5 s of every deep turn went to waiting for today's coaches before the first round; in the app, where those come from the `club_managers` table, the wait is shorter.
 
@@ -66,6 +66,6 @@ Keep deep mode opt-in, at low thinking. On these six questions it was faster, as
 
 Next steps, once the cap allows:
 
-- Add a line to `deepModeRules` asking the model to establish what changed this season before answering a question about the present, then rerun questions 3 and 11 in deep mode only.
+- ~~Add a line to `deepModeRules` asking the model to establish what changed this season.~~ Done on this branch, with team news on absences and an unchecked line after each round; rerun questions 3 and 11 in deep mode to see the effect.
 - Run the remaining live questions (2, 6, 7, 9, 10, 12) in deep mode with stored club snapshots available, to see whether a fresh snapshot makes the model research even less.
-- Fix the figure gate's sentence removal so it never leaves a dangling pronoun or a cut bullet (shared by both paths).
+- ~~Fix the figure gate's sentence removal so it never leaves a dangling pronoun.~~ Done on this branch.

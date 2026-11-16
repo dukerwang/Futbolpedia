@@ -328,6 +328,9 @@ How to research:
 - Call independent lookups together in one round: they run in parallel. Follow up only on what a result left open.
 - For who plays, results, availability and standings, use the live feeds. Use web search for what the feeds don't cover (tactical analysis, transfers and their dates, news, clubs or players outside the feeds), naming the season. A web search is the slowest and scarcest lookup: don't search for what a feed already gave you.
 - A lookup that came back not covered won't work if asked again.
+- An answer about the present says what is different this season for the club or player it is about (the people, the coach, the shape, the role or the form) and why. Find that out unless the conversation, a stored snapshot or a result already says it.
+- An answer about who is missing or doubtful reads team news as well as the injury list: no free source records knocks between list updates, and news reports them first.
+- Each result also lists what is still unchecked for the clubs and players in the question. Spend on those only where the answer needs them.
 - Draw a club's XI with show_pitch when the answer is about who plays for it or how it lines up; show a card with show_dossier when the card itself answers the user.
 - Write nothing to the user while you research. When research is done, write the whole answer in one reply.
 
@@ -354,6 +357,59 @@ Each club's stored snapshot, built at the time shown from its live data and a re
 ${snapshots.map((s) => `${formatClubSituation(applyStory(s.core, s.story))}\n(built ${s.builtAt.slice(0, 16).replace('T', ' ')})`).join('\n\n')}
 </stored_snapshots>`
     : '';
+
+// ---------------------------------------------------------------------------------------------
+// Coverage
+
+/** Words in a search query that show it asked what changed this season. */
+const CHANGE_CUES = /\b(?:chang\w*|transfers?|signings?|signed|arriv\w*|depart\w*|new|since last season|summer|differen\w*|evolv\w*)\b/i;
+/** Words in a search query that show it asked for team news on absences. */
+const NEWS_CUES = /\b(?:injur\w*|team news|news|absen\w*|fitness|doubts?|suspen\w*|knocks?|ruled out)\b/i;
+/** Club-name words too common to identify a club in a query. */
+const GENERIC_NAME = new Set(['football', 'club', 'city', 'united', 'real', 'athletic', 'sporting', 'town', 'rovers', 'hotspur']);
+
+/** Whether a query names a club or player: the whole name, or its most telling word. */
+const queryNames = (query: string, name: string): boolean => {
+  const q = query.toLowerCase();
+  if (q.includes(name.toLowerCase())) return true;
+  const words = name.toLowerCase().split(/[\s-]+/).filter((w) => w.length >= 4 && !GENERIC_NAME.has(w));
+  return words.some((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(q));
+};
+
+/**
+ * What a question about the present usually needs for each club and player it names, that this
+ * turn hasn't checked yet: a club's recent lineups, its injury list (or, where no list covers it,
+ * team news), a dated search on what changed this season (a fresh stored snapshot already says),
+ * and a player's season record. The items follow what the sources cover (`RESEARCH_COVERAGE_NOTE`).
+ * Code only lists them; the model decides whether to spend on them. Pure.
+ */
+export function uncheckedFor(
+  subjects: { clubs: string[]; players: string[] },
+  ledger: EvidenceLedger,
+  stored: ClubSnapshot[] = [],
+): string[] {
+  const looked = (tool: string, name: string) => ledger.lookups.some((l) => l.tool === tool && (sameClubName(l.subject, name) || queryNames(l.subject, name)));
+  const searched = (name: string, cues: RegExp) => ledger.lookups.some((l) => l.tool === 'web_search' && queryNames(l.subject, name) && cues.test(l.subject));
+  const items: string[] = [];
+  for (const club of subjects.clubs) {
+    const entry = ledger.entries.find((e) => e.club && sameClubName(e.club.team, club));
+    const read = Boolean(entry) || looked('club_recent_team', club);
+    if (!read) items.push(`${club}'s recent lineups and injury list (get_club_recent_team)`);
+    // Only Premier League clubs have an injury list; elsewhere, news is the only source.
+    else if (entry?.club && entry.club.fplPlayers === null && !searched(club, NEWS_CUES)) items.push(`team news on ${club}'s absences (no injury list covers it)`);
+    const snapshot = stored.some((s) => sameClubName(s.club, club) && s.story.changes.length > 0);
+    if (!snapshot && !searched(club, CHANGE_CUES)) items.push(`a dated search on what changed at ${club} this season`);
+  }
+  for (const player of subjects.players) {
+    if (!looked('player_season', player)) items.push(`${player}'s season record (get_player_season; Premier League players only)`);
+    if (!searched(player, CHANGE_CUES)) items.push(`a dated search on what changed for ${player} this season`);
+  }
+  return items;
+}
+
+/** The unchecked items as one line for a tool result. */
+export const formatUnchecked = (items: string[]): string =>
+  items.length ? `Not yet checked: ${items.join('; ')}.` : 'Nothing on the usual checklist for this question is unchecked.';
 
 // ---------------------------------------------------------------------------------------------
 // The loop
@@ -655,9 +711,10 @@ ${params.savedDossiersBlock}
     const responses = await runRound(reply.calls);
     const over = spentOn();
     const budgetLine = formatBudget(left());
+    const uncheckedLine = formatUnchecked(uncheckedFor({ clubs: spottedClubs, players: route.targetPlayers }, ledger, stored));
     const results = responses.map((r) => ({
       name: r.name,
-      response: { ...r.response, ...(over ? { researchOver: RESEARCH_OVER } : {}), budget: budgetLine },
+      response: { ...r.response, ...(over ? { researchOver: RESEARCH_OVER } : {}), unchecked: uncheckedLine, budget: budgetLine },
     }));
     for (const r of results) toolResults.push(JSON.stringify(r.response));
     params.onStageChange?.(over ? 'Writing scouting analysis...' : 'Weighing what came back...');

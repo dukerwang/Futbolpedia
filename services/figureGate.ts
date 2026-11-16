@@ -372,6 +372,23 @@ export function matchesSlot(claim: FigureClaim, slots: string[], chunk: string =
   });
 }
 
+/** A sentence that opens on a word pointing back at a subject named before it ("He", "Their", "The 26-year-old"). */
+const LEANS_BACK = /^(?:\*\*|\*|_)?(?:he|she|they|it|his|her|their|its|him|them|this|that|these|those|the \d{2}-year-old)\b/i;
+
+/**
+ * The name in a sentence's bold lead label ("**Name (details):** ..." gives "**Name:**"), or null
+ * when the sentence has no label or the name itself holds a figure.
+ */
+const labelName = (sentence: string): string | null => {
+  const m = sentence.match(/^\*\*([^*]+?)\*\*\s*:?/);
+  if (!m) return null;
+  const name = m[1].replace(/\s*\([^)]*\)\s*/g, ' ').replace(/[:.\s]+$/, '').trim();
+  return name && findFigures(name).length === 0 && !/\d/.test(name) ? `**${name}:**` : null;
+};
+
+/** What's left of an item when only its lead survived: a bold label, or text ending on a colon. */
+const LABEL_ONLY = /^(?:\*\*[^*]+\*\*[:.]?|[^.!?]*:)$/;
+
 /** Sentences of a paragraph or list item: a stop followed by a space ends one, so "8.4" stays whole. */
 const sentences = (line: string): string[] => line.split(/(?<=[.!?])\s+(?=\S)/);
 
@@ -429,6 +446,31 @@ export function gateUnsupportedFigures(text: string, evidence: string, grounded:
     }
   }
 
+  // A list item's first sentence often carries its bold label ("**Name (fee, from Club):** ..."),
+  // so removing that sentence would leave the rest of the item opening on "He" with nobody named.
+  // The label's name moves to what's left of the item, or, when the whole item went, to the next
+  // item in the block that opens on a pronoun. The label's bracketed details (where a fee or a count
+  // sits) never move with it, and a name with a figure of its own isn't kept.
+  let carried: string | null = null;
+  for (const shape of shapes) {
+    if (shape.kind !== 'prose') {
+      carried = null;
+      continue;
+    }
+    const first = shape.parts.find((p) => !p.gone);
+    if (carried && first && shape.marker && LEANS_BACK.test(first.text)) {
+      first.text = `${carried} ${first.text}`;
+      carried = null;
+      continue;
+    }
+    carried = null;
+    const lead = shape.parts[0];
+    const name = shape.marker && lead?.gone ? labelName(lead.text) : null;
+    if (!name) continue;
+    if (first && LEANS_BACK.test(first.text)) first.text = `${name} ${first.text}`;
+    else if (!first) carried = name;
+  }
+
   const lines = shapes.map((shape) => {
     if (shape.kind === 'fixed') return shape.line;
     if (shape.kind === 'table') return shape.cells.map((c) => (c.gone ? c.text.replace(/\S.*\S|\S/, '–') : c.text)).join('|');
@@ -437,8 +479,9 @@ export function gateUnsupportedFigures(text: string, evidence: string, grounded:
       .map((p) => p.text)
       .join(' ')
       .trimEnd();
-    // A list item or paragraph with nothing left goes; one that kept something keeps its marker.
-    return body ? `${shape.marker}${body}` : null;
+    // A list item or paragraph with nothing left goes, as does one left with only a label; one that
+    // kept something keeps its marker.
+    return body && !LABEL_ONLY.test(body) ? `${shape.marker}${body}` : null;
   });
   const out = lines
     .filter((l): l is string => l !== null)

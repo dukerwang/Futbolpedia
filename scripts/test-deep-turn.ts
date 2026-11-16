@@ -36,7 +36,7 @@ globalThis.fetch = (async (input: any) => {
   return new Response(JSON.stringify({ error: { code: 400, message: 'offline test' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
 }) as typeof fetch;
 
-const { runDeepTurn, takesDeepPath, stageLabel, DEEP_DECLARATIONS, deepModeRules, DEFAULT_DEEP_BUDGET } = await import('../services/deepTurn');
+const { runDeepTurn, takesDeepPath, stageLabel, DEEP_DECLARATIONS, deepModeRules, DEFAULT_DEEP_BUDGET, uncheckedFor } = await import('../services/deepTurn');
 type DeepModel = import('../services/deepTurn').DeepModel;
 type DeepReply = import('../services/deepTurn').DeepReply;
 type DeepToolResponse = import('../services/deepTurn').DeepToolResponse;
@@ -359,6 +359,58 @@ await test('a club lookup brings the club\'s verified coach, and the scrub knows
 await test('the budget rules are descriptive: no player, club or rating examples', () => {
   const rules = deepModeRules(DEFAULT_DEEP_BUDGET);
   assert.doesNotMatch(rules, /\b(Arsenal|Chelsea|Madrid|Messi|Saka|\d{2} Overall)\b/);
+});
+
+// --- Coverage ---------------------------------------------------------------------------------
+
+await test('each result lists what is still unchecked for the spotted club and player, and the list shrinks as calls land', async () => {
+  const fake = fakeModel([
+    callsReply(call('get_club_recent_team', { team: 'Southside' })),
+    callsReply(call('web_search', { query: 'Southside team news injuries November 2026' }), call('get_player_season', { name: 'Main Nine' })),
+    callsReply(call('web_search', { query: 'Southside summer signings and what changed since last season, Main Nine new role 2026-27' })),
+    answer('Southside changed shape this summer.'),
+  ]);
+  const params = { ...baseParams('How is Main Nine doing at Southside?'), route: { ...route(), targetPlayers: ['Main Nine'] } };
+  await quietly(() => runDeepTurn(params, { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] }));
+  const lines = fake.sent.slice(1).map((s) => String(responsesOf(s)[0].response.unchecked));
+  assert.equal(
+    lines[0],
+    "Not yet checked: team news on Southside's absences (no injury list covers it); a dated search on what changed at Southside this season; Main Nine's season record (get_player_season; Premier League players only); a dated search on what changed for Main Nine this season.",
+  );
+  assert.equal(lines[1], 'Not yet checked: a dated search on what changed at Southside this season; a dated search on what changed for Main Nine this season.');
+  assert.equal(lines[2], 'Nothing on the usual checklist for this question is unchecked.');
+  // It rides beside the budget, which still ends every result.
+  for (const sent of fake.sent.slice(1)) {
+    for (const r of responsesOf(sent)) assert.deepEqual(Object.keys(r.response).slice(-2), ['unchecked', 'budget']);
+  }
+});
+
+await test('the unchecked list never forces a round: the model may answer with items left', async () => {
+  const fake = fakeModel([callsReply(call('get_club_recent_team', { team: 'Southside' })), answer('Southside line up in a 4-3-3.')]);
+  let stats: import('../services/deepTurn').DeepStats | null = null;
+  const reply = await quietly(() =>
+    runDeepTurn(baseParams('Southside shape?'), { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], onStats: (s) => (stats = s) }),
+  );
+  assert.equal(reply, 'Southside line up in a 4-3-3.');
+  assert.equal(stats!.rounds, 1);
+  assert.equal(stats!.stop, 'answered');
+  assert.match(String(responsesOf(fake.sent[1])[0].response.unchecked), /^Not yet checked: /);
+});
+
+await test('a club not yet read lists its lineups; a fresh stored snapshot already covers what changed', () => {
+  const empty = { entries: [], gaps: [], lookups: [], discarded: [] };
+  assert.deepEqual(uncheckedFor({ clubs: ['Southside'], players: [] }, empty), [
+    "Southside's recent lineups and injury list (get_club_recent_team)",
+    'a dated search on what changed at Southside this season',
+  ]);
+  const snapshot = { club: 'Southside', league: 'LaLiga', core: {} as any, story: { changes: ['New Fullback signed'], distinctive: '', newsAbsences: [], unknowns: [] }, sources: [], builtAt: '2026-11-15T10:00:00Z', version: 1 };
+  assert.deepEqual(uncheckedFor({ clubs: ['Southside'], players: [] }, empty, [snapshot]), ["Southside's recent lineups and injury list (get_club_recent_team)"]);
+});
+
+await test('the budget rules ask for what changed and for team news on absences', () => {
+  const rules = deepModeRules(DEFAULT_DEEP_BUDGET);
+  assert.match(rules, /says what is different this season for the club or player/);
+  assert.match(rules, /reads team news as well as the injury list/);
 });
 
 // --- The entry rule ---------------------------------------------------------------------------
