@@ -682,7 +682,7 @@ const App: React.FC = () => {
     userMessageText: string,
     imageData?: string,
     mentions: Mention[] = [],
-    sendOptions?: { deep?: boolean },
+    sendOptions?: { deep?: boolean; fast?: boolean },
   ) => {
     if (!userMessageText.trim() && !imageData) return;
     // A shared conversation's address (`/c/<code>`) stops describing it once you add to it.
@@ -796,6 +796,7 @@ const App: React.FC = () => {
           conversationId: activeConversationId ?? undefined,
           challengeCardKey: challengeCard ? getCardKey(challengeCard) : undefined,
           deep: sendOptions?.deep,
+          fast: sendOptions?.fast,
           onGaffaScorecard: (card) => {
             scorecard = card;
             streamStarted = true;
