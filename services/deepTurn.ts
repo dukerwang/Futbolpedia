@@ -399,8 +399,14 @@ export interface DeepStats {
 }
 
 /** The promise's value, or null once `ms` has passed. */
-const within = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
-  Promise.race([p, new Promise<null>((resolve) => setTimeout(() => resolve(null), Math.max(0, ms)))]);
+const within = <T>(p: Promise<T>, ms: number): Promise<T | null> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), Math.max(0, ms));
+  });
+  // The timer goes once the promise settles, so a finished lookup leaves nothing running.
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+};
 
 const noLive: Promise<ToolOutcome> = Promise.resolve({ status: 'empty', result: null, missing: [] });
 
