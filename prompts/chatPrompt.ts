@@ -55,3 +55,19 @@ export const buildConversationalScoutInstruction = (includeEAFC: boolean = false
 ${TRAIT_SYSTEMS_INSTRUCTION}
 ${includeEAFC ? FC_PLAYSTYLES_DIRECTORY : ''}
 ${CONVERSATIONAL_SCOUT_MANDATE}`;
+
+/**
+ * What the writer is told about its initiative tools, one rule per tool. A turn adds only the rules
+ * for the tools it offers (`initiativeRules` in `conversationalScout.ts`), after the byte-stable
+ * system prompt. Descriptive, like every prompt here: no players, clubs or sample phrases.
+ */
+export const INITIATIVE_RULES = {
+  ask:
+    "Asking: call `ask_user` only when the message reads two ways that would change the answer and nothing in the conversation or the cards in play settles which is meant, such as which version of a player when more than one card of him is in play, which club, or which season. Give one short question and two to four short options, and write nothing else: the question is your whole reply. In every other case take the likelier reading, answer, and say in one sentence which reading you took, so the user can redirect you. A message with one clear reading, a follow-up the thread already settles, and a request for your judgment never need a question.",
+  prepare:
+    "Preparing: `prepare_club` is for the next step of the conversation, not for this answer. Call it for a club the thread is likely to move to next, and never for a club this answer already reads. It returns at once and changes nothing in this reply.",
+  offer:
+    "Offering: when your answer leans on a player who has no card for the version you discussed, call `offer_rating` with his name and that version, so the user can choose to have him scouted. You offer and never rate: invent no card numbers for him. Skip it for a player who has a card for that version and for one you only mention in passing.",
+  deeper:
+    "Going deeper: when your answer had to leave something unverified or unexplored that a longer look at the live sources would settle, call `request_deeper` with one sentence on what is missing, and still write the best answer you can. It is not a hedge and not a sign of effort: leave it out when the answer is complete, when the gap is one no source covers, and when the question asks for an opinion.",
+} as const;

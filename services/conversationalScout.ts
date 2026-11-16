@@ -1,14 +1,15 @@
 import { Type } from '@google/genai';
-import type { ChatMessage, GaffaContextBag, GaffaTradeScorecard, PlayerProfile } from '../types';
+import type { AskPrompt, ChatMessage, GaffaContextBag, GaffaTradeScorecard, GoDeeper, PlayerProfile } from '../types';
 import type { ThinkingTier } from '../constants/modelProfiles';
 import { ATTRIBUTE_KEYS } from '../constants/ratingTiers';
-import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
+import { buildConversationalScoutInstruction, INITIATIVE_RULES } from '../prompts/chatPrompt';
 import {
   generateProseTurn,
   type ProseToolMode,
   generateStructured,
   getCurrentSeasonInfo,
   type DossierToolHandlers,
+  type InitiativeToolHandlers,
 } from './aiClient';
 import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
 import {
@@ -48,6 +49,7 @@ import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubMana
 import { reconcileDossierNumbers } from './dossierNumberGate';
 import { cardEdition, toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
+import { askedDirectly, cleanReason, createPreparer, validateAsk } from './initiative';
 import { lineupsForTurn, type LineupView } from './lineupView';
 import { buildGaffaTurn, capGaffaTradeProse, leagueFocusOf, starterClubs, type GaffaTurn } from './gaffaTurn';
 import { lockGaffaRosterNames } from './gaffaLineupAudit';
@@ -244,6 +246,10 @@ export interface ReplyAttachments {
   scoutOffers: string[];
   /** First-choice XIs to draw under the reply, for the clubs a question about the present is about. */
   lineups?: LineupView[];
+  /** The question the writer asked instead of answering; its options are chips under the reply. */
+  ask?: AskPrompt;
+  /** Set when the writer judged the question deserved more research than the fast path allows. */
+  goDeeper?: GoDeeper;
 }
 
 /** Adds a scout offer unless the player is already offered or carded in this reply. */
@@ -312,6 +318,12 @@ export interface ConversationalScoutParams {
   onGaffaScorecard?: (scorecard: GaffaTradeScorecard) => void;
   /** Whose follow-up state this turn reads and writes (`threadStateFor`). */
   conversationId?: string;
+  /**
+   * Gives the writer its initiative tools (ask, prepare, offer, and go deeper where `deeper`).
+   * Left out on turns that can't show them: Gaffa's panel and any turn the caller rules out.
+   * A challenge turn never gets them, whatever is passed.
+   */
+  initiative?: InitiativeOptions;
 }
 
 /**
@@ -468,6 +480,12 @@ export function createDossierTools(args: {
   attachments?: ReplyAttachments;
   /** Called with each card the model reads. */
   onRead?: (card: PlayerProfile) => void;
+  /**
+   * Whether a lookup that finds no card offers the player to Scout by rule. Left out, every missing
+   * player is offered (deep mode). The default chat path offers only a player the user asked about
+   * directly, and leaves the rest to the writer's `offer_rating`.
+   */
+  offerMissing?: (name: string) => boolean;
 }): DossierToolHandlers {
   const { cardsInPlay, localCards, historical: isHistoricalThread, attachments } = args;
   const readCards = new Map<string, PlayerProfile>();
@@ -478,8 +496,11 @@ export function createDossierTools(args: {
       const result = await lookUpDossier(name, [...cardsInPlay, ...localCards], historical);
       if (result.status === 'ambiguous') return { found: false, matchingPlayers: result.names };
       if (result.status === 'missing') {
-        if (attachments) offerScout(attachments, name);
-        return { found: false };
+        const offered = Boolean(attachments) && (args.offerMissing?.(name) ?? true);
+        if (attachments && offered) offerScout(attachments, name);
+        return offered || !args.offerMissing
+          ? { found: false }
+          : { found: false, note: 'No card yet. If his card matters to your answer, call offer_rating so the user can have him scouted.' };
       }
       readCards.set(toBasePlayerSlug(name), result.card);
       readCards.set(toBasePlayerSlug(result.card.basicInfo.name), result.card);
@@ -500,6 +521,87 @@ export function createDossierTools(args: {
     },
   };
 }
+
+/** Which initiative tools a turn offers the writer. */
+export interface InitiativeOptions {
+  /** Offer `request_deeper`: the turn is one deep mode would accept (`takesDeepPath` with the flag on). */
+  deeper: boolean;
+}
+
+/**
+ * The writer's initiative tools for one turn (`initiative.ts` has the rules behind them), written
+ * onto the reply's attachments. `endTurn` is what the model loop checks after each round of tool
+ * calls: once the writer has asked a valid question, the question is the reply.
+ */
+export function createInitiativeTools(args: {
+  attachments: ReplyAttachments;
+  cardsInPlay: PlayerProfile[];
+  localCards: PlayerProfile[];
+  historical: boolean;
+  conversationId: string;
+  /** Clubs this turn already reads, which `prepare_club` leaves alone. */
+  clubsInPlay: string[];
+  deeper: boolean;
+  /** Starts a club's build; defaults to the server's snapshot route. */
+  startBuild?: (club: string) => void;
+}): { tools: InitiativeToolHandlers; endTurn: () => string | null } {
+  const { attachments } = args;
+  let asked: AskPrompt | null = null;
+  const prepare = createPreparer(args.conversationId, args.clubsInPlay, args.startBuild);
+  const tools: InitiativeToolHandlers = {
+    ask: ({ question, options }) => {
+      if (asked) return { asked: true, note: 'Already asked. Your reply is that question.' };
+      const checked = validateAsk(question, options);
+      if ('error' in checked) return { asked: false, error: checked.error };
+      asked = checked.ask;
+      // The question is the whole reply: nothing drawn for an answer stays under it.
+      attachments.ask = asked;
+      attachments.cards = [];
+      delete attachments.lineups;
+      delete attachments.goDeeper;
+      return { asked: true, note: 'Your reply is this question. Write nothing else.' };
+    },
+    prepare,
+    offer: async ({ name, edition }) => {
+      const player = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : '';
+      if (!player || player.length > 80) return { offered: false, error: 'Missing or unusable player name' };
+      const prime = edition === 'prime';
+      const pool = [...attachments.cards, ...args.cardsInPlay, ...args.localCards];
+      const result = await lookUpDossier(player, pool, prime);
+      if (result.status === 'ambiguous') return { offered: false, matchingPlayers: result.names };
+      if (result.status === 'found') {
+        // He has a card for this version: nothing to offer. A card of the other version doesn't count.
+        if (isPrimeCard(result.card) === prime) return { offered: false, reason: 'He already has a card for that version.' };
+        if (prime) offerPrimeScout(attachments, result.card.basicInfo.name);
+        else offerScout(attachments, result.card.basicInfo.name);
+        return { offered: true };
+      }
+      if (prime) offerPrimeScout(attachments, player);
+      else offerScout(attachments, player);
+      return { offered: true };
+    },
+    ...(args.deeper
+      ? {
+          deeper: ({ reason }: { reason?: unknown }) => {
+            const text = cleanReason(reason);
+            if (!text) return { flagged: false, error: 'Give the reason in one sentence.' };
+            if (!asked) attachments.goDeeper = { reason: text };
+            return { flagged: true };
+          },
+        }
+      : {}),
+  };
+  return { tools, endTurn: () => asked?.question ?? null };
+}
+
+/**
+ * The writer's rules for the initiative tools a turn offers, as one instruction. Ask, prepare and
+ * offer come together; go deeper only where the turn is one deep mode would take.
+ */
+export const initiativeRules = (offered: InitiativeOptions): string =>
+  [INITIATIVE_RULES.ask, INITIATIVE_RULES.prepare, INITIATIVE_RULES.offer, offered.deeper ? INITIATIVE_RULES.deeper : '']
+    .filter(Boolean)
+    .join(' ');
 
 /**
  * What a turn about the present may state as fact, and how precise figures are sourced: facts
@@ -868,6 +970,10 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     ? ` No stored card exists for ${missingCards.join(' or ')}; they were already checked, so don't look them up.`
     : '';
   const gapNote = gaps.length ? ` ${gaps.map(editionGapNote).join(' ')}` : '';
+  // The initiative tools (ask, prepare, offer, go deeper) are the default chat path's; a challenge
+  // turn that fell back to prose never gets them.
+  const offersInitiative = Boolean(params.initiative && attachments && route.intent !== 'challenge_or_revise');
+  const initiativeNote = offersInitiative ? initiativeRules(params.initiative!) : '';
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${gaffaBlock}
 ${ongoingThread}
@@ -883,7 +989,7 @@ ${savedDossiersBlock}
 1. ${modeGuidance}${shownNote}${missingNote}${gapNote}
 ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
 3. ${MANAGER_FIDELITY_RULE}`}
-4. ${CONTINUITY_REMINDER}
+4. ${CONTINUITY_REMINDER}${initiativeNote ? `\n5. ${initiativeNote}` : ''}
 </instructions>
 <task>${message}</task>`;
 
@@ -944,11 +1050,26 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
   }
 
   // The model reads any player's card, yours or shared, and shows the ones that answer the user.
+  const writerCards = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+  const initiative =
+    offersInitiative
+      ? createInitiativeTools({
+          attachments: attachments!,
+          cardsInPlay,
+          localCards: writerCards,
+          historical: isHistoricalThread,
+          conversationId: params.conversationId ?? 'local',
+          clubsInPlay: [...targetClubsInPlay, ...gaffaClubs],
+          deeper: params.initiative!.deeper,
+        })
+      : null;
   const dossierTools = createDossierTools({
     cardsInPlay,
-    localCards: mergeAllCalibratedDossiers(savedDossiers, conversationDossiers),
+    localCards: writerCards,
     historical: isHistoricalThread,
     attachments,
+    // With the offer tool, a missing player is offered by rule only when the user named him.
+    ...(initiative ? { offerMissing: (name: string) => askedDirectly(name, route.targetPlayers, message) } : {}),
   });
   // Gaffa squad and market names are copied exactly, and a scorecard reply stays short.
   const finishGaffa = (text: string): string => {
@@ -967,6 +1088,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
     dossiersPool,
     gaffaBag,
     dossierTools,
+    ...(initiative ? { initiativeTools: initiative.tools, endTurn: initiative.endTurn } : {}),
     onToolCalls: (names) => perf?.(`writer tool calls: ${names.join(', ')}`),
     onToolResult: (_name, result) => toolResults.push(typeof result === 'string' ? result : JSON.stringify(result)),
     onGrounded: (segment) => figureCheck?.grounded.push(segment),
