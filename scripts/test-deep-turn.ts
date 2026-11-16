@@ -212,9 +212,9 @@ await test('every tool result ends with the budget line, and the prompt states t
   assert.match(system, /Stop researching as soon as you have what the answer needs/);
 });
 
-await test('the deep loop offers the writer\'s tools, the history routes, web search and show_pitch', () => {
+await test('the deep loop offers the writer\'s tools, the history routes, web search and the four view tools', () => {
   const names = DEEP_DECLARATIONS.map((d) => d.name);
-  for (const n of ['get_club_recent_team', 'get_player_season', 'get_league_table', 'look_up_dossier', 'show_dossier', 'grep_saved_dossiers', 'club_season', 'player_career', 'web_search', 'show_pitch']) {
+  for (const n of ['get_club_recent_team', 'get_player_season', 'get_league_table', 'look_up_dossier', 'show_dossier', 'grep_saved_dossiers', 'club_season', 'player_career', 'web_search', 'show_pitch', 'show_table', 'show_comparison', 'show_ranking']) {
     assert.ok(names.includes(n), n);
   }
   assert.equal(new Set(names).size, names.length, 'no tool is declared twice');
@@ -348,6 +348,117 @@ await test('show_pitch attaches the club\'s XI, reading its live data when the t
   assert.equal(responsesOf(fake.sent[1])[0].response.shown, true);
   assert.ok(stages.includes("Drawing Southside's XI"));
   assert.equal(stats!.calls, 0, 'show_pitch is free');
+});
+
+
+// --- View tools -------------------------------------------------------------------------------
+
+const plRows = [
+  { rank: 1, team: 'Southside', group: null, played: 12, won: 9, drawn: 3, lost: 0, goalDiff: 17, points: 30, form: null },
+  { rank: 2, team: 'Northside', group: null, played: 12, won: 8, drawn: 2, lost: 2, goalDiff: 9, points: 26, form: null },
+];
+const toolsWithTable = (clock: { t: number }): ResearchToolset => ({
+  ...fakeTools(clock).tools,
+  leagueTable: async () => ({
+    status: 'found',
+    result: { kind: 'league_table', label: 'LaLiga table, 2026-27', content: '1. Southside — 30 pts', stage: 'facts', table: { league: 'LaLiga', season: '2026-27', rows: plRows } },
+    missing: [],
+  }),
+});
+const kindsOf = (c: ReplyComposer) => c.blocks().map((b) => b.kind);
+const run = (fake: ReturnType<typeof fakeModel>, composer: ReplyComposer, extra: Record<string, unknown> = {}, tools = fakeTools({ t: 0 }).tools) =>
+  quietly(() => runDeepTurn(baseParams('Q', composer), { model: fake.model, tools, snapshots: null, managers: async () => [], ...extra }));
+
+await test('a round that only draws keeps its text, and the view sits after it, for free', async () => {
+  const composer = new ReplyComposer();
+  const fake = fakeModel([
+    { text: 'Southside sit top of the table.', calls: [call('show_table', { league: 'LaLiga', highlight: ['Southside'] })] },
+    answer('That lead is built on the defence.'),
+  ]);
+  let stats: import('../services/deepTurn').DeepStats | null = null;
+  const reply = await run(fake, composer, { onStats: (s: import('../services/deepTurn').DeepStats) => (stats = s) }, toolsWithTable({ t: 0 }));
+  assert.deepEqual(kindsOf(composer), ['prose', 'table', 'prose']);
+  assert.equal(reply, 'Southside sit top of the table.\n\nThat lead is built on the defence.');
+  assert.equal(stats!.rounds, 0, 'a round that only draws is not a round');
+  assert.equal(stats!.calls, 0, 'the feed read behind the table costs the model no lookup');
+});
+
+await test('a round of lookups drops its text, and its views go after the prose that was kept', async () => {
+  const composer = new ReplyComposer();
+  const fake = fakeModel([
+    { text: 'Let me check the table and the lineups first.', calls: [call('get_club_recent_team', { team: 'Southside' }), call('show_table', { league: 'LaLiga' })] },
+    answer('Southside lead the league and play a 4-3-3.'),
+  ]);
+  let stats: import('../services/deepTurn').DeepStats | null = null;
+  const reply = await run(fake, composer, { onStats: (s: import('../services/deepTurn').DeepStats) => (stats = s) }, toolsWithTable({ t: 0 }));
+  assert.equal(reply, 'Southside lead the league and play a 4-3-3.', 'the preamble is gone');
+  assert.deepEqual(kindsOf(composer), ['table', 'prose'], 'no prose was kept, so the view comes first');
+  assert.equal(stats!.rounds, 1);
+  assert.equal(stats!.calls, 1, 'the club read counted; the view did not');
+});
+
+await test('views called in successive rounds land at the text written before each, and a reply that ends on a view needs no more text', async () => {
+  const composer = new ReplyComposer();
+  const fake = fakeModel([
+    { text: 'First the shape.', calls: [call('show_pitch', { club: 'Southside' })] },
+    { text: 'Then the table.', calls: [call('show_table', { league: 'LaLiga' })] },
+    answer(''),
+  ]);
+  const reply = await run(fake, composer, {}, toolsWithTable({ t: 0 }));
+  assert.deepEqual(kindsOf(composer), ['prose', 'pitch', 'prose', 'table']);
+  assert.equal(reply, 'First the shape.\n\nThen the table.');
+  assert.equal(fake.sent.length, 3, 'no request to write again: the views came with their text');
+});
+
+await test('every view tool result reaches the evidence: a figure the table shows is supported, one it does not is cut', async () => {
+  const composer = new ReplyComposer();
+  const fake = fakeModel([
+    callsReply(call('show_table', { league: 'LaLiga', highlight: ['Southside'] })),
+    answer('Southside have 30 points from 12 games. They have a 71 percent chance of the title.'),
+  ]);
+  const reply = await run(fake, composer, { gateFeedback: async () => ({ replacements: [] }) }, toolsWithTable({ t: 0 }));
+  assert.match(reply, /Southside have 30 points/);
+  assert.doesNotMatch(reply, /71 percent/);
+  assert.deepEqual(kindsOf(composer), ['table', 'prose']);
+});
+
+await test('the gates cut a sentence from one segment and no view moves', async () => {
+  const composer = new ReplyComposer();
+  const fake = fakeModel([
+    { text: 'Southside have 30 points. Their title odds are 71 percent.', calls: [call('show_table', { league: 'LaLiga' })] },
+    { text: 'Northside trail by four points. They keep 55 percent of the ball.', calls: [call('show_pitch', { club: 'Southside' })] },
+    answer('Nothing is settled.'),
+  ]);
+  const reply = await run(fake, composer, { gateFeedback: async () => ({ replacements: [] }) }, toolsWithTable({ t: 0 }));
+  assert.equal(reply, 'Southside have 30 points.\n\nNorthside trail by four points.\n\nNothing is settled.');
+  assert.deepEqual(kindsOf(composer), ['prose', 'table', 'prose', 'pitch', 'prose']);
+});
+
+await test('the limit on views is the only one: twelve view rounds spend no round budget, and a view past the ceiling is refused and counts as a round', async () => {
+  const composer = new ReplyComposer();
+  const script: DeepReply[] = [];
+  for (let i = 0; i < 13; i++) script.push({ text: `Point ${i + 1}.`, calls: [call('show_table', { league: 'LaLiga' })] });
+  script.push(answer('Done.'));
+  const fake = fakeModel(script);
+  let stats: import('../services/deepTurn').DeepStats | null = null;
+  await run(fake, composer, { onStats: (s: import('../services/deepTurn').DeepStats) => (stats = s) }, toolsWithTable({ t: 0 }));
+  assert.equal(composer.blocks().filter((b) => b.kind === 'table').length, 12);
+  assert.equal(stats!.rounds, 1, 'only the round that drew past the ceiling was counted');
+  const refused = responsesOf(fake.sent[13])[0].response;
+  assert.equal(refused.reason, 'view limit reached, nothing drawn');
+});
+
+await test('the rules give one descriptive line for each view tool, and say where a view lands', () => {
+  const rules = deepModeRules(DEFAULT_DEEP_BUDGET);
+  for (const tool of ['show_pitch', 'show_table', 'show_comparison', 'show_ranking', 'show_dossier']) assert.ok(rules.includes(`\`${tool}\``), tool);
+  assert.match(rules, /A view lands where you call it/);
+  assert.match(rules, /drawing views costs no lookup, search or round/);
+});
+
+await test('each view tool has a progress label', () => {
+  assert.equal(stageLabel(call('show_table', { league: 'Premier League' })), 'Drawing the Premier League table');
+  assert.equal(stageLabel(call('show_comparison', { playerA: 'A', playerB: 'B' })), 'Comparing A and B');
+  assert.equal(stageLabel(call('show_ranking', { title: 'Best' })), 'Drawing the ranking: Best');
 });
 
 await test('each tool call has a short progress label', () => {

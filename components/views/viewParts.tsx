@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { pillClass, type PillTone } from '../pills';
+import { clubKey } from './viewData';
 
 /** Small pieces the views share. Pure: nothing here reads a service. */
 
@@ -30,17 +31,7 @@ export const VersionPill: React.FC<{ label: string | undefined | null }> = ({ la
   return <span className={pillClass(pill.tone, 'xs')}>{pill.text}</span>;
 };
 
-/** "Brighton & Hove Albion FC" and "brighton & hove albion" are one club. */
-export const clubKey = (name: string): string =>
-  name
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9 ]+/g, ' ')
-    .split(/\s+/)
-    .filter((t) => t && !['fc', 'afc', 'cf', 'sc'].includes(t))
-    .join(' ');
+export { clubKey };
 
 /** A signed number in the table's style: "+12", "−3", "0"; "–" when the feed left it out. */
 export const signed = (n: number | null): string => (n === null ? '–' : n > 0 ? `+${n}` : n < 0 ? `−${Math.abs(n)}` : '0');

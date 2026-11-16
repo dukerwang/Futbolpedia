@@ -1,7 +1,7 @@
 import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration } from '@google/genai';
 import type { ChatMessage, PlayerProfile } from '../types';
 import { resolveTaskModelConfig, samplingFor, type ThinkingTier } from '../constants/modelProfiles';
-import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
+import { buildConversationalScoutInstruction, viewRules } from '../prompts/chatPrompt';
 import {
   blockedOrEmptyResponseError,
   getAi,
@@ -10,6 +10,7 @@ import {
   LOOK_UP_DOSSIER_DECLARATION,
   NETWORK_FUNCTION_DECLARATIONS,
   SHOW_DOSSIER_DECLARATION,
+  textBeforeCalls,
   THINKING_LEVEL_MAP,
 } from './aiClient';
 import { buildOngoingThreadBlock, CONTINUITY_REMINDER } from './chatContinuity';
@@ -28,9 +29,10 @@ import {
   sanitizeScoutProseDetailed,
   stripScoutMarkup,
   threadStateFor,
+  wantsPrimeOf,
   type FigureCheck,
 } from './conversationalScout';
-import { buildHistoryContents, grepDossiers, mergeAllCalibratedDossiers, serializeProfileForHistory, type DossierGrepParams } from './dossierStore';
+import { buildHistoryContents, getCardKey, grepDossiers, mergeAllCalibratedDossiers, serializeProfileForHistory, type DossierGrepParams } from './dossierStore';
 import {
   addEvidence,
   emptyLedger,
@@ -41,7 +43,7 @@ import {
 } from './evidenceLedger';
 import { expandTables, type FigureClaim } from './figureGate';
 import { correctReply, formatGateFeedback, gateFeedbackEnabled, GATE_FEEDBACK_STAGE_LABEL, type CorrectionModel, type GateFeedbackStats } from './gateFeedback';
-import { REPLY_BLOCKS, ReplyComposer, runViewTool, viewToolDeclarations } from './replyBlocks';
+import { createViewTools, gateSegments, joinSegments, makeCardLookup, MAX_REPLY_VIEWS, ReplyComposer, splitSegments, viewToolDeclarations } from './replyBlocks';
 import {
   executeCall,
   fileOutcomes,
@@ -215,7 +217,10 @@ export interface DeepFunctionCall {
 }
 
 export interface DeepReply {
-  /** The reply's text; empty when it only called tools. */
+  /**
+   * The round's text, with or without calls. In a round of lookups it is a preamble and is dropped;
+   * in a round that only draws views it is the answer so far, and each view sits after it.
+   */
   text: string;
   calls: DeepFunctionCall[];
   finishReason?: string;
@@ -261,20 +266,18 @@ export const liveDeepModel: DeepModel = {
         let finishReason: string | undefined;
         const calls: DeepFunctionCall[] = [];
         for await (const chunk of stream) {
+          // Calls from earlier chunks end the text; text ahead of a call in this chunk is kept.
+          const callsBefore = calls.length > 0;
           for (const c of chunk.functionCalls ?? []) calls.push({ name: String(c.name), args: (c.args as Record<string, unknown>) ?? {} });
           const finish = chunk.candidates?.[0]?.finishReason;
           if (finish) finishReason = finish;
-          // Text parts read directly: chunk.text warns on every chunk that also carries a call.
-          const piece = (chunk.candidates?.[0]?.content?.parts ?? [])
-            .filter((p) => typeof p.text === 'string' && !p.thought)
-            .map((p) => p.text)
-            .join('');
-          if (piece && calls.length === 0) {
+          const piece = textBeforeCalls(chunk, callsBefore);
+          if (piece) {
             text += piece;
             onText?.(text);
           }
         }
-        return { text: calls.length ? '' : text, calls, finishReason };
+        return { text, calls, finishReason };
       },
     };
   },
@@ -353,6 +356,9 @@ const RESEARCH_FUNCTIONS: Record<string, (args: Record<string, unknown>) => Rese
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
+/** Tools that draw something in the reply. They are free, and a round that only calls them keeps its text. */
+const PRESENTATION = new Set(['show_pitch', 'show_table', 'show_comparison', 'show_ranking', 'show_dossier']);
+
 /** Tools that cost a lookup. The local grep and the presentation tools are free. */
 const COUNTED = new Set([...Object.keys(RESEARCH_FUNCTIONS), 'look_up_dossier']);
 
@@ -378,6 +384,12 @@ export function stageLabel(call: DeepFunctionCall): string {
       return str(a.name) ? `Showing ${str(a.name)}'s card` : 'Showing a card';
     case 'show_pitch':
       return `Drawing ${str(a.club) || 'the club'}'s XI`;
+    case 'show_table':
+      return `Drawing the ${str(a.league) || 'league'} table`;
+    case 'show_comparison':
+      return `Comparing ${str(a.playerA) || 'the players'} and ${str(a.playerB) || 'the other'}`;
+    case 'show_ranking':
+      return `Drawing the ranking${str(a.title) ? `: ${str(a.title).slice(0, 60)}` : ''}`;
     case 'grep_saved_dossiers':
       return 'Searching your dossiers';
     default:
@@ -391,9 +403,9 @@ export function stageLabel(call: DeepFunctionCall): string {
 /** Deep mode's part of the system instruction: the budget and how to spend it. Descriptive only. */
 export const deepModeRules = (budget: DeepBudget): string => `## Deep mode
 
-In this conversation you decide your own research. Your tools read live club data, Premier League player seasons, league tables, past club seasons, player careers, the web, the stored dossier cards and the user's saved dossiers; two more show things under your reply: show_pitch draws a club's first-choice XI and show_dossier shows a player's card.
+In this conversation you decide your own research. Your tools read live club data, Premier League player seasons, league tables, past club seasons, player careers, the web, the stored dossier cards and the user's saved dossiers; the show tools draw views in your reply.
 
-Budget for this turn: ${Math.round(budget.ms / 1000)} seconds of research, ${budget.calls} lookups (at most ${budget.searches} of them web searches) and ${budget.rounds} rounds of tool calls. The local dossier search and the two show tools are free. Every tool result ends with what's left. When any part of the budget runs out, research is over and your next reply must be the answer.
+Budget for this turn: ${Math.round(budget.ms / 1000)} seconds of research, ${budget.calls} lookups (at most ${budget.searches} of them web searches) and ${budget.rounds} rounds of tool calls. The local dossier search and the show tools are free: drawing views costs no lookup, search or round. Every tool result ends with what's left. When any part of the budget runs out, research is over and your next reply must be the answer.
 
 How to research:
 - First work out what the answer has to establish, then look up only that. Stop researching as soon as you have what the answer needs; a question the conversation or the cards already answer needs no lookup.
@@ -403,8 +415,8 @@ How to research:
 - An answer about the present says what is different this season for the club or player it is about (the people, the coach, the shape, the role or the form) and why. Find that out unless the conversation, a stored snapshot or a result already says it.
 - An answer about who is missing or doubtful reads team news as well as the injury list: no free source records knocks between list updates, and news reports them first.
 - Each result also lists what is still unchecked for the clubs and players in the question. Spend on those only where the answer needs them.
-- Draw a club's XI with show_pitch when the answer is about who plays for it or how it lines up; show a card with show_dossier when the card itself answers the user.
-- Write nothing to the user while you research. When research is done, write the whole answer in one reply.
+- ${viewRules()}
+- Write nothing to the user while you look things up: text you write in a round that also calls a lookup is discarded. When research is done, write the answer. To place a view inside it, write the part that leads into the view, call the view tool in that same turn, and carry on with the rest after its result; a turn that only draws views keeps its text.
 
 ${RESEARCH_COVERAGE_NOTE}`;
 
@@ -661,22 +673,30 @@ ${params.savedDossiersBlock}
   const managerContext = () => ({ verifiedFacts: [formatLedger(ledger)].filter(Boolean), clubManagers: verified });
   const clean = (text: string) => sanitizeScoutProse(text, managerContext(), cardsInPlay, figureCheck);
 
-  const dossierTools = createDossierTools({ cardsInPlay, localCards: allCalibrated, historical: false, composer });
-  const dossiersPool = [...params.savedDossiers, ...params.conversationDossiers];
+  // The reply's prose passes the gates a segment at a time, together, so a view stays where the model
+  // called it however much a segment loses.
+  composer.setGate((segments) => gateSegments(segments, clean));
 
-  /** Draws a club's XI through the registry's `pitch` entry, which reads the feed when this turn hasn't. */
-  const showPitch = (club: string): Promise<Record<string, unknown>> =>
-    runViewTool(
-      REPLY_BLOCKS.pitch,
-      { club },
-      {
-        tools,
-        ledger: { read: () => ledger, write: (next) => { ledger = next; } },
-        stored,
-        now,
-      },
-      composer,
-    );
+  // Deep mode's text always streams from the model, so views and cards sit inside the reply.
+  const dossierTools = createDossierTools({ cardsInPlay, localCards: allCalibrated, historical: false, composer, inline: true });
+  const dossiersPool = [...params.savedDossiers, ...params.conversationDossiers];
+  const viewTools = createViewTools({
+    composer,
+    inline: true,
+    context: {
+      tools,
+      ledger: { read: () => ledger, write: (next) => { ledger = next; } },
+      stored,
+      cards: makeCardLookup({
+        pool: [...cardsInPlay, ...allCalibrated],
+        preferPrime: (name) => wantsPrimeOf(message, name, false),
+        onCard: (card) => {
+          if (!cardsInPlay.some((c) => getCardKey(c) === getCardKey(card))) cardsInPlay.push(card);
+        },
+      }),
+      now,
+    },
+  });
 
   /** The model's view of a lookup's outcome. */
   const describe = (outcome: ToolOutcome): Record<string, unknown> => ({
@@ -720,6 +740,7 @@ ${params.savedDossiersBlock}
           }
           return { response, filed: { call: researchCall, outcome } };
         }
+        if (viewTools.handles(call.name)) return { response: await viewTools.run(call.name, args) };
         switch (call.name) {
           case 'look_up_dossier': {
             const result = (await dossierTools.lookUp(args as { name?: string; edition?: string })) as Record<string, unknown>;
@@ -727,8 +748,6 @@ ${params.savedDossiersBlock}
           }
           case 'show_dossier':
             return { response: (await dossierTools.show(args as { name?: string })) as Record<string, unknown> };
-          case 'show_pitch':
-            return { response: await showPitch(str(args.club)) };
           case 'grep_saved_dossiers':
             return { response: grepDossiers(dossiersPool, args as DossierGrepParams) as unknown as Record<string, unknown> };
           default:
@@ -752,9 +771,17 @@ ${params.savedDossiersBlock}
     return round.map((call, i) => ({ name: call.name, response: done[i].response }));
   };
 
+  // The answer's text so far: what earlier rounds that only drew views wrote. A round of lookups
+  // writes a preamble, which is dropped; a round that only draws keeps its text, and its views sit after it.
+  let kept = '';
+  const answerSoFar = (roundText: string): string => (kept && roundText.trim() ? `${kept}\n\n${roundText}` : kept || roundText);
   // Streaming: a round's text streams once it is clearly the answer, never a preamble to tool calls.
   let streamed = false;
   let firstToken = true;
+  const publish = (text: string) => {
+    composer.setText(text);
+    params.onStreamChunk?.(composer.displayText());
+  };
   const onText = (roundText: string, final: boolean) => {
     if (!params.onStreamChunk || (!final && !streamed && roundText.length < STREAM_HOLD_CHARS)) return;
     streamed = true;
@@ -762,15 +789,27 @@ ${params.savedDossiersBlock}
       firstToken = false;
       perf?.('first answer token');
     }
-    params.onStreamChunk(clean(roundText));
+    publish(answerSoFar(roundText));
   };
 
   const toolCalls: string[] = [];
   let stop: DeepStats['stop'] = 'answered';
+  let viewRounds = 0;
   params.onStageChange?.('Planning the research...');
   let reply = await conversation.send(prompt, { tools: true, onText: (t) => onText(t, false) });
   while (reply.calls.length > 0) {
-    rounds++;
+    // Drawing is free: a round that only draws costs no round, and keeps its text as part of the answer.
+    const drawsOnly = reply.calls.every((c) => PRESENTATION.has(c.name));
+    // A model that only draws, forever, runs into the views ceiling and then the round budget.
+    if (drawsOnly && ++viewRounds <= MAX_REPLY_VIEWS) {
+      if (reply.text.trim()) kept = answerSoFar(reply.text);
+    } else rounds++;
+    // The composer holds exactly the kept text, so a view lands after it and a dropped preamble is gone.
+    composer.setText(kept);
+    if (drawsOnly && kept && params.onStreamChunk) {
+      streamed = true;
+      params.onStreamChunk(composer.displayText());
+    }
     toolCalls.push(...reply.calls.map((c) => c.name));
     perf?.(`deep round ${rounds}: ${reply.calls.map((c) => c.name).join(', ')}`);
     const responses = await runRound(reply.calls);
@@ -789,33 +828,38 @@ ${params.savedDossiersBlock}
       break;
     }
   }
-  // A reply with no text (or calls the model was told it couldn't make) gets one plain request to write.
-  if (!reply.text.trim()) {
+  // A reply with no text (or calls the model was told it couldn't make) gets one plain request to write,
+  // unless views came with their own text.
+  if (!reply.text.trim() && !kept.trim()) {
     reply = await conversation.send(RESEARCH_OVER, { tools: false, onText: (t) => onText(t, true) });
   }
-  if (!reply.text.trim()) {
+  if (!reply.text.trim() && !kept.trim()) {
     const why = blockedOrEmptyResponseError(reply.finishReason).message;
     throw new DeepFailure(stop === 'answered' ? 'empty' : 'budget', stop === 'answered' ? why : `the ${stop} budget was spent and no answer followed: ${why}`);
   }
+  const answer = answerSoFar(reply.text);
 
   verified = await within(managers(), 5_000).then((m) => m ?? verified);
   // A short answer held back while it might have been a preamble streams now.
   if (!streamed) onText(reply.text, true);
+  composer.setText(answer);
 
-  // The gates check the reply against the turn's evidence. When they flag something and the budget
-  // isn't spent, the model gets one call to fix it first; a round that runs counts as a lookup.
+  // The gates check the reply against the turn's evidence, a segment at a time and together. When they
+  // flag something and the budget isn't spent, the model gets one call to fix it first; a round that
+  // runs counts as a lookup.
   const finalFigures: FigureCheck = {
     ...figureCheck,
     onRemoved: (removed: FigureClaim[]) => {
       if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures from a deep reply: ${removed.map((r) => r.text).join('; ')}`);
     },
   };
-  let finalText: string;
+  const segments = composer.rawProse();
+  let finalJoined: string;
   let feedback: GateFeedbackStats | null = null;
   const spent = left();
   if (gateFeedbackEnabled() && spent.calls > 0 && spent.ms > 0) {
     const corrected = await correctReply({
-      raw: reply.text,
+      raw: joinSegments(segments),
       sanitize: (text) => sanitizeScoutProseDetailed(text, managerContext(), cardsInPlay, finalFigures),
       strip: stripScoutMarkup,
       correct: deps.gateFeedback,
@@ -824,11 +868,14 @@ ${params.savedDossiersBlock}
     });
     if (corrected.called) calls++;
     feedback = corrected.stats;
-    finalText = corrected.text;
+    finalJoined = corrected.text;
     if (feedback) perf?.(`gate feedback: ${formatGateFeedback(feedback)}`);
   } else {
-    finalText = sanitizeScoutProse(reply.text, managerContext(), cardsInPlay, finalFigures);
+    finalJoined = sanitizeScoutProse(joinSegments(segments), managerContext(), cardsInPlay, finalFigures);
   }
+  const parts = splitSegments(finalJoined, segments.length) ?? segments.map((seg) => sanitizeScoutProse(seg, managerContext(), cardsInPlay, finalFigures));
+  composer.settle(parts);
+  const finalText = parts.filter((p) => p.trim()).join('\n\n');
 
   const stats: DeepStats = { rounds, calls, searches, toolCalls, stop, gateFeedback: feedback };
   deps.onStats?.(stats);

@@ -185,16 +185,8 @@ await test('a question about the present researches facts, then analysis, and th
       onBlocks: (blocks) => (attached = blocks),
     }),
   );
-  // The reply carries the club's first-choice XI for the pitch view, from the same snapshot.
-  const lineups = (attached ?? []).filter((b) => b.kind === 'pitch' && b.status === 'ready').map((b: any) => b.data);
-  const lineup = lineups[0];
-  assert.equal(lineups.length, 1);
-  assert.equal(lineup?.club, 'Southside');
-  assert.equal(lineup?.formation, '4-3-3');
-  assert.equal(lineup?.matchesRead, 3);
-  assert.equal(lineup?.xi.length, 11);
-  assert.ok(lineup?.xi.some((s) => s.role === 'LB' && s.name === 'New Fullback'));
-  assert.deepEqual(lineup?.out, [{ name: 'Eight Two', note: 'ankle (2026-10-28)' }]);
+  // Code draws no XI on its own: the writer chooses its views, and this writer called none.
+  assert.deepEqual((attached ?? []).filter((b) => b.kind !== 'prose'), []);
   // The pressing figure was never looked up, so its sentence goes; the rest stands.
   assert.equal(reply, 'New Fullback starts at left-back in a back four. Main Nine leads the line.');
   assert.ok(liveAsked.some((u) => u.includes('name=Southside')), 'the club was looked up live');

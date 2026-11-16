@@ -4,6 +4,9 @@ import { askEntry } from './ask';
 import { cardEntry } from './card';
 import { goDeeperEntry } from './goDeeper';
 import { pitchEntry } from './pitch';
+import { rankingEntry } from './ranking';
+import { comparisonEntry } from './comparison';
+import { tableEntry } from './table';
 import { proseEntry } from './prose';
 import { scorecardEntry } from './scorecard';
 import { scoutOfferEntry } from './scoutOffer';
@@ -11,6 +14,9 @@ import { scoutOfferEntry } from './scoutOffer';
 /** One entry per kind. A new kind is one line in `ReplyBlockData` and one entry here. */
 export const REPLY_BLOCKS: { [K in ReplyBlockKind]: BlockEntry<K> } = {
   pitch: pitchEntry,
+  table: tableEntry,
+  comparison: comparisonEntry,
+  ranking: rankingEntry,
   card: cardEntry,
   scoutOffer: scoutOfferEntry,
   ask: askEntry,

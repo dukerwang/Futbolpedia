@@ -1,5 +1,5 @@
-import { nameScore, roleCol, roleRow } from './liveFootball';
-import type { ClubCore, ClubSituation, Situation } from './situationSnapshot';
+import { roleCol, roleRow } from './liveFootball';
+import type { ClubCore, ClubSituation } from './situationSnapshot';
 
 /**
  * The pitch view's data: a club's first-choice XI as the situation snapshot worked it out, cut
@@ -32,9 +32,6 @@ export interface LineupView {
   out: { name: string; note: string }[];
 }
 
-/** Most XIs a reply draws. */
-export const MAX_LINEUPS = 2;
-
 /** The drawing of a club's XI, or null when the snapshot found no XI to draw. */
 export function lineupViewOf(club: ClubSituation): LineupView | null {
   if (club.xiBasis === 'none' || club.xi.length === 0) return null;
@@ -59,48 +56,6 @@ export function lineupViewOf(club: ClubSituation): LineupView | null {
     })),
     out: out.map((o) => ({ name: o.name, note: o.note })),
   };
-}
-
-const sameClub = (a: string, b: string): boolean =>
-  a.trim().toLowerCase() === b.trim().toLowerCase() || nameScore(a, [b]) >= 2 || nameScore(b, [a]) >= 2;
-
-export interface LineupTurn {
-  /** The turn's situation snapshot, fresh or the thread's last one. */
-  situation: Situation | null;
-  /** The clubs the router spotted, or the thread's current clubs for a follow-up. */
-  clubs: string[];
-  /** The players the router spotted. */
-  players: string[];
-  /** A thread about primes, past seasons or the past decade. */
-  historical: boolean;
-  /** A Gaffa trade scorecard heads this reply. */
-  scorecard: boolean;
-}
-
-/**
- * Which clubs' XIs a reply draws: only a turn about the present, for the clubs the turn is about
- * (a question about one player counts as one about his club) that the snapshot found an XI for, at
- * most two, in the order the snapshot lists them.
- */
-export function lineupsForTurn(turn: LineupTurn): LineupView[] {
-  if (turn.historical || turn.scorecard || !turn.situation) return [];
-  const wanted = [...turn.clubs];
-  if (turn.players.length === 1) {
-    const [target] = turn.players;
-    for (const p of turn.situation.players) {
-      if (p.club && (nameScore(p.name, [target]) >= 2 || nameScore(target, [p.name]) >= 2)) wanted.push(p.club);
-    }
-  }
-  if (wanted.length === 0) return [];
-  const views: LineupView[] = [];
-  for (const club of turn.situation.clubs) {
-    if (views.length >= MAX_LINEUPS) break;
-    if (!wanted.some((w) => sameClub(w, club.club))) continue;
-    if (views.some((v) => sameClub(v.club, club.club))) continue;
-    const view = lineupViewOf(club);
-    if (view) views.push(view);
-  }
-  return views;
 }
 
 /** "First-choice XI · 4-2-3-1 · from 6 recent starting XIs · as of 2026-11-14". */

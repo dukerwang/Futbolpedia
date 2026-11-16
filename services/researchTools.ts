@@ -158,7 +158,7 @@ export const liveToolset = (cardPool: PlayerProfile[], get: LiveGet = getLive): 
     const data = res.data;
     return 'reason' in data
       ? none(data.status ?? 'empty', data.reason)
-      : found({ kind: 'league_table', label: `${data.league} table${data.season ? `, ${data.season}` : ''}`, content: data.text, stage: 'facts' });
+      : found({ kind: 'league_table', label: `${data.league} table${data.season ? `, ${data.season}` : ''}`, content: data.text, stage: 'facts', table: { league: data.league, season: data.season, rows: data.rows ?? [] } });
   },
   async webSearch(query, options) {
     const { month, year } = getCurrentSeasonInfo();

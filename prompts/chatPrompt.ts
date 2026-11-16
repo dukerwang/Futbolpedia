@@ -71,3 +71,25 @@ export const INITIATIVE_RULES = {
   deeper:
     "Going deeper: when your answer had to leave something unverified or unexplored that a longer look at the live sources would settle, call `request_deeper` with one sentence on what is missing, and still write the best answer you can. It is not a hedge and not a sign of effort: leave it out when the answer is complete, when the gap is one no source covers, and when the question asks for an opinion.",
 } as const;
+
+/**
+ * The writer's guidance for each view tool a turn offers, one line a tool, joined into the turn's
+ * `<instructions>` (never the system prompt). Deep mode's rules say the same. Descriptive: what the
+ * view shows, when a view carries a point better than prose, and where the call goes. No examples,
+ * players, clubs or sample phrases.
+ */
+export const VIEW_RULES = {
+  intro:
+    "Views: you can draw a view in the reply with a tool. A view carries a point better than prose when the reader needs to see an order, a set of numbers or a shape; where it only decorates, leave it out. A view lands where you call it, so write the part of the answer that leads into it, call it, and carry on after it. A view shows what the tool fetched, so never supply figures yourself, and don't restate in prose what the view shows: say what it means. A tool that can't draw says why in its result; write around it.",
+  show_pitch: "`show_pitch` draws a club's first-choice XI with who is out, worked out from its recent lineups, for an answer about who plays for a club or how it lines up.",
+  show_table: "`show_table` draws a league's current table with the clubs you name marked, for a point that rests on where clubs stand today; it cannot draw a past season's.",
+  show_comparison: "`show_comparison` puts two players' stored cards side by side, for a point that sets two carded players against each other; it never rates anyone.",
+  show_ranking: "`show_ranking` draws an ordered list of players tied to their cards, for an answer that is an order. Where the ranking claims who was better, the cards' ratings settle the order of the carded players and the result tells you what moved: follow the order drawn.",
+  show_dossier: "`show_dossier` shows a player's stored card, for an answer the card itself carries.",
+} as const;
+
+/** The view guidance for a turn's offered tools: the intro, then each tool's line. */
+export const viewRules = (tools: readonly (keyof typeof VIEW_RULES)[] = VIEW_TOOLS_IN_RULES): string =>
+  [VIEW_RULES.intro, ...tools.filter((t) => t !== 'intro').map((t) => VIEW_RULES[t])].join(' ');
+
+const VIEW_TOOLS_IN_RULES = ['show_pitch', 'show_table', 'show_comparison', 'show_ranking', 'show_dossier'] as const;

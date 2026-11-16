@@ -15,7 +15,11 @@ import { formatClubReport, type ClubMatch, type LiveClubReport } from '../servic
 import type { ResearchToolset, ToolOutcome } from '../services/researchTools';
 import { emptyLedger, type EvidenceLedger } from '../services/evidenceLedger';
 import type { LineupView } from '../services/lineupView';
-import { ReplyComposer, REPLY_BLOCKS, blocksOf, copyTextOf, readyOf, runViewTool, viewToolDeclarations, withDossierBlock } from '../services/replyBlocks';
+import { ReplyComposer, REPLY_BLOCKS, blocksOf, copyTextOf, createViewTools, gateSegments, joinSegments, MAX_REPLY_VIEWS, readyOf, runViewTool, splitSegments, viewToolDeclarations, withDossierBlock } from '../services/replyBlocks';
+import { gateUnsupportedFigures } from '../services/figureGate';
+import { getCardKey } from '../services/dossierCards';
+import type { DossierLookup } from '../services/dossierLookup';
+import type { StandingsRow } from '../services/liveFootball';
 import type { BuildContext } from '../services/replyBlocks';
 import { pitchBlock } from '../services/replyBlocks/pitch';
 import { buildHistoryContents } from '../services/dossierContext';
@@ -136,8 +140,8 @@ const kinds = (blocks: ReplyBlock[]): string[] => blocks.map((b) => b.kind);
 
 // --- Registry ---------------------------------------------------------------------------------
 
-await test('only the pitch has a tool here, and deep mode reads it from the registry', () => {
-  assert.deepEqual(viewToolDeclarations().map((d) => d.name), ['show_pitch']);
+await test('the four views have a tool, and both paths read the declarations from the registry', () => {
+  assert.deepEqual(viewToolDeclarations().map((d) => d.name), ['show_pitch', 'show_table', 'show_comparison', 'show_ranking']);
   assert.match(REPLY_BLOCKS.pitch.tool!.description!, /first-choice XI/);
   for (const kind of ['card', 'scoutOffer', 'ask', 'goDeeper', 'scorecard'] as const) assert.equal(REPLY_BLOCKS[kind].tool, undefined, kind);
 });
@@ -170,12 +174,19 @@ await test('pitch: each failure is a reason the model reads', async () => {
   assert.deepEqual(none, { error: 'Missing club' });
   const unknown = await REPLY_BLOCKS.pitch.build({ club: 'Nowhere' }, ctxFor(toolsFor([])));
   assert.deepEqual(unknown, { error: 'No live data for that club, so no XI to draw.' });
-  const shown = [pitchBlock('p1', view('Southside'))];
-  const again = await REPLY_BLOCKS.pitch.build({ club: 'Southside FC' }, ctxFor(toolsFor(['Southside']), () => shown));
-  assert.deepEqual(again, { unchanged: { shown: true, note: 'Already shown.' } });
-  const two = [pitchBlock('p1', view('Alpha')), pitchBlock('p2', view('Beta'))];
-  const over = await REPLY_BLOCKS.pitch.build({ club: 'Southside' }, ctxFor(toolsFor(['Southside']), () => two));
-  assert.deepEqual(over, { error: 'At most 2 XIs per reply.' });
+  // No rule about a subject or a count: the same club twice, and a third XI, are the model's own choice.
+  const shown = [pitchBlock('p1', view('Southside')), pitchBlock('p2', view('Alpha')), pitchBlock('p3', view('Beta'))];
+  const again = await REPLY_BLOCKS.pitch.build({ club: 'Southside' }, ctxFor(toolsFor(['Southside']), () => shown));
+  assert.ok('block' in again);
+});
+
+await test('pitch: the XI the writer argues from is the one drawn', async () => {
+  ledger = emptyLedger();
+  const calls: string[] = [];
+  const situation = { asOf: '2026-11-14', clubs: [{ ...view('Southside'), out: [], outCovered: true, newsAbsences: [], form: '', changes: [], distinctive: '', unknowns: [] }], players: [], unknowns: [] } as any;
+  const out = await REPLY_BLOCKS.pitch.build({ club: 'southside fc' }, { ...ctxFor(toolsFor(['Southside'], calls)), situation: () => situation });
+  assert.ok('block' in out);
+  assert.deepEqual(calls, [], 'no lookup: the snapshot already holds the club');
 });
 
 await test('card, scoutOffer, ask, goDeeper and scorecard: build, failure, result, history and copy', async () => {
@@ -230,7 +241,7 @@ await test('copyTextOf joins the scorecard and the prose, and leaves views and c
   const composer = new ReplyComposer();
   composer.setScorecard(scorecard);
   composer.setText('The prose.');
-  composer.setLineups([view('Southside')]);
+  composer.addView(pitchBlock(composer.newId(), view('Southside')));
   composer.showCard(card('Florian Wirtz'));
   composer.offerScout('Pedri');
   composer.setGoDeeper({ reason: 'x' });
@@ -280,7 +291,7 @@ await test('code-added blocks go where their feature puts them today', () => {
   composer.setGoDeeper({ reason: 'More to read.' });
   composer.offerScout('Pedri');
   composer.showCard(card('Florian Wirtz'));
-  composer.setLineups([view('Southside')]);
+  composer.addView(pitchBlock(composer.newId(), view('Southside')));
   composer.setScorecard(scorecard);
   composer.setText('The reply.');
   assert.deepEqual(kinds(composer.finish('The reply.')), ['scorecard', 'prose', 'pitch', 'card', 'scoutOffer', 'goDeeper']);
@@ -303,7 +314,7 @@ await test('a question is the whole reply: it drops cards, XIs and the Go deeper
   const composer = new ReplyComposer();
   composer.offerScout('Pedri');
   composer.showCard(card('Florian Wirtz'));
-  composer.setLineups([view('Southside')]);
+  composer.addView(pitchBlock(composer.newId(), view('Southside')));
   composer.setGoDeeper({ reason: 'x' });
   composer.addView(pitchBlock(composer.newId(), view('Beta')), { inline: true });
   composer.setAsk({ question: 'Which season?', options: ['This one', 'Last one'] });
@@ -318,7 +329,7 @@ await test('snapshot and restore drop what a failed attempt added, text included
   composer.setText('Earlier.');
   const saved = composer.snapshot();
   composer.showCard(card('Florian Wirtz'));
-  composer.setLineups([view('Southside')]);
+  composer.addView(pitchBlock(composer.newId(), view('Southside')));
   composer.setText('Earlier. Lots more from the attempt that gave up.');
   composer.restore(saved);
   assert.deepEqual(kinds(composer.blocks()), ['prose', 'scoutOffer']);
@@ -360,7 +371,7 @@ await test('runViewTool: places a ready view, reports a failure as the result, a
   const bad = await runViewTool(REPLY_BLOCKS.pitch, { club: 'Nowhere' }, { ...base, tools: toolsFor([]) }, composer);
   assert.deepEqual(bad, { shown: false, reason: 'No live data for that club, so no XI to draw.' });
   const dup = await runViewTool(REPLY_BLOCKS.pitch, { club: 'Southside' }, base, composer);
-  assert.deepEqual(dup, { shown: true, note: 'Already shown.' });
+  assert.equal(dup.shown, true, 'the same club twice is allowed');
 
   const second = new ReplyComposer();
   let inFlight: string[] = [];
@@ -371,6 +382,277 @@ await test('runViewTool: places a ready view, reports a failure as the result, a
   const failed = new ReplyComposer();
   await runViewTool(REPLY_BLOCKS.pitch, { club: 'Nowhere' }, { ...base, tools: toolsFor([]) }, failed, { pending: true });
   assert.deepEqual(failed.blocks().map((b) => (b.kind === 'prose' ? 'prose' : b.status)), ['failed']);
+});
+
+
+// --- Table, comparison and ranking ------------------------------------------------------------
+
+const standing = (rank: number, team: string, points: number, group: string | null = null): StandingsRow => ({
+  rank, team, group, played: 12, won: 8, drawn: 2, lost: 2, goalDiff: 10 - rank, points, form: null,
+});
+const tableTools = (rows: StandingsRow[] | null, calls: string[] = []): ResearchToolset => ({
+  ...toolsFor([]),
+  leagueTable: async (league) => {
+    calls.push(league);
+    if (!rows) return { status: 'not_covered', result: null, missing: [], note: 'no table source' };
+    return {
+      status: 'found',
+      result: { kind: 'league_table', label: `Premier League table, 2026-27`, content: 'text', stage: 'facts', table: { league: 'Premier League', season: '2026-27', rows } },
+      missing: [],
+    };
+  },
+});
+const PL_ROWS = [standing(1, 'Arsenal', 29), standing(2, 'Chelsea', 26), standing(3, 'Liverpool', 24)];
+
+await test('table: builds the rows from the live feed, marks the clubs, files the lookup and reads back the table', async () => {
+  ledger = emptyLedger();
+  const calls: string[] = [];
+  const out = await REPLY_BLOCKS.table.build({ league: 'Premier League', highlight: ['Arsenal', 'Spurs'] }, ctxFor(tableTools(PL_ROWS, calls)));
+  assert.ok('block' in out);
+  if (!('block' in out)) return;
+  assert.deepEqual(calls, ['Premier League']);
+  assert.equal(ledger.lookups.length, 1);
+  const { data } = out.block;
+  assert.equal(data.league, 'Premier League');
+  assert.equal(data.season, '2026-27');
+  assert.equal(data.rows.length, 3);
+  assert.equal(data.groups, undefined, 'a plain league has no groups');
+  assert.deepEqual(data.highlight, ['Arsenal', 'Spurs']);
+  const result = REPLY_BLOCKS.table.toolResult(out.block);
+  assert.equal(result.shown, true);
+  assert.deepEqual(result.notInTheTable, ['Spurs']);
+  assert.match(String(result.table), /1\. Arsenal — 29 pts, P12 W8 D2 L2, GD \+9/);
+  assert.equal(REPLY_BLOCKS.table.toHistory(out.block), '[shown: Premier League table, 2026-27]');
+  assert.match(REPLY_BLOCKS.table.toCopy(out.block), /^Premier League table, 2026-27\n1\. Arsenal/);
+  assert.deepEqual(REPLY_BLOCKS.table.hint!({ league: 'Premier League' }), { league: 'Premier League' });
+});
+
+await test('table: groups come from the rows, and each failure is a reason the model reads', async () => {
+  ledger = emptyLedger();
+  const grouped = await REPLY_BLOCKS.table.build({ league: 'Champions League' }, ctxFor(tableTools([standing(1, 'Arsenal', 9, 'Group A'), standing(1, 'Chelsea', 7, 'Group B'), standing(2, 'Spurs', 4, 'Group A')])));
+  assert.ok('block' in grouped);
+  if ('block' in grouped) assert.deepEqual(grouped.block.data.groups, ['Group A', 'Group B']);
+  assert.deepEqual(await REPLY_BLOCKS.table.build({ league: ' ' }, ctxFor(tableTools(PL_ROWS))), { error: 'Missing league' });
+  const none = await REPLY_BLOCKS.table.build({ league: 'Nowhere League' }, ctxFor(tableTools(null)));
+  assert.ok('error' in none && /No live table for Nowhere League/.test(none.error));
+  // Only today's table exists; a past season is refused without a lookup.
+  const calls: string[] = [];
+  const past = await REPLY_BLOCKS.table.build({ league: 'Premier League', season: '2003-04' }, ctxFor(tableTools(PL_ROWS, calls)));
+  assert.ok('error' in past && /No past tables yet/.test(past.error));
+  assert.deepEqual(calls, []);
+});
+
+const pool = new Map<string, PlayerProfile>();
+const withCard = (name: string, overall: number, over: Record<string, unknown> = {}): PlayerProfile => {
+  const c = { ...card(name, overall), ...over } as PlayerProfile;
+  pool.set(name.toLowerCase(), c);
+  return c;
+};
+const cardsFake = (asked: string[] = []): NonNullable<BuildContext['cards']> => ({
+  async lookUp(name, edition): Promise<DossierLookup> {
+    asked.push(`${name}${edition ? `:${edition}` : ''}`);
+    const hit = [...pool.entries()].find(([k]) => k.includes(name.toLowerCase()) || name.toLowerCase().includes(k.split(' ').pop()!));
+    return hit ? { status: 'found', card: hit[1] } : { status: 'missing' };
+  },
+});
+const ctxWithCards = (asked: string[] = []): BuildContext => ({ ...ctxFor(toolsFor([])), cards: cardsFake(asked) });
+
+await test('comparison: two stored cards, never a rating; a missing card is an error naming the player', async () => {
+  pool.clear();
+  withCard('Florian Wirtz', 86);
+  withCard('Jamal Musiala', 88);
+  const asked: string[] = [];
+  const out = await REPLY_BLOCKS.comparison.build({ playerA: 'Florian Wirtz', playerB: 'Jamal Musiala', edition: 'prime' }, ctxWithCards(asked));
+  assert.ok('block' in out);
+  if (!('block' in out)) return;
+  assert.deepEqual(asked, ['Florian Wirtz:prime', 'Jamal Musiala:prime']);
+  assert.equal(out.block.data.a.dossier.overall, 86);
+  assert.equal(out.block.data.b.dossier.name, 'Jamal Musiala');
+  const result = REPLY_BLOCKS.comparison.toolResult(out.block);
+  assert.match(String(result.a), /Florian Wirtz.*Overall 86, Potential 90.*Finishing 80/);
+  assert.equal(REPLY_BLOCKS.comparison.toHistory(out.block), '[shown: comparison of Florian Wirtz (Overall 86) and Jamal Musiala (Overall 88)]');
+  assert.match(REPLY_BLOCKS.comparison.toCopy(out.block), /Florian Wirtz.*Overall 86/);
+
+  const missing = await REPLY_BLOCKS.comparison.build({ playerA: 'Florian Wirtz', playerB: 'Pedri' }, ctxWithCards());
+  assert.ok('error' in missing && /No stored card for Pedri/.test(missing.error) && /offer_rating/.test(missing.error));
+  assert.ok('error' in (await REPLY_BLOCKS.comparison.build({ playerA: 'Florian Wirtz', playerB: ' ' }, ctxWithCards())));
+  assert.ok('error' in (await REPLY_BLOCKS.comparison.build({ playerA: 'Florian Wirtz', playerB: 'Wirtz' }, ctxWithCards())), 'one card twice');
+  const noLookup = await REPLY_BLOCKS.comparison.build({ playerA: 'a', playerB: 'b' }, ctxFor(toolsFor([])));
+  assert.ok('error' in noLookup);
+  const ambiguous = await REPLY_BLOCKS.comparison.build({ playerA: 'Silva', playerB: 'Wirtz' }, { ...ctxFor(toolsFor([])), cards: { lookUp: async (n) => (n === 'Silva' ? { status: 'ambiguous', names: ['David Silva', 'Bernardo Silva'] } : { status: 'missing' }) } });
+  assert.ok('error' in ambiguous && /David Silva, Bernardo Silva/.test(ambiguous.error));
+});
+
+await test('comparison: a goalkeeper against an outfielder reads headline numbers only', async () => {
+  pool.clear();
+  withCard('Gianluigi Donnarumma', 87, { goalkeeperAttributes: { reflexes: 90 }, attributes: undefined });
+  withCard('Jamal Musiala', 88);
+  const out = await REPLY_BLOCKS.comparison.build({ playerA: 'Gianluigi Donnarumma', playerB: 'Jamal Musiala' }, ctxWithCards());
+  assert.ok('block' in out);
+  if (!('block' in out)) return;
+  const result = REPLY_BLOCKS.comparison.toolResult(out.block);
+  assert.match(String(result.note), /don't share a scale/);
+  assert.ok(!/Reflexes|Finishing/.test(`${result.a} ${result.b}`));
+});
+
+await test('ranking: peak level follows the cards and reports the moves; output keeps the model order', async () => {
+  pool.clear();
+  withCard('Zinedine Zidane', 94);
+  withCard('Ronaldinho', 92);
+  withCard('Xavi Hernandez', 90);
+  const names = ['Xavi Hernandez', 'Zinedine Zidane', 'Ronaldinho'];
+  const peak = await REPLY_BLOCKS.ranking.build({ title: 'Best midfielders', names, criterion: 'peak level' }, ctxWithCards());
+  assert.ok('block' in peak);
+  if (!('block' in peak)) return;
+  assert.deepEqual(peak.block.data.entries.map((e) => e.name), ['Zinedine Zidane', 'Ronaldinho', 'Xavi Hernandez']);
+  assert.ok(peak.block.data.moves.length > 0);
+  const result = REPLY_BLOCKS.ranking.toolResult(peak.block);
+  assert.equal((result.order as string[])[0], '1. Zinedine Zidane (current form), card Overall 94');
+  assert.match(String(result.note), /follows the cards/);
+  assert.equal(REPLY_BLOCKS.ranking.toHistory(peak.block), '[shown: ranking "Best midfielders" by peak level: Zinedine Zidane, Ronaldinho, Xavi Hernandez]');
+  assert.match(REPLY_BLOCKS.ranking.toCopy(peak.block), /^Best midfielders \(peak level\)\n1\. Zinedine Zidane \(94\)/);
+  for (const criterion of ['sustained_level', 'mixed']) {
+    const out = await REPLY_BLOCKS.ranking.build({ title: 'T', names, criterion }, ctxWithCards());
+    assert.ok('block' in out && out.block.data.entries[0].name === 'Zinedine Zidane', criterion);
+  }
+  const output = await REPLY_BLOCKS.ranking.build({ title: 'Most productive', names, criterion: 'output' }, ctxWithCards());
+  assert.ok('block' in output);
+  if ('block' in output) {
+    assert.deepEqual(output.block.data.entries.map((e) => e.name), names, "the model's order stands");
+    assert.deepEqual(output.block.data.moves, []);
+    assert.equal(REPLY_BLOCKS.ranking.toolResult(output.block).moves, undefined);
+  }
+});
+
+await test('ranking: an uncarded player keeps his place, and each failure is a reason', async () => {
+  pool.clear();
+  withCard('Zinedine Zidane', 94);
+  withCard('Xavi Hernandez', 90);
+  const out = await REPLY_BLOCKS.ranking.build({ title: 'Order', names: ['Xavi Hernandez', 'Unrated Legend', 'Zinedine Zidane'], criterion: 'peak level' }, ctxWithCards());
+  assert.ok('block' in out);
+  if (!('block' in out)) return;
+  assert.deepEqual(out.block.data.entries.map((e) => e.name), ['Zinedine Zidane', 'Unrated Legend', 'Xavi Hernandez']);
+  assert.deepEqual(out.block.data.entries[1], { name: 'Unrated Legend' });
+  assert.match(String((REPLY_BLOCKS.ranking.toolResult(out.block).order as string[])[1]), /no card yet/);
+  assert.ok('error' in (await REPLY_BLOCKS.ranking.build({ title: 'T', names: ['One'], criterion: 'peak level' }, ctxWithCards())));
+  const unknown = await REPLY_BLOCKS.ranking.build({ title: 'T', names: ['A', 'B'], criterion: 'vibes' }, ctxWithCards());
+  assert.ok('error' in unknown && /peak level/.test(unknown.error));
+  assert.ok('error' in (await REPLY_BLOCKS.ranking.build({ title: ' ', names: ['A', 'B'], criterion: 'output' }, ctxWithCards())));
+  const many = Array.from({ length: 20 }, (_, i) => `Player ${i}`);
+  const capped = await REPLY_BLOCKS.ranking.build({ title: 'Long', names: [...many, 'player 0'], criterion: 'output' }, ctxWithCards());
+  assert.ok('block' in capped && capped.block.data.entries.length === 15, 'fifteen at most, duplicates dropped');
+  assert.deepEqual(REPLY_BLOCKS.ranking.hint!({ title: 'Long', names: many, criterion: 'output' }), { title: 'Long', rows: 15 });
+});
+
+// --- Segments: the gates run per prose segment and no view moves -------------------------------
+
+await test('the figure gate cuts a sentence from one segment, and every view stays where it was called', () => {
+  const composer = new ReplyComposer();
+  const evidence = '1. Arsenal — 29 pts, P12 W8 D2 L2, GD +9';
+  const gate = (text: string) => gateUnsupportedFigures(text, evidence).text;
+  composer.setGate((segments) => gateSegments(segments, gate));
+  const one = 'Arsenal lead with 29 points. Their title odds are 71 percent. ';
+  const two = 'The chasing pack is close. They keep 55 percent of the ball. ';
+  composer.setText(one);
+  composer.addView(pitchBlock(composer.newId(), view('Southside')), { inline: true });
+  composer.setText(one + two);
+  composer.addView(pitchBlock(composer.newId(), view('Northside')), { inline: true });
+  composer.setText(`${one}${two}Nothing is settled.`);
+  const shown = composer.blocks();
+  assert.deepEqual(kinds(shown), ['prose', 'pitch', 'prose', 'pitch', 'prose']);
+  assert.equal((shown[0] as { text: string }).text, 'Arsenal lead with 29 points.');
+  assert.equal((shown[2] as { text: string }).text, 'The chasing pack is close.');
+  assert.equal((shown[4] as { text: string }).text, 'Nothing is settled.');
+  assert.equal(composer.displayText(), 'Arsenal lead with 29 points.\n\nThe chasing pack is close.\n\nNothing is settled.');
+  assert.deepEqual(shown.filter((b) => b.kind === 'pitch').map((b) => (b as { data: { club: string } }).data.club), ['Southside', 'Northside']);
+  // The final gates settle the same segments. One that loses all its prose draws none, and the views stay.
+  composer.settle(gateSegments(composer.rawProse(), (t) => gateUnsupportedFigures(t, '').text));
+  const done = composer.finish();
+  assert.deepEqual(kinds(done), ['pitch', 'prose', 'pitch', 'prose']);
+});
+
+await test('segments are gated together under one mark, and a lost mark falls back to gating each on its own', () => {
+  assert.deepEqual(splitSegments(joinSegments(['one.', 'two.', 'three.']), 3), ['one.', 'two.', 'three.']);
+  assert.deepEqual(splitSegments('whole', 1), ['whole']);
+  assert.equal(splitSegments('no marks here', 3), null);
+  // A budget of one figure across the reply spans the segments: the later sentence goes.
+  const budget = (text: string) => gateUnsupportedFigures(text, '29 pts, 24 pts', [], { budget: { max: 1, slots: [] } }).text;
+  assert.deepEqual(gateSegments(['Arsenal have 29 pts.', 'Liverpool have 24 pts.'], budget), ['Arsenal have 29 pts.', '']);
+  // A gate that eats the marks: each segment is gated alone.
+  assert.deepEqual(gateSegments(['a. 12 goals.', 'b.'], (t) => t.replace(/\n*# ⟦view⟧\n*/g, ' ').replace('12 goals.', '').trim()), ['a.', 'b.']);
+});
+
+// --- The tools: one limit, views where the model called them ----------------------------------
+
+await test('view tools: placed where called with a skeleton, settled in place, and MAX_REPLY_VIEWS refuses the next call', async () => {
+  pool.clear();
+  withCard('Zinedine Zidane', 94);
+  withCard('Xavi Hernandez', 90);
+  ledger = emptyLedger();
+  const composer = new ReplyComposer();
+  const tools = createViewTools({
+    composer,
+    inline: true,
+    context: { ...ctxFor(tableTools(PL_ROWS)), cards: cardsFake() },
+  });
+  assert.deepEqual(tools.declarations.map((d) => d.name), ['show_pitch', 'show_table', 'show_comparison', 'show_ranking']);
+  assert.ok(tools.handles('show_table') && !tools.handles('show_dossier'));
+  assert.deepEqual(await tools.run('show_nothing', {}), { shown: false, reason: 'Unknown view tool: show_nothing' });
+
+  composer.setText('Here is the table. ');
+  const running = tools.run('show_table', { league: 'Premier League', highlight: ['Arsenal'] });
+  assert.deepEqual(composer.blocks().map((b) => (b.kind === 'prose' ? 'prose' : b.status)), ['prose', 'pending'], 'a skeleton while it loads');
+  assert.equal((await running).shown, true);
+  composer.setText('Here is the table. Arsenal lead.');
+  assert.deepEqual(kinds(composer.blocks()), ['prose', 'table', 'prose']);
+
+  // Eleven more fit; the same table twice is the model's own choice; the thirteenth is refused.
+  for (let i = 0; i < MAX_REPLY_VIEWS - 1; i++) assert.equal((await tools.run('show_table', { league: 'Premier League' })).shown, true);
+  const refused = await tools.run('show_table', { league: 'Premier League' });
+  assert.deepEqual(refused, { shown: false, reason: 'view limit reached, nothing drawn' });
+  assert.equal(composer.blocks().filter((b) => b.kind === 'table').length, MAX_REPLY_VIEWS);
+  // A failed view leaves a failed block, which draws nothing and frees no limit it never held.
+  const failing = new ReplyComposer();
+  const t2 = createViewTools({ composer: failing, inline: false, context: ctxFor(tableTools(null)) });
+  const bad = await t2.run('show_table', { league: 'Nowhere League' });
+  assert.equal(bad.shown, false);
+  failing.setText('x');
+  assert.deepEqual(kinds(failing.finish()), ['prose']);
+});
+
+await test('view tools: a ranking tool call carries its title and row count to the skeleton', async () => {
+  pool.clear();
+  withCard('Zinedine Zidane', 94);
+  const composer = new ReplyComposer();
+  let hinted: unknown;
+  const slow: BuildContext['cards'] = { lookUp: async (n) => { hinted = composer.blocks().find((b) => b.kind === 'ranking'); return cardsFake().lookUp(n); } };
+  const tools = createViewTools({ composer, inline: false, context: { ...ctxFor(toolsFor([])), cards: slow } });
+  await tools.run('show_ranking', { title: 'Best midfielders', names: ['Zinedine Zidane', 'Xavi Hernandez'], criterion: 'output' });
+  assert.deepEqual((hinted as { hint?: unknown }).hint, { title: 'Best midfielders', rows: 2 });
+  assert.equal((hinted as { status: string }).status, 'pending');
+});
+
+await test('a shown card sits where show_dossier was called, and still files with the reply', () => {
+  const composer = new ReplyComposer();
+  composer.setText('First point. ');
+  const wirtz = card('Florian Wirtz');
+  composer.showCard(wirtz, { inline: true });
+  composer.setText('First point. Second point.');
+  assert.deepEqual(kinds(composer.blocks()), ['prose', 'card', 'prose']);
+  assert.deepEqual(composer.cards, [wirtz]);
+  assert.equal(getCardKey(composer.cards[0]), getCardKey(wirtz));
+  composer.showCard(wirtz, { inline: true });
+  assert.equal(composer.blocks().filter((b) => b.kind === 'card').length, 1, 'once');
+});
+
+await test('a question replaces all the prose, and a settled reply ignores later text', () => {
+  const composer = new ReplyComposer();
+  composer.setText('Looking. ');
+  composer.addView(pitchBlock(composer.newId(), view('Southside')), { inline: true });
+  composer.setAsk({ question: 'Which club?', options: ['A', 'B'] });
+  composer.replaceProse('Which club?');
+  assert.deepEqual(kinds(composer.blocks()), ['prose', 'ask']);
+  assert.equal(composer.displayText(), 'Which club?');
 });
 
 // --- blocksOf ---------------------------------------------------------------------------------

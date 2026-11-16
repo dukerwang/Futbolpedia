@@ -178,8 +178,8 @@ interface Research {
   toolCalls?: string[];
   /** Deep mode only: why research ended. */
   stop?: string;
-  lineupsShown: number;
-  cardsShown: number;
+  /** The views the reply drew, by kind (pitch, table, comparison, ranking, card), in the order of `VIEW_KINDS`. */
+  views: Record<string, number>;
   /** The gate feedback round's counts (`services/gateFeedback.ts`); absent when no round finished. */
   gateFeedback?: { flagged: number; fixed: number; dropped: number; removed: number };
 }
@@ -193,6 +193,21 @@ function gateFeedbackOf(perf: string[]): Research['gateFeedback'] {
   return undefined;
 }
 
+/** The views a reply draws, which the model chooses, so the report shows what it reached for. */
+const VIEW_KINDS = ['pitch', 'table', 'comparison', 'ranking', 'card'] as const;
+function viewsDrawn(attached: import('../types').ReplyBlock[] | null): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const kind of VIEW_KINDS) {
+    const n = (attached ?? []).filter((b) => b.kind === kind && b.status === 'ready').length;
+    if (n) out[kind] = n;
+  }
+  return out;
+}
+
+/** "1 pitch, 1 table" for the report's Views column; a dash for a reply that drew none. */
+const viewsLine = (views: Record<string, number> | undefined): string =>
+  Object.entries(views ?? {}).map(([kind, n]) => `${n} ${kind}`).join(', ') || '–';
+
 /** The turn's research, from its perf lines and, in deep mode, the loop's own count. */
 function researchOf(
   perf: string[],
@@ -203,8 +218,7 @@ function researchOf(
   const lookupLines = perf.filter((l) => l.startsWith('[Perf] lookup '));
   const feedback = gateFeedbackOf(perf);
   const shown = {
-    lineupsShown: (attached ?? []).filter((b) => b.kind === 'pitch').length,
-    cardsShown: (attached ?? []).filter((b) => b.kind === 'card').length,
+    views: viewsDrawn(attached),
     ...(feedback ? { gateFeedback: feedback } : {}),
   };
   if (stats && path?.path !== 'stage') {
@@ -428,14 +442,14 @@ The grader is the same model that writes the answers, so it can share their blin
 - Median first token: ${secs(median(results.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s
 - Gate feedback (flagged sentences the model fixed, dropped, or lost to the second pass): ${results.reduce((n, r) => n + (r.run.research?.gateFeedback?.fixed ?? 0), 0)} fixed, ${results.reduce((n, r) => n + (r.run.research?.gateFeedback?.dropped ?? 0), 0)} dropped, ${results.reduce((n, r) => n + (r.run.research?.gateFeedback?.removed ?? 0), 0)} removed, across ${results.filter((r) => r.run.research?.gateFeedback).length} turns with a correction round. A turn with no round (nothing flagged, a spent budget, a late reply or a failed call) shows 0, 0, 0.
 
-| # | Stale | Invented | What changed | Decisive | Hedged roles | Gaps admitted | Path | Lookups | Searches | Rounds | Shown | Gate fixed | Gate dropped | Gate removed | First token (s) | Total (s) | Notes |
+| # | Stale | Invented | What changed | Decisive | Hedged roles | Gaps admitted | Path | Lookups | Searches | Rounds | Views | Gate fixed | Gate dropped | Gate removed | First token (s) | Total (s) | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${results
   .map((r) => {
     const x = r.run.research;
     // A turn with nothing flagged shows 0, 0, 0: no round ran. The counts are those of `[GateFeedback]`.
     const gate = x?.gateFeedback ? `${x.gateFeedback.fixed} | ${x.gateFeedback.dropped} | ${x.gateFeedback.removed}` : '0 | 0 | 0';
-    const research = x ? `${x.fallback ? `deep, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${[x.lineupsShown && `${x.lineupsShown} XI`, x.cardsShown && `${x.cardsShown} card`].filter(Boolean).join(', ') || '–'} | ${gate}` : '– | – | – | – | – | – | – | –';
+    const research = x ? `${x.fallback ? `deep, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${viewsLine(x.views)} | ${gate}` : '– | – | – | – | – | – | – | –';
     return r.grade
       ? `| ${r.q.n} | ${r.grade.staleFacts.length} | ${r.grade.inventedFacts.length} | ${r.grade.saysWhatChanged} | ${r.grade.decisiveness} | ${r.grade.hedgedRoles} | ${r.grade.gapsAdmitted} | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.grade.notes.replace(/\|/g, '/').replace(/\n/g, ' ')} |`
       : `| ${r.q.n} | – | – | – | – | – | – | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${r.run.error}` : 'Grading failed'} |`;

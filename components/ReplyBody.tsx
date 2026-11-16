@@ -8,8 +8,11 @@ import { useTypewriter } from './useTypewriter';
 import { GaffaTradeScorecardView } from './GaffaTradeScorecard';
 import { DossierChatCard } from './DossierChatCard';
 import { AskChips, GoDeeperChip } from './ReplyChips';
-import { PitchView } from './PitchView';
 import { ScoutOffer } from './ScoutOffer';
+import { ComparisonSkeleton, ComparisonView } from './views/ComparisonView';
+import { LeagueTableSkeleton, LeagueTableView } from './views/LeagueTableView';
+import { PitchBlockView, PitchSkeleton } from './views/PitchBlockView';
+import { RankingSkeleton, RankingView } from './views/RankingView';
 
 // External links in model prose should never navigate away from an in-progress chat.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -49,10 +52,22 @@ const Prose: React.FC<{ text: string; typing?: boolean }> = ({ text, typing }) =
     />
 );
 
-/** A view whose data is still loading holds its place so the prose below doesn't jump. */
-const PendingView: React.FC = () => (
-    <div aria-busy="true" aria-label="Loading" className="h-48 border border-cream-300 dark:border-charcoal-border bg-cream-100/50 dark:bg-charcoal-surface/50 animate-pulse" />
-);
+/** The skeleton of a pending view, as tall as the view that replaces it where the call says enough to know. */
+const skeletonOf = (b: ReplyBlock): React.ReactNode => {
+    if (b.kind === 'prose' || b.status !== 'pending') return null;
+    switch (b.kind) {
+        case 'pitch':
+            return <PitchSkeleton />;
+        case 'table':
+            return <LeagueTableSkeleton caption={['Table', b.hint?.league]} />;
+        case 'comparison':
+            return <ComparisonSkeleton />;
+        case 'ranking':
+            return <RankingSkeleton title={b.hint?.title} rows={b.hint?.rows} />;
+        default:
+            return <div aria-busy="true" aria-label="Loading" className="h-24 border border-cream-300 dark:border-charcoal-border bg-cream-100/50 dark:bg-charcoal-surface/50 animate-pulse" />;
+    }
+};
 
 /**
  * A reply's body: its blocks in order, with the prose typing in as it arrives. Blocks after the last
@@ -103,9 +118,19 @@ export const ReplyBody: React.FC<ReplyBodyProps> = ({ message, isNew, isError, o
     /** One block outside a run. `lead` is a block ahead of the prose, drawn bare. */
     function renderOne(b: ReplyBlock, lead: boolean): React.ReactNode {
         if (b.kind === 'prose') return null;
-        if (b.status === 'pending') return <PendingView key={b.id} />;
+        // A view whose data is still loading holds its place, the height of its settled state, so the
+        // prose below doesn't jump; a failed view draws nothing.
+        if (b.status === 'pending') return <div key={b.id} className="animate-fade-in">{skeletonOf(b)}</div>;
         if (b.status !== 'ready') return null;
         switch (b.kind) {
+            case 'pitch':
+                return <div key={b.id} className="animate-fade-in"><PitchBlockView lineup={b.data} /></div>;
+            case 'table':
+                return <div key={b.id} className="animate-fade-in"><LeagueTableView data={b.data} /></div>;
+            case 'comparison':
+                return <div key={b.id} className="animate-fade-in"><ComparisonView data={b.data} onOpenDossier={onOpenDossier} /></div>;
+            case 'ranking':
+                return <div key={b.id} className="animate-fade-in"><RankingView data={b.data} onOpenDossier={onOpenDossier} onScoutName={onScoutName} /></div>;
             case 'scorecard':
                 return <GaffaTradeScorecardView key={b.id} card={b.data} />;
             case 'card':
@@ -133,15 +158,6 @@ export const ReplyBody: React.FC<ReplyBodyProps> = ({ message, isNew, isError, o
         if (b.kind === 'prose') {
             const text = proseOf(b, i);
             if (text) out.push(<Prose key={b.id} text={text} typing={i === lastProse && isTyping} />);
-            continue;
-        }
-        // Consecutive XIs share one component, which lays two clubs side by side.
-        if (b.kind === 'pitch') {
-            const run: ReplyBlock[] = [];
-            while (i < blocks.length && blocks[i].kind === 'pitch') run.push(blocks[i++]);
-            i--;
-            const views = run.flatMap(r => (r.kind === 'pitch' && r.status === 'ready' ? [r.data] : []));
-            if (views.length) out.push(<div key={b.id} className="animate-fade-in"><PitchView lineups={views} /></div>);
             continue;
         }
         // Cards and Scout offers sit together in one column under the prose.

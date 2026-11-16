@@ -583,7 +583,7 @@ export type LiveMatchResult =
   | { found: true; lineup: LiveLineup }
   | { found: false; status: LiveStatus | 'pending'; reason: string };
 export type LiveTableResult =
-  | { found: true; league: string; season: string | null; text: string }
+  | { found: true; league: string; season: string | null; text: string; rows: StandingsRow[] }
   | { found: false; status: LiveStatus; reason: string };
 
 const MINUTE = 60_000;
@@ -676,7 +676,7 @@ export function createLiveFootball(getJson: GetJson, now: () => number = Date.no
     const json = await settle(cached(`${ESPN_STANDINGS}/${league.slug}/standings`, 60 * MINUTE));
     const { season, rows } = parseEspnStandings(json);
     if (!rows.length) return { found: false, status: json ? 'empty' : 'failed', reason: `ESPN returned no table for ${league.name}` };
-    return { found: true, league: league.name, season, text: formatLeagueTable(rows) };
+    return { found: true, league: league.name, season, text: formatLeagueTable(rows), rows };
   }
 
   /**

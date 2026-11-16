@@ -74,6 +74,10 @@ globalThis.fetch = (async (input: any, init?: any) => {
     snapshotRoute.push(new URL(url, 'http://local').searchParams.get('club') ?? '');
     return json({ snapshot: null });
   }
+  if (url.startsWith('/api/live/table')) {
+    const row = (rank: number, team: string, points: number) => ({ rank, team, group: null, played: 12, won: 8, drawn: 2, lost: 2, goalDiff: 10 - rank, points, form: null });
+    return json({ found: true, league: 'Premier League', season: '2026-27', text: '1. Arsenal — 29 pts, P12 W8 D2 L2, GD +9\n2. Chelsea — 26 pts, P12 W7 D3 L2, GD +8', rows: [row(1, 'Arsenal', 29), row(2, 'Chelsea', 26)] });
+  }
   if (url.startsWith('/api/')) return new Response('{}', { status: 404 });
   if (!url.includes('generativelanguage.googleapis.com')) return realFetch(input, init);
 
@@ -104,6 +108,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
 const { sendMessageToAI } = await import('../services/geminiService');
 const { createDossierTools, createInitiativeTools, offerScout, showCard } = await import('../services/conversationalScout');
 const { ReplyComposer, readyOf } = await import('../services/replyBlocks');
+const { pitchBlock } = await import('../services/replyBlocks/pitch');
 type ReplyBlock = import('../types').ReplyBlock;
 /** What a reply attached, read back from its blocks. */
 const attachedIn = (blocks: ReplyBlock[] | null) => ({
@@ -234,7 +239,7 @@ await test('an asking reply drops what was drawn for an answer, and keeps scout 
   const composer = new ReplyComposer();
   composer.showCard(card('Florian Wirtz'));
   composer.offerScout('Pedri');
-  composer.setLineups([{ club: 'Southside' } as any]);
+  composer.addView(pitchBlock(composer.newId(), { club: 'Southside' } as any));
   composer.setGoDeeper({ reason: 'x' });
   const { tools, endTurn } = createInitiativeTools({
     composer, cardsInPlay: [], localCards: [], historical: false, conversationId: 'conv-unit', clubsInPlay: [], deeper: true, startBuild: () => {},
@@ -272,7 +277,7 @@ await test('control: a clear question with its card in play, and a writer that d
   const a = attachedIn(t.attached);
   assert.equal(a.ask, undefined);
   assert.equal(a.goDeeper, undefined);
-  assert.equal(a.cards.length, 1, 'his card is shown, as before');
+  assert.equal(a.cards.length, 0, 'code no longer shows his card; the writer does, with show_dossier');
   // The writer was told when to ask and when to take the likelier reading and say so.
   const prompt = t.writer[0].prompt ?? '';
   assert.ok(prompt.includes('call `ask_user` only when the message reads two ways'));
@@ -335,7 +340,7 @@ await test('offer_rating for his prime offers the prime beside his current card'
 await test('offer_rating never duplicates a card that is shown, or one that exists for that version', async () => {
   const t = await runTurn(playerQuestion, { first: [call('offer_rating', { name: 'Florian Wirtz', edition: 'current' })] });
   const a = attachedIn(t.attached);
-  assert.equal(a.cards.length, 1);
+  assert.equal(a.cards.length, 0);
   assert.deepEqual(a.scoutOffers, []);
   // A prime card he has is not offered again either.
   const both = await runTurn(playerQuestion, {
@@ -424,6 +429,109 @@ await test('a blank reason attaches nothing', async () => {
 await test('the writer is told go deeper is not a hedge', async () => {
   const t = await runTurn(playerQuestion);
   assert.ok((t.writer[0].prompt ?? '').includes('It is not a hedge and not a sign of effort'));
+});
+
+
+// ---------------------------------------------------------------------------------------------
+// View tools
+
+const VIEW_TOOLS = ['show_pitch', 'show_table', 'show_comparison', 'show_ranking', 'show_dossier'];
+const kindsOf = (blocks: ReplyBlock[] | null) => (blocks ?? []).map((b) => b.kind);
+
+await test('every prose turn is offered the four view tools and show_dossier, a thread about the past and a card-only turn included', async () => {
+  const present = await runTurn('Who is top of the league?', { route: { ...playerRoute, analyticalMode: 'debate_or_verdict', needsSearch: false, targetPlayers: [] } });
+  const past = await runTurn('How good was prime Florian Wirtz?', { route: pastRoute });
+  const cardsOnly = await runTurn(playerQuestion);
+  for (const [label, t] of [['present', present], ['past', past], ['cards only', cardsOnly]] as const) {
+    assert.ok(VIEW_TOOLS.every((n) => t.writer[0].tools.includes(n)), `${label}: shown ${t.writer[0].tools}`);
+    const prompt = t.writer[0].prompt ?? '';
+    for (const tool of VIEW_TOOLS) assert.ok(prompt.includes(`\`${tool}\``), `${label}: the prompt has a line for ${tool}`);
+    assert.ok(prompt.includes('A view lands where you call it'), label);
+  }
+});
+
+await test('the view guidance is descriptive and joins the turn instructions, not the system prompt', async () => {
+  const { viewRules } = await import('../prompts/chatPrompt');
+  const { buildConversationalScoutInstruction } = await import('../prompts/chatPrompt');
+  const rules = viewRules();
+  assert.doesNotMatch(rules, /\b(Arsenal|Chelsea|Madrid|Messi|Saka|Wirtz|\d{2} Overall)\b/);
+  for (const eaFc of [false, true]) assert.ok(!/show_table|show_ranking|show_comparison/.test(buildConversationalScoutInstruction(eaFc)), 'the system prompt stays byte-stable');
+});
+
+await test('Gaffa’s panel and a challenge turn are offered no view tool, and a call to one is unknown', async () => {
+  const panel = await runTurn(playerQuestion, { options: { noRating: true }, first: [call('show_table', { league: 'Premier League' })], final: 'A plain answer for the panel.' });
+  assert.ok(VIEW_TOOLS.filter((n) => n !== 'show_dossier').every((n) => !panel.writer[0].tools.includes(n)), `shown ${panel.writer[0].tools}`);
+  assert.ok(!(panel.writer[0].prompt ?? '').includes('A view lands where you call it'));
+  assert.deepEqual(kindsOf(panel.attached).filter((k) => k !== 'prose'), []);
+  const wirtz = card('Florian Wirtz');
+  const challenge = await runTurn('He should be a point higher.', {
+    route: { ...playerRoute, intent: 'challenge_or_revise', targetPlayers: ['Florian Wirtz'] },
+    options: { challengeCardKey: (await import('../services/dossierStore')).getCardKey(wirtz) },
+    cards: [wirtz],
+    final: 'The prose the writer gave.',
+  });
+  assert.ok(challenge.writer.every((w) => VIEW_TOOLS.filter((n) => n !== 'show_dossier').every((n) => !w.tools.includes(n))));
+});
+
+await test('a streamed reply puts a view where the model called it: text, the table, then the rest', async () => {
+  const t = await runTurn('Who is top of the league?', {
+    stream: true,
+    first: [{ text: 'Arsenal lead the table. ' }, call('show_table', { league: 'Premier League', highlight: ['Arsenal'] })],
+    final: 'The gap to Chelsea is small.',
+  });
+  assert.deepEqual(kindsOf(t.attached), ['prose', 'table', 'prose']);
+  const blocks = t.attached!;
+  assert.equal((blocks[0] as { text: string }).text, 'Arsenal lead the table.');
+  assert.equal((blocks[2] as { text: string }).text, 'The gap to Chelsea is small.');
+  assert.equal(t.reply, 'Arsenal lead the table.\n\nThe gap to Chelsea is small.');
+  const table = blocks[1] as import('../types').ReadyBlock<'table'>;
+  assert.equal(table.data.rows.length, 2);
+  assert.deepEqual(table.data.highlight, ['Arsenal']);
+});
+
+await test('a reply that is not streamed has no text to anchor to, so its view follows the prose', async () => {
+  const t = await runTurn('Who is top of the league?', {
+    first: [call('show_table', { league: 'Premier League' })],
+    final: 'Arsenal lead the table.',
+  });
+  assert.deepEqual(kindsOf(t.attached), ['prose', 'table']);
+});
+
+await test('show_dossier lands where it was called on a streamed reply, and a one-player question shows no card by rule', async () => {
+  const shown = await runTurn(playerQuestion, {
+    stream: true,
+    first: [{ text: 'He is a high-end starter. ' }, call('show_dossier', { name: 'Florian Wirtz' })],
+    final: 'His card has the detail.',
+  });
+  assert.deepEqual(kindsOf(shown.attached), ['prose', 'card', 'prose']);
+  const plain = await runTurn(playerQuestion, { stream: true, first: [{ text: 'He is a high-end starter.' }] });
+  assert.deepEqual(kindsOf(plain.attached), ['prose'], 'code attaches nothing: the model chose no card');
+});
+
+await test('a comparison of two carded players draws both cards, and one without a card is a reason the model reads', async () => {
+  const cards = [card('Florian Wirtz'), card('Jamal Musiala')];
+  const ok = await runTurn('Wirtz or Musiala?', {
+    stream: true,
+    cards,
+    first: [{ text: 'Close call. ' }, call('show_comparison', { playerA: 'Florian Wirtz', playerB: 'Jamal Musiala' })],
+    final: 'Musiala has the edge.',
+  });
+  assert.deepEqual(kindsOf(ok.attached), ['prose', 'comparison', 'prose']);
+  const bad = await runTurn('Wirtz or Pedri?', {
+    cards,
+    first: [call('show_comparison', { playerA: 'Florian Wirtz', playerB: 'Pedri' })],
+    final: 'I only have Wirtz rated.',
+  });
+  assert.deepEqual(kindsOf(bad.attached), ['prose'], 'a failed view draws nothing');
+});
+
+await test('a question the writer asks drops the views drawn before it', async () => {
+  const t = await runTurn('Who is top of the league?', {
+    stream: true,
+    first: [{ text: 'Let me look. ' }, call('show_table', { league: 'Premier League' }), call('ask_user', { question: 'Which league?', options: ['Premier League', 'La Liga'] })],
+  });
+  assert.deepEqual(kindsOf(t.attached), ['prose', 'ask']);
+  assert.equal(t.reply, 'Which league?');
 });
 
 // ---------------------------------------------------------------------------------------------

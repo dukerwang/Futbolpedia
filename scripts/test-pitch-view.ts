@@ -2,8 +2,8 @@
 /**
  * Offline check for the pitch view: every slot code ESPN's lineup parser can emit has a place on
  * the pitch, an XI's eleven slots and their labels never overlap, an even split and an empty slot
- * show their labels, and a reply attaches XIs only for a turn about the present (at most two
- * clubs). No network, no model.
+ * show their labels. Which XIs a reply draws is the model's call (`show_pitch`, see test-reply-blocks.ts).
+ * No network, no model.
  *
  * Usage:
  *   npx tsx scripts/test-pitch-view.ts
@@ -14,16 +14,14 @@ import React from 'react';
 import { PitchView } from '../components/PitchView';
 import { parseMatchLineup, roleRow, type ClubMatch } from '../services/liveFootball';
 import {
-  MAX_LINEUPS,
   PITCH,
   lineupCaption,
   lineupViewOf,
-  lineupsForTurn,
   placeXI,
   surnameOf,
   type LineupSlot,
 } from '../services/lineupView';
-import type { ClubSituation, Situation } from '../services/situationSnapshot';
+import type { ClubSituation } from '../services/situationSnapshot';
 
 let passes = 0;
 let failures = 0;
@@ -177,52 +175,6 @@ test('absences from the news join the injury list without repeating a name', () 
   const uncovered = lineupViewOf(lineup({ outCovered: false, out: [], newsAbsences: [{ name: 'Someone Else', note: 'illness' }, { name: 'someone else', note: 'again' }] }))!;
   assert.deepEqual(uncovered.out, [{ name: 'Someone Else', note: 'illness' }]);
   assert.equal(lineupViewOf(lineup({ xiBasis: 'none', xi: [] })), null);
-});
-
-// ---------------------------------------------------------------------------------------------
-// When a reply attaches XIs
-
-const club = (name: string, over: Partial<ClubSituation> = {}): ClubSituation => lineup({ club: name, ...over });
-const situation = (clubs: ClubSituation[], players: Situation['players'] = []): Situation => ({ asOf: '2026-11-14', clubs, players, unknowns: [] });
-const turn = (over: Partial<Parameters<typeof lineupsForTurn>[0]> = {}) => ({
-  situation: situation([club('Arsenal')]),
-  clubs: ['Arsenal'],
-  players: [] as string[],
-  historical: false,
-  scorecard: false,
-  ...over,
-});
-
-test('a question about the present attaches the XI of the club it is about', () => {
-  const views = lineupsForTurn(turn());
-  assert.deepEqual(views.map((v) => v.club), ['Arsenal']);
-  assert.equal(views[0].xi.length, 11);
-  // Short forms of a club's name match.
-  assert.equal(lineupsForTurn(turn({ situation: situation([club('Tottenham Hotspur')]), clubs: ['Spurs', 'Tottenham'] })).length, 1);
-});
-
-test('a thread about the past, a Gaffa scorecard reply or no snapshot attaches nothing', () => {
-  assert.deepEqual(lineupsForTurn(turn({ historical: true })), []);
-  assert.deepEqual(lineupsForTurn(turn({ scorecard: true })), []);
-  assert.deepEqual(lineupsForTurn(turn({ situation: null })), []);
-});
-
-test('only the clubs the turn is about, with an XI, at most two, in the snapshot order', () => {
-  const clubs = [club('Chelsea'), club('Arsenal'), club('Liverpool'), club('Everton', { xiBasis: 'none', xi: [], formation: null, matchesRead: 0 })];
-  const views = lineupsForTurn(turn({ situation: situation(clubs), clubs: ['Liverpool', 'Arsenal', 'Everton', 'Chelsea'] }));
-  assert.equal(MAX_LINEUPS, 2);
-  assert.deepEqual(views.map((v) => v.club), ['Chelsea', 'Arsenal']);
-  // A club the snapshot covers but the turn isn't about is left out; one with no XI is skipped.
-  assert.deepEqual(lineupsForTurn(turn({ situation: situation(clubs), clubs: ['Everton'] })), []);
-  assert.deepEqual(lineupsForTurn(turn({ situation: situation(clubs), clubs: ['Liverpool'] })).map((v) => v.club), ['Liverpool']);
-  assert.deepEqual(lineupsForTurn(turn({ clubs: [] })), []);
-});
-
-test('a question about one player gets his club’s XI', () => {
-  const s = situation([club('Arsenal'), club('Chelsea')], [{ name: 'Bukayo Saka', club: 'Arsenal', role: 'RW', form: '', status: '', changes: '' }]);
-  assert.deepEqual(lineupsForTurn(turn({ situation: s, clubs: [], players: ['Saka'] })).map((v) => v.club), ['Arsenal']);
-  // Two players are a comparison, not a question about one club.
-  assert.deepEqual(lineupsForTurn(turn({ situation: s, clubs: [], players: ['Saka', 'Palmer'] })), []);
 });
 
 console.log(`${passes} passed, ${failures} failed`);
