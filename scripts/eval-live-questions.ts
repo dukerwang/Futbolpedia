@@ -366,20 +366,9 @@ if (warm) {
   await new Promise((r) => setTimeout(r, 20_000));
 }
 
-for (const q of questions) {
-  process.stdout.write(`Q${q.n}: ${q.text} ... `);
-  const run = await ask(q.text);
-  const graded = run.answer ? await grade(q.text, run.answer, today).catch((e) => ({ grade: null, raw: String(e) })) : { grade: null, raw: '' };
-  results.push({ q, run, grade: graded.grade, graderRaw: graded.raw });
-  console.log(
-    run.error
-      ? `failed: ${run.error}`
-      : `${((run.firstTokenMs ?? run.totalMs) / 1000).toFixed(1)}s first token, ${(run.totalMs / 1000).toFixed(1)}s total${
-          graded.grade ? `; stale ${graded.grade.staleFacts.length}, invented ${graded.grade.inventedFacts.length}, decisive ${graded.grade.decisiveness}/5` : '; grading failed'
-        }`,
-  );
-}
-
+// Written after every question, so a run cut short (a crash, a spend cap) keeps what it finished.
+const stamp = stampOf('');
+function writeReport(): void {
 const secs = (ms: number | null) => (ms === null ? '–' : (ms / 1000).toFixed(1));
 const graded = results.filter((r) => r.grade);
 const sum = (f: (g: Grade) => number) => graded.reduce((n, r) => n + f(r.grade!), 0);
@@ -387,7 +376,7 @@ const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math
 
 const report = `# Live question eval: ${today}, ${label}
 
-Ran ${results.length} questions through the ${deep ? 'deep mode loop (`--deep`)' : 'chat pipeline'}${warm ? ', each answered once beforehand so club snapshots were already built' : ', cold: every club snapshot built during the run'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
+Ran ${results.length} questions through the ${deep ? 'deep mode loop (`--deep`)' : 'chat pipeline'}${warm ? ', each answered once beforehand so club snapshots were already built' : deep ? ', cold: no stored club snapshots (deep mode reads them but never builds one)' : ', cold: every club snapshot built during the run'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
 
 The grader is the same model that writes the answers, so it can share their blind spots and misjudge facts its own search doesn't reach. Compare runs with each other rather than reading any score as absolute.
 
@@ -432,8 +421,24 @@ ${r.run.perf.map((l) => `    ${l}`).join('\n') || '    (no perf lines)'}
   )
   .join('\n')}`;
 
-mkdirSync(dir, { recursive: true });
-const stamp = stampOf('');
-writeFileSync(join(dir, `${stamp}.md`), report);
-writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(results, null, 2));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${stamp}.md`), report);
+  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(results, null, 2));
+}
+
+for (const q of questions) {
+  process.stdout.write(`Q${q.n}: ${q.text} ... `);
+  const run = await ask(q.text);
+  const graded = run.answer ? await grade(q.text, run.answer, today).catch((e) => ({ grade: null, raw: String(e) })) : { grade: null, raw: '' };
+  results.push({ q, run, grade: graded.grade, graderRaw: graded.raw });
+  console.log(
+    run.error
+      ? `failed: ${run.error}`
+      : `${((run.firstTokenMs ?? run.totalMs) / 1000).toFixed(1)}s first token, ${(run.totalMs / 1000).toFixed(1)}s total${
+          graded.grade ? `; stale ${graded.grade.staleFacts.length}, invented ${graded.grade.inventedFacts.length}, decisive ${graded.grade.decisiveness}/5` : '; grading failed'
+        }`,
+  );
+  writeReport();
+}
+
 console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
