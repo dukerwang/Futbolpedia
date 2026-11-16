@@ -1,0 +1,602 @@
+[
+  {
+    "q": {
+      "n": 1,
+      "text": "Break down Arsenal's build-up shape this season",
+      "tests": "Club tactics from recent lineups"
+    },
+    "run": {
+      "answer": "Under Mikel Arteta in 2026–27, Arsenal line up in a base **4-2-3-1** that morphs into an asymmetric **3-2-5** (or box-midfield) in possession, shaped heavily by summer recruitment—most notably the £75m addition of **Bruno Guimarães**—and key injuries to **William Saliba** and **Bukayo Saka**.\n\n### 1. First-Phase Build-Up: The Asymmetric Back Three\n* **Goalkeeper & Centre-Backs:** **David Raya** initiates short build-up between **Gabriel Magalhães** (left centre-back) and **Ezri Konsa** (right centre-back, stepping in for the injured Saliba). Konsa’s recovery pace and comfort defending wide channels allow Arsenal to push their line high without exposing the right half-space.\n* **The Full-Back Tilt:** At left-back, **Riccardo Calafiori** steps inside into midfield or tucks in to form a three-man rest defense alongside Gabriel and Konsa, depending on the press. On the opposite flank, **Jurriën Timber** (with **Ben White** as the primary rotation option) pushes higher up the right touchline to provide width and overlap, though Timber can also invert when Calafiori holds the back three.\n* **The Trade-Off:** Without Saliba’s line-breaking verticality from the right side of defense, Arsenal rely more heavily on Gabriel’s left-footed diagonals and Raya’s chipped distribution to bypass aggressive man-to-man presses.\n\n### 2. The Double Pivot: Progression & Press Resistance\n* **Declan Rice & Bruno Guimarães:** Arsenal’s midfield engine room pairs **Declan Rice** with **Bruno Guimarães** (while **Martín Zubimendi**—currently a hamstring doubt—rotates in). Rice provides the physical ball-winning, transitional coverage, and occasional drops into the backline to help progress play under pressure.\n* **Guimarães’s Impact:** Signing Guimarães has given Arsenal a true press-resistant controller next to Rice. Rather than relying solely on **Martin Ødegaard** to drop deep, Guimarães receives on the half-turn under heavy pressure, shields the ball, and threads vertical passes through the lines to link defense and attack.\n\n### 3. Final-Third Geometry & Out-of-Possession Press\n* **Right-Side Overload (Without Saka):** With **Bukayo Saka** sidelined by a thigh injury, **Noni Madueke** starts on the right wing. Madueke holds the width to isolate his full-back 1v1, while **Martin Ødegaard** drifts into the right half-space to combine with Madueke and Timber.\n* **Left-Side Directness:** **Christos Tzolis** occupies the left wing, attacking the space behind the opposition’s right-back with direct, off-ball runs rather than coming short to feet.\n* **The Number Nine Contrast:** **Kai Havertz** leads the line as a dropping facilitator, pulling centre-backs out of position and helping spearhead Arsenal’s aggressive **4-4-2** out-of-possession press. When **Viktor Gyökeres** enters the pitch, Arsenal’s geometry shifts from fluid interchanges to a direct, vertical pinning threat that stretches the opposition backline.",
+      "firstTokenMs": 20966,
+      "totalMs": 24182,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +3ms (total 3ms)",
+        "[Perf] superseded primes: +0ms (total 3ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1527ms (total 1530ms)",
+        "[Perf] deep round 1: get_club_recent_team, web_search: +1685ms (total 3215ms)",
+        "[Perf] lookup club_recent_team \"Arsenal\": 539ms (found)",
+        "[Perf] lookup web_search \"Arsenal 2026-27 tactical build-up shape formation manager\": 12963ms (found)",
+        "[Perf] deep round 2: show_pitch: +15763ms (total 18978ms)",
+        "[Perf] first answer token: +1971ms (total 20949ms)",
+        "[Perf] deep turn: 2 rounds, 2 lookups (1 searches), stop answered, tools get_club_recent_team, web_search, show_pitch: +3228ms (total 24177ms)",
+        "[Perf] deep turn: +4ms (total 24181ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 2,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "get_club_recent_team",
+          "web_search",
+          "show_pitch"
+        ],
+        "stop": "answered",
+        "lineupsShown": 1,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "yes",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "Strong, decisive tactical breakdown that accurately integrates 2026-27 personnel, summer signings (Bruno Guimarães for £75m, Ezri Konsa), and current injuries (William Saliba, Bukayo Saka, Martín Zubimendi). Its only minor omission is not noting that Myles Lewis-Skelly has actually played more Premier League minutes than Guimarães this season despite the Rice-Guimarães pairing starting the last two league matches."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"Strong, decisive tactical breakdown that accurately integrates 2026-27 personnel, summer signings (Bruno Guimarães for £75m, Ezri Konsa), and current injuries (William Saliba, Bukayo Saka, Martín Zubimendi). Its only minor omission is not noting that Myles Lewis-Skelly has actually played more Premier League minutes than Guimarães this season despite the Rice-Guimarães pairing starting the last two league matches.\"\n}"
+  },
+  {
+    "q": {
+      "n": 2,
+      "text": "How is Liverpool's midfield set up right now?",
+      "tests": "Unit-level tactics, rotation"
+    },
+    "run": {
+      "answer": "Under **Andoni Iraola**, Liverpool have shifted to a high-pressing **4-2-3-1**—used in all four of their recent matches across competitions—built around a two-man double pivot behind a free-roaming No. 10.\n\n### 1. The Double Pivot: Mac Allister & the Rotating Partner\n* **Alexis Mac Allister (Left/Right Pivot):** Mac Allister is the primary ball-progressor and tempo-setter in the deeper pair, starting three of the last four matches (and eight in the Premier League). His press-resistance, scanning, and willingness to receive on the half-turn give Liverpool their cleanest route out of the first phase, while also arriving late into the box (as he did to score in the 3–1 win at Crystal Palace).\n* **Trey Nyoni (Rotating Pivot Partner):** With **Ryan Gravenberch** managing a foot injury (75% chance of playing) and limited to just one start in the last four matches (against Chelsea in the Carabao Cup), teenager Trey Nyoni has stepped into the double pivot, starting three of the last four games across all competitions (including against Arsenal and Fenerbahçe). Nyoni provides legs and composure on the ball alongside Mac Allister, though asking a young midfielder to hold down a two-man base in Iraola’s aggressive pressing system carries obvious physical and positional demands.\n* **Dominik Szoboszlai (Alternative Pivot / Utility):** Szoboszlai has split his minutes between the double pivot (starting alongside Mac Allister at Crystal Palace) and the No. 10 role (against Fenerbahçe). In the pivot, his engine and aggressive pressing triggers help Iraola’s side hunt high up the pitch, but his instinct to sprint out and close down opponents has repeatedly left space in behind the midfield on counterattacks.\n\n### 2. The No. 10: Florian Wirtz\n* **Florian Wirtz (Attacking Midfielder):** Wirtz is the undisputed creative hub ahead of the pivot, starting all 10 Premier League matches (1 goal, 5 assists). Operating between the lines behind **Alexander Isak**, with **Bradley Barcola** and **Cody Gakpo** flanking him, Wirtz’s close control and disguised final-third passing dictate Liverpool’s chance creation. When Wirtz is rested or rotated (as in the Champions League trip to Fenerbahçe), Szoboszlai steps up into the No. 10 slot.\n\n### 3. Structural Trade-Offs\n* **Lack of a Specialist Destroyer:** Iraola’s 4-2-3-1 prioritizes out-of-possession intensity and \"controlled chaos\" over a traditional holding screen. With **Wataru Endo** barely featuring this season and Gravenberch currently doubtful, Liverpool lack a natural ball-winning No. 6 to protect the space behind Mac Allister and Nyoni/Szoboszlai.\n* **Transition Exposure:** Because Szoboszlai and Wirtz press high and commit bodies ahead of the ball, opponents who bypass the initial press can attack **Virgil van Dijk** and **Jérémy Jacquet** directly in transition—a vulnerability that has already surfaced in defeats to Arsenal and Fenerbahçe and has prompted Liverpool to target midfield reinforcements for January.",
+      "firstTokenMs": 22467,
+      "totalMs": 26664,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +15ms (total 15ms)",
+        "[Perf] superseded primes: +0ms (total 15ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1504ms (total 1519ms)",
+        "[Perf] deep round 1: get_club_recent_team, web_search: +1972ms (total 3491ms)",
+        "[Perf] lookup club_recent_team \"Liverpool\": 489ms (found)",
+        "[Perf] lookup web_search \"Liverpool midfield tactics lineup 2026-27\": 12928ms (found)",
+        "[Perf] deep round 2: show_pitch: +17333ms (total 20824ms)",
+        "[Perf] first answer token: +1636ms (total 22460ms)",
+        "[Perf] deep turn: 2 rounds, 2 lookups (1 searches), stop answered, tools get_club_recent_team, web_search, show_pitch: +4200ms (total 26660ms)",
+        "[Perf] deep turn: +4ms (total 26664ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 2,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "get_club_recent_team",
+          "web_search",
+          "show_pitch"
+        ],
+        "stop": "answered",
+        "lineupsShown": 1,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "yes",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "Strength: Accurately captures Liverpool's current 4-2-3-1 midfield setup under Andoni Iraola, integrating recent lineups, injuries, Premier League stats, and January midfield targets with no factual errors. Weakness: Saying Wataru Endo has 'barely featuring' slightly understates that he has played zero competitive minutes this season, and the pivot section could have noted more clearly that Dominik Szoboszlai started ahead of Trey Nyoni in the most recent league win at Crystal Palace."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"Strength: Accurately captures Liverpool's current 4-2-3-1 midfield setup under Andoni Iraola, integrating recent lineups, injuries, Premier League stats, and January midfield targets with no factual errors. Weakness: Saying Wataru Endo has 'barely featuring' slightly understates that he has played zero competitive minutes this season, and the pivot section could have noted more clearly that Dominik Szoboszlai started ahead of Trey Nyoni in the most recent league win at Crystal Palace.\"\n}"
+  },
+  {
+    "q": {
+      "n": 3,
+      "text": "Who's injured at Manchester City at the moment?",
+      "tests": "Injury list"
+    },
+    "run": {
+      "answer": "As of 16 November 2026, Manchester City have one confirmed long-term absentee and three defenders carrying knocks from their 3–1 defeat at Nottingham Forest before the international break:\n\n* **Antoine Semenyo (Out):** Ruled out with a knee injury. No official return date is set, though he is targeting a potential return around 19 December 2026.\n* **Marc Guéhi (Doubtful):** Forced off at half-time against Nottingham Forest with a hip/groin issue and subsequently withdrew from the England squad. He is currently being assessed with no confirmed return date.\n* **Joško Gvardiol (Doubtful):** Also substituted at half-time at Nottingham Forest. He was passed fit enough to join up with Croatia during the international break, though he remains under assessment ahead of City's return to Premier League action against Fulham on 21 November.\n* **Abdukodir Khusanov (Doubtful):** Played the full 90 minutes against Nottingham Forest but withdrew from the Uzbekistan squad with an unspecified knock and is being assessed.",
+      "firstTokenMs": 20682,
+      "totalMs": 21515,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +1825ms (total 1825ms)",
+        "[Perf] superseded primes: +0ms (total 1825ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1501ms (total 3327ms)",
+        "[Perf] deep round 1: get_club_recent_team, web_search: +1649ms (total 4976ms)",
+        "[Perf] lookup club_recent_team \"Manchester City\": 405ms (found)",
+        "[Perf] lookup web_search \"Manchester City injury news team news November 2026\": 12942ms (found)",
+        "[Perf] first answer token: +15706ms (total 20682ms)",
+        "[Perf] deep turn: 1 rounds, 2 lookups (1 searches), stop answered, tools get_club_recent_team, web_search: +831ms (total 21513ms)",
+        "[Perf] deep turn: +2ms (total 21515ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 2,
+        "searches": 1,
+        "rounds": 1,
+        "toolCalls": [
+          "get_club_recent_team",
+          "web_search"
+        ],
+        "stop": "answered",
+        "lineupsShown": 0,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "not_needed",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "Strength: Accurately captures all four current injury concerns as of 16 November 2026, combining the live FPL statuses with up-to-date international break developments (Guéhi's England withdrawal and Khusanov's Uzbekistan omission). Minor weakness: Describes Gvardiol as still under assessment without noting that he played the full 90 minutes for Croatia against both England (12 Nov) and Czechia (15 Nov)."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"not_needed\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"Strength: Accurately captures all four current injury concerns as of 16 November 2026, combining the live FPL statuses with up-to-date international break developments (Guéhi's England withdrawal and Khusanov's Uzbekistan omission). Minor weakness: Describes Gvardiol as still under assessment without noting that he played the full 90 minutes for Croatia against both England (12 Nov) and Czechia (15 Nov).\"\n}"
+  },
+  {
+    "q": {
+      "n": 4,
+      "text": "What's Real Madrid's best XI right now?",
+      "tests": "Lineups versus squad list"
+    },
+    "run": {
+      "answer": "Under José Mourinho, Real Madrid have settled into a **4-2-3-1** that has carried them to an eight-game winning streak across all competitions. Based on recent selections, availability, and tactical balance, their best XI right now is:\n\n* **GK: Thibaut Courtois** — The undisputed starter in goal, with Andriy Lunin serving as the backup.\n* **RB: Federico Valverde** — Mourinho has trusted Valverde at right-back in the biggest domestic tests (including the 2-1 win at Barcelona and the 3-0 win at Valencia), using his recovery speed and engine to lock down the flank. Trent Alexander-Arnold and Denzel Dumfries provide specialized attacking alternatives when Madrid want more natural width or crossing from deep.\n* **CBs: Dean Huijsen & Ibrahima Konaté** — The first-choice pairing. Huijsen brings left-sided ball progression and composure in build-up, while Konaté handles the physical duels and large-space defending on the right. Antonio Rüdiger and Éder Militão remain high-level rotational options.\n* **LB: Marc Cucurella** — A fixture on the left side of the back four, giving Madrid relentless pressing intensity and touchline reliability with Ferland Mendy sidelined by a long-term hip injury.\n* **Double Pivot: Aurélien Tchouaméni & Bernardo Silva** — Tchouaméni sits as the defensive screen and aerial presence (though he is a slight adductor doubt coming out of the international break, with Eduardo Camavinga ready to step in), while Bernardo Silva dictates tempo, links play under pressure, and connects the back line to the forwards.\n* **AM-L: Yan Diomande** — With Rodrygo out until January 2027 (ACL) and Vinícius Júnior enduring a slow start to the campaign following a four-game domestic suspension, Diomande has seized the left-wing spot with his directness and ball-carrying.\n* **AM: Jude Bellingham** — The central hub behind the striker, arriving late into the box and leading the counter-press.\n* **AM-R: Arda Güler** — Cuts inside onto his left foot from the right half-space, supplying the final-third creativity and set-piece delivery that balances Diomande's width on the opposite flank.\n* **CF: Kylian Mbappé** — The focal point up top, stretching defenses vertically and attacking the spaces created by Bellingham and Güler.\n\n### Squad Balance & Functional Diagnosis\nThe XI has a clear structural logic: **Bernardo Silva** and **Arda Güler** give Mourinho's side the tight-space manipulation and tempo control to break down low blocks, while **Konaté**, **Valverde**, **Diomande**, and **Mbappé** provide elite transition threat.\n\nThe main functional vulnerability is **depth at pure holding midfield** behind Tchouaméni—Camavinga is a dynamic ball-winner and carrier, but he does not naturally replicate Tchouaméni's positional screening. Likewise, with **Raúl Asencio** (broken leg) and **Ferland Mendy** out, Cucurella has carried a heavy workload at left-back without a natural like-for-like deputy.",
+      "firstTokenMs": 20495,
+      "totalMs": 23739,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +1851ms (total 1851ms)",
+        "[Perf] superseded primes: +0ms (total 1852ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1506ms (total 3357ms)",
+        "[Perf] deep round 1: get_club_recent_team, web_search: +2691ms (total 6048ms)",
+        "[Perf] lookup club_recent_team \"Real Madrid\": 394ms (found)",
+        "[Perf] lookup web_search \"Real Madrid injuries team news November 2026 2026-27\": 9548ms (found)",
+        "[Perf] deep round 2: show_pitch: +12695ms (total 18742ms)",
+        "[Perf] first answer token: +1741ms (total 20483ms)",
+        "[Perf] deep turn: 2 rounds, 2 lookups (1 searches), stop answered, tools get_club_recent_team, web_search, show_pitch: +3252ms (total 23735ms)",
+        "[Perf] deep turn: +4ms (total 23739ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 2,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "get_club_recent_team",
+          "web_search",
+          "show_pitch"
+        ],
+        "stop": "answered",
+        "lineupsShown": 1,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "yes",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "Strength: Accurately captures Real Madrid's November 2026 XI under José Mourinho—including the 4-2-3-1 shape, Valverde at right-back, Diomande starting over Vinícius Júnior, and current injuries—while decisively naming one starter per role. Weakness: Overlooks Álvaro Carreras as an available left-back deputy behind Cucurella and slightly downplays Tchouaméni's right adductor injury as a 'slight' doubt after it forced him out of France's camp."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"Strength: Accurately captures Real Madrid's November 2026 XI under José Mourinho—including the 4-2-3-1 shape, Valverde at right-back, Diomande starting over Vinícius Júnior, and current injuries—while decisively naming one starter per role. Weakness: Overlooks Álvaro Carreras as an available left-back deputy behind Cucurella and slightly downplays Tchouaméni's right adductor injury as a 'slight' doubt after it forced him out of France's camp.\"\n}"
+  },
+  {
+    "q": {
+      "n": 5,
+      "text": "How have Chelsea used their summer signings so far?",
+      "tests": "Transfers and roles"
+    },
+    "run": {
+      "answer": "Under **Xabi Alonso**, Chelsea’s summer 2026 recruitment drive (£327m across 11 senior and youth arrivals, offset by £384m in sales including Enzo Fernández’s £124m move to Manchester City) has been integrated in distinct tiers: a handful of immediate structural pillars, a heavily rotated group of full-backs and veterans plugging injury gaps, and several young investments still waiting for regular minutes.\n\n### 1. The Immediate Pillars\n* **Morgan Rogers (£120m, Aston Villa):** Chelsea’s marquee signing has been the undisputed centerpiece of Alonso’s attack. Alonso has used him primarily off the left—as a left-sided inside forward (`CF-L` in a 4-3-2-1 against Sunderland, `AM-L` in a 4-2-3-1 against Manchester United, and `LF` in a 4-3-3 at Liverpool)—while also deploying him as the central focal point (`F`) in a 3-4-2-1 against Tottenham.\n\n### 2. The Tactical Glue & Rotational Core\n* **Jordan Henderson (Free, Brentford):** Following Enzo Fernández’s departure, the 36-year-old has been used far more heavily than a typical free-transfer depth piece (**5 PL starts, 446', 2G 1A**). Starting three of the last four matches, Henderson has operated on the left of Alonso’s midfield three (`CM-L` / `LM`) alongside **Moisés Caicedo** and **Romeo Lavia**, giving Chelsea’s midfield ball security and positional organization.\n* **Pep Chavarría (£16m, Rayo Vallecano) & Valentín Barco (£34m, Strasbourg):** With Jorrel Hato injured, Alonso has split left-back duties.\n\n### 3. Impact Depth & Unproven Investments\n* **Geovany Quenda (£43m, Sporting CP):** The 19-year-old winger has been eased in slowly (**1 PL start, 111'**), used mainly as a second-half spark off the bench against Sunderland and Manchester United, with one start as a left-sided forward (`CF-L`) against Tottenham.\n* **Danny Welbeck (£5m, Brighton) & Emmanuel Emegha (Undisclosed, Strasbourg):** With João Pedro sidelined by a thigh injury, Alonso has largely opted for **Pedro Neto** as a mobile central forward rather than turning to his new strikers. Welbeck (**1 PL start, 126'**) started the Carabao Cup tie at Liverpool and has served as a late-game league substitute, while Emegha (**0 PL starts, 3'**) has barely featured outside of brief cameo appearances.\n* **Youth Arrivals:** Teenagers **Dastan Satpaev** (£2.1m, Kairat) and **Harrison Bettoni** (Wigan Athletic) have yet to feature in the Premier League or recent matchday squads.",
+      "firstTokenMs": 27619,
+      "totalMs": 32594,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +4ms (total 4ms)",
+        "[Perf] superseded primes: +0ms (total 4ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1502ms (total 1507ms)",
+        "[Perf] deep round 1: get_club_recent_team, web_search: +2373ms (total 3880ms)",
+        "[Perf] lookup club_recent_team \"Chelsea\": 466ms (found)",
+        "[Perf] lookup web_search \"Chelsea summer 2026 signings transfers 2026-27 season\": 12866ms (found)",
+        "[Perf] deep round 2: show_pitch: +19514ms (total 23394ms)",
+        "[Perf] first answer token: +4211ms (total 27605ms)",
+        "[Perf] deep turn: 2 rounds, 2 lookups (1 searches), stop answered, tools get_club_recent_team, web_search, show_pitch: +4968ms (total 32574ms)",
+        "[Perf] deep turn: +20ms (total 32594ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 2,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "get_club_recent_team",
+          "web_search",
+          "show_pitch"
+        ],
+        "stop": "answered",
+        "lineupsShown": 1,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [
+        {
+          "claim": "With Jorrel Hato injured, Alonso has split left-back duties between Pep Chavarría and Valentín Barco.",
+          "why": "Since Hato's last appearance against Tottenham (2026-10-24), Chelsea's left-backs in the last three matches were Malo Gusto (at Liverpool), Marco Palestra (vs Manchester United), and Pep Chavarría (at Sunderland); Valentín Barco has only 1 Premier League start (118 minutes) all season and has not started at left-back in the recent run."
+        }
+      ],
+      "saysWhatChanged": "yes",
+      "decisiveness": 4,
+      "hedgedRoles": 1,
+      "gapsAdmitted": "no",
+      "notes": "Strongest in its accurate transfer figures and detailed, up-to-date positional and minutes data for Xabi Alonso's integration of Morgan Rogers, Jordan Henderson, Geovany Quenda, Danny Welbeck, and Emmanuel Emegha. Its biggest weakness is omitting three major summer signings who have been regular starters—Emiliano Martínez, Maxence Lacroix, and Marco Palestra—while inaccurately claiming Valentín Barco has split left-back duties with Pep Chavarría and failing to mention that Dastan Satpaev is out on loan at Burnley."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [\n    {\n      \"claim\": \"With Jorrel Hato injured, Alonso has split left-back duties between Pep Chavarría and Valentín Barco.\",\n      \"why\": \"Since Hato's last appearance against Tottenham (2026-10-24), Chelsea's left-backs in the last three matches were Malo Gusto (at Liverpool), Marco Palestra (vs Manchester United), and Pep Chavarría (at Sunderland); Valentín Barco has only 1 Premier League start (118 minutes) all season and has not started at left-back in the recent run.\"\n    }\n  ],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 4,\n  \"hedgedRoles\": 1,\n  \"gapsAdmitted\": \"no\",\n  \"notes\": \"Strongest in its accurate transfer figures and detailed, up-to-date positional and minutes data for Xabi Alonso's integration of Morgan Rogers, Jordan Henderson, Geovany Quenda, Danny Welbeck, and Emmanuel Emegha. Its biggest weakness is omitting three major summer signings who have been regular starters—Emiliano Martínez, Maxence Lacroix, and Marco Palestra—while inaccurately claiming Valentín Barco has split left-back duties with Pep Chavarría and failing to mention that Dastan Satpaev is out on loan at Burnley.\"\n}"
+  },
+  {
+    "q": {
+      "n": 6,
+      "text": "How is Barcelona pressing this season?",
+      "tests": "Out-of-possession tactics"
+    },
+    "run": {
+      "answer": "Under Hans-Dieter Flick in 2026-27, Barcelona are the most aggressive pressing side in La Liga, posting a league-leading PPDA of 8.1 and ranking third in high turnovers (85) while holding La Liga’s highest average defensive line at 45.7 metres.\n\nThe biggest structural shift this season is the personnel Flick uses to execute that press—specifically the summer additions of **Rodri**, **Anthony Gordon**, and **Karim Adeyemi**, alongside deploying **Raphinha** as a mobile False Nine.\n\n### 1. The First Wave: Raphinha’s False Nine Triggers\nFlick’s press starts at the top with **Raphinha** leading the line rather than a traditional static striker. His relentless work rate and curved pressing runs set the trap, angling opposition centre-backs toward the touchlines and cutting off central lanes into the pivot.\n\nFlanking him, **Anthony Gordon** (who has started three of the last four matches on the left, with **Karim Adeyemi** rotating in against Alavés) gives Barcelona explosive closing speed on the left side. On the right, **Lamine Yamal** is tasked with pressing the opposing left-back or left-sided centre-back, though his primary value remains pinning defenders back and punishing turnovers in transition.\n\n### 2. Midfield Counter-Pressing & Rest Defense: Rodri, Fermín López, and Pedri\nBehind the front three, **Fermín López** acts as the vertical engine from attacking or central midfield, jumping onto the opposition’s deepest midfielder the moment Raphinha forces a sideways pass.\n\nThe key to sustaining this without being sliced open is **Rodri** (who started three of the last four matches before **Marc Bernal** filled in at Atlético Madrid). Rodri’s positioning and anticipation allow Barcelona to lock teams in: when the first wave forces a rushed clearance or an angled pass into the half-space, Rodri steps up to intercept and immediately recycle possession before the opponent can reset. **Pedri** works alongside him to screen the left half-space and dictate tempo once the ball is won back.\n\n### 3. The 45.7m High Line & Its Trade-Offs\nBecause Barcelona squeeze the pitch to 45.7 metres, the back four—**João Cancelo** at left-back, **Gerard Martín** and **Pau Cubarsí** at centre-back, and **Brian Fariñas** at right-back, with **Joan García** sweeping behind them—must defend huge spaces in behind.\n\nThat gamble has delivered dominant domestic wins (including 6-1 over Alavés and 3-0 over Aston Villa in the Champions League), but elite opponents have exposed its main pressure point:\n* **Space behind Lamine Yamal:** When opponents beat the initial press—as Real Madrid did in their 2-1 win at Camp Nou by playing cleanly out from the back, and as PSG did in a 4-2 Champions League victory—the most exploitable pocket is on Barcelona’s right flank behind Yamal, forcing **Brian Fariñas** and **Pau Cubarsí** into recovery sprints in open space.\n* **In-game adjustments:** The press is not infallible from minute one; against Atlético Madrid, Barcelona struggled to contain their build-up in the first half before Flick adjusted the pressing triggers at the break to turn the match into a 2-1 win.",
+      "firstTokenMs": 22516,
+      "totalMs": 26501,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +3ms (total 3ms)",
+        "[Perf] superseded primes: +0ms (total 3ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1502ms (total 1505ms)",
+        "[Perf] deep round 1: get_club_recent_team, web_search: +2561ms (total 4066ms)",
+        "[Perf] lookup club_recent_team \"Barcelona\": 14ms (found)",
+        "[Perf] lookup web_search \"Barcelona pressing tactics 2026-27 season\": 12338ms (found)",
+        "[Perf] deep round 2: show_pitch: +16566ms (total 20632ms)",
+        "[Perf] first answer token: +1880ms (total 22512ms)",
+        "[Perf] deep turn: 2 rounds, 2 lookups (1 searches), stop answered, tools get_club_recent_team, web_search, show_pitch: +3985ms (total 26497ms)",
+        "[Perf] deep turn: +4ms (total 26501ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 2,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "get_club_recent_team",
+          "web_search",
+          "show_pitch"
+        ],
+        "stop": "answered",
+        "lineupsShown": 1,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [
+        {
+          "claim": "Real Madrid's 2-1 win and PSG's 4-2 win exposed the pocket behind Yamal, forcing Brian Fariñas and Pau Cubarsí into recovery sprints in open space.",
+          "why": "Live feed and match lineups show Xavi Espart started at right-back in both the 2-1 loss to Real Madrid (2026-10-25, where Fariñas was not used) and the 4-2 loss to PSG (2026-10-20), not Brian Fariñas."
+        }
+      ],
+      "saysWhatChanged": "yes",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "Biggest strength is the accurate integration of current 2026-27 pressing metrics (8.1 PPDA, 45.7m defensive line, 85 high turnovers), summer arrivals (Rodri, Gordon, Adeyemi), and recent lineup roles. Biggest weakness is attributing right-flank defensive exposure in the Real Madrid and PSG defeats to Brian Fariñas when Xavi Espart actually started at right-back in both matches."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [\n    {\n      \"claim\": \"Real Madrid's 2-1 win and PSG's 4-2 win exposed the pocket behind Yamal, forcing Brian Fariñas and Pau Cubarsí into recovery sprints in open space.\",\n      \"why\": \"Live feed and match lineups show Xavi Espart started at right-back in both the 2-1 loss to Real Madrid (2026-10-25, where Fariñas was not used) and the 4-2 loss to PSG (2026-10-20), not Brian Fariñas.\"\n    }\n  ],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"Biggest strength is the accurate integration of current 2026-27 pressing metrics (8.1 PPDA, 45.7m defensive line, 85 high turnovers), summer arrivals (Rodri, Gordon, Adeyemi), and recent lineup roles. Biggest weakness is attributing right-flank defensive exposure in the Real Madrid and PSG defeats to Brian Fariñas when Xavi Espart actually started at right-back in both matches.\"\n}"
+  },
+  {
+    "q": {
+      "n": 7,
+      "text": "Who's been Bayern's most important player this season?",
+      "tests": "Current-season evidence"
+    },
+    "run": {
+      "answer": "**Michael Olise** has been Bayern Munich’s most important player this season, with **Harry Kane** a close second.\n\nUnder Vincent Kompany, Bayern sit top of the Bundesliga unbeaten through nine matches (21 points, +20 goal difference), and Olise has been their primary match-winner. Across all competitions in 2026–27, he leads the squad with 12 goals and 7 assists in 15 appearances, including 6 goals in 9 league games. What separates him is how he resolves games when opponents sit deep: his **First Touch** and **Dribbling** in tight right-half-space pockets force defenders onto their heels, and his **Finishing** and **Delivery** off his left foot turn half-chances into goals. He isn't just finishing moves; he's creating his own separation and carrying the heaviest scoring burden in the side.\n\nThe strongest counterargument is **Harry Kane**, whose creative output has been extraordinary. Kane leads the Bundesliga in assists (8 in 9 league appearances, or 7 per the official league site) to go with 4 goals. By dropping between the lines, his **Vision**, **Combination Play**, and **Progressive Passing** pull centre-backs out of position and open the exact lanes Olise attacks.\n\nStill, while Kane’s playmaking is the platform for Bayern’s attack, Olise has been the player consistently turning possession into decisive end-product across every competition.",
+      "firstTokenMs": 26481,
+      "totalMs": 28002,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +1919ms (total 1919ms)",
+        "[Perf] superseded primes: +0ms (total 1919ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1502ms (total 3420ms)",
+        "[Perf] deep round 1: get_club_recent_team, get_league_table, web_search: +2258ms (total 5678ms)",
+        "[Perf] lookup league_table \"Bundesliga\": 187ms (found)",
+        "[Perf] lookup club_recent_team \"Bayern Munich\": 250ms (found)",
+        "[Perf] lookup web_search \"Bayern Munich 2026-27 season best player stats goals assists\": 12190ms (found)",
+        "[Perf] deep round 2: look_up_dossier, look_up_dossier: +16170ms (total 21848ms)",
+        "[Perf] first answer token: +4629ms (total 26477ms)",
+        "[Perf] deep turn: 2 rounds, 5 lookups (1 searches), stop answered, tools get_club_recent_team, get_league_table, web_search, look_up_dossier, look_up_dossier: +1520ms (total 27997ms)",
+        "[Perf] deep turn: +6ms (total 28002ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 3,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "get_club_recent_team",
+          "get_league_table",
+          "web_search",
+          "look_up_dossier",
+          "look_up_dossier"
+        ],
+        "stop": "answered",
+        "lineupsShown": 0,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "no",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "The answer's biggest strength is its pinpoint factual accuracy on 2026-27 standings, appearances, goals, and assists—even noting the discrepancy between tracking sites and the official Bundesliga assist count for Harry Kane—paired with a decisive verdict. Its main weakness is that it describes the players' current roles without explaining what changed compared to last season (such as Kane's shift from primary goalscorer to chief creator) or noting Vincent Kompany's recent medical absence."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"no\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"The answer's biggest strength is its pinpoint factual accuracy on 2026-27 standings, appearances, goals, and assists—even noting the discrepancy between tracking sites and the official Bundesliga assist count for Harry Kane—paired with a decisive verdict. Its main weakness is that it describes the players' current roles without explaining what changed compared to last season (such as Kane's shift from primary goalscorer to chief creator) or noting Vincent Kompany's recent medical absence.\"\n}"
+  },
+  {
+    "q": {
+      "n": 8,
+      "text": "How is Florian Wirtz being used this season?",
+      "tests": "One player's current role"
+    },
+    "run": {
+      "answer": "In 2026–27, Florian Wirtz is Liverpool’s first-choice **No.\n\n### What Changed This Season\nUnder Iraola—who replaced Arne Slot—Liverpool shifted away from a slower, possession-heavy structure toward a **compact, player-oriented high press** and **faster, more direct transitions** into centre-forward Alexander Isak. That tactical change has altered what is asked of Wirtz in both phases:\n* **Out of possession:** Rather than conserving energy in a mid-block, Wirtz frequently steps up alongside Isak to form a front-two pressing trigger, closing down central progression lanes and forcing opponents wide.\n* **In possession:** He acts primarily as a **direct playmaker** rather than a high-touch tempo controller, looking to receive between the lines and release Isak, Bradley Barcola (left), or Cody Gakpo (right) early in transition.\n\n### On-Pitch Mechanics & Attribute Interaction\n* **First Touch, Agility & Combination Play in Traffic:** Operating centrally behind Isak puts Wirtz in the most congested zone on the pitch. His instant ball deadening (`First Touch`) and sharp deceleration (`Agility`) allow him to receive on the half-turn with a defender at his back and immediately link short wall passes (`Combination Play`) with Barcola, Gakpo, or an advancing Alexis Mac Allister.\n* **Vision & Progressive Passing vs. At the same time, he lacks top-end straight-line `Speed` to stretch defences in wide isolation—which is why deploying him centrally, flanked by genuine wide runners like Barcola and Gakpo, maximizes his creative strengths while hiding his pace limitation.\n* **Pressing Intensity & Stamina:** Iraola’s man-oriented press demands constant high-intensity sprints from the No. 10 slot. Wirtz has handled the workload well enough to start every league match, though he has been rotated or brought off the bench in cup and Champions League fixtures (such as coming on as a substitute against Chelsea and Fenerbahçe) to manage his legs.\n\n### Intrinsic Class vs. Tactical Environment\nLiverpool’s current setup amplifies Wirtz’s **transition playmaking**—when opponents leave space behind their midfield, his quickness of thought and early release into Isak are lethal. However, Iraola’s more direct approach can also leave Wirtz isolated against **compact low blocks**. When teams sit deep and deny space in behind—as seen in Liverpool’s 1–0 home defeat to Arsenal, where they failed to register a single shot on target—Liverpool’s reduced emphasis on patient, sustained possession gives Wirtz fewer combinations around the box to unpick set defences.",
+      "firstTokenMs": 21598,
+      "totalMs": 25612,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +2565ms (total 2565ms)",
+        "[Perf] superseded primes: +0ms (total 2565ms)",
+        "[Perf] dossier lookup: +2ms (total 2566ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +2ms (total 2568ms)",
+        "[Perf] deep round 1: web_search, get_player_season: +3103ms (total 5671ms)",
+        "[Perf] lookup player_season \"Florian Wirtz\": 16ms (found)",
+        "[Perf] lookup web_search \"\"Florian Wirtz\" 2026-27 club role position tactics\": 11474ms (found)",
+        "[Perf] deep round 2: get_club_recent_team: +13122ms (total 18793ms)",
+        "[Perf] lookup club_recent_team \"Liverpool\": 15ms (found)",
+        "[Perf] first answer token: +2802ms (total 21595ms)",
+        "[Perf] deep turn: 2 rounds, 3 lookups (1 searches), stop answered, tools web_search, get_player_season, get_club_recent_team: +4009ms (total 25604ms)",
+        "[Perf] deep turn: +8ms (total 25612ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 3,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "web_search",
+          "get_player_season",
+          "get_club_recent_team"
+        ],
+        "stop": "answered",
+        "lineupsShown": 0,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "yes",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "The answer's biggest strength is its accurate, up-to-date breakdown of how Florian Wirtz is deployed under Andoni Iraola alongside Alexander Isak, Bradley Barcola, and Cody Gakpo, backed by verified rotation details and the Arsenal 0–1 match reference. Its main weakness is formatting/truncation glitches in two places ('first-choice **No.' and 'Vision & Progressive Passing vs. At the same time...') and omitting Wirtz's current Premier League production (1 goal, 5 assists in 10 starts)."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"The answer's biggest strength is its accurate, up-to-date breakdown of how Florian Wirtz is deployed under Andoni Iraola alongside Alexander Isak, Bradley Barcola, and Cody Gakpo, backed by verified rotation details and the Arsenal 0–1 match reference. Its main weakness is formatting/truncation glitches in two places ('first-choice **No.' and 'Vision & Progressive Passing vs. At the same time...') and omitting Wirtz's current Premier League production (1 goal, 5 assists in 10 starts).\"\n}"
+  },
+  {
+    "q": {
+      "n": 9,
+      "text": "Is Bukayo Saka fit and how's his form?",
+      "tests": "Player fitness and form"
+    },
+    "run": {
+      "answer": "**No, Bukayo Saka is not fit.** He is currently sidelined with a thigh (quadriceps) injury suffered just 10 minutes into Arsenal’s 2-2 Champions League draw away at Bayern Munich on October 21, when he went down after a routine pass with no apparent contact.\n\n### Fitness & Return Timeline\n* **Current Status:** Saka has missed Arsenal’s last five matches in all competitions (Everton, Fleetwood Town, Liverpool, Slavia Prague, and Hull City) as well as England’s November UEFA Nations League fixtures.\n* **Return Outlook:** Mikel Arteta stated earlier this month that Saka will be out for \"weeks\" and will only begin pitch work after the international break, with no official return date set. He is ruled out for Arsenal’s trip to Newcastle United on November 21, with projections pointing toward an early-to-mid December return at the earliest.\n* **How Arsenal Have Adapted:** In Saka’s absence, Noni Madueke has stepped into the right-wing (`AM-R`) slot in Arsenal’s 4-2-3-1, starting three of the last four matches (with Max Dowman rotating in for the Carabao Cup tie against Fleetwood).\n\n---\n\n### 2026-27 Form & On-Pitch Mechanics\n* **Finishing vs. Creation:** His goal return tracks closely with his expected-goals volume, driven by his `Offensive Positioning`—specifically his timing when attacking the back post or drifting into the inside-right channel—and clean `Finishing` off his left foot.\n* **What Arsenal Miss Most:** While Madueke brings sharp `Acceleration` and direct 1v1 `Dribbling` to the right flank, Saka’s true separation is his `Retention` and `Composure` under pressure. Receiving with his back to the touchline, he absorbs contact (`Strength`) and manipulates the ball (`First Touch`, `Combination Play`) to connect with Martin Ødegaard and the right-back (Jurriën Timber or Ben White) while pinning two defenders. Without him, Arsenal lose their most reliable press-resistant outlet on the right side ahead of a heavy run against Newcastle, Borussia Dortmund, and Manchester City.",
+      "firstTokenMs": 21716,
+      "totalMs": 24980,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +1848ms (total 1848ms)",
+        "[Perf] superseded primes: +0ms (total 1849ms)",
+        "[Perf] dossier lookup: +1ms (total 1850ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1ms (total 1851ms)",
+        "[Perf] deep round 1: get_player_season, get_club_recent_team: +2686ms (total 4536ms)",
+        "[Perf] lookup player_season \"Bukayo Saka\": 19ms (found)",
+        "[Perf] lookup club_recent_team \"Arsenal\": 21ms (found)",
+        "[Perf] deep round 2: web_search: +1438ms (total 5974ms)",
+        "[Perf] lookup web_search \"Bukayo Saka Arsenal injury November 2026 2026-27 season form\": 11470ms (found)",
+        "[Perf] first answer token: +15738ms (total 21712ms)",
+        "[Perf] deep turn: 2 rounds, 3 lookups (1 searches), stop answered, tools get_player_season, get_club_recent_team, web_search: +3258ms (total 24970ms)",
+        "[Perf] deep turn: +11ms (total 24981ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 3,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "get_player_season",
+          "get_club_recent_team",
+          "web_search"
+        ],
+        "stop": "answered",
+        "lineupsShown": 0,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "yes",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "Strength: Accurately captures Saka's October 21 quad/thigh injury against Bayern Munich, Arteta's November update, his five missed Arsenal matches and England absences, and Madueke's 3-of-4 starts at AM-R in his place. Weakness: States Saka is definitively ruled out for Newcastle on November 21 when no post-break update has been issued yet (even if unlikely), and references his goal-to-xG alignment without citing his exact 2026-27 numbers (3 goals, 3.63 xG in 7 starts)."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"Strength: Accurately captures Saka's October 21 quad/thigh injury against Bayern Munich, Arteta's November update, his five missed Arsenal matches and England absences, and Madueke's 3-of-4 starts at AM-R in his place. Weakness: States Saka is definitively ruled out for Newcastle on November 21 when no post-break update has been issued yet (even if unlikely), and references his goal-to-xG alignment without citing his exact 2026-27 numbers (3 goals, 3.63 xG in 7 starts).\"\n}"
+  },
+  {
+    "q": {
+      "n": 10,
+      "text": "Where are Tottenham in the league and how's their form?",
+      "tests": "Standings and results"
+    },
+    "run": {
+      "answer": "Tottenham Hotspur sit **11th in the 2026–27 Premier League table** after 10 matches with **12 points** (**3 wins, 3 draws, 4 defeats; -1 goal difference**). They are level on points with 12th-placed Newcastle United, just one point behind Aston Villa in 10th, and four points off Chelsea and Everton in 5th and 6th.\n\n### Form: A Sharp October Turnaround, Checked at Leeds\nTottenham’s season has split into two distinct phases:\n\n* **Winless start (August–September):** Spurs failed to win any of their opening six league matches (three draws, three defeats), including a 3–2 home loss to Aston Villa on 19 September, leaving them bottom of the table entering October.\n* **Unbeaten October surge:** Roberto De Zerbi’s side turned their campaign around with a four-match unbeaten run—earning De Zerbi the October Premier League Manager of the Month award:\n  * **10 Oct:** 1–1 away at Manchester United (playing with 10 men, Dominic Solanke scoring a stoppage-time equalizer)\n  * **19 Oct:** 3–1 home vs. Coventry City\n  * **24 Oct:** 2–0 away at Chelsea\n  * **31 Oct:** 2–0 home vs. Crystal Palace\n* **November check:** They entered the November international break on a **1–0 away defeat at Leeds United** on 7 November.\n\n### What Changed on the Pitch\nAfter a heavy summer 2026 rebuild—which saw Cristian Romero depart for Atlético Madrid and the arrivals of Jan Paul van Hecke, Sandro Tonali, Andy Robertson, Mateus Fernandes, and loanee Omar Marmoush—De Zerbi’s side initially struggled for balance before a key structural tweak in October:\n\n* **Midfield & Defensive Control:** Moving **Mateus Fernandes** deeper from the No. 10 role to partner **Sandro Tonali** in central midfield stabilized the team out of possession, halving their shots conceded from 13.5 to 7 per game. Behind them, **Antonín Kinsky** has started all 10 league matches in goal behind a settled core of **Andy Robertson** at left-back, **Micky van de Ven** and **Jan Paul van Hecke** at centre-back, and **Archie Gray** (with **Pedro Porro** starting at Leeds) at right-back.\n* **Control Without Cutting Edge:** Spurs lead the Premier League in final-third passes and set a league record of 759 passes against Crystal Palace (143 from van Hecke alone), yet they rank **bottom three in goals scored and 17th in xG**. Whether **Omar Marmoush** leads the line as a false nine or **Dominic Solanke** starts centrally flanked by **Mohammed Kudus** and **Mathys Tel**, turning territorial dominance into high-value chances remains their primary hurdle.\n\n### Availability & Next Up\nSpurs host **Ipswich Town on 21 November** before facing Sunderland (away, 29 November) and Fulham (home, 3 December). **Mathys Tel** is doubtful with an ankle knock picked up at Leeds (75% chance of playing), while **Xavi Simons**, **Wilson Odobert**, **Lucas Bergvall**, **Mykhailo Mudryk**, and **Sávio** (expected back 21 November) are on the injury list.",
+      "firstTokenMs": 23303,
+      "totalMs": 26685,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +2947ms (total 2947ms)",
+        "[Perf] superseded primes: +0ms (total 2947ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1505ms (total 4452ms)",
+        "[Perf] deep round 1: get_league_table, get_club_recent_team: +1532ms (total 5984ms)",
+        "[Perf] lookup league_table \"Premier League\": 159ms (found)",
+        "[Perf] lookup club_recent_team \"Tottenham Hotspur\": 398ms (found)",
+        "[Perf] deep round 2: web_search: +2638ms (total 8623ms)",
+        "[Perf] lookup web_search \"Tottenham Hotspur 2026-27 season Roberto De Zerbi form tactics\": 10567ms (found)",
+        "[Perf] first answer token: +14672ms (total 23295ms)",
+        "[Perf] deep turn: 2 rounds, 3 lookups (1 searches), stop answered, tools get_league_table, get_club_recent_team, web_search: +3382ms (total 26677ms)",
+        "[Perf] deep turn: +9ms (total 26686ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 3,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "get_league_table",
+          "get_club_recent_team",
+          "web_search"
+        ],
+        "stop": "answered",
+        "lineupsShown": 0,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "yes",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "Biggest strength: an accurate, up-to-date breakdown of Tottenham's 2026-27 league standing, October turnaround under Roberto De Zerbi, summer rebuild, tactical shift with Mateus Fernandes and Sandro Tonali, and current injury list. Biggest weakness: the specific '13.5 to 7 shots conceded per game' split could not be independently verified, and 'bottom three in goals scored' slightly overstates things since only two clubs have fewer than Spurs' 10 goals (with four others tied on 10)."
+    },
+    "graderRaw": "```json\n{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"Biggest strength: an accurate, up-to-date breakdown of Tottenham's 2026-27 league standing, October turnaround under Roberto De Zerbi, summer rebuild, tactical shift with Mateus Fernandes and Sandro Tonali, and current injury list. Biggest weakness: the specific '13.5 to 7 shots conceded per game' split could not be independently verified, and 'bottom three in goals scored' slightly overstates things since only two clubs have fewer than Spurs' 10 goals (with four others tied on 10).\"\n}\n```"
+  },
+  {
+    "q": {
+      "n": 11,
+      "text": "Compare Declan Rice and Bruno Guimarães this season",
+      "tests": "Current-form comparison"
+    },
+    "run": {
+      "answer": "The 2026–27 season has turned what used to be a cross-club stylistic debate into an internal Arsenal case study. Following Bruno Guimarães’s £75 million summer arrival from Newcastle United, Mikel Arteta now deploys both players in the same 4-2-3-1 double pivot—most recently pairing them together in consecutive 1-0 Premier League wins at Liverpool and at home to Hull City.\n\nWhile they share a midfield, their footballing identities remain distinct. Declan Rice is an athletic, high-volume two-way controller who dictates games through physical coverage, ball-carrying, and increasingly incisive final-third delivery. Guimarães is a press-resistant, tempo-setting technician built around tight-space manipulation, disguised passing, and late arrivals into the penalty area.\n\n### 1. Build-Up & Progression\n* **Declan Rice:** Arteta has tweaked Rice’s build-up geometry this season, frequently shifting him toward the right side of midfield where he drops into the right centre-back slot whenever full-backs like Riccardo Calafiori or Ben White invert. Rice’s progression relies on **Progressive Passing** via long diagonals and **Dribbling** through open grass—using his long stride to eat up 20–30 yards when opponents leave central lanes vacant.\n* **Bruno Guimarães:** Guimarães’s value in the first phase lies in **Retention** and **First Touch**. When pressed from behind in congested central pockets, he uses subtle body feints and sole rolls to shield the ball, draw a second marker, and release a teammate with **Vision** that sees disguised vertical lanes early. Where Rice progresses by *carrying* or *switching* around the block, Guimarães progresses by *absorbing* pressure and playing *through* the middle of it.\n\n### 2. Final-Third Creation & Box Threat\n* **Declan Rice:** His **Delivery**—both from set pieces and from overlapping/underlapping runs into the right half-space—has become a consistent source of high-value chances.\n* **Bruno Guimarães:** Still adapting to what he has described as a \"completely different\" tactical structure under Arteta, Guimarães has been eased in with 4 Premier League starts (386 minutes), yet he has already posted 2 league goals (against Sunderland and Leeds United). His final-third threat is less about wide **Delivery** and more about **Combination Play** around the D and **Offensive Positioning** to arrive late onto cut-backs.\n\n### 3. Out-of-Possession & Rest Defense\n* **Declan Rice:** This is where Rice separates himself from almost every midfielder in Europe. His combination of **Defensive Positioning**, **Tackling**, and recovery **Speed** allows Arsenal to push both full-backs high while leaving Rice to patrol vast transition spaces. He reads danger early, times his lunges cleanly, and rarely gets beaten in 1v1 ground duels.\n* **Bruno Guimarães:** Guimarães brings high **Pressing Intensity** and sharp **Interceptions**—stepping in front of receivers to nick the ball in midfield—but he lacks Rice’s top-end recovery **Speed** and **Strength** when isolated in wide-open channels. In a high line, Guimarães needs a physically dominant partner alongside him to cover the space behind.\n\n### 4. Transition Impact\n* In defensive transition, Rice is a fire-extinguisher; his **Stamina** and **Acceleration** over the first 10–15 yards allow him to shut down counter-attacks before they reach the back four.\n* In offensive transition, Guimarães is the faster *thinker* with the ball at his feet—his **Composure** under immediate counter-pressure lets him hit the first-time forward pass to spring Noni Madueke or Kai Havertz, whereas Rice is more likely to drive forward with the ball himself before releasing it.\n\n---\n\n### Key Attribute Separators & Limitations\n* **Where Rice wins:** **Speed**, **Stamina**, **Tackling**, **Defensive Positioning**, **Delivery**, and **Consistency** (starting all 10 Premier League matches and 4 Champions League games so far). His main limitation remains receiving on the half-turn with his back to goal against a tight, aggressive man-mark, where his touch can occasionally push him away from the central lane.\n* **Where Guimarães wins:** **First Touch**, **Retention**, **Vision**, and **Combination Play** in phone-booth spaces. His main limitation is physical recovery in open-field transitions, alongside a current adaptation curve that has limited him to 4 league starts in Arsenal's rotation.\n\n---\n\n### Tier & Verdict\n* **Current Standing:** **Declan Rice (`90–92 World-Class`)** holds the clear edge over **Bruno Guimarães (`87–89 Borderline World-Class`)**. Rice is not only the undisputed cornerstone of Arsenal’s 2026–27 midfield—playing every major minute and leading the league in assists—but his two-way completeness puts him firmly in the World-Class bracket. Guimarães has the pedigree of a `90`-level operator at his Newcastle peak, but in 2026–27 he is currently performing at a high-end Borderline World-Class level while adjusting to Arteta’s rotational demands.\n* **Higher Ceiling:** **Declan Rice.** In modern knockout football, a midfielder who can simultaneously shut down elite transitions and produce 5 assists in 10 league games has a higher ceiling than a technician who requires structural protection behind him.\n* **Tactical Fit:** Rice thrives in aggressive, high-line systems that expose the midfield to wide-open transitions; Guimarães thrives in possession-dominant setups that prioritise central progression through tight blocks. Together, they cover each other’s flaws—but as an individual force this season, Rice is the superior player.",
+      "firstTokenMs": 30072,
+      "totalMs": 36522,
+      "perf": [
+        "[Perf] turn router (compare): +28ms (total 28ms)",
+        "[Perf] superseded primes: +0ms (total 28ms)",
+        "[Perf] dossier lookup: +2ms (total 30ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +9ms (total 38ms)",
+        "[Perf] deep round 1: get_player_season, get_player_season, get_club_recent_team, get_club_recent_team: +1708ms (total 1747ms)",
+        "[Perf] lookup player_season \"Declan Rice\": 70ms (found)",
+        "[Perf] lookup player_season \"Bruno Guimarães\": 68ms (found)",
+        "[Perf] lookup club_recent_team \"Arsenal\": 71ms (found)",
+        "[Perf] lookup club_recent_team \"Newcastle United\": 455ms (found)",
+        "[Perf] deep round 2: web_search, web_search: +6642ms (total 8389ms)",
+        "[Perf] lookup web_search \"Bruno Guimarães Arsenal transfer 2026-27 season role\": 13070ms (found)",
+        "[Perf] lookup web_search \"Declan Rice Arsenal 2026-27 season role assists\": 14951ms (found)",
+        "[Perf] first answer token: +21676ms (total 30065ms)",
+        "[Perf] deep turn: 2 rounds, 6 lookups (2 searches), stop answered, tools get_player_season, get_player_season, get_club_recent_team, get_club_recent_team, web_search, web_search: +6444ms (total 36509ms)",
+        "[Perf] deep turn: +12ms (total 36521ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 6,
+        "searches": 2,
+        "rounds": 2,
+        "toolCalls": [
+          "get_player_season",
+          "get_player_season",
+          "get_club_recent_team",
+          "get_club_recent_team",
+          "web_search",
+          "web_search"
+        ],
+        "stop": "answered",
+        "lineupsShown": 0,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "yes",
+      "decisiveness": 5,
+      "hedgedRoles": 0,
+      "gapsAdmitted": "not_needed",
+      "notes": "Biggest strength: thoroughly grounded in verified 2026-27 facts—including Guimarães's £75m summer move, exact Premier League minutes/goals/assists, recent 1-0 wins over Liverpool and Hull City, and Rice's league-leading 5 assists and 4 Champions League starts—while delivering a decisive verdict. Biggest weakness: the tactical generalization that Rice frequently shifts to the right side of midfield slightly overlooks that he has also started on the left of the 4-2-3-1 double pivot in recent matches against Hull City and Slavia Prague."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 5,\n  \"hedgedRoles\": 0,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"Biggest strength: thoroughly grounded in verified 2026-27 facts—including Guimarães's £75m summer move, exact Premier League minutes/goals/assists, recent 1-0 wins over Liverpool and Hull City, and Rice's league-leading 5 assists and 4 Champions League starts—while delivering a decisive verdict. Biggest weakness: the tactical generalization that Rice frequently shifts to the right side of midfield slightly overlooks that he has also started on the left of the 4-2-3-1 double pivot in recent matches against Hull City and Slavia Prague.\"\n}"
+  },
+  {
+    "q": {
+      "n": 12,
+      "text": "What does Inter's back three look like this season?",
+      "tests": "Personnel in a named structure"
+    },
+    "run": {
+      "answer": "Under Cristian Chivu, Inter’s back three in the 2026–27 season has settled into a 3-5-2 base built around a core quartet of **Carlos Augusto**, **Alessandro Bastoni**, **Manuel Akanji**, and **Yann Bisseck**, with **Benjamin Pavard** and **John Stones** providing rotation depth behind them.\n\n### Personnel & Positional Roles\n\n* **Left Centre-Back — Carlos Augusto:** Rather than serving purely as wing-back cover, Carlos Augusto has been Chivu’s most consistent starter on the left of the back three, starting all four of Inter’s most recent matches (three at left centre-back against Como, Feyenoord, and Venezia, and one at left wing-back against AC Milan). His natural left-footedness and recovery pace allow **Federico Dimarco** to push high up the left flank without leaving the left half-space exposed in transition.\n* **Central Centre-Back — Alessandro Bastoni:** Bastoni has shifted inward to play as the central defender in the 3-5-2 (starting there against Como and Venezia, and returning to the lineup against Como after serving a Champions League suspension against Feyenoord). Placing Bastoni in the middle gives Inter a left-footed playmaker at the base of the build-up, able to step into midfield or hit diagonal switches toward **Djed Spence** on the right.\n* **Right Centre-Back — Yann Bisseck / Manuel Akanji:** The right-sided role is split between **Yann Bisseck** (who started at right centre-back against Feyenoord, AC Milan, and Venezia) and **Manuel Akanji** (who started there against Como after filling the central slot against Feyenoord and Milan). Both bring the physicality and ground coverage needed to defend wide channels when Spence pushes forward.\n* **Rotation Depth — Benjamin Pavard & John Stones:** Neither Pavard nor Stones has been a regular starter in the recent run. Pavard has been used off the bench against Como and Feyenoord after missing the Milan derby, while Stones was on the bench against Como following a doubt ahead of the derby.\n\n### Build-Up & Out-of-Possession Geometry\n\n1. **Asymmetric Left-Side Progression:** With Carlos Augusto at left centre-back and Bastoni in the middle, Inter’s first-phase build-up is heavily left-footed. Carlos Augusto’s comfort stepping into wide areas lets Dimarco hold the touchline or invert into the half-space alongside **Piotr Zielinski**, while Bastoni’s central position allows him to dictate tempo and feed **Hakan Çalhanoglu** or **Nicolò Barella** between the lines.\n2. **Transition Protection & Wide-Channel Defense:** Because both Dimarco and Spence attack aggressively from the wing-back slots, the outer centre-backs—Carlos Augusto on the left and either Bisseck or Akanji on the right—are routinely tasked with defending 1v1 in wide spaces. That trade-off was visible in the 3–1 derby defeat to AC Milan, where Chivu switched to a 3-4-2-1 with Bastoni, Akanji, and Bisseck, and Inter were exposed when their wide defenders were dragged out of shape.\n3. **Central Security:** Using Akanji or Bastoni in the middle of the three gives Inter two distinct profiles depending on the matchup: Bastoni maximizes vertical passing and line-breaking distribution from deep, while Akanji offers recovery speed and duel security when Chivu wants Bastoni shifted wider or rested.",
+      "firstTokenMs": 29695,
+      "totalMs": 33881,
+      "perf": [
+        "[Perf] turn router (tactical_chat): +2086ms (total 2086ms)",
+        "[Perf] superseded primes: +0ms (total 2086ms)",
+        "[Perf] deep context (0 stored snapshots, 0 coaches): +1502ms (total 3588ms)",
+        "[Perf] deep round 1: get_club_recent_team, web_search: +2061ms (total 5649ms)",
+        "[Perf] lookup club_recent_team \"Inter\": 431ms (found)",
+        "[Perf] lookup web_search \"Inter Milan 2026-27 back three defenders lineup\": 18039ms (found)",
+        "[Perf] deep round 2: show_pitch: +22350ms (total 28000ms)",
+        "[Perf] first answer token: +1695ms (total 29695ms)",
+        "[Perf] deep turn: 2 rounds, 2 lookups (1 searches), stop answered, tools get_club_recent_team, web_search, show_pitch: +4184ms (total 33880ms)",
+        "[Perf] deep turn: +2ms (total 33882ms)"
+      ],
+      "research": {
+        "path": "deep",
+        "lookups": 2,
+        "searches": 1,
+        "rounds": 2,
+        "toolCalls": [
+          "get_club_recent_team",
+          "web_search",
+          "show_pitch"
+        ],
+        "stop": "answered",
+        "lineupsShown": 1,
+        "cardsShown": 0
+      }
+    },
+    "grade": {
+      "staleFacts": [],
+      "inventedFacts": [],
+      "saysWhatChanged": "yes",
+      "decisiveness": 4,
+      "hedgedRoles": 1,
+      "gapsAdmitted": "not_needed",
+      "notes": "Strength: Accurately captures Inter's 2026–27 back three under Cristian Chivu, including exact recent lineups, Bastoni's Champions League suspension, and the bench roles of Pavard and summer signing John Stones. Weakness: Splits the right centre-back role between Bisseck and Akanji despite Bisseck starting there in three of the last four matches, and omits the summer departures of Acerbi and De Vrij when framing the unit's evolution."
+    },
+    "graderRaw": "{\n  \"staleFacts\": [],\n  \"inventedFacts\": [],\n  \"saysWhatChanged\": \"yes\",\n  \"decisiveness\": 4,\n  \"hedgedRoles\": 1,\n  \"gapsAdmitted\": \"not_needed\",\n  \"notes\": \"Strength: Accurately captures Inter's 2026–27 back three under Cristian Chivu, including exact recent lineups, Bastoni's Champions League suspension, and the bench roles of Pavard and summer signing John Stones. Weakness: Splits the right centre-back role between Bisseck and Akanji despite Bisseck starting there in three of the last four matches, and omits the summer departures of Acerbi and De Vrij when framing the unit's evolution.\"\n}"
+  }
+]

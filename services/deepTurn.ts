@@ -117,7 +117,7 @@ export const DEFAULT_DEEP_BUDGET: DeepBudget = {
  * the turn to the stage pipeline. The `deep` and `fast` flags still force either path whatever this
  * says, which is how the eval runs both. Flip it only on the strength of the eval in PR 77.
  */
-export const DEEP_BY_DEFAULT = false;
+export const DEEP_BY_DEFAULT = true;
 
 /**
  * Whether a turn asked for the deep loop: `fast` always says no, `deep` says yes, and a turn with
