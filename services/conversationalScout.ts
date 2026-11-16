@@ -43,6 +43,7 @@ import {
 import { extractThreadClubs, type TurnRoute } from './turnRouter';
 import {
   scrubUnverifiedManagerText,
+  scrubUnverifiedManagerTextDetailed,
   type VerifiedClubManager,
 } from '../packages/engine/src/gates/managerMentions.ts';
 import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubManagers';
@@ -53,7 +54,8 @@ import { askedDirectly, cleanReason, createPreparer, validateAsk } from './initi
 import { lineupsForTurn, type LineupView } from './lineupView';
 import { buildGaffaTurn, capGaffaTradeProse, leagueFocusOf, starterClubs, type GaffaTurn } from './gaffaTurn';
 import { lockGaffaRosterNames } from './gaffaLineupAudit';
-import { expandTables, gateUnsupportedFigures, type FigureClaim, type FigureGateOptions } from './figureGate';
+import { correctReply, formatGateFeedback, GATE_FEEDBACK_STAGE_LABEL, stageFeedbackAllowed, type CorrectionModel, type Sanitized } from './gateFeedback';
+import { expandTables, gateFigureFindings, gateUnsupportedFigures, type FigureClaim, type FigureGateOptions } from './figureGate';
 import { figureBudget, formatDebateBriefForWriter, runDebateResearch, type DebateBrief } from './debateBrief';
 import { standingsFor, type CardStanding } from './debateConsistency';
 import { liveDebateRecords, liveEraSnapshots } from './eraSnapshots';
@@ -124,17 +126,9 @@ export const threadIsHistorical = (route: TurnRoute, history: ChatMessage[], mes
   route.isHistorical ||
   (!route.wantsCurrentForm && /\b(prime|peak|all[- ]time|(?:19|20)\d0s)\b/i.test(`${recentThreadText(history)}\n${message}`));
 
-/**
- * Strip leaked internal grounding tags or search citations from user-facing prose, enforce
- * manager fidelity, and put any misquoted attribute of a card in play back to its stored value.
- */
-export function sanitizeScoutProse(
-  text: string,
-  managerCtx?: { verifiedFacts?: string[]; clubManagers?: VerifiedClubManager[]; past?: boolean },
-  cardsInPlay: PlayerProfile[] = [],
-  figures?: FigureCheck,
-): string {
-  const stripped = text
+/** Leaked internal grounding tags and search citations, removed from user-facing prose. */
+export function stripScoutMarkup(text: string): string {
+  return text
     .replace(
       /\s*\[(?:Search|Source|Grounding|Query)\s*\d*(?:\s*[,&]\s*(?:Search|Source|Grounding|Query)\s*\d*)*\]/gi,
       '',
@@ -148,21 +142,67 @@ export function sanitizeScoutProse(
     .replace(/<\/?(?:situation_snapshot|research_brief|debate_brief|factual_foundation|locked_dossiers|calibrated_peer_ledger|saved_dossiers)>/gi, '')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
+}
 
+type ScoutManagerContext = { verifiedFacts?: string[]; clubManagers?: VerifiedClubManager[]; past?: boolean };
+
+/** The manager gate's context; an answer about past seasons skips the gate (see `sanitizeStripped`). */
+const managerGateContext = (managerCtx?: ScoutManagerContext) => ({
+  currentHeadCoach: null,
+  verifiedFacts: managerCtx?.verifiedFacts ?? [],
+  clubManagers: managerCtx?.clubManagers ?? [],
+});
+
+/** The three gates on prose that markup is already stripped from. */
+function sanitizeStripped(
+  stripped: string,
+  managerCtx: ScoutManagerContext | undefined,
+  cardsInPlay: PlayerProfile[],
+  figures?: FigureCheck,
+): string {
   // The manager gate guards today's coaches. An answer about past seasons names the coaches of
   // those seasons, which it would rewrite as "the current setup", so it doesn't run there.
-  const scrubbed = managerCtx?.past
-    ? stripped
-    : scrubUnverifiedManagerText(stripped, {
-        currentHeadCoach: null,
-        verifiedFacts: managerCtx?.verifiedFacts ?? [],
-        clubManagers: managerCtx?.clubManagers ?? [],
-      });
+  const scrubbed = managerCtx?.past ? stripped : scrubUnverifiedManagerText(stripped, managerGateContext(managerCtx));
   const reconciled = reconcileDossierNumbers(scrubbed, cardsInPlay).text;
   if (!figures) return reconciled;
   const gated = gateUnsupportedFigures(reconciled, figures.evidence(), figures.grounded, figures.options);
   figures.onRemoved?.([...gated.removed, ...gated.trimmed]);
   return gated.text;
+}
+
+/**
+ * Strip leaked internal grounding tags or search citations from user-facing prose, enforce
+ * manager fidelity, and put any misquoted attribute of a card in play back to its stored value.
+ */
+export function sanitizeScoutProse(
+  text: string,
+  managerCtx?: ScoutManagerContext,
+  cardsInPlay: PlayerProfile[] = [],
+  figures?: FigureCheck,
+): string {
+  return sanitizeStripped(stripScoutMarkup(text), managerCtx, cardsInPlay, figures);
+}
+
+/** A reply sanitized, with what the gates flagged in it (`gateFeedback.ts`). */
+export type ScoutProseResult = Sanitized;
+
+/**
+ * `sanitizeScoutProse`, also returning what each gate flagged in the stripped reply. Each gate
+ * reads the stripped text on its own for its findings, so they all point into the one text a
+ * correction round rewrites; the sanitized `text` comes from the gates in their usual order.
+ */
+export function sanitizeScoutProseDetailed(
+  text: string,
+  managerCtx?: ScoutManagerContext,
+  cardsInPlay: PlayerProfile[] = [],
+  figures?: FigureCheck,
+): ScoutProseResult {
+  const stripped = stripScoutMarkup(text);
+  const sanitized = sanitizeStripped(stripped, managerCtx, cardsInPlay, figures);
+  const coaches = managerCtx?.past ? [] : scrubUnverifiedManagerTextDetailed(stripped, managerGateContext(managerCtx)).replaced;
+  const attributes = reconcileDossierNumbers(stripped, cardsInPlay).findings;
+  const figureFindings = figures ? gateFigureFindings(stripped, figures.evidence(), figures.grounded, figures.options).findings : [];
+  return { text: sanitized, stripped, findings: { figures: figureFindings, attributes, coaches } };
 }
 
 /**
@@ -324,6 +364,8 @@ export interface ConversationalScoutParams {
    * A challenge turn never gets them, whatever is passed.
    */
   initiative?: InitiativeOptions;
+  /** The gate feedback round's model and clock, for tests (`gateFeedback.ts`). */
+  gateFeedback?: { correct?: CorrectionModel; now?: () => number };
 }
 
 /**
@@ -1078,6 +1120,8 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
     return gaffaTurn.scorecard ? capGaffaTradeProse(locked) : locked;
   };
   let firstChunk = true;
+  const clock = params.gateFeedback?.now ?? Date.now;
+  const writerStart = clock();
   const rawReply = await generateProseTurn({
     message: fullPrompt,
     historyContents,
@@ -1102,16 +1146,27 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
         }
       : undefined,
   });
+  const writerMs = clock() - writerStart;
 
-  return finishGaffa(sanitizeScoutProse(
-    rawReply,
-    scoutManagerContext,
-    cardsInPlay,
-    figureCheck && {
-      ...figureCheck,
-      onRemoved: (removed) => {
-        if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures (unsupported, or over a debate's budget): ${removed.map((r) => r.text).join('; ')}`);
-      },
+  const finalFigures: FigureCheck | undefined = figureCheck && {
+    ...figureCheck,
+    onRemoved: (removed) => {
+      if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures (unsupported, or over a debate's budget): ${removed.map((r) => r.text).join('; ')}`);
     },
-  ));
+  };
+  // A researched turn whose writer finished in time gives the model one chance to fix what the gates
+  // flag before they cut it; the stream above shows the gated text, and this reply replaces it.
+  if (stageFeedbackAllowed({ researched: researched || Boolean(debate), figureCheck: Boolean(figureCheck), writerMs })) {
+    const corrected = await correctReply({
+      raw: rawReply,
+      sanitize: (text) => sanitizeScoutProseDetailed(text, scoutManagerContext, cardsInPlay, finalFigures),
+      strip: stripScoutMarkup,
+      correct: params.gateFeedback?.correct,
+      onCorrecting: () => onStageChange?.(GATE_FEEDBACK_STAGE_LABEL),
+      now: clock,
+    });
+    if (corrected.stats) perf?.(`gate feedback: ${formatGateFeedback(corrected.stats)}`);
+    return finishGaffa(corrected.text);
+  }
+  return finishGaffa(sanitizeScoutProse(rawReply, scoutManagerContext, cardsInPlay, finalFigures));
 }

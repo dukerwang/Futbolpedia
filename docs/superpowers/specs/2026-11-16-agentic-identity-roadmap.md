@@ -53,6 +53,15 @@ constant and an off switch, and every eval estimates before it runs.
   `docs/superpowers/evals/reports/2026-11-16-2010-deep-full.md`: twelve questions, no stale facts,
   two invented, "what changed" on ten of eleven, at about half the calls of a cold stage turn.
 
+- **Gates as feedback** (PR PRNUM): when the figure gate, the attribute check or the manager scrub
+  flags a reply and the turn has time, the model gets one call to fix the flagged sentences before
+  anything is cut (`services/gateFeedback.ts`). Code applies the replacements to the reply, so
+  unflagged sentences stay byte-identical, and the gates run again; what is still unsupported is
+  removed as before. Deep mode always, counted against its lookup budget; the stage pipeline only
+  on a researched turn whose writer finished inside `GATE_FEEDBACK_CUTOFF_MS`. Each round logs
+  `[GateFeedback] flagged N, fixed M, dropped D, removed R`, and `npm run eval:live` reports the
+  three counts per question. The live check is written up in the PR and not yet run.
+
 ## Planned
 
 ### 1. Presentation as tools
@@ -70,29 +79,11 @@ How an answer is shown becomes the model's call on the default path.
   sessions in the writer files at once. Touches `services/aiClient.ts`, new components. Suited to
   Sonnet.
 
-### 2. Gates as feedback
-
-The conduct gates hand their findings back before they delete.
-
-- **Figure gate**: when it finds unsupported figures and the turn has time left, one correction
-  round gives the model the flagged figures and the evidence it had, asking it to rewrite only those
-  sentences, citing the evidence or dropping the figure. The gate runs again on the result; what is
-  still unsupported is removed as today. The same round carries the number gate's and the manager
-  scrub's findings.
-- **Where**: deep mode always (its stream shows a "checking figures" stage); the default path only
-  when the gate runs before streaming ends and the turn is under `REFLECT_CUTOFF_MS`. Otherwise
-  deletion stays.
-- **Measure**: log how often a correction keeps a sentence that deletion would have lost, and
-  whether the eval's invented-facts score moves.
-- **Depends on** deep mode. Touches `services/figureGate.ts`, `services/deepTurn.ts`,
-  `services/conversationalScout.ts`. Suited to Sonnet.
-
 ## Order
 
 1. Watch the live `[deep]` and `[deep] fallback` log lines after publish; a warm deep run
    (`--deep --warm`) when budget allows, to measure turns that reuse stored snapshots.
 2. Presentation as tools.
-3. Gates as feedback, once presentation has merged.
 
 After each piece: merge, then pull and publish in Google AI Studio for it to reach the live app.
 
