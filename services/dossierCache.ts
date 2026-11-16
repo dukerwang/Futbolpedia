@@ -35,6 +35,21 @@ export function useServerSupabase(client: unknown): void {
   if (typeof window === 'undefined') supabase = client;
 }
 
+/**
+ * The server's write client, made with the secret key (service_role), for card review
+ * (services/cardReview.ts), the first place the server rates and publishes cards. It is a separate
+ * client: the publishable one above keeps every read under the same row-level security as a
+ * browser. Writes cross the same `enforce_dossier_refresh_window` trigger either way; the only
+ * difference service_role makes there is its in-place clause (strengths, weaknesses and data gaps
+ * on an unchanged row), which a rating never uses, since a rating always moves `updated_at`.
+ */
+let serverWriter: any = null;
+export function useServerSupabaseWriter(client: unknown): void {
+  if (typeof window === 'undefined') serverWriter = client;
+}
+/** Where card writes go: the server's secret-key client when it has one, else the app's client. */
+const writeClient = (): any => serverWriter ?? supabase;
+
 export const isSupabaseReady = () => !!supabase;
 
 // Invalidate cached dossiers created before the v4.1 rating calibration update
@@ -185,7 +200,8 @@ export const upsertCachedDossier = async (
     supabaseCalibratedPool = [stamped, ...supabaseCalibratedPool];
   }
 
-  if (!supabase) return;
+  const db = writeClient();
+  if (!db) return;
   try {
     const nowIso = new Date().toISOString();
     const rows: PlayerProfileRow[] = [];
@@ -194,7 +210,7 @@ export const upsertCachedDossier = async (
     // under their archive slug, so they never take the prime pointer.
     if (cardEdition(stamped) === 'season_snapshot' || cardEdition(stamped) === 'era') {
       if (versioned) {
-        await supabase
+        await db
           .from('player_profiles')
           .upsert([{ player_slug: versioned, player_data: stamped, updated_at: nowIso }], {
             onConflict: 'player_slug',
@@ -203,7 +219,7 @@ export const upsertCachedDossier = async (
       return;
     }
 
-    const { data: existing } = await supabase
+    const { data: existing } = await db
       .from('player_profiles')
       .select('player_data, updated_at')
       .eq('player_slug', alias)
@@ -236,7 +252,7 @@ export const upsertCachedDossier = async (
     if (versioned) {
       rows.push({ player_slug: versioned, player_data: stamped, updated_at: nowIso });
     }
-    await supabase.from('player_profiles').upsert(rows, { onConflict: 'player_slug' });
+    await db.from('player_profiles').upsert(rows, { onConflict: 'player_slug' });
   } catch (e) {
     console.warn('[Cache] Upsert failed:', e);
   }
@@ -254,10 +270,11 @@ export const publishLatestUpdate = async (profile: PlayerProfile): Promise<void>
   const idx = supabaseCalibratedPool.findIndex((p) => getCardKey(p) === key);
   if (idx >= 0) supabaseCalibratedPool[idx] = profile;
 
-  if (!supabase) return;
+  const db = writeClient();
+  if (!db) return;
   try {
     const alias = toDossierCardSlug(profile.basicInfo.name);
-    const { data: existing } = await supabase
+    const { data: existing } = await db
       .from('player_profiles')
       .select('player_data, updated_at')
       .eq('player_slug', alias)
@@ -266,7 +283,7 @@ export const publishLatestUpdate = async (profile: PlayerProfile): Promise<void>
       ? ensureDossierDated(existing.player_data as PlayerProfile, rowTimeMs(existing.updated_at))
       : null;
     if (!current || getCardKey(current) !== key) return;
-    await supabase
+    await db
       .from('player_profiles')
       .update({ player_data: profile, updated_at: new Date().toISOString() })
       .eq('player_slug', alias);

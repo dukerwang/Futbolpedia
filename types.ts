@@ -172,6 +172,12 @@ export interface PlayerProfile {
   peerPlacement?: PeerPlacement;
   /** Evidence grade and sample size evaluation */
   confidence?: DossierConfidence;
+  /**
+   * Data gaps a stored record filled after the card was rated (card review's fill_facts,
+   * services/cardReview.ts): the gap as the card listed it, the fact, its source and the day.
+   * The rating doesn't change.
+   */
+  filledGaps?: { gap: string; fact: string; source: string; filledOn: string }[];
   /** Dialectical arguments for higher or lower rating */
   scoutingDebate?: ScoutingDebate;
   /** Holistic archetype projection and tactical synergies */

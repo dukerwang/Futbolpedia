@@ -7,9 +7,11 @@ import {
   ensureDossierDated,
   getDossierEvaluationDate,
   getLatestUpdateDate,
+  isCardInRefreshWindow,
   isPrimeCard,
   LATEST_UPDATE_REFRESH_DAYS,
   needsLatestUpdateRefresh,
+  toBasePlayerSlug,
   toDossierCardSlug,
   toPlayerSlug,
 } from './dossierCards';
@@ -20,6 +22,17 @@ import type { LiveClubResult } from './liveFootball';
 import type { LiveGet, ResearchToolset } from './researchTools';
 import type { SnapshotServer } from './snapshotServer';
 import { scoutSubjectKey } from './scoutNotes';
+import {
+  CARD_ACTION_COST,
+  CARD_REVIEW_DEFAULT_CALLS,
+  cardTargets,
+  formatCardSignals,
+  gatherCardSignals,
+  type CardActors,
+  type CardReviewSources,
+  type CardMoment,
+  type CardReviewSignals,
+} from './cardReview';
 
 /**
  * The scout's day. Once a day, between conversations, one planning call reads a dated summary of
@@ -43,8 +56,9 @@ export const SCOUT_DAY_TICK_MS = 60 * 60 * 1000;
 export const MAX_PLAN_ACTIONS = 20;
 /** The planning call is one model call. */
 export const PLAN_CALLS = 1;
-/** What each action costs, in model calls, as the plan prompt tells the model. */
+/** What each action costs, in model calls, as the plan prompt tells the model. Card actions are in `CARD_ACTION_COST`. */
 export const ACTION_COST = { rebuild_snapshot: 4, build_era: 3, refresh_latest_update: 2, research_note: 1 } as const;
+export { CARD_REVIEW_DEFAULT_CALLS };
 export const DEMAND_DAYS = 7;
 export const LIST_CAP = 20;
 /** A latest scored prediction that missed this many names marks a club's story as stale. */
@@ -92,6 +106,7 @@ export function createScoutTally(now: () => number = Date.now) {
   const players = new Map<string, { name: string; days: Bucket }>();
   const seasons = new Map<string, { club: string; season: string; days: Bucket }>();
   const gaps = new Map<string, { item: string; status: 'empty' | 'failed'; days: Bucket }>();
+  const cardViews = new Map<string, { name: string; days: Bucket }>();
   const startedAt = now();
   let gaffaTurns: Bucket = new Map();
 
@@ -134,6 +149,17 @@ export function createScoutTally(now: () => number = Date.now) {
       const c = text(club, 80);
       const s = normalizePeriod(season);
       if (c && s) touch(seasons, `${toClubKey(c)}|${s}`, () => ({ club: c, season: s, days: new Map() }));
+    },
+    /**
+     * A player whose card someone opened (a card page) or asked for a link to (the card lookup),
+     * counted for card review. Only names that resolved to a stored card are recorded.
+     */
+    cardView(name: string) {
+      const n = text(name, 80);
+      if (n) touch(cardViews, toPlayerSlug(n), () => ({ name: n, days: new Map() }));
+    },
+    demandCards(): DemandHit[] {
+      return [...cardViews.values()].map((e) => ({ name: e.name, hits: total(e.days) })).filter((e) => e.hits > 0).sort((a, b) => b.hits - a.hits);
     },
     /** One turn on Gaffa's chat route (the clubs it researches count through the live routes). */
     gaffaTurn() {
@@ -188,6 +214,8 @@ export interface ScoutSignals {
   fixtures: { club: string; kickoff: string; opponent: string; competition: string; snapshotBuiltAt: string; snapshotOlderThanDay: boolean; asked: number }[];
   cards: { nearingRefresh: CardSignal[]; staleLatestUpdate: CardSignal[] };
   gaps: GapTally[];
+  /** Card review's signals (services/cardReview.ts); null when card review is off or its source failed. */
+  cardReview?: CardReviewSignals | null;
   /** Sources that couldn't be read for this summary. */
   unread: string[];
 }
@@ -202,6 +230,8 @@ export interface ScoutSources {
   nextFixture(club: string): Promise<{ kickoff: string; opponent: string; competition: string } | null>;
   /** The shared current cards' pointer rows, as card outlines with their dates. */
   cards(): Promise<PlayerProfile[]>;
+  /** Card review's signals, with how often each player was asked about; absent when card review is off. */
+  cardReview?(asked: (player: string) => number): Promise<CardReviewSignals>;
 }
 
 async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -226,7 +256,9 @@ export async function gatherSignals(sources: ScoutSources, nowMs: number = Date.
   const clubHits = new Map(tally.demandClubs().map((c) => [toClubKey(c.name), c.hits]));
   const playerHits = new Map(tally.demandPlayers().map((p) => [toPlayerSlug(p.name), p.hits]));
   const askedClub = (name: string) => clubHits.get(toClubKey(name)) ?? 0;
-  const askedPlayer = (name: string) => playerHits.get(toPlayerSlug(name)) ?? 0;
+  // A player's demand: the live player route, card pages and card links, by his name's slug.
+  const cardHits = new Map(tally.demandCards().map((p) => [toPlayerSlug(p.name), p.hits]));
+  const askedPlayer = (name: string) => (playerHits.get(toPlayerSlug(name)) ?? 0) + (cardHits.get(toPlayerSlug(name)) ?? 0);
   const byAsked = <T extends { asked: number }>(a: T, b: T) => b.asked - a.asked;
 
   const snapshots = await guard('stored snapshots', () => sources.snapshots(), []);
@@ -283,6 +315,7 @@ export async function gatherSignals(sources: ScoutSources, nowMs: number = Date.
     }
   }
   const cardOrder = (a: CardSignal, b: CardSignal) => b.asked - a.asked || b.days - a.days;
+  const cardReview = sources.cardReview ? await guard('card review', () => sources.cardReview!(askedPlayer), null) : undefined;
 
   return {
     day: dayOf(nowMs),
@@ -298,13 +331,18 @@ export async function gatherSignals(sources: ScoutSources, nowMs: number = Date.
     fixtures,
     cards: { nearingRefresh: nearing.sort(cardOrder).slice(0, LIST_CAP), staleLatestUpdate: stale.sort(cardOrder).slice(0, LIST_CAP) },
     gaps: tally.gaps().slice(0, LIST_CAP),
+    ...(cardReview !== undefined ? { cardReview } : {}),
     unread,
   };
 }
 
 /** The signal counts for the log line. */
 export const describeSignals = (s: ScoutSignals): string =>
-  `demand ${s.demand.clubs.length} clubs, ${s.demand.players.length} players, ${s.demand.seasons.length} seasons; ${s.staleStories.length} stale stories; ${s.fixtures.length} fixtures (${s.fixtures.filter((f) => f.snapshotOlderThanDay).length} with a snapshot over a day old); cards ${s.cards.nearingRefresh.length} nearing refresh, ${s.cards.staleLatestUpdate.length} with an old Latest Update; ${s.gaps.length} gaps${s.unread.length ? `; unread: ${s.unread.join(', ')}` : ''}`;
+  `demand ${s.demand.clubs.length} clubs, ${s.demand.players.length} players, ${s.demand.seasons.length} seasons; ${s.staleStories.length} stale stories; ${s.fixtures.length} fixtures (${s.fixtures.filter((f) => f.snapshotOlderThanDay).length} with a snapshot over a day old); cards ${s.cards.nearingRefresh.length} nearing refresh, ${s.cards.staleLatestUpdate.length} with an old Latest Update; ${s.gaps.length} gaps${
+    s.cardReview
+      ? `; card review ${s.cardReview.expiredCurrent.length} past their window, ${s.cardReview.situationMoved.length} moved, ${s.cardReview.historicalGaps.length} with covered gaps, ${s.cardReview.coherence.pairs.length} two-way pairs, ${s.cardReview.coherence.cycles.length} circles`
+      : ''
+  }${s.unread.length ? `; unread: ${s.unread.join(', ')}` : ''}`;
 
 // ---------------------------------------------------------------------------------------------
 // The plan
@@ -313,9 +351,16 @@ export type ScoutAction =
   | { type: 'rebuild_snapshot'; club: string; reason: string }
   | { type: 'build_era'; club: string; season: string; reason: string }
   | { type: 'refresh_latest_update'; player: string; reason: string }
-  | { type: 'research_note'; subject: string; question: string; reason: string };
+  | { type: 'research_note'; subject: string; question: string; reason: string }
+  | { type: 'rerate_current'; player: string; reason: string }
+  | { type: 'fill_facts'; cardKey: string; reason: string }
+  | { type: 'review_prime'; player: string; reason: string };
 
 export type ScoutActionType = ScoutAction['type'];
+
+/** Card actions spend the card budget (`CARD_REVIEW_CALLS`); the rest spend the day's. */
+export const isCardAction = (a: ScoutAction): a is Extract<ScoutAction, { type: keyof typeof CARD_ACTION_COST }> => a.type in CARD_ACTION_COST;
+export const actionCost = (a: ScoutAction): number => (isCardAction(a) ? CARD_ACTION_COST[a.type] : ACTION_COST[a.type as keyof typeof ACTION_COST]);
 
 export interface ScoutPlan {
   /** One line on the day's priorities, or why nothing is worth doing. */
@@ -332,12 +377,13 @@ export const PLAN_SCHEMA: Record<string, unknown> = {
       items: {
         type: Type.OBJECT,
         properties: {
-          type: { type: Type.STRING, enum: ['rebuild_snapshot', 'build_era', 'refresh_latest_update', 'research_note'] },
+          type: { type: Type.STRING, enum: ['rebuild_snapshot', 'build_era', 'refresh_latest_update', 'research_note', 'rerate_current', 'fill_facts', 'review_prime'] },
           club: { type: Type.STRING },
           season: { type: Type.STRING },
           player: { type: Type.STRING },
           subject: { type: Type.STRING },
           question: { type: Type.STRING },
+          cardKey: { type: Type.STRING },
           reason: { type: Type.STRING },
         },
         required: ['type', 'reason'],
@@ -352,6 +398,8 @@ export interface PlanInput {
   season: string;
   /** Model calls the actions may spend: the day's budget less the planning call. */
   budget: number;
+  /** Model calls card actions may spend (`CARD_REVIEW_CALLS`); 0 offers no card actions. */
+  cardBudget?: number;
   signals: ScoutSignals;
 }
 
@@ -386,8 +434,21 @@ ${list(s.cards.staleLatestUpdate.map((c) => `${c.player} (${c.club}): line dated
 Lookups that keep coming back empty or failed, most first:
 ${list(s.gaps.map((g) => `${g.item} [${g.status}] (${g.count})`))}
 
-Gaffa panel turns in the window: ${s.demand.gaffaTurns} (the clubs they research are counted above).${s.unread.length ? `\nSources that could not be read today: ${s.unread.join(', ')}.` : ''}`;
+Gaffa panel turns in the window: ${s.demand.gaffaTurns} (the clubs they research are counted above).${s.cardReview ? `\n\n${formatCardSignals(s.cardReview)}` : ''}${s.unread.length ? `\nSources that could not be read today: ${s.unread.join(', ')}.` : ''}`;
 }
+
+/**
+ * The card actions, offered only with a card budget and card review signals. A card is a record of
+ * when it was rated and anchors later cards, so its rating is reviewed only for a reason the
+ * signals give.
+ */
+const cardActionsPrompt = (cardBudget: number): string => `
+Cards have a separate budget of ${cardBudget} model calls, spent only on these actions, so card work never takes calls from the actions above. A card rates one version of a player and anchors every card rated after it, so a rating is re-examined only for a reason the card signals give, never because a player is popular alone:
+- rerate_current(player): rates a current card whose rating window has closed through the full dossier pipeline, and publishes the new card as a visitor's request would. About ${CARD_ACTION_COST.rerate_current} calls. Only for a player in the list of current cards whose window has closed; queued ones and the most asked about come first.
+- fill_facts(cardKey): fills a historical card's data gaps from the stored record that now covers them, without touching its rating. About ${CARD_ACTION_COST.fill_facts} calls. Only for a card key in the list of historical cards with covered gaps.
+- review_prime(player): drafts a new rating of the player's prime with the new record or the contradiction in its evidence, then a separate reviewer decides whether it replaces the card: it may accept, ask for one revision (another ${CARD_ACTION_COST.review_prime} calls), or refuse. About ${CARD_ACTION_COST.review_prime} calls a round. Only for a player whose prime card appears in the covered-gaps list or in a placement contradiction, and only when that evidence could change the rating; a gap whose fact can't change how good he was is a fill_facts.
+A player in the list of moved current cards gets refresh_latest_update now, whatever his line's age; his re-rating waits for the day his window closes.
+`;
 
 export const buildPlanPrompt = (i: PlanInput): string => `You are the scout of Futbolpedia, a football scouting service. Once a day, between conversations, you choose what to research so that tomorrow's answers rest on fresher facts where people are looking. Today is ${i.today}, in the ${i.season} season.
 
@@ -396,9 +457,10 @@ You have ${i.budget} model calls for the whole day. Code runs your list in order
 - build_era(club, season): builds the permanent snapshot of one past club season, written as YYYY-YY, from 2003-04 up to last season. About ${ACTION_COST.build_era} calls, and the result is kept for good. Choose one only when people looked that season up; a season already stored costs nothing.
 - refresh_latest_update(player): rewrites the news line on a player's current card from fresh facts. About ${ACTION_COST.refresh_latest_update} calls. Only for a player in the list of cards whose Latest Update is old.
 - research_note(subject, question): one web search on a club or a player, kept for 14 days as a dated note that chat reads for that subject. About ${ACTION_COST.research_note} call. Write the question as a researcher would type it. Use it for a gap the lookups keep reporting, or a question people keep circling that no stored snapshot answers.
-
+${i.cardBudget && i.signals.cardReview ? cardActionsPrompt(i.cardBudget) : ''}
 How to choose:
 - What people are asking about comes first, then what the prediction record shows is stale, then fixtures within 48 hours for clubs whose snapshot is old, then ageing cards. Something nobody asks about and no record flags is not worth a call.
+- Each budget is counted on its own: leave either unspent when nothing on its side is worth it.
 - Name clubs and players exactly as the signals do. Use only clubs and players that appear in the signals, except the subject of a research note.
 - Don't repeat an action, and don't rebuild a snapshot that is fresh unless the record shows its story is stale.
 - Leave budget unspent when nothing is worth it. An empty list is the right answer on a quiet day. Don't pad the list to use the calls.
@@ -419,7 +481,8 @@ function knownNames(signals: ScoutSignals) {
       ...signals.staleStories.map((c) => key(c.club)),
       ...signals.fixtures.map((c) => key(c.club)),
     ]),
-    refreshable: new Set(signals.cards.staleLatestUpdate.map((c) => toPlayerSlug(c.player))),
+    refreshable: new Set([...signals.cards.staleLatestUpdate.map((c) => toPlayerSlug(c.player)), ...(signals.cardReview?.situationMoved ?? []).map((c) => toPlayerSlug(c.player))]),
+    cards: cardTargets(signals.cardReview),
   };
 }
 
@@ -440,9 +503,10 @@ export function pastSeason(raw: unknown, seasonStartYear: number): string | null
 export function sanitizePlan(
   raw: any,
   signals: ScoutSignals,
-  options: { canRefreshLatestUpdate?: boolean; seasonStartYear?: number } = {},
+  options: { canRefreshLatestUpdate?: boolean; seasonStartYear?: number; canReviewCards?: boolean } = {},
 ): { plan: ScoutPlan; dropped: number } {
   const canRefresh = options.canRefreshLatestUpdate ?? true;
+  const canReview = (options.canReviewCards ?? true) && !!signals.cardReview;
   const seasonStartYear = options.seasonStartYear ?? getCurrentSeasonInfo().seasonStartYear;
   const known = knownNames(signals);
   const given: any[] = Array.isArray(raw?.actions) ? raw.actions : [];
@@ -488,6 +552,30 @@ export function sanitizePlan(
         }
         break;
       }
+      case 'rerate_current': {
+        const player = text(a.player, 80);
+        if (canReview && player && known.cards.rerate.has(toBasePlayerSlug(player))) {
+          action = { type: 'rerate_current', player, reason };
+          id = `rerate:${toBasePlayerSlug(player)}`;
+        }
+        break;
+      }
+      case 'fill_facts': {
+        const cardKey = text(a.cardKey, 200);
+        if (canReview && cardKey && known.cards.fill.has(cardKey)) {
+          action = { type: 'fill_facts', cardKey, reason };
+          id = `fill:${cardKey}`;
+        }
+        break;
+      }
+      case 'review_prime': {
+        const player = text(a.player, 80);
+        if (canReview && player && known.cards.review.has(toBasePlayerSlug(player))) {
+          action = { type: 'review_prime', player, reason };
+          id = `review:${toBasePlayerSlug(player)}`;
+        }
+        break;
+      }
     }
     if (!action || !reason || seen.has(id) || actions.length >= MAX_PLAN_ACTIONS) {
       dropped++;
@@ -516,14 +604,20 @@ export interface ActionResult {
   /** Model calls the action really spent. */
   calls: number;
   detail: string;
+  /** A card action's card before and after, for the journal. */
+  before?: CardMoment;
+  after?: CardMoment;
 }
 
 /** What carries each action out. Tests swap in fakes; `liveScoutActors` is the real one. */
 export interface ScoutActors {
   rebuildSnapshot(club: string): Promise<ActionResult>;
   buildEra(club: string, season: string): Promise<ActionResult>;
-  refreshLatestUpdate(player: string): Promise<ActionResult>;
+  /** `moved`: the card's situation moved inside its window, so its line is rewritten whatever its age. */
+  refreshLatestUpdate(player: string, options?: { moved?: boolean }): Promise<ActionResult>;
   researchNote(subject: string, question: string): Promise<ActionResult>;
+  /** Card review's actions (services/cardReview.ts); absent when card review is off. */
+  cards?: CardActors;
 }
 
 export interface RanEntry {
@@ -533,6 +627,8 @@ export interface RanEntry {
   calls: number;
   detail: string;
   ms: number;
+  before?: CardMoment;
+  after?: CardMoment;
 }
 export interface SkippedEntry {
   index: number;
@@ -550,65 +646,114 @@ export const describeAction = (a: ScoutAction): string => {
       return `refresh_latest_update(${a.player})`;
     case 'research_note':
       return `research_note(${a.subject}: ${a.question})`;
+    case 'rerate_current':
+      return `rerate_current(${a.player})`;
+    case 'fill_facts':
+      return `fill_facts(${a.cardKey})`;
+    case 'review_prime':
+      return `review_prime(${a.player})`;
   }
 };
 
-async function runAction(a: ScoutAction, actors: ScoutActors): Promise<ActionResult> {
+async function runAction(a: ScoutAction, actors: ScoutActors, ctx: { signals?: ScoutSignals; cardsLeft: number }): Promise<ActionResult> {
+  const cards = () => {
+    if (!actors.cards) throw new Error('card review is not available');
+    return actors.cards;
+  };
+  const cardCtx = { signals: ctx.signals?.cardReview ?? null, remaining: ctx.cardsLeft, reason: a.reason };
   switch (a.type) {
     case 'rebuild_snapshot':
       return actors.rebuildSnapshot(a.club);
     case 'build_era':
       return actors.buildEra(a.club, a.season);
-    case 'refresh_latest_update':
-      return actors.refreshLatestUpdate(a.player);
+    case 'refresh_latest_update': {
+      const moved = (ctx.signals?.cardReview?.situationMoved ?? []).some((c) => toPlayerSlug(c.player) === toPlayerSlug(a.player));
+      return moved ? actors.refreshLatestUpdate(a.player, { moved }) : actors.refreshLatestUpdate(a.player);
+    }
     case 'research_note':
       return actors.researchNote(a.subject, a.question);
+    case 'rerate_current':
+      return cards().rerateCurrent(a.player, cardCtx);
+    case 'fill_facts':
+      return cards().fillFacts(a.cardKey, cardCtx);
+    case 'review_prime':
+      return cards().reviewPrime(a.player, cardCtx);
   }
 }
 
+/** The day's two budget lines: the scout's day's own, and card review's. */
+export interface Budgets {
+  main: number;
+  cards: number;
+}
+const asBudgets = (b: number | Budgets): Budgets => (typeof b === 'number' ? { main: b, cards: 0 } : b);
+
 /**
- * Runs the plan in order. An action that doesn't fit in what is left of the budget (by its
+ * Runs the plan in order. Card actions spend the card budget and every other action the day's, so
+ * neither can starve the other. An action that doesn't fit in what is left of its budget (by its
  * estimated cost) is skipped, and a cheaper one further down may still run; the budget is checked
  * again after each action against what it really spent. An action that throws doesn't stop the
  * pass and is charged its estimate, since its real cost isn't known. `done` carries actions an
- * interrupted pass already ran, which are neither run again nor re-counted.
+ * interrupted pass already ran, which are neither run again nor re-counted. `spent` is the day's
+ * line, `cardSpent` card review's.
  */
 export async function executePlan(
   plan: ScoutPlan,
   actors: ScoutActors,
-  budget: number,
-  hooks: { done?: RanEntry[]; onProgress?: (ran: RanEntry[], skipped: SkippedEntry[], spent: number) => Promise<void> | void; now?: () => number } = {},
-): Promise<{ ran: RanEntry[]; skipped: SkippedEntry[]; spent: number }> {
+  budget: number | Budgets,
+  hooks: {
+    done?: RanEntry[];
+    signals?: ScoutSignals;
+    onProgress?: (ran: RanEntry[], skipped: SkippedEntry[], spent: number, cardSpent: number) => Promise<void> | void;
+    now?: () => number;
+  } = {},
+): Promise<{ ran: RanEntry[]; skipped: SkippedEntry[]; spent: number; cardSpent: number }> {
   const now = hooks.now ?? Date.now;
+  const budgets = asBudgets(budget);
   const ran: RanEntry[] = [...(hooks.done ?? [])];
   const skipped: SkippedEntry[] = [];
-  let spent = ran.reduce((n, r) => n + r.calls, 0);
+  let spent = ran.filter((r) => !isCardAction(r.action)).reduce((n, r) => n + r.calls, 0);
+  let cardSpent = ran.filter((r) => isCardAction(r.action)).reduce((n, r) => n + r.calls, 0);
   for (const [index, action] of plan.actions.entries()) {
     if (ran.some((r) => r.index === index)) continue;
-    const estimate = ACTION_COST[action.type];
-    if (spent >= budget) {
-      skipped.push({ index, action, reason: `budget spent (${spent} of ${budget} calls)` });
+    const estimate = actionCost(action);
+    const card = isCardAction(action);
+    const line = card ? budgets.cards : budgets.main;
+    const used = card ? cardSpent : spent;
+    const name = card ? 'card budget' : 'budget';
+    if (used >= line) {
+      skipped.push({ index, action, reason: `${name} spent (${used} of ${line} calls)` });
       continue;
     }
-    if (spent + estimate > budget) {
-      skipped.push({ index, action, reason: `would cost about ${estimate} calls with ${budget - spent} left` });
+    if (used + estimate > line) {
+      skipped.push({ index, action, reason: `would cost about ${estimate} calls with ${line - used} left in the ${name}` });
       continue;
     }
     const start = now();
     let result: ActionResult;
     try {
-      result = await runAction(action, actors);
+      result = await runAction(action, actors, { signals: hooks.signals, cardsLeft: budgets.cards - cardSpent });
     } catch (e) {
       result = { ok: false, calls: estimate, detail: `failed: ${(e as Error)?.message ?? e}`.slice(0, 200) };
     }
-    const entry: RanEntry = { index, action, ok: result.ok, calls: result.calls, detail: result.detail, ms: now() - start };
+    const entry: RanEntry = {
+      index,
+      action,
+      ok: result.ok,
+      calls: result.calls,
+      detail: result.detail,
+      ms: now() - start,
+      ...(result.before ? { before: result.before } : {}),
+      ...(result.after ? { after: result.after } : {}),
+    };
     ran.push(entry);
-    spent += result.calls;
+    if (card) cardSpent += result.calls;
+    else spent += result.calls;
     console.log(`[scout-day] ${describeAction(action)}: ${result.ok ? 'ok' : 'no result'}, ${result.calls} calls (${result.detail}) (${entry.ms}ms)`);
-    await hooks.onProgress?.(ran, skipped, spent);
+    await hooks.onProgress?.(ran, skipped, spent, cardSpent);
   }
   for (const s of skipped) console.log(`[scout-day] skipped ${describeAction(s.action)}: ${s.reason}`);
-  return { ran, skipped, spent };
+  return { ran, skipped, spent, cardSpent };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -632,6 +777,9 @@ export interface ScoutJournalRow {
   status: 'running' | 'done';
   budget: number;
   calls_spent: number;
+  /** Card review's budget line and what it spent (`CARD_REVIEW_CALLS`). */
+  card_budget?: number;
+  card_calls_spent?: number;
   signals: ScoutSignals;
   plan: ScoutPlan & { dropped?: number; error?: string };
   ran: RanEntry[];
@@ -723,6 +871,8 @@ export interface LiveActorDeps {
   notes: ScoutNoteStore;
   /** The Supabase client made with the secret key. */
   client: any;
+  /** Card review's actors, when it is on. */
+  cards?: CardActors;
   now?: () => number;
 }
 
@@ -737,6 +887,7 @@ export async function refreshLatestUpdateWith(
   player: string,
   rewrite: (card: PlayerProfile) => Promise<PlayerProfile> = rewriteLatestUpdate,
   nowMs: number = Date.now(),
+  options: { moved?: boolean } = {},
 ): Promise<ActionResult> {
   const slug = toDossierCardSlug(player, false);
   const read = async () => {
@@ -747,7 +898,9 @@ export async function refreshLatestUpdateWith(
   const row = await read();
   const card = row?.player_data ? ensureDossierDated(row.player_data, Date.parse(row.updated_at)) : null;
   if (!card) return { ok: false, calls: 0, detail: 'no shared current card' };
-  if (!needsLatestUpdateRefresh(card, nowMs)) return { ok: false, calls: 0, detail: 'its Latest Update is no longer old, or the card left its rating window' };
+  // A card whose situation moved (card review) gets a new line whatever its age, while it is in its window.
+  const due = options.moved ? !isPrimeCard(card) && !card.revision && isCardInRefreshWindow(card, nowMs) : needsLatestUpdateRefresh(card, nowMs);
+  if (!due) return { ok: false, calls: 0, detail: options.moved ? 'the card left its rating window' : 'its Latest Update is no longer old, or the card left its rating window' };
   const calls = ACTION_COST.refresh_latest_update;
   const refreshed = await rewrite(card);
   if (!refreshed.latestUpdateAsOf || refreshed.latestUpdateAsOf === card.latestUpdateAsOf || refreshed.latestUpdate === card.latestUpdate) {
@@ -767,6 +920,7 @@ export async function refreshLatestUpdateWith(
 export function liveScoutActors(deps: LiveActorDeps): ScoutActors {
   const now = deps.now ?? Date.now;
   return {
+    ...(deps.cards ? { cards: deps.cards } : {}),
     async rebuildSnapshot(club) {
       const { snapshot, calls } = await deps.snapshots.rebuild(club);
       return snapshot
@@ -778,7 +932,7 @@ export function liveScoutActors(deps: LiveActorDeps): ScoutActors {
       if (!built) return { ok: !!snapshot, calls, detail: snapshot ? 'already stored' : 'the history sources have no such season, or nowhere to keep it' };
       return snapshot ? { ok: true, calls, detail: `${snapshot.key} stored` } : { ok: false, calls, detail: 'the build produced no snapshot' };
     },
-    refreshLatestUpdate: (player) => refreshLatestUpdateWith(deps.client, player, rewriteLatestUpdate, now()),
+    refreshLatestUpdate: (player, options) => refreshLatestUpdateWith(deps.client, player, rewriteLatestUpdate, now(), options),
     async researchNote(subject, question) {
       const out = await deps.tools.webSearch(`${subject}: ${question}`);
       if (!out.result) return { ok: false, calls: 1, detail: `the search ${out.status === 'failed' ? 'failed' : 'found nothing'}${out.note ? ` (${out.note})` : ''}` };
@@ -806,6 +960,8 @@ export interface LiveSourceDeps {
   record(club: string): Promise<{ scored: { kickoff: string; opponent: string; scores: { code: { namesRight: number } | null; adjusted: { namesRight: number } | null } }[] } | null>;
   /** The Supabase client the server reads cards with. */
   client: any;
+  /** Card review's sources, when it is on. */
+  cardReview?: CardReviewSources;
 }
 
 const SNAPSHOT_LOOKBACK_MS = 14 * DAY_MS;
@@ -813,6 +969,7 @@ const SNAPSHOT_LOOKBACK_MS = 14 * DAY_MS;
 export function liveScoutSources(deps: LiveSourceDeps): ScoutSources {
   return {
     tally: deps.tally,
+    ...(deps.cardReview ? { cardReview: (asked: (player: string) => number) => gatherCardSignals(deps.cardReview!, asked) } : {}),
     async snapshots() {
       return (await deps.snapshots.listStored(SNAPSHOT_LOOKBACK_MS)).map((s) => ({ club: s.club, builtAt: s.builtAt }));
     },
@@ -879,6 +1036,8 @@ export interface ScoutDayDeps {
   afterSweep?: Promise<unknown>;
   /** The refresh action is offered to the planner only when the server can write a card's pointer row. */
   canRefreshLatestUpdate?: boolean;
+  /** Model calls card review may spend a day (`CARD_REVIEW_CALLS`); 0, or no card actors, turns card actions off. */
+  cardBudget?: number;
 }
 
 export function createScoutDay(deps: ScoutDayDeps) {
@@ -887,6 +1046,7 @@ export function createScoutDay(deps: ScoutDayDeps) {
   const budget = deps.budget ?? SCOUT_DAY_DEFAULT_CALLS;
   const enabled = deps.enabled ?? true;
   const canWrite = deps.canWrite ?? true;
+  const cardBudget = deps.actors.cards ? deps.cardBudget ?? CARD_REVIEW_DEFAULT_CALLS : 0;
   let busy = false;
   let swept = false;
   let tableWarned = false;
@@ -908,8 +1068,12 @@ export function createScoutDay(deps: ScoutDayDeps) {
       const season = getCurrentSeasonInfo(new Date(now()));
       let plan: ScoutJournalRow['plan'];
       try {
-        const raw = await model.plan({ today, season: season.currentSeason, budget: budget - PLAN_CALLS, signals });
-        const sanitized = sanitizePlan(raw, signals, { canRefreshLatestUpdate: deps.canRefreshLatestUpdate, seasonStartYear: season.seasonStartYear });
+        const raw = await model.plan({ today, season: season.currentSeason, budget: budget - PLAN_CALLS, cardBudget, signals });
+        const sanitized = sanitizePlan(raw, signals, {
+          canRefreshLatestUpdate: deps.canRefreshLatestUpdate,
+          seasonStartYear: season.seasonStartYear,
+          canReviewCards: cardBudget > 0,
+        });
         plan = { ...sanitized.plan, dropped: sanitized.dropped };
       } catch (e) {
         const failures = (planFailures.get(day) ?? 0) + 1;
@@ -920,21 +1084,23 @@ export function createScoutDay(deps: ScoutDayDeps) {
       }
       console.log(`[scout-day] plan: ${plan.summary || '(no summary)'} | ${plan.actions.length} actions${plan.dropped ? `, ${plan.dropped} dropped` : ''}`);
       plan.actions.forEach((a, i) => console.log(`[scout-day]   ${i + 1}. ${describeAction(a)}: ${a.reason}`));
-      row = { day, status: 'running', budget, calls_spent: PLAN_CALLS, signals, plan, ran: [], skipped: [], started_at: startedAt, updated_at: iso() };
+      row = { day, status: 'running', budget, calls_spent: PLAN_CALLS, card_budget: cardBudget, card_calls_spent: 0, signals, plan, ran: [], skipped: [], started_at: startedAt, updated_at: iso() };
     }
     await deps.journal.put(row);
 
-    const { ran, skipped, spent } = await executePlan(row.plan, deps.actors, budget, {
+    const cards = row.card_budget ?? cardBudget;
+    const { ran, skipped, spent, cardSpent } = await executePlan(row.plan, deps.actors, { main: budget, cards }, {
       done: row.ran,
+      signals: row.signals,
       now,
-      onProgress: async (r, s, n) => {
-        row = { ...row, ran: r, skipped: s, calls_spent: n + PLAN_CALLS, updated_at: iso() };
+      onProgress: async (r, s, n, c) => {
+        row = { ...row, ran: r, skipped: s, calls_spent: n + PLAN_CALLS, card_calls_spent: c, updated_at: iso() };
         await deps.journal.put(row).catch((e) => console.warn('[scout-day] journal progress not saved:', (e as Error)?.message ?? e));
       },
     });
-    row = { ...row, status: 'done', ran, skipped, calls_spent: spent + PLAN_CALLS, updated_at: iso() };
+    row = { ...row, status: 'done', ran, skipped, calls_spent: spent + PLAN_CALLS, card_budget: cards, card_calls_spent: cardSpent, updated_at: iso() };
     await deps.journal.put(row);
-    console.log(`[scout-day] done ${day}: ${ran.length} ran, ${skipped.length} skipped, ${row.calls_spent} of ${budget} calls spent`);
+    console.log(`[scout-day] done ${day}: ${ran.length} ran, ${skipped.length} skipped, ${row.calls_spent} of ${budget} calls spent${cards ? `, ${cardSpent} of ${cards} card calls` : ''}`);
     return row;
   }
 

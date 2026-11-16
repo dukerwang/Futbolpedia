@@ -324,6 +324,8 @@ const rateDossier = async (params: {
   imageData?: string;
   options?: SendMessageOptions;
   perf: (label: string) => void;
+  /** Card review's prime draft: rated, returned, never published here. */
+  hold?: boolean;
 }): Promise<string | PlayerProfile> => {
   const { message, route, context, savedDossiers, imageData, options, perf } = params;
   const {
@@ -758,11 +760,13 @@ const rateDossier = async (params: {
 
   const now = Date.now();
   const stampedProfile = stampDossier(reratingPrime() ? { ...profile, rerateAt: now } : profile, now);
-  upsertCachedDossier(
-    toDossierCardSlug(stampedProfile.basicInfo.name, isHistorical),
-    stampedProfile,
-    { supersede: supersede || reratingPrime() },
-  );
+  if (!params.hold) {
+    upsertCachedDossier(
+      toDossierCardSlug(stampedProfile.basicInfo.name, isHistorical),
+      stampedProfile,
+      { supersede: supersede || reratingPrime() },
+    );
+  }
   return stampedProfile;
 };
 
@@ -968,4 +972,18 @@ export const ratePlayer = async (
   void fetchSupabaseCalibratedPool();
   const context = buildTurnContext(message, route, conversationDossiers, savedDossiers);
   return rateDossier({ message, route, context, savedDossiers, options, perf });
+};
+
+/**
+ * Card review's prime draft (services/cardReview.ts, on the server): a "rerate" of his prime with
+ * the reason the review was opened, and its evidence, in the task. The draft is returned without
+ * being published; the scout's reviewer judges it first and the caller publishes an accepted one.
+ */
+export const draftPrimeRerate = async (name: string, reviewNote: string): Promise<string | PlayerProfile> => {
+  const request: RatingRequest = { name, edition: 'prime' };
+  const message = `${ratingTask(request)}\n\n${reviewNote}`;
+  const route: TurnRoute = { ...routeForRating(request), rerate: true };
+  await fetchSupabaseCalibratedPool();
+  const context = buildTurnContext(message, route, [], []);
+  return rateDossier({ message, route, context, savedDossiers: [], perf: createPerfLogger(), hold: true });
 };
