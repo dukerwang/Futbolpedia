@@ -49,6 +49,7 @@ const fakeDb = (rows: { clubs?: Record<string, SnapshotRow>; eras?: Record<strin
   const db: SnapshotDb = {
     readClub: async (key) => rows.clubs?.[key] ?? null,
     writeClub: async (row) => void log.clubWrites.push(row),
+    listClubs: async () => Object.values(rows.clubs ?? {}),
     readEra: async (key) => rows.eras?.[key] ?? null,
     writeEra: async (row) => void log.eraWrites.push(row),
     eraReady: async () => (log.eraReadyChecks++, eraReady),
