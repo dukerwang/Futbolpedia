@@ -12,7 +12,6 @@ import {
   offerPrimeScout,
   offerScout,
   runConversationalScout,
-  showCard,
   threadIsHistorical,
   wantsPrimeOf,
 } from './conversationalScout';
@@ -865,7 +864,8 @@ export const sendMessageToAI = async (
   // A turn whose caller doesn't stream stays non-streaming: passing a handler would change how the model is called.
   const onStreamChunk = options?.onStreamChunk
     ? (text: string) => {
-        composer.setText(text);
+        // A turn that gates by segment (the conversational scout) feeds the composer the raw text itself.
+        if (!composer.hasGate) composer.setText(text);
         options.onStreamChunk!(text);
       }
     : undefined;
@@ -889,11 +889,9 @@ export const sendMessageToAI = async (
         // A player whose prime the message names is looked up in his prime, however the turn routed.
         .map((name) => lookUpDossier(name, localCards, wantsPrimeOf(message, name, historical)).catch(() => null)),
     );
-    const asksAboutOne = route.analyticalMode === 'player_qa' && route.targetPlayers.length === 1;
     lookups.forEach((lookup, i) => {
       if (lookup?.status === 'found') {
         if (!localCards.includes(lookup.card)) turnDossiers = [...turnDossiers, lookup.card];
-        if (asksAboutOne) showCard(composer, lookup.card);
         // His prime was asked about but only his current form is rated: offer to scout the prime.
         if (editionGaps([lookup.card], historical, message).length) {
           offerPrimeScout(composer, lookup.card.basicInfo.name);
@@ -950,6 +948,8 @@ export const sendMessageToAI = async (
       onGaffaScorecard,
       conversationId: options?.conversationId,
       initiative: stageInitiative,
+      // Gaffa's panel draws its replies as text, so it is offered no views.
+      views: !options?.noRating,
       perf,
     });
   let fellBack = false;

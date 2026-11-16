@@ -1,4 +1,4 @@
-import type { LiveClubReport } from './liveFootball';
+import type { LiveClubReport, StandingsRow } from './liveFootball';
 
 /**
  * What a chat turn found out before writing: one numbered entry per piece of evidence (a club's
@@ -37,6 +37,8 @@ export interface EvidenceEntry {
   team?: string;
   /** A card entry's card key, so the card's latest published review can be filed beside it. */
   cardKey?: string;
+  /** The rows behind a league table entry, for the table view. Never printed. */
+  table?: { league: string; season: string | null; rows: StandingsRow[] };
 }
 
 /**

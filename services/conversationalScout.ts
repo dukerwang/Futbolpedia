@@ -2,7 +2,7 @@ import { Type } from '@google/genai';
 import type { AskPrompt, ChatMessage, GaffaContextBag, GaffaTradeScorecard, GoDeeper, PlayerProfile } from '../types';
 import type { ThinkingTier } from '../constants/modelProfiles';
 import { ATTRIBUTE_KEYS } from '../constants/ratingTiers';
-import { buildConversationalScoutInstruction, INITIATIVE_RULES } from '../prompts/chatPrompt';
+import { buildConversationalScoutInstruction, INITIATIVE_RULES, viewRules } from '../prompts/chatPrompt';
 import {
   generateProseTurn,
   type ProseToolMode,
@@ -51,8 +51,7 @@ import { reconcileDossierNumbers } from './dossierNumberGate';
 import { cardEdition, toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
 import { askedDirectly, cleanReason, createPreparer, validateAsk } from './initiative';
-import { lineupsForTurn } from './lineupView';
-import { ReplyComposer } from './replyBlocks';
+import { createViewTools, gateSegments, joinSegments, makeCardLookup, ReplyComposer, splitSegments } from './replyBlocks';
 import { buildGaffaTurn, capGaffaTradeProse, leagueFocusOf, starterClubs, type GaffaTurn } from './gaffaTurn';
 import { lockGaffaRosterNames } from './gaffaLineupAudit';
 import { correctReply, formatGateFeedback, GATE_FEEDBACK_STAGE_LABEL, stageFeedbackAllowed, type CorrectionModel, type Sanitized } from './gateFeedback';
@@ -328,6 +327,11 @@ export interface ConversationalScoutParams {
    * A challenge turn never gets them, whatever is passed.
    */
   initiative?: InitiativeOptions;
+  /**
+   * Offers the writer the view tools (pitch, table, comparison, ranking). Left out on Gaffa's panel,
+   * whose replies Gaffa draws as text; a challenge turn and a Gaffa trade scorecard never get them.
+   */
+  views?: boolean;
   /** The gate feedback round's model and clock, for tests (`gateFeedback.ts`). */
   gateFeedback?: { correct?: CorrectionModel; now?: () => number };
 }
@@ -484,6 +488,8 @@ export function createDossierTools(args: {
   localCards: PlayerProfile[];
   historical: boolean;
   composer?: ReplyComposer;
+  /** Whether a card the model shows sits where it called `show_dossier` (the reply's text is streaming). */
+  inline?: boolean;
   /** Called with each card the model reads. */
   onRead?: (card: PlayerProfile) => void;
   /**
@@ -522,7 +528,7 @@ export function createDossierTools(args: {
         readCards.get(toBasePlayerSlug(name)) ??
         pickCardPerPlayer(findReferencedDossiers(name, cardsInPlay, [name]), isHistoricalThread)[0];
       if (!card) return { shown: false, reason: 'No card in this turn for that player; look it up first.' };
-      if (composer) composer.showCard(card);
+      if (composer) composer.showCard(card, { inline: args.inline });
       return { shown: true };
     },
   };
@@ -939,18 +945,6 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   }
   const gaffaBlock = gaffaTurn?.block ?? '';
 
-  // The clubs' first-choice XIs, drawn under the reply from the snapshot the writer argues from.
-  if (composer) {
-    const lineups = lineupsForTurn({
-      situation: situationData,
-      clubs: targetClubsInPlay,
-      players: route.targetPlayers,
-      historical: isHistoricalThread,
-      scorecard: Boolean(gaffaTurn?.scorecard),
-    });
-    if (lineups.length > 0) composer.setLineups(lineups);
-  }
-
   const analyticalMode =
     route.analyticalMode ??
     (route.intent === 'compare'
@@ -977,6 +971,11 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   // turn that fell back to prose never gets them.
   const offersInitiative = Boolean(params.initiative && composer && route.intent !== 'challenge_or_revise');
   const initiativeNote = offersInitiative ? initiativeRules(params.initiative!) : '';
+  // The view tools: on every prose turn that can draw them, the past and cards-only turns included.
+  // A challenge turn, Gaffa's panel and a Gaffa trade scorecard (which has its own view) get none.
+  const offersViews = Boolean(params.views && composer && route.intent !== 'challenge_or_revise' && !gaffaTurn?.scorecard);
+  const viewNote = offersViews ? viewRules() : '';
+  const extraRules = [initiativeNote, viewNote].filter(Boolean);
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${gaffaBlock}
 ${ongoingThread}
@@ -992,7 +991,7 @@ ${savedDossiersBlock}
 1. ${modeGuidance}${shownNote}${missingNote}${gapNote}
 ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
 3. ${MANAGER_FIDELITY_RULE}`}
-4. ${CONTINUITY_REMINDER}${initiativeNote ? `\n5. ${initiativeNote}` : ''}
+4. ${CONTINUITY_REMINDER}${extraRules.map((rule, i) => `\n${5 + i}. ${rule}`).join('')}
 </instructions>
 <task>${message}</task>`;
 
@@ -1066,14 +1065,38 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
           deeper: params.initiative!.deeper,
         })
       : null;
+  // Views sit inside the reply only when its text streams, so each can follow the text that leads into it.
+  const streaming = Boolean(onStreamChunk);
   const dossierTools = createDossierTools({
     cardsInPlay,
     localCards: writerCards,
     historical: isHistoricalThread,
     composer,
+    inline: streaming && offersViews,
     // With the offer tool, a missing player is offered by rule only when the user named him.
     ...(initiative ? { offerMissing: (name: string) => askedDirectly(name, route.targetPlayers, message) } : {}),
   });
+  let viewLedger: EvidenceLedger = ledger ?? emptyLedger();
+  const viewTools = offersViews
+    ? createViewTools({
+        composer: composer!,
+        inline: streaming,
+        context: {
+          tools: liveToolset([...cardsInPlay, ...writerCards]),
+          ledger: { read: () => viewLedger, write: (next) => { viewLedger = next; } },
+          stored: [],
+          situation: () => situationData,
+          cards: makeCardLookup({
+            pool: [...cardsInPlay, ...writerCards],
+            preferPrime: (name) => wantsPrimeOf(message, name, isHistoricalThread),
+            onCard: (card) => {
+              if (!cardsInPlay.some((c) => getCardKey(c) === getCardKey(card))) cardsInPlay.push(card);
+            },
+          }),
+          now: Date.now,
+        },
+      })
+    : null;
   // Gaffa squad and market names are copied exactly, and a scorecard reply stays short.
   const finishGaffa = (text: string): string => {
     if (!gaffaBag || !gaffaTurn || gaffaTurn.focus === 'none') return text;
@@ -1083,6 +1106,11 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
   let firstChunk = true;
   const clock = params.gateFeedback?.now ?? Date.now;
   const writerStart = clock();
+  // The gates read the reply a prose segment at a time, together, so a view the model placed stays
+  // where it called it however much a segment loses. A composer-less turn (a test, a caller with no
+  // reply to compose) gates the whole text as it always did.
+  const gateText = (text: string, figures: FigureCheck | undefined = figureCheck) => sanitizeScoutProse(text, scoutManagerContext, cardsInPlay, figures);
+  if (composer) composer.setGate((segments) => gateSegments(segments, (t) => gateText(t)).map(finishGaffa));
   const rawReply = await generateProseTurn({
     message: fullPrompt,
     historyContents,
@@ -1094,6 +1122,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
     gaffaBag,
     dossierTools,
     ...(initiative ? { initiativeTools: initiative.tools, endTurn: initiative.endTurn } : {}),
+    ...(viewTools ? { viewTools } : {}),
     onToolCalls: (names) => perf?.(`writer tool calls: ${names.join(', ')}`),
     onToolResult: (_name, result) => toolResults.push(typeof result === 'string' ? result : JSON.stringify(result)),
     onGrounded: (segment) => figureCheck?.grounded.push(segment),
@@ -1103,7 +1132,12 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
             firstChunk = false;
             perf?.('first answer token');
           }
-          onStreamChunk(finishGaffa(sanitizeScoutProse(partial, scoutManagerContext, cardsInPlay, figureCheck)));
+          if (!composer) return onStreamChunk(finishGaffa(gateText(partial)));
+          // A question the writer asked is the whole reply, so it replaces what came before it.
+          const asked = initiative?.endTurn();
+          if (asked) composer.replaceProse(asked);
+          else composer.setText(partial);
+          onStreamChunk(composer.displayText());
         }
       : undefined,
   });
@@ -1115,11 +1149,20 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
       if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures (unsupported, or over a debate's budget): ${removed.map((r) => r.text).join('; ')}`);
     },
   };
+  // The reply's prose in the segments the views closed. Without a composer it is one segment.
+  const asked = initiative?.endTurn();
+  if (composer) {
+    if (asked) composer.replaceProse(asked);
+    else composer.setText(rawReply);
+  }
+  const segments = composer ? composer.rawProse() : [rawReply];
   // A researched turn whose writer finished in time gives the model one chance to fix what the gates
-  // flag before they cut it; the stream above shows the gated text, and this reply replaces it.
+  // flag before they cut it. It reads the segments as one reply, marks between them, so one call fixes
+  // the whole reply and a figure budget spans it; the stream above showed the gated text.
+  let finalJoined: string;
   if (stageFeedbackAllowed({ researched: researched || Boolean(debate), figureCheck: Boolean(figureCheck), writerMs })) {
     const corrected = await correctReply({
-      raw: rawReply,
+      raw: joinSegments(segments),
       sanitize: (text) => sanitizeScoutProseDetailed(text, scoutManagerContext, cardsInPlay, finalFigures),
       strip: stripScoutMarkup,
       correct: params.gateFeedback?.correct,
@@ -1127,7 +1170,11 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
       now: clock,
     });
     if (corrected.stats) perf?.(`gate feedback: ${formatGateFeedback(corrected.stats)}`);
-    return finishGaffa(corrected.text);
+    finalJoined = corrected.text;
+  } else {
+    finalJoined = sanitizeScoutProse(joinSegments(segments), scoutManagerContext, cardsInPlay, finalFigures);
   }
-  return finishGaffa(sanitizeScoutProse(rawReply, scoutManagerContext, cardsInPlay, finalFigures));
+  const parts = (splitSegments(finalJoined, segments.length) ?? segments.map((seg) => sanitizeScoutProse(seg, scoutManagerContext, cardsInPlay, finalFigures))).map(finishGaffa);
+  composer?.settle(parts);
+  return parts.filter((p) => p.trim()).join('\n\n');
 }

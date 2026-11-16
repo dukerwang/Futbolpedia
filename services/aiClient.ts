@@ -1,4 +1,4 @@
-import { GoogleGenAI, Content, ThinkingLevel, Type } from '@google/genai';
+import { GoogleGenAI, Content, ThinkingLevel, Type, type FunctionDeclaration } from '@google/genai';
 import type { GaffaContextBag, PlayerProfile } from '../types';
 import {
   AITask,
@@ -496,8 +496,8 @@ async function callNetworkTool(name: string, args: Record<string, unknown>): Pro
   );
   const res = await fetch(`${route.path}?${query}`);
   if (!res.ok) return { error: `${route.label} lookup returned status ${res.status}` };
-  // The structured club report is for research code; the model reads its text.
-  const { report: _report, ...rest } = await res.json();
+  // The structured club report and a table's rows are for research code and views; the model reads the text.
+  const { report: _report, rows: _rows, ...rest } = await res.json();
   return rest;
 }
 
@@ -518,6 +518,11 @@ export interface GenerateProseTurnParams {
   dossierTools?: DossierToolHandlers;
   /** The writer's initiative tools (ask, prepare, offer, go deeper); the default chat path only. */
   initiativeTools?: InitiativeToolHandlers;
+  /**
+   * The view tools (pitch, table, comparison, ranking): each call draws a view in the reply where the
+   * model called it. Offered on every prose turn that can draw them, including those answered from cards.
+   */
+  viewTools?: { declarations: FunctionDeclaration[]; handles(name: string): boolean; run(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> };
   /**
    * Checked after each round of tool calls: a string ends the turn, and is the reply (a question
    * the writer asked instead of answering).
@@ -540,6 +545,27 @@ const reportGrounding = (candidate: any, onGrounded?: (segment: string) => void)
   }
 };
 
+/**
+ * The text of a streamed chunk that comes before any function call: text the model wrote just ahead
+ * of a call in the same chunk is part of the reply (a view lands after it). Text after a call, or in
+ * a chunk once calls are pending, is dropped as it always was. A chunk with no parts to read falls
+ * back to its text.
+ */
+export function textBeforeCalls(chunk: any, callsPending: boolean): string {
+  if (callsPending) return '';
+  const parts: any[] | undefined = chunk?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts) || parts.length === 0) {
+    const text = chunk?.text;
+    return typeof text === 'string' ? text : '';
+  }
+  let out = '';
+  for (const part of parts) {
+    if (part?.functionCall) break;
+    if (typeof part?.text === 'string' && !part.thought) out += part.text;
+  }
+  return out;
+}
+
 export async function generateProseTurn(params: GenerateProseTurnParams): Promise<string> {
   const resolved = resolveTaskModelConfig('chat', {
     model: params.modelOverride,
@@ -555,6 +581,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
     ...(params.gaffaBag?.connected ? [GREP_GAFFA_MARKET_DECLARATION] : []),
     ...(params.dossierTools ? [LOOK_UP_DOSSIER_DECLARATION, SHOW_DOSSIER_DECLARATION] : []),
     ...initiativeDeclarations(params.initiativeTools),
+    ...(params.viewTools?.declarations ?? []),
   ];
 
   const tools: any[] =
@@ -611,6 +638,8 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
             apiResult = await params.dossierTools.lookUp(args);
           } else if (functionCall.name === 'show_dossier' && params.dossierTools) {
             apiResult = await params.dossierTools.show(args);
+          } else if (params.viewTools?.handles(String(functionCall.name))) {
+            apiResult = await params.viewTools.run(String(functionCall.name), args);
           } else if (functionCall.name === 'ask_user' && params.initiativeTools?.ask) {
             apiResult = params.initiativeTools.ask(args);
           } else if (functionCall.name === 'prepare_club' && params.initiativeTools?.prepare) {
@@ -649,6 +678,8 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
       pendingCalls = [];
       const stream = await chatSession.sendMessageStream({ message: messagePayload });
       for await (const chunk of stream) {
+        // Calls from earlier chunks end the text; a call in this chunk ends it from the call on.
+        const callsBefore = pendingCalls.length > 0;
         if (chunk.functionCalls && chunk.functionCalls.length > 0) {
           pendingCalls.push(...chunk.functionCalls);
         }
@@ -656,8 +687,8 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
         if (finish) lastFinishReason = finish;
         reportGrounding(chunk.candidates?.[0], params.onGrounded);
 
-        const chunkText = chunk.text;
-        if (typeof chunkText === 'string' && chunkText.length > 0 && pendingCalls.length === 0) {
+        const chunkText = textBeforeCalls(chunk, callsBefore);
+        if (chunkText.length > 0) {
           accumulatedText += chunkText;
           params.onStreamChunk?.(accumulatedText);
         }

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { LineupView } from './services/lineupView';
+import type { ComparisonViewData, RankingViewData, TableViewData } from './components/views/viewData';
 
 export interface BasicInfo {
   name: string;
@@ -265,6 +266,9 @@ export interface ChatMessage {
 /** What each kind of reply block carries. Adding a kind is one line here plus its registry entry. */
 export interface ReplyBlockData {
   pitch: LineupView;
+  table: TableViewData;
+  comparison: ComparisonViewData;
+  ranking: RankingViewData;
   card: ChatDossierRef;
   scoutOffer: { name: string };
   ask: AskPrompt;
@@ -276,6 +280,16 @@ export type ReplyBlockKind = keyof ReplyBlockData;
 
 /** `pending` while a view's data loads, then `ready`, or `failed` (drawn as nothing, never stored). */
 export type ReplyBlockStatus = 'pending' | 'ready' | 'failed';
+
+/**
+ * What a view tool's call already says about the view, kept on its `pending` block so the skeleton
+ * can be the settled view's height (the ranking's title and row count, the table's league).
+ */
+export interface ViewHint {
+  title?: string;
+  rows?: number;
+  league?: string;
+}
 
 /** A stretch of the reply's prose (markdown). */
 export interface ProseBlock {
@@ -291,7 +305,7 @@ export interface ProseBlock {
 export type DataBlock<K extends ReplyBlockKind = ReplyBlockKind> = {
   [P in K]:
     | { kind: P; id: string; status: 'ready'; data: ReplyBlockData[P] }
-    | { kind: P; id: string; status: 'pending' | 'failed'; data?: undefined };
+    | { kind: P; id: string; status: 'pending' | 'failed'; data?: undefined; hint?: ViewHint };
 }[K];
 
 /** A block whose data has arrived. */

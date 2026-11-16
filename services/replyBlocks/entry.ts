@@ -1,8 +1,9 @@
 import type { FunctionDeclaration } from '@google/genai';
-import type { DataBlock, ReadyBlock, ReplyBlock, ReplyBlockKind } from '../../types';
+import type { DataBlock, ReadyBlock, ReplyBlock, ReplyBlockKind, ViewHint } from '../../types';
+import type { DossierLookup } from '../dossierLookup';
 import type { EvidenceLedger } from '../evidenceLedger';
 import type { ResearchToolset } from '../researchTools';
-import type { ClubSnapshot } from '../situationSnapshot';
+import type { ClubSnapshot, Situation } from '../situationSnapshot';
 
 /**
  * What a block's `build` may read. Everything a test needs to fake is here: the research toolset
@@ -14,8 +15,15 @@ export interface BuildContext {
   /** The turn's evidence ledger; a build that reads a feed files the outcome here. */
   ledger: { read(): EvidenceLedger; write(next: EvidenceLedger): void };
   stored: ClubSnapshot[];
+  /** The turn's situation snapshot, which the writer argues from: a drawn XI reads the same club it does. */
+  situation?: () => Situation | null;
   /** The blocks the reply holds so far, for a rule such as "already shown". */
   blocks(): ReplyBlock[];
+  /**
+   * Finds a player's stored card (yours or shared), never rating anyone. `edition` left out takes the
+   * version the thread discusses him in, else his current form. Comparisons and rankings read it.
+   */
+  cards?: { lookUp(name: string, edition?: 'current' | 'prime'): Promise<DossierLookup> };
   now(): number;
   newId(): string;
 }
@@ -30,6 +38,9 @@ export type BuildResult<B> =
 /** The arguments each kind's `build` takes. */
 export interface BuildArgs {
   pitch: { club: string };
+  table: { league: string; country?: string; season?: string; highlight?: string[] };
+  comparison: { playerA: string; playerB: string; edition?: 'current' | 'prime' };
+  ranking: { title: string; names: string[]; criterion: string; edition?: 'current' | 'prime' };
   card: { profile: import('../../types').PlayerProfile };
   scoutOffer: { name: string };
   ask: import('../../types').AskPrompt;
@@ -42,6 +53,8 @@ export interface BlockEntry<K extends ReplyBlockKind> {
   kind: K;
   /** The Gemini declaration, for kinds the model can call. Kinds code adds have none. */
   tool?: FunctionDeclaration;
+  /** What the call already tells about the view, for the skeleton shown while `build` runs. */
+  hint?(args: BuildArgs[K]): ViewHint;
   /** Resolves real data and returns the block, or the reason it couldn't. */
   build(args: BuildArgs[K], ctx: BuildContext): Promise<BuildResult<ReadyBlock<K>>>;
   /** What the model reads back once the block is drawn. */

@@ -289,6 +289,8 @@ await test('player seasons use the name asked for, and tables read from ESPN sta
   const table = await live.table('Premier League');
   assert.ok(table.found);
   assert.equal(table.text, '1. Club United — 21 pts, P8 W7 D0 L1, GD +8');
+  // The rows behind the text come back too, for the table view; the text is what it always was.
+  assert.deepEqual(table.rows.map((r) => [r.rank, r.team, r.points, r.goalDiff]), [[1, 'Club United', 21, 8]]);
   assert.deepEqual(await live.table('Sunday League'), { found: false, status: 'not_covered', reason: 'no table source for "Sunday League"' });
   assert.deepEqual(await live.player('Lionel Nobody'), {
     found: false,

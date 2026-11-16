@@ -18,7 +18,8 @@ export async function runViewTool<K extends ReplyBlockKind>(
   options: { inline?: boolean; pending?: boolean } = {},
 ): Promise<Record<string, unknown>> {
   const full: BuildContext = { ...ctx, blocks: () => composer.blocks(), newId: composer.newId };
-  const pendingId = options.pending ? composer.beginView(entry.kind, { inline: options.inline }) : null;
+  const hint = options.pending ? entry.hint?.(args) : undefined;
+  const pendingId = options.pending ? composer.beginView(entry.kind, { inline: options.inline, hint }) : null;
   let outcome: Awaited<ReturnType<typeof entry.build>>;
   try {
     outcome = await entry.build(args, full);

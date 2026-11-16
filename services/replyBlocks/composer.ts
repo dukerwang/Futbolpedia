@@ -1,11 +1,9 @@
-import type { AskPrompt, DataBlock, GaffaTradeScorecard, GoDeeper, PlayerProfile, ReadyBlock, ReplyBlock, ReplyBlockKind } from '../../types';
+import type { AskPrompt, DataBlock, GaffaTradeScorecard, GoDeeper, PlayerProfile, ReadyBlock, ReplyBlock, ReplyBlockKind, ViewHint } from '../../types';
 import { isPrimeCard, toBasePlayerSlug } from '../dossierCards';
 import { getCardKey } from '../dossierStore';
-import type { LineupView } from '../lineupView';
 import { askBlock } from './ask';
 import { cardBlockOf } from './card';
 import { goDeeperBlock } from './goDeeper';
-import { pitchBlock } from './pitch';
 import { proseBlock } from './prose';
 import { scorecardBlock } from './scorecard';
 import { scoutOfferBlock } from './scoutOffer';
@@ -27,13 +25,20 @@ const PRIME_OFFER = /^prime\s+/i;
 
 type Segment = { text: string } | { view: DataBlock };
 
+/**
+ * The conduct gates over a reply's prose segments: given the raw text of each segment, the text to
+ * show for each, in the same order and count. Run on the segments together (so a figure budget
+ * spans the reply) and never moves a view.
+ */
+export type ProseGate = (segments: string[]) => string[];
+
 export interface ComposerSnapshot {
   text: string;
   closedLength: number;
   segments: Segment[];
   scorecard: DataBlock<'scorecard'> | null;
   endViews: DataBlock[];
-  cards: { profile: PlayerProfile; block: ReadyBlock<'card'> }[];
+  cards: { profile: PlayerProfile; block: ReadyBlock<'card'>; inline?: boolean }[];
   offers: ReadyBlock<'scoutOffer'>[];
   ask: ReadyBlock<'ask'> | null;
   goDeeper: ReadyBlock<'goDeeper'> | null;
@@ -56,11 +61,16 @@ export class ReplyComposer {
   private scorecard: DataBlock<'scorecard'> | null = null;
   /** Views placed after the last prose (what code attaches today, and a view with `inline` off). */
   private endViews: DataBlock[] = [];
-  private cardList: { profile: PlayerProfile; block: ReadyBlock<'card'> }[] = [];
+  private cardList: { profile: PlayerProfile; block: ReadyBlock<'card'>; inline?: boolean }[] = [];
   private offerList: ReadyBlock<'scoutOffer'>[] = [];
   private askBlock_: ReadyBlock<'ask'> | null = null;
   private goDeeperBlock_: ReadyBlock<'goDeeper'> | null = null;
   private counter = 0;
+  private gate: ProseGate | null = null;
+  /** The last gate run, so a notice that changes no text doesn't run the gates again. */
+  private gated: { key: string; out: string[] } | null = null;
+  /** The reply's prose after the final gates (and the correction round), once the writer is done. */
+  private finalProse: string[] | null = null;
   private lastTextNotice = -Infinity;
   private readonly now: () => number;
   private readonly textIntervalMs: number;
@@ -78,17 +88,65 @@ export class ReplyComposer {
   /** The reply as the reader sees it. Pending views are included; `finish` removes the ones left. */
   blocks(): ReplyBlock[] {
     const out: ReplyBlock[] = [];
+    const prose = this.shownProse();
+    let n = 0;
     if (this.scorecard) out.push(this.scorecard);
     for (const seg of this.segments) {
-      if ('view' in seg) out.push(seg.view);
-      else out.push(proseBlock(this.idFor(seg), seg.text));
+      if ('view' in seg) {
+        out.push(seg.view);
+        continue;
+      }
+      const text = prose[n++];
+      if (text?.trim()) out.push(proseBlock(`prose-${n}`, text));
     }
-    const tail = this.text.slice(this.closedLength);
-    if (tail.trim()) out.push(proseBlock('prose-tail', tail));
-    out.push(...this.endViews, ...this.cardList.map((c) => c.block), ...this.offerList);
+    const tail = prose[n];
+    if (tail?.trim()) out.push(proseBlock('prose-tail', tail));
+    out.push(...this.endViews, ...this.cardList.filter((c) => !c.inline).map((c) => c.block), ...this.offerList);
     if (this.askBlock_) out.push(this.askBlock_);
     if (this.goDeeperBlock_) out.push(this.goDeeperBlock_);
     return out;
+  }
+
+  /** The prose segments as written, in order: those a view closed, then the stretch after the last. */
+  rawProse(): string[] {
+    const closed = this.segments.flatMap((s) => ('view' in s ? [] : [s.text]));
+    const tail = this.text.slice(this.closedLength);
+    return tail.trim() ? [...closed, tail] : closed;
+  }
+
+  /** The prose as the reader sees it: the final text once settled, else the gates' reading of what has streamed. */
+  private shownProse(): string[] {
+    const raw = this.rawProse();
+    if (this.finalProse) return this.finalProse;
+    if (!this.gate) return raw;
+    const key = raw.join('\u0000');
+    if (this.gated?.key !== key) this.gated = { key, out: this.gate(raw) };
+    return this.gated.out;
+  }
+
+  /** The reply's prose as the reader sees it, joined, for the caller that streams plain text. */
+  displayText(): string {
+    return this.shownProse().filter((t) => t.trim()).join('\n\n');
+  }
+
+  /** Whether the writer reads the stream through this composer's gates (`setGate`). */
+  get hasGate(): boolean {
+    return this.gate !== null;
+  }
+
+  /** The gates the reply's prose passes through on its way to the reader. */
+  setGate(gate: ProseGate | null): void {
+    this.gate = gate;
+    this.gated = null;
+  }
+
+  /**
+   * The prose after the final gates, one text for each of `rawProse()`'s segments (empty where the
+   * gates removed all of one). It replaces the streamed reading, and no view moves.
+   */
+  settle(parts: string[]): void {
+    this.finalProse = parts;
+    this.notify(true);
   }
 
   /** The cards the reply shows, as profiles (the card blocks hold only their references). */
@@ -125,6 +183,14 @@ export class ReplyComposer {
     this.notify();
   }
 
+  /** Replaces all the reply's prose with this text (a question the writer asked is the whole reply). */
+  replaceProse(text: string): void {
+    this.segments = this.segments.filter((s) => 'view' in s);
+    this.closedLength = 0;
+    this.text = text;
+    this.notify(true);
+  }
+
   // -- Views ------------------------------------------------------------------------------------
 
   /**
@@ -139,8 +205,8 @@ export class ReplyComposer {
   }
 
   /** Places a `pending` block of this kind and returns its id; `resolve` or `fail` settles it. */
-  beginView(kind: ReplyBlockKind, options: { inline?: boolean } = {}): string {
-    const block = { kind, id: this.newId(), status: 'pending' } as DataBlock;
+  beginView(kind: ReplyBlockKind, options: { inline?: boolean; hint?: ViewHint } = {}): string {
+    const block = { kind, id: this.newId(), status: 'pending', ...(options.hint ? { hint: options.hint } : {}) } as DataBlock;
     this.addView(block, options);
     return block.id;
   }
@@ -154,17 +220,6 @@ export class ReplyComposer {
   fail(id: string): void {
     const found = this.find(id);
     if (found) this.swap(id, { ...found, status: 'failed', data: undefined } as DataBlock);
-  }
-
-  /** Replaces the views of one kind placed at the end (the XIs a turn attaches by rule). */
-  replaceEndViews(kind: ReplyBlockKind, blocks: DataBlock[]): void {
-    this.endViews = [...this.endViews.filter((v) => v.kind !== kind), ...blocks];
-    this.notify(true);
-  }
-
-  /** The XIs a turn draws, in place of any it held. */
-  setLineups(views: LineupView[]): void {
-    this.replaceEndViews('pitch', views.map((v) => pitchBlock(this.newId(), v)));
   }
 
   /** The views of one kind that are drawn, in order. */
@@ -181,10 +236,16 @@ export class ReplyComposer {
   }
 
   /** Adds a card to show under the reply, once. A current card leaves an offer of his prime in place. */
-  showCard(card: PlayerProfile): void {
+  showCard(card: PlayerProfile, options: { inline?: boolean } = {}): void {
     const key = getCardKey(card);
     if (this.cardList.some((c) => getCardKey(c.profile) === key)) return;
-    this.cardList.push({ profile: card, block: cardBlockOf(this.newId(), card) });
+    const block = cardBlockOf(this.newId(), card);
+    // A card the model shows inside the reply sits where it called it; the rest go under the prose.
+    if (options.inline) {
+      this.closeProse();
+      this.segments.push({ view: block });
+    }
+    this.cardList.push({ profile: card, block, inline: options.inline });
     const slug = toBasePlayerSlug(card.basicInfo.name);
     this.offerList = this.offerList.filter(
       (o) => toBasePlayerSlug(o.data.name) !== slug || (PRIME_OFFER.test(o.data.name) && !isPrimeCard(card)),
@@ -272,6 +333,9 @@ export class ReplyComposer {
     this.offerList = [...saved.offers];
     this.askBlock_ = saved.ask;
     this.goDeeperBlock_ = saved.goDeeper;
+    this.finalProse = null;
+    this.gate = null;
+    this.gated = null;
     this.notify(true);
   }
 
@@ -279,19 +343,19 @@ export class ReplyComposer {
    * Ends the reply with its final text (after the gates): a view still pending is marked failed
    * and removed, and the blocks are announced one last time. Returns what is stored.
    */
-  finish(finalText: string): ReplyBlock[] {
-    // Text before the last view was closed as its own segment; the final text is what follows it.
-    this.text = this.closedLength > 0 ? this.text.slice(0, this.closedLength) + finalText.slice(this.closedLength) : finalText;
+  finish(finalText?: string): ReplyBlock[] {
+    // A reply whose prose was gated by segments (`settle`) is already final. Otherwise the text the
+    // caller gives is: it replaces what follows the prose a view closed.
+    if (!this.finalProse && finalText !== undefined) {
+      this.text = this.closedLength > 0 ? this.text.slice(0, this.closedLength) + finalText.slice(this.closedLength) : finalText;
+      this.gate = null;
+    }
     const settled = this.blocks().filter((b) => b.kind === 'prose' || b.status === 'ready');
     this.options.onChange?.(settled, { cards: this.cards });
     return settled;
   }
 
   // -- Internals --------------------------------------------------------------------------------
-
-  private idFor(seg: { text: string }): string {
-    return `prose-${this.segments.indexOf(seg as Segment) + 1}`;
-  }
 
   private closeProse(): void {
     const text = this.text.slice(this.closedLength);

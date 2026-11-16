@@ -1,7 +1,7 @@
 import { Type } from '@google/genai';
 import type { ReadyBlock } from '../../types';
 import { executeCall, fileOutcomes, type ResearchCall } from '../researchTools';
-import { lineupViewOf, MAX_LINEUPS, type LineupView } from '../lineupView';
+import { lineupViewOf, type LineupView } from '../lineupView';
 import { applyStory, deriveClubCore, sameClubName } from '../situationSnapshot';
 import { readyBlock, type BlockEntry } from './entry';
 
@@ -12,7 +12,7 @@ export const pitchEntry: BlockEntry<'pitch'> = {
   kind: 'pitch',
   tool: {
     name: 'show_pitch',
-    description: `Draws a club's first-choice XI under your reply, worked out by code from its recent starting XIs and injury list (the data get_club_recent_team returns), with who is out. Use it when the answer is about who plays for the club or how it lines up. At most ${MAX_LINEUPS} per reply. Free: it doesn't count against your lookups.`,
+    description: `Draws a club's first-choice XI under your reply, worked out by code from its recent starting XIs and injury list (the data get_club_recent_team returns), with who is out. Use it when the answer is about who plays for the club or how it lines up. Call it where the reader needs the XI in your argument. Free: it doesn't count against your lookups.`,
     parameters: {
       type: Type.OBJECT,
       properties: { club: { type: Type.STRING, description: 'The club name.' } },
@@ -20,12 +20,15 @@ export const pitchEntry: BlockEntry<'pitch'> = {
     },
   },
 
+  hint: ({ club }) => ({ title: club }),
+
   /** Reads the club's live report when the turn hasn't, then works the XI out of it. */
   async build({ club }, ctx) {
     if (!club) return { error: 'Missing club' };
-    const shown = ctx.blocks().filter((b): b is ReadyBlock<'pitch'> => b.kind === 'pitch' && b.status === 'ready');
-    if (shown.some((b) => sameClubName(b.data.club, club))) return { unchanged: { shown: true, note: 'Already shown.' } };
-    if (shown.length >= MAX_LINEUPS) return { error: `At most ${MAX_LINEUPS} XIs per reply.` };
+    // The XI the writer argues from, when the turn built a situation snapshot that holds the club.
+    const argued = ctx.situation?.()?.clubs.find((c) => sameClubName(c.club, club));
+    const fromSituation = argued ? lineupViewOf(argued) : null;
+    if (fromSituation) return { block: pitchBlock(ctx.newId(), fromSituation) };
     const find = () => ctx.ledger.read().entries.find((e) => e.club && sameClubName(e.club.team, club));
     let entry = find();
     if (!entry) {

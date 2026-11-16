@@ -85,3 +85,18 @@ export interface RankingViewData {
    */
   moves: string[];
 }
+
+// ---------------------------------------------------------------------------------------------
+// Names
+
+/** "Brighton & Hove Albion FC" and "brighton & hove albion" are one club. */
+export const clubKey = (name: string): string =>
+  name
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t && !['fc', 'afc', 'cf', 'sc'].includes(t))
+    .join(' ');
