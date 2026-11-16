@@ -5,6 +5,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { GaffaTradeScorecardView, formatScorecardCopy } from './GaffaTradeScorecard';
 import { DossierChatCard, getLegacyDossierRef } from './DossierChatCard';
+import { AskChips, GoDeeperChip } from './ReplyChips';
 import { PitchView } from './PitchView';
 import { pillClass, type PillTone } from './pills';
 import { ratingVersionLabel } from '../services/ratingCommand';
@@ -87,6 +88,10 @@ interface ChatMessageProps {
     onOpenDossier?: (dossier: ChatDossierRef) => void;
     onScoutName?: (name: string) => void;
     onRetry?: (messageId: string) => void;
+    /** Given only on the latest reply: a chip sends its text as the next message. */
+    onAsk?: (text: string) => void;
+    /** Given only on the latest reply: reruns the question in deep mode as a new turn. */
+    onGoDeeper?: (messageId: string) => void;
 }
 
 /** A player the reply discussed who has no card yet: one tap sends him to Scout. */
@@ -116,7 +121,7 @@ const ScoutOffer: React.FC<{ name: string; onScout: (name: string) => void }> = 
     );
 };
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier, onScoutName, onRetry }) => {
+export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier, onScoutName, onRetry, onAsk, onGoDeeper }) => {
     const { sender, content, timestamp } = message;
     const isUser = sender === 'user';
     const [copied, setCopied] = useState(false);
@@ -275,6 +280,18 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
                         {onScoutName && message.scoutOffers?.map(name => (
                             <ScoutOffer key={name} name={name} onScout={onScoutName} />
                         ))}
+                    </div>
+                ) : null}
+
+                {!isError && !isTyping && onAsk && message.ask?.options.length ? (
+                    <div className="animate-fade-in">
+                        <AskChips options={message.ask.options} onAsk={onAsk} />
+                    </div>
+                ) : null}
+
+                {!isError && !isTyping && onGoDeeper && message.goDeeper?.reason ? (
+                    <div className="animate-fade-in">
+                        <GoDeeperChip reason={message.goDeeper.reason} onGoDeeper={() => onGoDeeper(message.id)} />
                     </div>
                 ) : null}
 

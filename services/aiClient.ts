@@ -348,6 +348,93 @@ export interface DossierToolHandlers {
   show: (args: { name?: string }) => Promise<unknown>;
 }
 
+/** The writer's initiative tools: choices about the conversation itself, not about the football. */
+export const ASK_USER_DECLARATION = {
+  name: 'ask_user',
+  description:
+    'Ends your turn with a question for the user instead of an answer. Use it only when the message reads two ways that would change the answer and nothing in the conversation or the cards in play settles which one is meant: which version of a player when several cards are in play, which club, which season. Your reply is then only this question, so do not write an answer as well. When one reading is clearly likelier, take it and say in a sentence which you took; never ask out of caution or to avoid a judgment. Each option is a short, complete reply to the question that the user can send as their next message.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      question: {
+        type: Type.STRING,
+        description: 'The question, one short sentence that names what is unclear.',
+      },
+      options: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Two to four distinct readings, each a few words, each one a complete answer to the question.',
+      },
+    },
+    required: ['question', 'options'],
+  },
+};
+
+export const PREPARE_CLUB_DECLARATION = {
+  name: 'prepare_club',
+  description:
+    'Starts the shared research on a club in the background and returns at once. It is for the next step of this conversation, not the current answer: use it for a club you expect the user to ask about next. It never changes this reply, and each club is prepared at most once per conversation.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      club: { type: Type.STRING, description: 'The club’s usual English name.' },
+    },
+    required: ['club'],
+  },
+};
+
+export const OFFER_RATING_DECLARATION = {
+  name: 'offer_rating',
+  description:
+    'Offers the user a rating of one player in Scout, shown under your reply. Use it when a player your answer leans on has no card for the version you discussed. It only offers: the user decides, and nothing is rated until they accept. It does nothing for a player who already has a card for that version.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      name: { type: Type.STRING, description: 'The player’s name.' },
+      edition: {
+        type: Type.STRING,
+        enum: ['current', 'prime'],
+        description: '"prime" for his best seasons, "current" for his form now.',
+      },
+    },
+    required: ['name', 'edition'],
+  },
+};
+
+export const REQUEST_DEEPER_DECLARATION = {
+  name: 'request_deeper',
+  description:
+    'Tells the user that this question deserved more research than your time allowed, and gives them a button that reruns it with a longer look. Use it only when your answer had to leave something unverified or unexplored that a longer look would settle. It is not a hedge: an answer you could give fully does not need it. Write your answer as usual; this adds the button under it.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      reason: {
+        type: Type.STRING,
+        description: 'What stayed unverified or unexplored, in one short sentence.',
+      },
+    },
+    required: ['reason'],
+  },
+};
+
+/**
+ * Handlers for the initiative tools. Each is optional: a turn passes only the tools it allows,
+ * and the model is shown only those declarations.
+ */
+export interface InitiativeToolHandlers {
+  ask?: (args: { question?: unknown; options?: unknown }) => unknown;
+  prepare?: (args: { club?: unknown }) => unknown;
+  offer?: (args: { name?: unknown; edition?: unknown }) => Promise<unknown> | unknown;
+  deeper?: (args: { reason?: unknown }) => unknown;
+}
+
+const initiativeDeclarations = (tools?: InitiativeToolHandlers): any[] => [
+  ...(tools?.ask ? [ASK_USER_DECLARATION] : []),
+  ...(tools?.prepare ? [PREPARE_CLUB_DECLARATION] : []),
+  ...(tools?.offer ? [OFFER_RATING_DECLARATION] : []),
+  ...(tools?.deeper ? [REQUEST_DEEPER_DECLARATION] : []),
+];
+
 export const NETWORK_FUNCTION_DECLARATIONS = [
   {
     name: 'get_club_recent_team',
@@ -429,6 +516,13 @@ export interface GenerateProseTurnParams {
   dossiersPool?: PlayerProfile[];
   gaffaBag?: GaffaContextBag;
   dossierTools?: DossierToolHandlers;
+  /** The writer's initiative tools (ask, prepare, offer, go deeper); the default chat path only. */
+  initiativeTools?: InitiativeToolHandlers;
+  /**
+   * Checked after each round of tool calls: a string ends the turn, and is the reply (a question
+   * the writer asked instead of answering).
+   */
+  endTurn?: () => string | null;
   onStreamChunk?: (accumulatedText: string) => void;
   /** Called with the tool names each time the model calls tools, for the turn's timing log. */
   onToolCalls?: (names: string[]) => void;
@@ -460,6 +554,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
     GREP_SAVED_DOSSIERS_DECLARATION,
     ...(params.gaffaBag?.connected ? [GREP_GAFFA_MARKET_DECLARATION] : []),
     ...(params.dossierTools ? [LOOK_UP_DOSSIER_DECLARATION, SHOW_DOSSIER_DECLARATION] : []),
+    ...initiativeDeclarations(params.initiativeTools),
   ];
 
   const tools: any[] =
@@ -516,6 +611,14 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
             apiResult = await params.dossierTools.lookUp(args);
           } else if (functionCall.name === 'show_dossier' && params.dossierTools) {
             apiResult = await params.dossierTools.show(args);
+          } else if (functionCall.name === 'ask_user' && params.initiativeTools?.ask) {
+            apiResult = params.initiativeTools.ask(args);
+          } else if (functionCall.name === 'prepare_club' && params.initiativeTools?.prepare) {
+            apiResult = params.initiativeTools.prepare(args);
+          } else if (functionCall.name === 'offer_rating' && params.initiativeTools?.offer) {
+            apiResult = await params.initiativeTools.offer(args);
+          } else if (functionCall.name === 'request_deeper' && params.initiativeTools?.deeper) {
+            apiResult = params.initiativeTools.deeper(args);
           } else if (Object.hasOwn(NETWORK_TOOL_ROUTES, functionCall.name)) {
             apiResult = await callNetworkTool(functionCall.name, args);
           } else {
@@ -564,7 +667,13 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
     await consumeStream(parts);
 
     for (let round = 0; pendingCalls.length > 0 && round < MAX_TOOL_ROUNDS; round++) {
-      await consumeStream(await executeToolCalls(pendingCalls));
+      const results = await executeToolCalls(pendingCalls);
+      const ended = params.endTurn?.();
+      if (ended) {
+        params.onStreamChunk?.(ended);
+        return ended;
+      }
+      await consumeStream(results);
     }
 
     if (!accumulatedText.trim()) throw blockedOrEmptyResponseError(lastFinishReason);
@@ -575,9 +684,10 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
   let response = await chatSession.sendMessage({ message: parts });
 
   for (let round = 0; response.functionCalls?.length && round < MAX_TOOL_ROUNDS; round++) {
-    response = await chatSession.sendMessage({
-      message: await executeToolCalls(response.functionCalls),
-    });
+    const results = await executeToolCalls(response.functionCalls);
+    const ended = params.endTurn?.();
+    if (ended) return ended;
+    response = await chatSession.sendMessage({ message: results });
   }
 
   reportGrounding(response.candidates?.[0], params.onGrounded);

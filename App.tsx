@@ -839,7 +839,7 @@ const App: React.FC = () => {
       if (typeof aiResponse === 'object' && 'basicInfo' in aiResponse) {
         newAiMessage = dossierReply(aiResponse as PlayerProfile, streamingMessageId);
       } else {
-        const { cards = [], scoutOffers = [], lineups = [] } = (attachments ?? {}) as Partial<ReplyAttachments>;
+        const { cards = [], scoutOffers = [], lineups = [], ask, goDeeper } = (attachments ?? {}) as Partial<ReplyAttachments>;
         // Cards chat showed join the conversation and your dossiers, as mentioned ones do.
         if (cards.length > 0) {
           const stamped = cards.map(card => stampDossier(card, Date.now()));
@@ -860,6 +860,8 @@ const App: React.FC = () => {
           ...(cards.length > 0 ? { cards: cards.map(toChatDossierRef) } : {}),
           ...(scoutOffers.length > 0 ? { scoutOffers } : {}),
           ...(lineups.length > 0 ? { lineups } : {}),
+          ...(ask ? { ask } : {}),
+          ...(goDeeper ? { goDeeper } : {}),
           ...(scorecard ? { gaffaScorecard: scorecard } : {}),
         };
       }
@@ -1036,6 +1038,24 @@ const App: React.FC = () => {
     setMessages(prev => prev.filter(m => !dropIds.has(m.id)));
     setPendingRetry({ text: userMessage.content, image: userMessage.image, rating: userMessage.rating });
   }, [messages]);
+
+  // A chip under a reply sends its text as the next message, through the normal send.
+  const handleAskOption = useCallback((text: string) => {
+    if (isLoading) return;
+    void handleSendMessage(text);
+  }, [isLoading, handleSendMessage]);
+
+  // Go deeper reruns the message the reply answered in deep mode, as a new turn under a new user
+  // message: the first reply stays where it is.
+  const handleGoDeeper = useCallback((replyId: string) => {
+    if (isLoading) return;
+    const replyIndex = messages.findIndex(m => m.id === replyId);
+    let userIndex = replyIndex - 1;
+    while (userIndex >= 0 && messages[userIndex].sender !== 'user') userIndex--;
+    const userMessage = messages[userIndex];
+    if (!userMessage || typeof userMessage.content !== 'string' || userMessage.rating) return;
+    void handleSendMessage(userMessage.content, undefined, [], { deep: true });
+  }, [isLoading, messages, handleSendMessage]);
 
   useEffect(() => {
     if (!pendingRetry || isLoading) return;
@@ -1459,6 +1479,8 @@ const App: React.FC = () => {
                 onScoutName={handleScoutName}
                 onOpenDossier={handleOpenDossier}
                 onRetry={handleRetry}
+                onAsk={handleAskOption}
+                onGoDeeper={handleGoDeeper}
             />
             
             {/* Input Container - Sticky Bottom */}

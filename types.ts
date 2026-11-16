@@ -244,6 +244,23 @@ export interface ChatMessage {
   scoutOffers?: string[];
   /** First-choice XIs a reply about the present draws under its prose (`PitchView`). */
   lineups?: LineupView[];
+  /** A reply that asks which reading the user meant: its question is the prose, its options are chips. */
+  ask?: AskPrompt;
+  /** A reply whose question deserved a longer look: a chip reruns the message in deep mode. */
+  goDeeper?: GoDeeper;
+}
+
+/** What the writer asks when a message reads two ways that would change the answer. */
+export interface AskPrompt {
+  question: string;
+  /** Two to four short replies, each one a complete answer to the question, sent as the next message. */
+  options: string[];
+}
+
+/** The writer's note that the fast path's budget left something a deep run would settle. */
+export interface GoDeeper {
+  /** What stayed unverified or unexplored; the chip's tooltip. */
+  reason: string;
 }
 
 /**

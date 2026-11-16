@@ -16,6 +16,10 @@ interface ChatHistoryProps {
   onScoutName?: (name: string) => void;
   onOpenDossier?: (dossier: ChatDossierRef) => void;
   onRetry?: (messageId: string) => void;
+  /** A chip under the latest reply sends its text as the next message. */
+  onAsk?: (text: string) => void;
+  /** Reruns the message a reply answered in deep mode, as a new turn. */
+  onGoDeeper?: (replyId: string) => void;
 }
 
 const STARTER_PROMPTS: { icon: string; label: string; prompt: string }[] = [
@@ -41,6 +45,8 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   onScoutName,
   onOpenDossier,
   onRetry,
+  onAsk,
+  onGoDeeper,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -204,6 +210,9 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               onScoutName={onScoutName}
               // Only the latest failure is retryable; older ones would replay stale context.
               onRetry={onRetry && !isLoading && i > lastUserIndex ? onRetry : undefined}
+              // Chips answer the latest reply only; an older one would send into a moved-on thread.
+              onAsk={!isLoading && i === messages.length - 1 ? onAsk : undefined}
+              onGoDeeper={!isLoading && i === messages.length - 1 ? onGoDeeper : undefined}
             />
           ))}
 

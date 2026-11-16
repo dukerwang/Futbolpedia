@@ -879,14 +879,18 @@ export const sendMessageToAI = async (
 
   // 5. Deep mode: one model loop decides the research, for a question about the present sent with
   // the Deep toggle. Every other turn, deep or not, takes the conversational scout.
-  const deep = takesDeepPath({
-    deep: options?.deep,
+  const deepTurn = {
     route,
     historical: threadIsHistorical(route, history, message),
     noRating: options?.noRating,
     gaffa: Boolean(options?.gaffaBag?.connected),
     image: Boolean(imageData),
-  });
+  };
+  const deep = takesDeepPath({ deep: options?.deep, ...deepTurn });
+  // The writer's initiative (ask, prepare, offer, go deeper) belongs to the app's own chat: Gaffa's
+  // panel (`noRating`) can't draw chips or offers. The go-deeper flag is offered only where the
+  // rerun would take the deep path, so its chip never leads to a turn that ignores the toggle.
+  const initiative = options?.noRating ? undefined : { deeper: takesDeepPath({ deep: true, ...deepTurn }) };
   // 6. Conversational Scout Pipeline (Comparisons, Live Dossier Revisions, Tactical Q&A, Archive)
   const reply = deep
     ? await runDeepTurn({
@@ -926,10 +930,17 @@ export const sendMessageToAI = async (
     gaffaBag: options?.gaffaBag,
     onGaffaScorecard: options?.onGaffaScorecard,
     conversationId: options?.conversationId,
+    initiative,
     perf,
   });
   perf(deep ? 'deep turn' : 'conversational scout');
-  if (attachments.cards.length > 0 || attachments.scoutOffers.length > 0 || (attachments.lineups?.length ?? 0) > 0) {
+  if (
+    attachments.cards.length > 0 ||
+    attachments.scoutOffers.length > 0 ||
+    (attachments.lineups?.length ?? 0) > 0 ||
+    attachments.ask ||
+    attachments.goDeeper
+  ) {
     options?.onAttachments?.(attachments);
   }
   return reply;
