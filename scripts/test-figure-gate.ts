@@ -191,5 +191,48 @@ Rio Ferdinand PFA Team of the Year selections: 6`);
   assert.equal(out.text, 'He won four Defender of the Year awards. He read the game early.');
 });
 
+// Question 5 of the 2026-11-16 deep-mode eval: a list item's labelled first sentence carried an
+// unsupported fee and count, and its removal left the item opening on "He" with nobody named.
+const LABELLED = `### 1. Immediate Starters
+* **Main Nine (£48m, from abroad):** The club's marquee signing has started every match. He leads the line.
+* **New Defender (£34m, from Rivals):** Signed to add pace, he has made 17 Premier League starts. He played both as the central defender in a back three and on the right of a back four.
+* **Wide Man (£20m, from Elsewhere):** He has 3 goals and 4 assists this season.`;
+
+test('a removed labelled first sentence leaves its name on the rest of the item, never a dangling pronoun', () => {
+  const out = gateUnsupportedFigures(LABELLED, EVIDENCE);
+  assert.equal(
+    out.text,
+    `### 1. Immediate Starters
+* **Main Nine (£48m, from abroad):** The club's marquee signing has started every match. He leads the line.
+* **New Defender:** He played both as the central defender in a back three and on the right of a back four.`,
+  );
+  // The unsupported figures never survive, inside the label or out of it.
+  assert.doesNotMatch(out.text, /£34m|£20m|17 Premier League starts/);
+  assert.deepEqual(out.removed.map((r) => r.text).sort(), ['17 Premier League starts', '£20m', '£34m'].sort());
+});
+
+test('when a labelled item goes whole, its name moves to the next item that opens on a pronoun', () => {
+  const reply = `* **New Defender (£34m, from Rivals):** Signed for £34m.
+* He played both as the central defender in a back three and on the right of a back four.
+* Main Nine leads the line.`;
+  assert.equal(
+    gateUnsupportedFigures(reply, EVIDENCE).text,
+    `* **New Defender:** He played both as the central defender in a back three and on the right of a back four.
+* Main Nine leads the line.`,
+  );
+});
+
+test('a list item left with only its marker or its label goes', () => {
+  const reply = `* **Wide Man.** He has 9 goals.
+* Signed for £34m.
+* Main Nine leads the line.`;
+  assert.equal(gateUnsupportedFigures(reply, EVIDENCE).text, '* Main Nine leads the line.');
+});
+
+test('a label whose name holds a figure is never carried', () => {
+  const reply = `* **The £34m signing (from Rivals):** Signed for £34m. He played on the right of a back four.`;
+  assert.doesNotMatch(gateUnsupportedFigures(reply, EVIDENCE).text, /£34m/);
+});
+
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

@@ -20,7 +20,7 @@ export const getAi = (): GoogleGenAI =>
 
 // gemini-3.8-flash and gemini-4-hydrogen both reject ThinkingLevel.MINIMAL with HTTP 400; map
 // 'minimal' to LOW.
-const THINKING_LEVEL_MAP: Record<ThinkingTier, ThinkingLevel> = {
+export const THINKING_LEVEL_MAP: Record<ThinkingTier, ThinkingLevel> = {
   minimal: ThinkingLevel.LOW,
   low: ThinkingLevel.LOW,
   medium: ThinkingLevel.MEDIUM,
@@ -35,7 +35,7 @@ export const dataUrlToInlinePart = (dataUrl: string) => {
   return { inlineData: { data: base64Data, mimeType: mimeType.replace('data:', '') } };
 };
 
-const blockedOrEmptyResponseError = (finishReason: string | undefined): Error =>
+export const blockedOrEmptyResponseError = (finishReason: string | undefined): Error =>
   finishReason && finishReason !== 'STOP'
     ? new Error(
         `The model's response was blocked due to: ${finishReason}. Please modify your prompt and try again.`,
@@ -188,7 +188,7 @@ export async function runGroundedSearch(
   }
 }
 
-const GREP_SAVED_DOSSIERS_DECLARATION = {
+export const GREP_SAVED_DOSSIERS_DECLARATION = {
   name: 'grep_saved_dossiers',
   description:
     'Instant (<1ms) structured grep and attribute filter across the user’s saved and in-conversation player dossiers. Use this whenever the user asks about their scouted players, compares against saved profiles, filters by position/rating/attribute thresholds, or asks who ranks highest in a specific attribute.',
@@ -304,7 +304,7 @@ const GREP_GAFFA_MARKET_DECLARATION = {
   },
 };
 
-const LOOK_UP_DOSSIER_DECLARATION = {
+export const LOOK_UP_DOSSIER_DECLARATION = {
   name: 'look_up_dossier',
   description:
     'Reads the published Futbolpedia dossier card for one player from the user’s dossiers and every shared card: Overall, Potential, all attributes, archetype, strengths and weaknesses. Call it before judging, ranking or describing a player who is not already in <locked_dossiers>, and answer from the card’s numbers. Returns found: false when nobody has rated him yet; then answer from grounding without inventing card numbers, and Futbolpedia offers the user a rating.',
@@ -326,7 +326,7 @@ const LOOK_UP_DOSSIER_DECLARATION = {
   },
 };
 
-const SHOW_DOSSIER_DECLARATION = {
+export const SHOW_DOSSIER_DECLARATION = {
   name: 'show_dossier',
   description:
     'Shows a player’s dossier card to the user under your reply. Use it when the user asks to see a player or his card, or when the card itself answers what they asked. Only for players whose card you have, in <locked_dossiers> or from look_up_dossier. Never repeat the whole card in prose after showing it.',
@@ -348,7 +348,7 @@ export interface DossierToolHandlers {
   show: (args: { name?: string }) => Promise<unknown>;
 }
 
-const NETWORK_FUNCTION_DECLARATIONS = [
+export const NETWORK_FUNCTION_DECLARATIONS = [
   {
     name: 'get_club_recent_team',
     description:

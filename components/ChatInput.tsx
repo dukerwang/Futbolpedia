@@ -56,6 +56,7 @@ interface ChatInputProps {
     message: string,
     imageData?: string,
     mentions?: Mention[],
+    options?: { deep?: boolean },
   ) => void;
   isLoading: boolean;
   loadingMessage: string;
@@ -97,6 +98,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const [sharedCards, setSharedCards] = useState<PlayerProfile[]>([]);
   const [searching, setSearching] = useState(false);
+  // Deep mode lives only in the composer: nothing about it is stored.
+  const [deep, setDeep] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
@@ -234,7 +237,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     e.preventDefault();
     if ((!message.trim() && !image) || isLoading) return;
     const named = mentions.filter((m) => message.includes(m.label));
-    onSendMessage(message, image || undefined, named.length > 0 ? named : undefined);
+    onSendMessage(message, image || undefined, named.length > 0 ? named : undefined, deep ? { deep: true } : undefined);
     setMessage('');
     setMentions([]);
     setImage(null);
@@ -413,6 +416,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             </button>
 
             {gaffaControl}
+
+            <button
+              type="button"
+              onClick={() => setDeep((on) => !on)}
+              aria-pressed={deep}
+              title="Deep: the scout takes longer and decides its own research"
+              disabled={isLoading}
+              className={`flex items-center gap-1 min-h-10 px-2 text-[11px] font-sans font-bold uppercase tracking-widest transition-colors disabled:opacity-50 ${
+                deep
+                  ? 'text-emerald-700 dark:text-emerald-400'
+                  : 'text-cream-800 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50'
+              }`}
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-[18px] font-light">{deep ? 'toggle_on' : 'toggle_off'}</span>
+              Deep
+            </button>
           </div>
 
           <button

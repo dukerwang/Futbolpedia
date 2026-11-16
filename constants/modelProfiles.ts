@@ -6,6 +6,8 @@ export type AITask =
   | 'extraction'
   | 'synthesis'
   | 'chat'
+  /** Deep mode's loop (`services/deepTurn.ts`): the chat model deciding its own research. */
+  | 'deep'
   | 'prediction';
 
 export interface TaskTuning {
@@ -77,6 +79,7 @@ const GEMINI_3_8_FLASH_PROFILE: ModelCapabilityProfile = {
     // while the explicit schema `calibration` block handles tier & peer reasoning in output tokens.
     synthesis: { thinkingLevel: 'low', temperature: 0.35 },
     chat: { thinkingLevel: 'low', temperature: 0.55 },
+    deep: { thinkingLevel: 'low', temperature: 0.5 },
     prediction: { thinkingLevel: 'low', temperature: 0.2 },
   },
 };
@@ -99,6 +102,8 @@ const GEMINI_4_HYDROGEN_PROFILE: ModelCapabilityProfile = {
     extraction: { thinkingLevel: 'low', temperature: 0.1 },
     synthesis: { thinkingLevel: 'low', temperature: 0.35 },
     chat: { thinkingLevel: 'low', temperature: 0.55 },
+    // Starts at low, like chat; the deep-mode eval decides whether medium earns its latency.
+    deep: { thinkingLevel: 'low', temperature: 0.5 },
     prediction: { thinkingLevel: 'low', temperature: 0.2 },
   },
 };
@@ -116,6 +121,7 @@ const GEMINI_4_ARGON_PROFILE: ModelCapabilityProfile = {
     extraction: { thinkingLevel: 'minimal', temperature: 0.1 },
     synthesis: { thinkingLevel: 'medium', temperature: 0.3 },
     chat: { thinkingLevel: 'medium', temperature: 0.5 },
+    deep: { thinkingLevel: 'medium', temperature: 0.5 },
     prediction: { thinkingLevel: 'low', temperature: 0.2 },
   },
 };
@@ -174,7 +180,7 @@ export function resolveTaskModelConfig(
   },
 ): ResolvedTaskConfig {
   const defaultModelForTask =
-    task === 'synthesis' || task === 'chat' ? DEFAULT_SYNTHESIS_MODEL : DEFAULT_FAST_MODEL;
+    task === 'synthesis' || task === 'chat' || task === 'deep' ? DEFAULT_SYNTHESIS_MODEL : DEFAULT_FAST_MODEL;
 
   const model = overrides?.model || defaultModelForTask;
   const profile = getModelProfile(model);
