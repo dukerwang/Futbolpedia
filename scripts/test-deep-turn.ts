@@ -36,7 +36,22 @@ globalThis.fetch = (async (input: any) => {
   return new Response(JSON.stringify({ error: { code: 400, message: 'offline test' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
 }) as typeof fetch;
 
-const { runDeepTurn, takesDeepPath, stageLabel, DEEP_DECLARATIONS, deepModeRules, DEFAULT_DEEP_BUDGET, uncheckedFor } = await import('../services/deepTurn');
+const {
+  runDeepTurn,
+  takesDeepPath,
+  stageLabel,
+  DEEP_DECLARATIONS,
+  deepModeRules,
+  DEFAULT_DEEP_BUDGET,
+  uncheckedFor,
+  DEEP_BY_DEFAULT,
+  wantsDeep,
+  speedToggle,
+  runDeepWithFallback,
+  DeepFailure,
+  FALLBACK_STAGE_LABEL,
+} = await import('../services/deepTurn');
+type PathInfo = import('../services/deepTurn').PathInfo;
 type DeepModel = import('../services/deepTurn').DeepModel;
 type DeepReply = import('../services/deepTurn').DeepReply;
 type DeepToolResponse = import('../services/deepTurn').DeepToolResponse;
@@ -451,6 +466,257 @@ await test('with the toggle, a historical question and a rating take the normal 
     const { opened } = await sendDeep(message);
     assert.equal(opened, false, message);
   }
+});
+
+
+// --- Deep by default --------------------------------------------------------------------------
+
+await test('the constant ships off', () => {
+  assert.equal(DEEP_BY_DEFAULT, false);
+});
+
+await test('a turn asks for deep through its flag or the default, and fast always says no', () => {
+  for (const byDefault of [false, true]) {
+    assert.equal(wantsDeep({ deep: true }, byDefault), true);
+    assert.equal(wantsDeep({ fast: true }, byDefault), false);
+    assert.equal(wantsDeep({ deep: true, fast: true }, byDefault), false, 'fast wins when both arrive');
+  }
+  assert.equal(wantsDeep({}, false), false);
+  assert.equal(wantsDeep({}, true), true);
+  assert.equal(wantsDeep({}), DEEP_BY_DEFAULT, 'the default is the constant');
+});
+
+await test('with the default on, every turn the entry rule accepts takes the loop without a flag, and Fast does not', () => {
+  const r = (intent: string) => ({ intent }) as any;
+  const on = { byDefault: true };
+  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false }), true);
+  assert.equal(takesDeepPath({ ...on, route: r('compare'), historical: false }), true);
+  assert.equal(takesDeepPath({ ...on, fast: true, route: r('tactical_chat'), historical: false }), false);
+  // The turns the rule rejects are unchanged.
+  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: true }), false);
+  assert.equal(takesDeepPath({ ...on, route: r('single_dossier'), historical: false }), false);
+  assert.equal(takesDeepPath({ ...on, route: r('challenge_or_revise'), historical: false }), false);
+  assert.equal(takesDeepPath({ ...on, route: r('archive_inventory'), historical: false }), false);
+  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, noRating: true }), false);
+  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, gaffa: true }), false);
+  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, image: true }), false);
+});
+
+await test('with the default off, an unflagged turn never takes the loop and the Deep flag still does', () => {
+  const r = (intent: string) => ({ intent }) as any;
+  assert.equal(takesDeepPath({ byDefault: false, route: r('tactical_chat'), historical: false }), false);
+  assert.equal(takesDeepPath({ route: r('tactical_chat'), historical: false }), false);
+  assert.equal(takesDeepPath({ byDefault: false, deep: true, route: r('tactical_chat'), historical: false }), true);
+});
+
+await test('the toggle reads Deep and sends deep when the default is off, Fast and sends fast when it is on', () => {
+  assert.deepEqual(speedToggle(false), { text: 'Deep', tooltip: 'Deep: the scout takes longer and decides its own research', options: { deep: true } });
+  const fast = speedToggle(true);
+  assert.equal(fast.text, 'Fast');
+  assert.match(fast.tooltip, /answers quickly from a fixed research pass/);
+  assert.deepEqual(fast.options, { fast: true });
+  assert.equal(speedToggle().text, speedToggle(DEEP_BY_DEFAULT).text);
+});
+
+await test('the composer renders each label and wires its option', async () => {
+  const React = (await import('react')).default;
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { ChatInput } = await import('../components/ChatInput');
+  const props = { onSendMessage: () => {}, isLoading: false, loadingMessage: '', localCards: [], onScoutName: () => {} };
+  const off = renderToStaticMarkup(React.createElement(ChatInput, { ...props, deepByDefault: false }));
+  const on = renderToStaticMarkup(React.createElement(ChatInput, { ...props, deepByDefault: true }));
+  assert.match(off, /aria-pressed="false"[^>]*title="Deep: the scout takes longer and decides its own research"/);
+  assert.match(off, /toggle_off<\/span>Deep<\/button>/);
+  assert.match(on, /title="Fast: the scout answers quickly from a fixed research pass"/);
+  assert.match(on, /toggle_off<\/span>Fast<\/button>/);
+  assert.ok(!on.includes('>Deep<'), 'no Deep label when the default is on');
+  assert.ok(!off.includes('>Fast<'), 'no Fast label when the default is off');
+});
+
+// --- The fallback -----------------------------------------------------------------------------
+
+/** Runs `fn` with console.warn collected (the rest silenced). */
+async function warned<T>(fn: () => Promise<T>): Promise<{ value: T; warnings: string[] }> {
+  const warnings: string[] = [];
+  const { log, info, warn } = console;
+  console.log = console.info = () => {};
+  console.warn = (...a: unknown[]) => void warnings.push(a.map(String).join(' '));
+  try {
+    return { value: await fn(), warnings };
+  } finally {
+    Object.assign(console, { log, info, warn });
+  }
+}
+
+await test('the loop reports why it gave up: no text at all, or its budget spent with no answer', async () => {
+  const params = baseParams('Q');
+  const empty = fakeModel([callsReply(call('get_league_table', { league: 'A' })), { text: '', calls: [], finishReason: 'STOP' }]);
+  await assert.rejects(
+    quietly(() => runDeepTurn(params, { model: empty.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] })),
+    (e: any) => e instanceof DeepFailure && e.reason === 'empty' && /failed to return a valid text response/.test(e.message),
+  );
+  // Rounds spent, then nothing but another tool call and an empty reply to the plain request.
+  const spent = fakeModel([callsReply(call('get_league_table', { league: 'A' })), callsReply(call('get_league_table', { league: 'B' })), { text: '', calls: [] }]);
+  await assert.rejects(
+    quietly(() => runDeepTurn(params, { model: spent.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], budget: { rounds: 1 } })),
+    (e: any) => e instanceof DeepFailure && e.reason === 'budget' && /rounds budget was spent/.test(e.message),
+  );
+});
+
+await test('a loop that fails runs the stage pipeline once, with its label and a log line; one that answers does not', async () => {
+  const labels: string[] = [];
+  const paths: PathInfo[] = [];
+  let stageRuns = 0;
+  const hooks = { onStageChange: (l: string) => labels.push(l), onPath: (p: PathInfo) => paths.push(p) };
+  const stage = async () => (++stageRuns, 'the stage answer');
+
+  for (const [reason, failure] of [
+    ['error', new Error('network down')],
+    ['empty', new DeepFailure('empty', 'no text')],
+    ['budget', new DeepFailure('budget', 'spent')],
+  ] as const) {
+    labels.length = paths.length = stageRuns = 0;
+    const { value, warnings } = await warned(() => runDeepWithFallback(async () => Promise.reject(failure), stage, hooks));
+    assert.equal(value, 'the stage answer', reason);
+    assert.equal(stageRuns, 1, `${reason}: the stage pipeline ran once`);
+    assert.deepEqual(labels, [FALLBACK_STAGE_LABEL]);
+    assert.deepEqual(paths, [{ path: 'deep' }, { path: 'stage', fallback: reason }]);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], new RegExp(`^\\[deep\\] fallback \\(${reason}\\): `));
+  }
+
+  labels.length = paths.length = stageRuns = 0;
+  const { value, warnings } = await warned(() => runDeepWithFallback(async () => 'the deep answer', stage, hooks));
+  assert.equal(value, 'the deep answer');
+  assert.equal(stageRuns, 0);
+  assert.deepEqual(labels, []);
+  assert.deepEqual(paths, [{ path: 'deep' }]);
+  assert.deepEqual(warnings, []);
+  assert.match(FALLBACK_STAGE_LABEL, /standard route/);
+});
+
+await test('the stage run starts only after the loop has stopped', async () => {
+  const events: string[] = [];
+  await warned(() =>
+    runDeepWithFallback(
+      async () => {
+        events.push('deep start');
+        await new Promise((r) => setTimeout(r, 10));
+        events.push('deep end');
+        throw new Error('boom');
+      },
+      async () => (events.push('stage'), 'ok'),
+    ),
+  );
+  assert.deepEqual(events, ['deep start', 'deep end', 'stage']);
+});
+
+// --- Both paths through sendMessageToAI -------------------------------------------------------
+
+/** One turn through sendMessageToAI with the deep model faked; the stage pipeline reaches only the refusing fetch. */
+async function sendTurn(message: string, options: Record<string, unknown>, script: (DeepReply | ((sent: Sent[]) => DeepReply))[], deepDeps: Record<string, unknown> = {}) {
+  const fake = fakeModel(script);
+  const paths: PathInfo[] = [];
+  const stages: string[] = [];
+  const { value, warnings } = await warned(() =>
+    sendMessageToAI(message, [], undefined, [], [], {
+      onPath: (p) => paths.push(p),
+      onStageChange: (l) => stages.push(l),
+      ...options,
+      deepDeps: { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], ...deepDeps },
+    }).catch((e) => `failed: ${e?.message ?? e}`),
+  );
+  return { reply: value as string, opened: fake.opened() !== null, sent: fake.sent, paths, stages, warnings };
+}
+const PRESENT = "Break down Southside's build-up shape this season";
+const DEEP_ANSWER = [answer('A deep answer about the present.')];
+
+await test('with the default on, a present-day message runs the loop without a flag, and a past thread takes the stage pipeline', async () => {
+  const present = await sendTurn(PRESENT, { deepByDefault: true }, DEEP_ANSWER);
+  assert.ok(present.opened);
+  assert.equal(present.reply, 'A deep answer about the present.');
+  assert.deepEqual(present.paths, [{ path: 'deep' }]);
+  const past = await sendTurn('Prime Zidane or prime Kaká?', { deepByDefault: true }, DEEP_ANSWER);
+  assert.equal(past.opened, false);
+  assert.deepEqual(past.paths, [{ path: 'stage' }]);
+  // A rating takes the rating pipeline, which has no chat path to report.
+  const rating = await sendTurn('rate Main Nine', { deepByDefault: true }, DEEP_ANSWER);
+  assert.equal(rating.opened, false);
+  assert.deepEqual(rating.paths, []);
+});
+
+await test('with the default on, Fast sends a present-day message to the stage pipeline', async () => {
+  const fast = await sendTurn(PRESENT, { deepByDefault: true, fast: true }, DEEP_ANSWER);
+  assert.equal(fast.opened, false);
+  assert.deepEqual(fast.paths, [{ path: 'stage' }]);
+  // Fast is not a fallback: nothing was warned and no label said the route changed.
+  assert.deepEqual(fast.warnings.filter((w) => w.includes('[deep]')), []);
+  assert.ok(!fast.stages.includes(FALLBACK_STAGE_LABEL));
+});
+
+await test('with the default off, an unflagged message takes the stage pipeline and Deep still takes the loop', async () => {
+  const plain = await sendTurn(PRESENT, { deepByDefault: false }, DEEP_ANSWER);
+  assert.equal(plain.opened, false);
+  assert.deepEqual(plain.paths, [{ path: 'stage' }]);
+  const unset = await sendTurn(PRESENT, {}, DEEP_ANSWER);
+  assert.equal(unset.opened, false, 'the shipped constant is off');
+  const deep = await sendTurn(PRESENT, { deepByDefault: false, deep: true }, DEEP_ANSWER);
+  assert.ok(deep.opened);
+  assert.deepEqual(deep.paths, [{ path: 'deep' }]);
+  // `deep` and `fast` force a path whatever the constant says.
+  const forcedStage = await sendTurn(PRESENT, { deepByDefault: true, fast: true, deep: true }, DEEP_ANSWER);
+  assert.equal(forcedStage.opened, false);
+});
+
+await test('a loop that throws falls back to the stage pipeline once, with the label and the log line', async () => {
+  const turn = await sendTurn(PRESENT, { deepByDefault: true }, [
+    () => {
+      throw new Error('model unavailable');
+    },
+  ]);
+  assert.ok(turn.opened);
+  assert.deepEqual(turn.paths, [{ path: 'deep' }, { path: 'stage', fallback: 'error' }]);
+  assert.ok(turn.stages.includes(FALLBACK_STAGE_LABEL));
+  assert.equal(turn.stages.filter((l) => l === FALLBACK_STAGE_LABEL).length, 1);
+  assert.equal(turn.warnings.filter((w) => w.startsWith('[deep] fallback (error)')).length, 1);
+  assert.equal(turn.sent.length, 1, 'the loop made one attempt');
+});
+
+await test('an empty reply and a spent budget with no answer each fall back once', async () => {
+  const empty = await sendTurn(PRESENT, { deepByDefault: true }, [{ text: '', calls: [], finishReason: 'STOP' }]);
+  assert.deepEqual(empty.paths, [{ path: 'deep' }, { path: 'stage', fallback: 'empty' }]);
+  const spent = await sendTurn(
+    PRESENT,
+    { deepByDefault: true },
+    [callsReply(call('get_league_table', { league: 'A' })), callsReply(call('get_league_table', { league: 'B' })), { text: '', calls: [] }],
+    { budget: { rounds: 1 } },
+  );
+  assert.deepEqual(spent.paths, [{ path: 'deep' }, { path: 'stage', fallback: 'budget' }]);
+  assert.equal(spent.warnings.filter((w) => w.startsWith('[deep] fallback (budget)')).length, 1);
+});
+
+await test('a loop that is slow but answers never falls back', async () => {
+  // Each reading of the clock moves a minute on, so the time budget is spent after the first round.
+  let t = 0;
+  const turn = await sendTurn(
+    PRESENT,
+    { deepByDefault: true },
+    [callsReply(call('get_league_table', { league: 'A' })), answer('A late but complete answer.')],
+    { now: () => (t += 60_000) },
+  );
+  assert.equal(turn.reply, 'A late but complete answer.');
+  assert.deepEqual(turn.paths, [{ path: 'deep' }]);
+  assert.deepEqual(turn.warnings.filter((w) => w.includes('[deep] fallback')), []);
+  assert.ok(!turn.stages.includes(FALLBACK_STAGE_LABEL));
+});
+
+await test('with the default off, a failing Deep turn falls back the same way', async () => {
+  const turn = await sendTurn(PRESENT, { deepByDefault: false, deep: true }, [
+    () => {
+      throw new Error('model unavailable');
+    },
+  ]);
+  assert.deepEqual(turn.paths, [{ path: 'deep' }, { path: 'stage', fallback: 'error' }]);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

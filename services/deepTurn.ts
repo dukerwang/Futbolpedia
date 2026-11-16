@@ -63,7 +63,9 @@ import { extractThreadClubs, type TurnRoute } from './turnRouter';
 import type { VerifiedClubManager } from '../packages/engine/src/gates/managerMentions.ts';
 
 /**
- * Deep mode: an opt-in chat path where one model loop decides every lookup. Instead of the brief,
+ * Deep mode: a chat path where one model loop decides every lookup (opt-in with the Deep toggle, or
+ * the default for present-day questions once `DEEP_BY_DEFAULT` is on, with the stage pipeline as its
+ * fallback). Instead of the brief,
  * reflect and situation calls the default path runs in an order code sets, the chat model gets the
  * conversation, the cards in play, each spotted club's stored snapshot and today's date, plus every
  * tool the writer and research have, and is told its budget. It calls what it wants, in the order
@@ -109,21 +111,97 @@ export const DEFAULT_DEEP_BUDGET: DeepBudget = {
 // Entry
 
 /**
- * Whether a turn sent with the Deep toggle takes the deep path. Questions about the past keep the
- * debate brief, ratings and challenges keep their pipelines, and Gaffa turns (the panel, or a club
- * attached in the app) keep the club blocks only the default path builds. Images and archive
- * questions stay on the default path too. Every other deep turn takes the loop.
+ * Whether deep mode is the default for a turn that carries no flag. It ships off: a turn takes the
+ * deep loop only when the user sent Deep (`deep: true`). Turned on, every turn `takesDeepPath`
+ * accepts runs the loop, the composer's toggle reads Fast and sends `fast: true`, and Fast sends
+ * the turn to the stage pipeline. The `deep` and `fast` flags still force either path whatever this
+ * says, which is how the eval runs both. Flip it only on the strength of the eval in PR 77.
+ */
+export const DEEP_BY_DEFAULT = false;
+
+/**
+ * Whether a turn asked for the deep loop: `fast` always says no, `deep` says yes, and a turn with
+ * neither follows the default. `fast` wins when both arrive, since it is the cheaper path.
+ */
+export function wantsDeep(turn: { deep?: boolean; fast?: boolean }, byDefault: boolean = DEEP_BY_DEFAULT): boolean {
+  if (turn.fast) return false;
+  return Boolean(turn.deep) || byDefault;
+}
+
+/** What the composer's one toggle says and sends, by `DEEP_BY_DEFAULT`: Deep when off, Fast when on. */
+export function speedToggle(byDefault: boolean = DEEP_BY_DEFAULT): { text: string; tooltip: string; options: { deep: true } | { fast: true } } {
+  return byDefault
+    ? { text: 'Fast', tooltip: 'Fast: the scout answers quickly from a fixed research pass', options: { fast: true } }
+    : { text: 'Deep', tooltip: 'Deep: the scout takes longer and decides its own research', options: { deep: true } };
+}
+
+/**
+ * Whether a turn takes the deep path. It must have asked for it (`wantsDeep`), and questions about
+ * the past keep the debate brief, ratings and challenges keep their pipelines, and Gaffa turns (the
+ * panel, or a club attached in the app) keep the club blocks only the stage pipeline builds. Images
+ * and archive questions stay on the stage pipeline too. Every other turn that asked takes the loop.
  */
 export function takesDeepPath(turn: {
   deep?: boolean;
+  fast?: boolean;
+  /** Overrides `DEEP_BY_DEFAULT`, for tests and the eval. */
+  byDefault?: boolean;
   route: Pick<TurnRoute, 'intent'>;
   historical: boolean;
   noRating?: boolean;
   gaffa?: boolean;
   image?: boolean;
 }): boolean {
-  if (!turn.deep || turn.historical || turn.noRating || turn.gaffa || turn.image) return false;
+  if (!wantsDeep(turn, turn.byDefault) || turn.historical || turn.noRating || turn.gaffa || turn.image) return false;
   return !['single_dossier', 'challenge_or_revise', 'archive_inventory'].includes(turn.route.intent);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fallback
+
+/** Why a deep turn fell back: the loop threw, ended with no text, or spent its budget with no answer. */
+export type DeepFallbackReason = 'error' | 'empty' | 'budget';
+
+/** The loop gave up with nothing to show. Slowness alone is never one: a late answer is an answer. */
+export class DeepFailure extends Error {
+  constructor(
+    readonly reason: Exclude<DeepFallbackReason, 'error'>,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DeepFailure';
+  }
+}
+
+/** The progress line for a turn that gave up on deep mode. */
+export const FALLBACK_STAGE_LABEL = 'Taking the standard route...';
+
+export interface PathInfo {
+  path: 'deep' | 'stage';
+  /** Set on the stage run that followed a deep turn's failure. */
+  fallback?: DeepFallbackReason;
+}
+
+/**
+ * Runs a deep turn and, if the loop gives up, the stage pipeline once in its place. It falls back
+ * only after the loop has thrown or ended with no answer, never on slowness, so a turn doesn't
+ * pay twice for research that succeeded; the stage run starts after the loop has stopped.
+ */
+export async function runDeepWithFallback(
+  deep: () => Promise<string>,
+  stage: () => Promise<string>,
+  hooks: { onStageChange?: (label: string) => void; onPath?: (info: PathInfo) => void } = {},
+): Promise<string> {
+  hooks.onPath?.({ path: 'deep' });
+  try {
+    return await deep();
+  } catch (e: any) {
+    const reason: DeepFallbackReason = e instanceof DeepFailure ? e.reason : 'error';
+    console.warn(`[deep] fallback (${reason}): ${String(e?.message ?? e).slice(0, 160)}`);
+    hooks.onStageChange?.(FALLBACK_STAGE_LABEL);
+    hooks.onPath?.({ path: 'stage', fallback: reason });
+    return stage();
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -728,7 +806,10 @@ ${params.savedDossiersBlock}
   if (!reply.text.trim()) {
     reply = await conversation.send(RESEARCH_OVER, { tools: false, onText: (t) => onText(t, true) });
   }
-  if (!reply.text.trim()) throw blockedOrEmptyResponseError(reply.finishReason);
+  if (!reply.text.trim()) {
+    const why = blockedOrEmptyResponseError(reply.finishReason).message;
+    throw new DeepFailure(stop === 'answered' ? 'empty' : 'budget', stop === 'answered' ? why : `the ${stop} budget was spent and no answer followed: ${why}`);
+  }
 
   verified = await within(managers(), 5_000).then((m) => m ?? verified);
   // A short answer held back while it might have been a preamble streams now.

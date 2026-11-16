@@ -17,6 +17,12 @@
  *   npm run eval:live -- --set historical   # the historical set, each question twice (--repeat 1 to run once)
  *   npm run eval:live -- --set historical --only 2,3 --repeat 1 --no-builds   # a small, cheap subset
  *   npm run eval:live -- --deep --only 1,3 --label deep   # the live set through deep mode (services/deepTurn.ts)
+ *   npm run eval:live -- --stage --label stage   # the same set through the stage pipeline, whatever DEEP_BY_DEFAULT says
+ *
+ * `--deep` and `--stage` each force their path for every question the path accepts (questions
+ * about the past, ratings and the like take the stage pipeline either way); with neither, a turn
+ * goes where the app would send it. Each report row names the path the answer took, and a deep
+ * turn that gave up and ran the stage pipeline shows its fallback reason.
  *
  * The live routes run in-process, so no server is needed. Supabase isn't loaded outside the
  * browser, so club snapshots are built fresh in memory for each run rather than read from the
@@ -58,9 +64,15 @@ const only = argValue('--only')?.split(',').map((n) => Number(n.trim()));
 const warm = args.includes('--warm');
 /** `--deep`: send every question with the Deep toggle on, so questions about the present go through deep mode. */
 const deep = args.includes('--deep');
+/** `--stage`: send every question with the Fast toggle on, so it takes the stage pipeline even where deep mode would take it. */
+const stage = args.includes('--stage');
+if (deep && stage) {
+  console.error('Pass --deep or --stage, not both.');
+  process.exit(1);
+}
 const set = argValue('--set') === 'historical' ? 'historical' : 'live';
 const repeat = Math.max(1, Number(argValue('--repeat') ?? (set === 'historical' ? 2 : 1)) || 1);
-const label = (argValue('--label') ?? (deep ? 'deep' : warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
+const label = (argValue('--label') ?? (deep ? 'deep' : stage ? 'stage' : warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
 const history = await import('./eval-history');
 if (set === 'historical') history.installReadOnlySupabase();
 
@@ -153,7 +165,10 @@ interface RunResult {
 }
 
 interface Research {
-  path: 'default' | 'deep';
+  /** The path that produced the answer: the deep loop, or the stage pipeline (also after a deep turn gave up). */
+  path: 'stage' | 'deep';
+  /** Set when a deep turn gave up and the stage pipeline answered: why the loop gave up. */
+  fallback?: import('../services/deepTurn').DeepFallbackReason;
   /** Lookups the turn ran (live feeds, history routes, web searches, cards), snapshot builds included. */
   lookups: number;
   searches: number;
@@ -168,15 +183,20 @@ interface Research {
 }
 
 /** The turn's research, from its perf lines and, in deep mode, the loop's own count. */
-function researchOf(perf: string[], stats: import('../services/deepTurn').DeepStats | null, attached: { lineups?: unknown[]; cards?: unknown[] } | null): Research {
+function researchOf(
+  perf: string[],
+  stats: import('../services/deepTurn').DeepStats | null,
+  attached: { lineups?: unknown[]; cards?: unknown[] } | null,
+  path: import('../services/deepTurn').PathInfo | null,
+): Research {
   const lookupLines = perf.filter((l) => l.startsWith('[Perf] lookup '));
   const shown = { lineupsShown: attached?.lineups?.length ?? 0, cardsShown: attached?.cards?.length ?? 0 };
-  if (stats) {
+  if (stats && path?.path !== 'stage') {
     return { path: 'deep', lookups: lookupLines.length, searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length, rounds: stats.rounds, toolCalls: stats.toolCalls, stop: stats.stop, ...shown };
   }
   const researched = perf.some((l) => l.includes(' brief ('));
   const rounds = (researched ? 1 : 0) + perf.filter((l) => l.includes('research round 2')).length + perf.filter((l) => l.includes('writer tool calls')).length;
-  return { path: 'default', lookups: lookupLines.length, searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length, rounds, ...shown };
+  return { path: 'stage', ...(path?.fallback ? { fallback: path.fallback } : {}), lookups: lookupLines.length, searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length, rounds, ...shown };
 }
 
 async function ask(question: string): Promise<RunResult> {
@@ -191,6 +211,7 @@ async function ask(question: string): Promise<RunResult> {
   let firstTokenMs: number | null = null;
   let stats: import('../services/deepTurn').DeepStats | null = null;
   let attached: { lineups?: unknown[]; cards?: unknown[] } | null = null;
+  let path: import('../services/deepTurn').PathInfo | null = null;
   try {
     const reply = await sendMessageToAI(question, [], undefined, [], [], {
       onStreamChunk: () => {
@@ -199,12 +220,16 @@ async function ask(question: string): Promise<RunResult> {
       onAttachments: (a) => {
         attached = a;
       },
-      ...(deep ? { deep: true, deepDeps: { onStats: (s) => (stats = s) } } : {}),
+      onPath: (p) => {
+        path = p;
+      },
+      ...(deep ? { deep: true } : stage ? { fast: true } : {}),
+      deepDeps: { onStats: (s) => (stats = s) },
     });
     const answer = typeof reply === 'string' ? reply : `[Rated a card instead of answering: ${reply.basicInfo.name}]`;
-    return { answer, firstTokenMs, totalMs: Date.now() - start, perf, research: researchOf(perf, stats, attached) };
+    return { answer, firstTokenMs, totalMs: Date.now() - start, perf, research: researchOf(perf, stats, attached, path) };
   } catch (e: any) {
-    return { answer: '', error: String(e?.message ?? e), firstTokenMs, totalMs: Date.now() - start, perf, research: researchOf(perf, stats, attached) };
+    return { answer: '', error: String(e?.message ?? e), firstTokenMs, totalMs: Date.now() - start, perf, research: researchOf(perf, stats, attached, path) };
   } finally {
     Object.assign(console, { log, info, warn });
   }
@@ -376,7 +401,7 @@ const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math
 
 const report = `# Live question eval: ${today}, ${label}
 
-Ran ${results.length} questions through the ${deep ? 'deep mode loop (`--deep`)' : 'chat pipeline'}${warm ? ', each answered once beforehand so club snapshots were already built' : deep ? ', cold: no stored club snapshots (deep mode reads them but never builds one)' : ', cold: every club snapshot built during the run'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
+Ran ${results.length} questions through the ${deep ? 'deep mode loop (`--deep`)' : stage ? 'stage pipeline (`--stage`)' : 'chat pipeline'}${warm ? ', each answered once beforehand so club snapshots were already built' : deep ? ', cold: no stored club snapshots (deep mode reads them but never builds one)' : ', cold: every club snapshot built during the run'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
 
 The grader is the same model that writes the answers, so it can share their blind spots and misjudge facts its own search doesn't reach. Compare runs with each other rather than reading any score as absolute.
 
@@ -386,12 +411,12 @@ The grader is the same model that writes the answers, so it can share their blin
 - Mean decisiveness: ${graded.length ? (sum((g) => g.decisiveness) / graded.length).toFixed(1) : '–'} / 5
 - Median first token: ${secs(median(results.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s
 
-| # | Stale | Invented | What changed | Decisive | Hedged roles | Gaps admitted | Lookups | Searches | Rounds | Shown | First token (s) | Total (s) | Notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| # | Stale | Invented | What changed | Decisive | Hedged roles | Gaps admitted | Path | Lookups | Searches | Rounds | Shown | First token (s) | Total (s) | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${results
   .map((r) => {
     const x = r.run.research;
-    const research = x ? `${x.lookups} | ${x.searches} | ${x.rounds} | ${[x.lineupsShown && `${x.lineupsShown} XI`, x.cardsShown && `${x.cardsShown} card`].filter(Boolean).join(', ') || '–'}` : '– | – | – | –';
+    const research = x ? `${x.fallback ? `deep, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${[x.lineupsShown && `${x.lineupsShown} XI`, x.cardsShown && `${x.cardsShown} card`].filter(Boolean).join(', ') || '–'}` : '– | – | – | – | –';
     return r.grade
       ? `| ${r.q.n} | ${r.grade.staleFacts.length} | ${r.grade.inventedFacts.length} | ${r.grade.saysWhatChanged} | ${r.grade.decisiveness} | ${r.grade.hedgedRoles} | ${r.grade.gapsAdmitted} | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.grade.notes.replace(/\|/g, '/').replace(/\n/g, ' ')} |`
       : `| ${r.q.n} | – | – | – | – | – | – | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${r.run.error}` : 'Grading failed'} |`;

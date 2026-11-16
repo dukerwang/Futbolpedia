@@ -18,7 +18,7 @@ import {
   type ReplyAttachments,
 } from './conversationalScout';
 import { lookUpDossier, replaceSupersededPrimes } from './dossierLookup';
-import { runDeepTurn, takesDeepPath, type DeepTurnDeps } from './deepTurn';
+import { DEEP_BY_DEFAULT, runDeepTurn, runDeepWithFallback, takesDeepPath, wantsDeep, type DeepTurnDeps, type PathInfo } from './deepTurn';
 import {
   CALIBRATION_EPOCH_MS,
   buildHistoryContents,
@@ -202,11 +202,21 @@ export interface SendMessageOptions {
    */
   challengeCardKey?: string;
   /**
-   * Sent with the composer's Deep toggle: the turn goes through deep mode (`deepTurn.ts`), one
-   * model loop that decides its own research, when it is a question about the present. Every
-   * other turn ignores it.
+   * Sent with the composer's Deep toggle (while `DEEP_BY_DEFAULT` is off): the turn goes through
+   * deep mode (`deepTurn.ts`), one model loop that decides its own research, when it is a question
+   * about the present. Every other turn ignores it.
    */
   deep?: boolean;
+  /**
+   * Sent with the composer's Fast toggle (while `DEEP_BY_DEFAULT` is on), and by the eval to force
+   * the stage pipeline: the turn takes it even where deep mode would take the turn.
+   * Wins over `deep` when both arrive.
+   */
+  fast?: boolean;
+  /** Overrides `DEEP_BY_DEFAULT` for one turn, for tests and the eval. */
+  deepByDefault?: boolean;
+  /** Called as each path starts: once for the path chosen, and again on the stage run that follows a deep turn's failure. */
+  onPath?: (info: PathInfo) => void;
   /** Fakes and overrides for deep mode's model, tools and budget, for tests and the eval. */
   deepDeps?: DeepTurnDeps;
 }
@@ -785,8 +795,11 @@ export const sendMessageToAI = async (
   // 1. Classify turn via Structured Turn Router (warm Supabase pool in background without blocking routing).
   // A question that looks like it's about the present starts its web search now, while routing runs.
   void fetchSupabaseCalibratedPool();
-  // A deep turn decides its own searches, so nothing is started for it.
-  const questionSearch = imageData || options?.deep ? null : startQuestionSearch(message, liveToolset([]));
+  // A deep turn decides its own searches, so nothing is started for it. A turn that is deep only by
+  // default, and so may still be Gaffa's, keeps its search: the stage pipeline reads it.
+  const byDefault = options?.deepByDefault ?? DEEP_BY_DEFAULT;
+  const deepFirst = wantsDeep(options ?? {}, byDefault) && (Boolean(options?.deep) || !(options?.noRating || options?.gaffaBag?.connected));
+  const questionSearch = imageData || deepFirst ? null : startQuestionSearch(message, liveToolset([]));
   // One that looks like it's about the past, in a new chat, starts its debate brief.
   const debateBrief = imageData || history.length ? null : startDebateBrief(message, { debates: liveDebateRecords });
   let route = await classifyTurn({
@@ -881,8 +894,9 @@ export const sendMessageToAI = async (
   const context = buildTurnContext(message, route, conversationDossiers, turnDossiers);
   const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock } = context;
 
-  // 5. Deep mode: one model loop decides the research, for a question about the present sent with
-  // the Deep toggle. Every other turn, deep or not, takes the conversational scout.
+  // 5. Deep mode: one model loop decides the research, for a question about the present that asked
+  // for it (the Deep toggle, or by default when `DEEP_BY_DEFAULT` is on). Every other turn takes the
+  // conversational scout, and so does a deep turn whose loop gives up.
   const deepTurn = {
     route,
     historical: threadIsHistorical(route, history, message),
@@ -890,54 +904,78 @@ export const sendMessageToAI = async (
     gaffa: Boolean(options?.gaffaBag?.connected),
     image: Boolean(imageData),
   };
-  const deep = takesDeepPath({ deep: options?.deep, ...deepTurn });
+  const deep = takesDeepPath({ deep: options?.deep, fast: options?.fast, byDefault, ...deepTurn });
   // The writer's initiative (ask, prepare, offer, go deeper) belongs to the app's own chat: Gaffa's
-  // panel (`noRating`) can't draw chips or offers. The go-deeper flag is offered only where the
-  // rerun would take the deep path, so its chip never leads to a turn that ignores the toggle.
-  const initiative = options?.noRating ? undefined : { deeper: takesDeepPath({ deep: true, ...deepTurn }) };
+  // panel (`noRating`) can't draw chips or offers. The go-deeper flag is offered only on a stage
+  // turn that deep mode would have accepted, so its chip never leads to a turn that ignores it and a
+  // deep turn, or one that fell back from deep, never carries it.
+  const initiativeFor = (deeper: boolean) => (options?.noRating ? undefined : { deeper });
+  const initiative = initiativeFor(!deep && takesDeepPath({ deep: true, ...deepTurn }));
   // 6. Conversational Scout Pipeline (Comparisons, Live Dossier Revisions, Tactical Q&A, Archive)
-  const reply = deep
-    ? await runDeepTurn({
-        message,
-        route,
-        history,
-        isEAFCRequest,
-        conversationDossiers,
-        savedDossiers: turnDossiers,
-        lockedDossiersBlock,
-        savedDossiersBlock,
-        peerLedgerBlock,
-        attachments,
-        onStreamChunk: options?.onStreamChunk,
-        onStageChange: options?.onStageChange,
-        conversationId: options?.conversationId,
-        perf,
-      }, options?.deepDeps)
-    : await runConversationalScout({
-    message,
-    route,
-    history,
-    questionSearch,
-    debateBrief,
-    imageData,
-    isEAFCRequest,
-    conversationDossiers,
-    savedDossiers: turnDossiers,
-    lockedDossiersBlock,
-    savedDossiersBlock,
-    peerLedgerBlock,
-    attachments,
-    challengeCard,
-    onDossierUpdated: options?.onDossierUpdated,
-    onStreamChunk: options?.onStreamChunk,
-    onStageChange: options?.onStageChange,
-    gaffaBag: options?.gaffaBag,
-    onGaffaScorecard: options?.onGaffaScorecard,
-    conversationId: options?.conversationId,
-    initiative,
-    perf,
-  });
-  perf(deep ? 'deep turn' : 'conversational scout');
+  const runStage = (stageInitiative: typeof initiative) =>
+    runConversationalScout({
+      message,
+      route,
+      history,
+      questionSearch,
+      debateBrief,
+      imageData,
+      isEAFCRequest,
+      conversationDossiers,
+      savedDossiers: turnDossiers,
+      lockedDossiersBlock,
+      savedDossiersBlock,
+      peerLedgerBlock,
+      attachments,
+      challengeCard,
+      onDossierUpdated: options?.onDossierUpdated,
+      onStreamChunk: options?.onStreamChunk,
+      onStageChange: options?.onStageChange,
+      gaffaBag: options?.gaffaBag,
+      onGaffaScorecard: options?.onGaffaScorecard,
+      conversationId: options?.conversationId,
+      initiative: stageInitiative,
+      perf,
+    });
+  let fellBack = false;
+  let reply: string;
+  if (deep) {
+    // What the loop attached before it gave up goes with it; the stage run builds its own.
+    const before = { cards: [...attachments.cards], scoutOffers: [...attachments.scoutOffers], lineups: attachments.lineups ? [...attachments.lineups] : undefined };
+    reply = await runDeepWithFallback(
+      () =>
+        runDeepTurn(
+          {
+            message,
+            route,
+            history,
+            isEAFCRequest,
+            conversationDossiers,
+            savedDossiers: turnDossiers,
+            lockedDossiersBlock,
+            savedDossiersBlock,
+            peerLedgerBlock,
+            attachments,
+            onStreamChunk: options?.onStreamChunk,
+            onStageChange: options?.onStageChange,
+            conversationId: options?.conversationId,
+            perf,
+          },
+          options?.deepDeps,
+        ),
+      () => {
+        fellBack = true;
+        Object.assign(attachments, before);
+        if (!before.lineups) delete attachments.lineups;
+        return runStage(initiativeFor(false));
+      },
+      { onStageChange: options?.onStageChange, onPath: options?.onPath },
+    );
+  } else {
+    options?.onPath?.({ path: 'stage' });
+    reply = await runStage(initiative);
+  }
+  perf(deep && !fellBack ? 'deep turn' : 'conversational scout');
   if (
     attachments.cards.length > 0 ||
     attachments.scoutOffers.length > 0 ||
