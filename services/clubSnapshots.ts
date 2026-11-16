@@ -97,6 +97,12 @@ const FAILED_RETRY_MS = 10 * 60 * 1000;
 export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource & {
   /** The snapshots this store holds in memory, built or read within the last day. */
   known(): ClubSnapshot[];
+  /**
+   * A new build that replaces the stored snapshot, whatever its age (the scout's day). `calls` is
+   * the model calls it made: its searches plus the situation call. A build already running is
+   * waited for and costs nothing here.
+   */
+  rebuild(club: string, live: Promise<ToolOutcome>): Promise<{ snapshot: ClubSnapshot | null; calls: number }>;
 } {
   const now = deps.now ?? Date.now;
   const memory = new Map<string, { snapshot: ClubSnapshot | null; expiresAt: number }>();
@@ -191,10 +197,39 @@ export function createClubSnapshotStore(deps: SnapshotStoreDeps): SnapshotSource
     return job;
   }
 
+  async function rebuild(club: string, live: Promise<ToolOutcome>): Promise<{ snapshot: ClubSnapshot | null; calls: number }> {
+    const outcome = await live.catch(() => null);
+    const team = outcome?.result?.club?.team;
+    if (!outcome || !team) return { snapshot: null, calls: 0 };
+    const key = toClubKey(team);
+    const pending = builds.get(key);
+    if (pending) return { snapshot: await pending, calls: 0 };
+    let calls = 0;
+    const job = (async () => {
+      const pass = await deps.research(club, outcome).catch((e) => {
+        console.warn(`[ClubSnapshots] Research failed for ${club}:`, e);
+        return null;
+      });
+      if (!pass) return null;
+      calls = pass.calls.length + 1;
+      const snapshot = await deps.summarize(club, outcome, pass).catch((e) => {
+        console.warn(`[ClubSnapshots] Rebuild failed for ${club}:`, e);
+        return null;
+      });
+      if (snapshot) {
+        memory.set(key, { snapshot, expiresAt: now() + SNAPSHOT_REFRESH_MS });
+        await deps.write(snapshotToRow(snapshot)).catch((e) => console.warn('[ClubSnapshots] Write failed:', e));
+      }
+      return snapshot;
+    })().finally(() => builds.delete(key));
+    builds.set(key, job);
+    return { snapshot: await job, calls };
+  }
+
   const known = (): ClubSnapshot[] =>
     [...memory.values()].filter((v) => v.snapshot && v.expiresAt > now()).map((v) => v.snapshot as ClubSnapshot);
 
-  return { stored, research, get, known };
+  return { stored, research, get, known, rebuild };
 }
 
 /**

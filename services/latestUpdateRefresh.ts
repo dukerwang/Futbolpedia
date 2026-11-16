@@ -28,7 +28,7 @@ const LATEST_UPDATE_SCHEMA = {
   required: ['latestUpdate'],
 };
 
-async function rewriteLatestUpdate(card: PlayerProfile): Promise<PlayerProfile> {
+export async function rewriteLatestUpdate(card: PlayerProfile): Promise<PlayerProfile> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
   const name = card.basicInfo.name;
   const [research, apiPlayer, manager] = await Promise.all([
