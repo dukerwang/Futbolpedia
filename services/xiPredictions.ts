@@ -654,12 +654,15 @@ export function createXiPredictions(deps: XiPredictionDeps) {
     }
   }
 
-  /** Sweeps now, then hourly. The timer doesn't keep the process alive. */
-  function start(): { stop(): void } {
-    void sweep();
+  /**
+   * Sweeps now, then hourly. The timer doesn't keep the process alive. `firstSweep` settles when
+   * the first sweep has finished, so the scout's day can run after it.
+   */
+  function start(): { stop(): void; firstSweep: Promise<unknown> } {
+    const firstSweep = sweep();
     const timer = setInterval(() => void sweep(), XI_SWEEP_INTERVAL_MS);
     timer.unref?.();
-    return { stop: () => clearInterval(timer) };
+    return { stop: () => clearInterval(timer), firstSweep };
   }
 
   /** A club's record, by any name the live data knows it by. Cached for a few minutes. */

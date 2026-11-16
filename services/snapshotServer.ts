@@ -1,5 +1,5 @@
 import { SNAPSHOT_VERSION, createClubSnapshotStore, researchClub, rowToSnapshot, summarizeClub, type ClubResearch, type SnapshotRow } from './clubSnapshots';
-import { buildEraSnapshot, createEraSnapshotStore, isMissingTable, type EraKind, type EraRow, type EraSnapshot } from './eraSnapshots';
+import { buildEraSnapshot, createEraSnapshotStore, eraSearches, isMissingTable, normalizePeriod, type EraKind, type EraRow, type EraSnapshot } from './eraSnapshots';
 import type { createHistoryFootball } from './historyFootball';
 import type { createLiveFootball } from './liveFootball';
 import { liveToolset, type LiveGet } from './researchTools';
@@ -107,6 +107,14 @@ export interface SnapshotServer {
   listStored(maxAgeMs: number): Promise<ClubSnapshot[]>;
   /** A club season's or a player window's stored snapshot, else a new build. */
   era(kind: EraKind, subject: string, period: string): Promise<EraSnapshot | null>;
+  /** A new build of a club's snapshot that replaces the stored one, with the model calls it made. */
+  rebuild(club: string): Promise<{ snapshot: ClubSnapshot | null; calls: number }>;
+  /**
+   * An era snapshot the way the scout's day builds one: nothing when it is already stored
+   * (`built` false, no calls), else a build and the model calls it made (its searches plus the
+   * story call). Without a table to keep it in, nothing is built.
+   */
+  eraBuild(kind: EraKind, subject: string, period: string): Promise<{ snapshot: EraSnapshot | null; built: boolean; calls: number }>;
 }
 
 export function createSnapshotServer(deps: { get: LiveGet; db: SnapshotDb | null }): SnapshotServer {
@@ -124,6 +132,12 @@ export function createSnapshotServer(deps: { get: LiveGet; db: SnapshotDb | null
     // An era snapshot is kept for good, so it's only worth building once it can be stored.
     build: async (req, facts) => ((await db?.eraReady()) ? buildEraSnapshot(req, facts, tools) : null),
   });
+  const eraRequest = (kind: EraKind, subject: string, period: string) => ({
+    kind,
+    subject,
+    period,
+    facts: kind === 'club_season' ? tools.clubSeason(subject, period) : tools.playerCareer(subject),
+  });
   return {
     clubResearch: (club) => clubs.research(club, tools.clubRecentTeam(club)),
     club: (club) => clubs.get(club, tools.clubRecentTeam(club)),
@@ -133,7 +147,18 @@ export function createSnapshotServer(deps: { get: LiveGet; db: SnapshotDb | null
       const rows = await db.listClubs(new Date(Date.now() - maxAgeMs).toISOString());
       return rows.map(rowToSnapshot).filter((s): s is ClubSnapshot => s !== null);
     },
-    era: (kind, subject, period) =>
-      eras.get({ kind, subject, period, facts: kind === 'club_season' ? tools.clubSeason(subject, period) : tools.playerCareer(subject) }),
+    era: (kind, subject, period) => eras.get(eraRequest(kind, subject, period)),
+    rebuild: (club) => clubs.rebuild(club, tools.clubRecentTeam(club)),
+    async eraBuild(kind, subject, period) {
+      const req = eraRequest(kind, subject, period);
+      const stored = await eras.stored(req);
+      if (stored) return { snapshot: stored, built: false, calls: 0 };
+      // The same conditions a build needs: the facts came back, the period reads, there's a table.
+      const facts = await req.facts.catch(() => null);
+      const resolved = normalizePeriod(period);
+      if (!facts?.result || !resolved || !(await db?.eraReady())) return { snapshot: null, built: false, calls: 0 };
+      const snapshot = await eras.get(req);
+      return { snapshot, built: true, calls: eraSearches({ kind, subject, period: resolved }).length + 1 };
+    },
   };
 }
