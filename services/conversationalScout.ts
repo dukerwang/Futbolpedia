@@ -51,10 +51,9 @@ import { formatVerifiedManagersBlock, getVerifiedClubManagers } from './clubMana
 import { reconcileDossierNumbers } from './dossierNumberGate';
 import { cardEdition, toBasePlayerSlug } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
-import { askedDirectly, cleanReason, createPreparer, validateAsk } from './initiative';
+import { askedDirectly, createPreparer, validateAsk } from './initiative';
 import { createViewTools, gateSegments, joinSegments, makeCardLookup, ReplyComposer, splitSegments } from './replyBlocks';
-import { buildGaffaTurn, capGaffaTradeProse, leagueFocusOf, starterClubs, type GaffaTurn } from './gaffaTurn';
-import { lockGaffaRosterNames } from './gaffaLineupAudit';
+import { buildGaffaTurn, finishGaffaReply, leagueFocusOf, starterClubs, type GaffaTurn } from './gaffaTurn';
 import { correctReply, formatGateFeedback, GATE_FEEDBACK_STAGE_LABEL, stageFeedbackAllowed, type CorrectionModel, type Sanitized } from './gateFeedback';
 import { expandTables, gateFigureFindings, gateUnsupportedFigures, type FigureClaim, type FigureGateOptions } from './figureGate';
 import { figureBudget, formatDebateBriefForWriter, runDebateResearch, type DebateBrief } from './debateBrief';
@@ -113,19 +112,23 @@ export function getThreadSignature(history: ChatMessage[], message: string): str
 }
 
 /** Recent string turns of the thread, for finding which players and edition it is about. */
-const recentThreadText = (history: ChatMessage[], count = 6): string =>
+const recentThreadText = (history: ChatMessage[], count = 6, userOnly = false): string =>
   history
     .slice(-count)
+    .filter((m) => !userOnly || m.sender === 'user')
     .map((m) => (typeof m.content === 'string' ? m.content : ''))
     .join('\n');
 
 /**
  * Whether the thread is about players' primes. A follow-up such as "he wasn't better than him"
- * names no timeframe, but continues a prime-versus-prime debate.
+ * names no timeframe, but continues a prime-versus-prime debate. With `userOnly` (a conversation
+ * with a Gaffa club attached, which is about the present unless the user says otherwise), only the
+ * user's own words count, so a reply that called a free agent "in his prime years" doesn't turn the
+ * squad thread into one about the past.
  */
-export const threadIsHistorical = (route: TurnRoute, history: ChatMessage[], message = ''): boolean =>
+export const threadIsHistorical = (route: TurnRoute, history: ChatMessage[], message = '', opts: { userOnly?: boolean } = {}): boolean =>
   route.isHistorical ||
-  (!route.wantsCurrentForm && /\b(prime|peak|all[- ]time|(?:19|20)\d0s)\b/i.test(`${recentThreadText(history)}\n${message}`));
+  (!route.wantsCurrentForm && /\b(prime|peak|all[- ]time|(?:19|20)\d0s)\b/i.test(`${recentThreadText(history, 6, opts.userOnly)}\n${message}`));
 
 /** Leaked internal grounding tags and search citations, removed from user-facing prose. */
 export function stripScoutMarkup(text: string): string {
@@ -323,11 +326,11 @@ export interface ConversationalScoutParams {
   /** Whose follow-up state this turn reads and writes (`threadStateFor`). */
   conversationId?: string;
   /**
-   * Gives the writer its initiative tools (ask, prepare, offer, and go deeper where `deeper`).
-   * Left out on turns that can't show them: Gaffa's panel and any turn the caller rules out.
-   * A challenge turn never gets them, whatever is passed.
+   * Gives the writer its initiative tools (ask, prepare, offer). Left out on turns that can't show
+   * them: Gaffa's panel and any turn the caller rules out. A challenge turn never gets them, whatever
+   * is passed.
    */
-  initiative?: InitiativeOptions;
+  initiative?: boolean;
   /**
    * Offers the writer the view tools (pitch, table, comparison, ranking). Left out on Gaffa's panel,
    * whose replies Gaffa draws as text; a challenge turn and a Gaffa trade scorecard never get them.
@@ -542,12 +545,6 @@ export function createDossierTools(args: {
   };
 }
 
-/** Which initiative tools a turn offers the writer. */
-export interface InitiativeOptions {
-  /** Offer `request_deeper`: the turn is one deep mode would accept (`takesDeepPath` with the flag on). */
-  deeper: boolean;
-}
-
 /**
  * The writer's initiative tools for one turn (`initiative.ts` has the rules behind them), written
  * onto the reply's composer. `endTurn` is what the model loop checks after each round of tool
@@ -561,7 +558,6 @@ export function createInitiativeTools(args: {
   conversationId: string;
   /** Clubs this turn already reads, which `prepare_club` leaves alone. */
   clubsInPlay: string[];
-  deeper: boolean;
   /** Starts a club's build; defaults to the server's snapshot route. */
   startBuild?: (club: string) => void;
 }): { tools: InitiativeToolHandlers; endTurn: () => string | null } {
@@ -597,28 +593,12 @@ export function createInitiativeTools(args: {
       else composer.offerScout(player);
       return { offered: true };
     },
-    ...(args.deeper
-      ? {
-          deeper: ({ reason }: { reason?: unknown }) => {
-            const text = cleanReason(reason);
-            if (!text) return { flagged: false, error: 'Give the reason in one sentence.' };
-            if (!asked) composer.setGoDeeper({ reason: text });
-            return { flagged: true };
-          },
-        }
-      : {}),
   };
   return { tools, endTurn: () => asked?.question ?? null };
 }
 
-/**
- * The writer's rules for the initiative tools a turn offers, as one instruction. Ask, prepare and
- * offer come together; go deeper only where the turn is one deep mode would take.
- */
-export const initiativeRules = (offered: InitiativeOptions): string =>
-  [INITIATIVE_RULES.ask, INITIATIVE_RULES.prepare, INITIATIVE_RULES.offer, offered.deeper ? INITIATIVE_RULES.deeper : '']
-    .filter(Boolean)
-    .join(' ');
+/** The writer's rules for the initiative tools, as one instruction: ask, prepare and offer come together. */
+export const initiativeRules = (): string => [INITIATIVE_RULES.ask, INITIATIVE_RULES.prepare, INITIATIVE_RULES.offer].join(' ');
 
 /**
  * What a turn about the present may state as fact, and how precise figures are sourced: facts
@@ -780,7 +760,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   let verifiedManagers: VerifiedClubManager[] = [];
   let cardsInPlay: PlayerProfile[] = [];
   let gaps: { name: string; label: string }[] = [];
-  const isHistoricalThread = threadIsHistorical(route, history, message);
+  const isHistoricalThread = threadIsHistorical(route, history, message, { userOnly: Boolean(params.gaffaBag?.connected) });
   const thread = threadStateFor(params.conversationId ?? 'local');
   // A Gaffa club attached to the conversation. A question about its squad also researches the
   // Premier League clubs most of its starters play for.
@@ -975,10 +955,10 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
     ? ` No stored card exists for ${missingCards.join(' or ')}; they were already checked, so don't look them up.`
     : '';
   const gapNote = gaps.length ? ` ${gaps.map(editionGapNote).join(' ')}` : '';
-  // The initiative tools (ask, prepare, offer, go deeper) are the default chat path's; a challenge
-  // turn that fell back to prose never gets them.
+  // The initiative tools (ask, prepare, offer) are the default chat path's; a challenge turn that
+  // fell back to prose never gets them.
   const offersInitiative = Boolean(params.initiative && composer && route.intent !== 'challenge_or_revise');
-  const initiativeNote = offersInitiative ? initiativeRules(params.initiative!) : '';
+  const initiativeNote = offersInitiative ? initiativeRules() : '';
   // The view tools: on every prose turn that can draw them, the past and cards-only turns included.
   // A challenge turn, Gaffa's panel and a Gaffa trade scorecard (which has its own view) get none.
   const offersViews = Boolean(params.views && composer && route.intent !== 'challenge_or_revise' && !gaffaTurn?.scorecard);
@@ -1073,7 +1053,6 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
           historical: isHistoricalThread,
           conversationId: params.conversationId ?? 'local',
           clubsInPlay: [...targetClubsInPlay, ...gaffaClubs],
-          deeper: params.initiative!.deeper,
         })
       : null;
   // Views sit inside the reply only when its text streams, so each can follow the text that leads into it.
@@ -1108,12 +1087,8 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
         },
       })
     : null;
-  // Gaffa squad and market names are copied exactly, and a scorecard reply stays short.
-  const finishGaffa = (text: string): string => {
-    if (!gaffaBag || !gaffaTurn || gaffaTurn.focus === 'none') return text;
-    const locked = lockGaffaRosterNames(text, gaffaBag);
-    return gaffaTurn.scorecard ? capGaffaTradeProse(locked) : locked;
-  };
+  // The market rule, squad and market names copied exactly, and a scorecard reply kept short.
+  const finishGaffa = (text: string, log = false): string => finishGaffaReply(text, gaffaBag, gaffaTurn, log);
   let firstChunk = true;
   const clock = params.gateFeedback?.now ?? Date.now;
   const writerStart = clock();
@@ -1121,7 +1096,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
   // where it called it however much a segment loses. A composer-less turn (a test, a caller with no
   // reply to compose) gates the whole text as it always did.
   const gateText = (text: string, figures: FigureCheck | undefined = figureCheck) => sanitizeScoutProse(text, scoutManagerContext, cardsInPlay, figures);
-  if (composer) composer.setGate((segments) => gateSegments(segments, (t) => gateText(t)).map(finishGaffa));
+  if (composer) composer.setGate((segments) => gateSegments(segments, (t) => gateText(t)).map((t) => finishGaffa(t)));
   const rawReply = await generateProseTurn({
     message: fullPrompt,
     historyContents,
@@ -1185,7 +1160,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
   } else {
     finalJoined = sanitizeScoutProse(joinSegments(segments), scoutManagerContext, cardsInPlay, finalFigures);
   }
-  const parts = (splitSegments(finalJoined, segments.length) ?? segments.map((seg) => sanitizeScoutProse(seg, scoutManagerContext, cardsInPlay, finalFigures))).map(finishGaffa);
+  const parts = (splitSegments(finalJoined, segments.length) ?? segments.map((seg) => sanitizeScoutProse(seg, scoutManagerContext, cardsInPlay, finalFigures))).map((part) => finishGaffa(part, true));
   composer?.settle(parts);
   return parts.filter((p) => p.trim()).join('\n\n');
 }

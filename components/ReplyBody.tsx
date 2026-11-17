@@ -2,12 +2,12 @@ import React from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { ChatDossierRef, ChatMessage, ReplyBlock } from '../types';
-import { blocksOf } from '../services/replyBlocks';
+import { drawnBlocksOf } from '../services/replyBlocks';
 import { getLegacyDossierRef } from '../services/dossierRefs';
 import { useTypewriter } from './useTypewriter';
 import { GaffaTradeScorecardView } from './GaffaTradeScorecard';
 import { DossierChatCard } from './DossierChatCard';
-import { AskChips, GoDeeperChip } from './ReplyChips';
+import { AskChips } from './ReplyChips';
 import { ScoutOffer } from './ScoutOffer';
 import { ComparisonSkeleton, ComparisonView } from './views/ComparisonView';
 import { LeagueTableSkeleton, LeagueTableView } from './views/LeagueTableView';
@@ -41,8 +41,6 @@ export interface ReplyBodyProps {
     onScoutName?: (name: string) => void;
     /** Given only on the latest reply: a chip sends its text as the next message. */
     onAsk?: (text: string) => void;
-    /** Given only on the latest reply: reruns the question in deep mode as a new turn. */
-    onGoDeeper?: (messageId: string) => void;
 }
 
 const Prose: React.FC<{ text: string; typing?: boolean }> = ({ text, typing }) => (
@@ -74,8 +72,8 @@ const skeletonOf = (b: ReplyBlock): React.ReactNode => {
  * prose wait until it has finished typing; a `pending` view shows a placeholder and a `failed` one
  * draws nothing.
  */
-export const ReplyBody: React.FC<ReplyBodyProps> = ({ message, isNew, isError, onRetry, onOpenDossier, onScoutName, onAsk, onGoDeeper }) => {
-    const blocks = blocksOf(message);
+export const ReplyBody: React.FC<ReplyBodyProps> = ({ message, isNew, isError, onRetry, onOpenDossier, onScoutName, onAsk }) => {
+    const blocks = drawnBlocksOf(message);
     // The side-panel notice of an old dossier reply is redundant beside its card.
     const hideNotice = typeof message.content === 'string' && Boolean(getLegacyDossierRef(message.content));
     const lastProse = blocks.reduce((at, b, i) => (b.kind === 'prose' ? i : at), -1);
@@ -140,10 +138,6 @@ export const ReplyBody: React.FC<ReplyBodyProps> = ({ message, isNew, isError, o
             case 'ask':
                 return onAsk && b.data.options.length ? (
                     <div key={b.id} className="animate-fade-in"><AskChips options={b.data.options} onAsk={onAsk} /></div>
-                ) : null;
-            case 'goDeeper':
-                return onGoDeeper && b.data.reason ? (
-                    <div key={b.id} className="animate-fade-in"><GoDeeperChip reason={b.data.reason} onGoDeeper={() => onGoDeeper(message.id)} /></div>
                 ) : null;
             default:
                 return null;

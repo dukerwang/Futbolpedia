@@ -87,6 +87,7 @@ import { ratingTask, routeForRating } from './ratingCommand';
 import { classifyTurn, extractCandidateSlug, type TurnRoute } from './turnRouter';
 import { startQuestionSearch } from './researchAgent';
 import { startDebateBrief } from './debateBrief';
+import { isGaffaTrade } from './gaffaTurn';
 import { liveDebateRecords } from './eraSnapshots';
 import { liveToolset } from './researchTools';
 
@@ -204,15 +205,14 @@ export interface SendMessageOptions {
    */
   challengeCardKey?: string;
   /**
-   * Sent with the composer's Deep toggle (while `DEEP_BY_DEFAULT` is off): the turn goes through
-   * deep mode (`deepTurn.ts`), one model loop that decides its own research, when it is a question
-   * about the present. Every other turn ignores it.
+   * Forces deep mode (`deepTurn.ts`), one model loop that decides its own research, for a turn it
+   * accepts, whatever `DEEP_BY_DEFAULT` says. The eval's `--deep` and the tests send it; the app
+   * doesn't need to, since deep is the default.
    */
   deep?: boolean;
   /**
-   * Sent with the composer's Fast toggle (while `DEEP_BY_DEFAULT` is on), and by the eval to force
-   * the stage pipeline: the turn takes it even where deep mode would take the turn.
-   * Wins over `deep` when both arrive.
+   * Forces the stage pipeline even where deep mode would take the turn: the eval's `--stage` and
+   * the tests send it. Wins over `deep` when both arrive.
    */
   fast?: boolean;
   /** Overrides `DEEP_BY_DEFAULT` for one turn, for tests and the eval. */
@@ -797,10 +797,13 @@ export const sendMessageToAI = async (
   // 1. Classify turn via Structured Turn Router (warm Supabase pool in background without blocking routing).
   // A question that looks like it's about the present starts its web search now, while routing runs.
   void fetchSupabaseCalibratedPool();
-  // A deep turn decides its own searches, so nothing is started for it. A turn that is deep only by
-  // default, and so may still be Gaffa's, keeps its search: the stage pipeline reads it.
+  // A deep turn decides its own searches, so nothing is started for it. Gaffa's panel and a Gaffa
+  // trade take the stage pipeline, so they keep their search: the stage pipeline reads it.
   const byDefault = options?.deepByDefault ?? DEEP_BY_DEFAULT;
-  const deepFirst = wantsDeep(options ?? {}, byDefault) && (Boolean(options?.deep) || !(options?.noRating || options?.gaffaBag?.connected));
+  const gaffaTrade = isGaffaTrade(message, history, options?.gaffaBag);
+  // A conversation with a club attached is about the present unless the user's own words say otherwise.
+  const gaffaThread = { userOnly: Boolean(options?.gaffaBag?.connected) };
+  const deepFirst = wantsDeep(options ?? {}, byDefault) && !options?.noRating && !gaffaTrade;
   const questionSearch = imageData || deepFirst ? null : startQuestionSearch(message, liveToolset([]));
   // One that looks like it's about the past, in a new chat, starts its debate brief.
   const debateBrief = imageData || history.length ? null : startDebateBrief(message, { debates: liveDebateRecords });
@@ -882,7 +885,7 @@ export const sendMessageToAI = async (
     const localCards = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
     // The edition the conversation is about, as the writer reads it: a follow-up in a prime debate
     // that names no timeframe is still about primes.
-    const historical = threadIsHistorical(route, history, message);
+    const historical = threadIsHistorical(route, history, message, gaffaThread);
     const lookups = await Promise.all(
       route.targetPlayers
         .slice(0, 4)
@@ -907,25 +910,24 @@ export const sendMessageToAI = async (
   const context = buildTurnContext(message, route, conversationDossiers, turnDossiers);
   const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock } = context;
 
-  // 5. Deep mode: one model loop decides the research, for a question about the present that asked
-  // for it (the Deep toggle, or by default when `DEEP_BY_DEFAULT` is on). Every other turn takes the
+  // 5. Deep mode: one model loop decides the research, for a question about the present (by default,
+  // `DEEP_BY_DEFAULT`), a Gaffa club attached in the app included. Every other turn takes the
   // conversational scout, and so does a deep turn whose loop gives up.
-  const deepTurn = {
+  const deep = takesDeepPath({
+    deep: options?.deep,
+    fast: options?.fast,
+    byDefault,
     route,
-    historical: threadIsHistorical(route, history, message),
+    historical: threadIsHistorical(route, history, message, gaffaThread),
     noRating: options?.noRating,
-    gaffa: Boolean(options?.gaffaBag?.connected),
+    gaffaTrade,
     image: Boolean(imageData),
-  };
-  const deep = takesDeepPath({ deep: options?.deep, fast: options?.fast, byDefault, ...deepTurn });
-  // The writer's initiative (ask, prepare, offer, go deeper) belongs to the app's own chat: Gaffa's
-  // panel (`noRating`) can't draw chips or offers. The go-deeper flag is offered only on a stage
-  // turn that deep mode would have accepted, so its chip never leads to a turn that ignores it and a
-  // deep turn, or one that fell back from deep, never carries it.
-  const initiativeFor = (deeper: boolean) => (options?.noRating ? undefined : { deeper });
-  const initiative = initiativeFor(!deep && takesDeepPath({ deep: true, ...deepTurn }));
+  });
+  // The writer's initiative (ask, prepare, offer) belongs to the app's own chat: Gaffa's panel
+  // (`noRating`) can't draw chips or offers.
+  const initiative = !options?.noRating;
   // 6. Conversational Scout Pipeline (Comparisons, Live Dossier Revisions, Tactical Q&A, Archive)
-  const runStage = (stageInitiative: typeof initiative) =>
+  const runStage = () =>
     runConversationalScout({
       message,
       route,
@@ -947,7 +949,7 @@ export const sendMessageToAI = async (
       gaffaBag: options?.gaffaBag,
       onGaffaScorecard,
       conversationId: options?.conversationId,
-      initiative: stageInitiative,
+      initiative,
       // Gaffa's panel draws its replies as text, so it is offered no views.
       views: !options?.noRating,
       perf,
@@ -970,6 +972,7 @@ export const sendMessageToAI = async (
             lockedDossiersBlock,
             savedDossiersBlock,
             peerLedgerBlock,
+            gaffaBag: options?.gaffaBag,
             composer,
             onStreamChunk,
             onStageChange: options?.onStageChange,
@@ -981,13 +984,13 @@ export const sendMessageToAI = async (
       () => {
         fellBack = true;
         composer.restore(before);
-        return runStage(initiativeFor(false));
+        return runStage();
       },
       { onStageChange: options?.onStageChange, onPath: options?.onPath },
     );
   } else {
     options?.onPath?.({ path: 'stage' });
-    reply = await runStage(initiative);
+    reply = await runStage();
   }
   perf(deep && !fellBack ? 'deep turn' : 'conversational scout');
   // The reply's blocks, with its final text: what the app stores.

@@ -256,7 +256,8 @@ const liveSet = readFileSync(join(root, 'docs/superpowers/evals/live-questions.m
 const cases = readConversations(liveSet);
 
 await test('the live set carries the conversation cases, the shared conversation first', () => {
-  assert.deepEqual(cases.map((c) => c.id), ['C1', 'C2', 'C3', 'C4']);
+  assert.deepEqual(cases.map((c) => c.id), ['C1', 'C2', 'C3', 'C4', 'C5']);
+  assert.equal(cases[4].gaffaClub, true, 'the market case needs the club too');
   const c1 = cases[0];
   assert.equal(c1.gaffaClub, true);
   assert.equal(c1.turns.length, 4);

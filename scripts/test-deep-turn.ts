@@ -46,7 +46,6 @@ const {
   uncheckedFor,
   DEEP_BY_DEFAULT,
   wantsDeep,
-  speedToggle,
   runDeepWithFallback,
   DeepFailure,
   FALLBACK_STAGE_LABEL,
@@ -545,14 +544,14 @@ await test('only a deep question about the present takes the deep path', () => {
   const r = (intent: string) => ({ intent }) as any;
   assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false }), true);
   assert.equal(takesDeepPath({ deep: true, route: r('compare'), historical: false }), true);
-  // With the constant on, a present-day turn with no flag takes the loop; Fast sends it to the stage pipeline.
+  // With the constant on, a present-day turn with no flag takes the loop; `fast` sends it to the stage pipeline.
   assert.equal(takesDeepPath({ deep: false, route: r('tactical_chat'), historical: false }), true);
   assert.equal(takesDeepPath({ fast: true, route: r('tactical_chat'), historical: false }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: true }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('single_dossier'), historical: false }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('challenge_or_revise'), historical: false }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false, noRating: true }), false);
-  assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false, gaffa: true }), false);
+  assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false, gaffaTrade: true }), false);
   assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false, image: true }), false);
 });
 
@@ -568,13 +567,13 @@ const sendDeep = async (message: string) => {
   return { opened: fake.opened() !== null, reply };
 };
 
-await test('with the toggle, a question about the present goes through the deep loop', async () => {
+await test('with the deep flag, a question about the present goes through the deep loop', async () => {
   const { opened, reply } = await sendDeep("Break down Southside's build-up shape this season");
   assert.ok(opened, 'the deep model was opened');
   assert.equal(reply, 'A deep answer about the present.');
 });
 
-await test('with the toggle, a historical question and a rating take the normal path', async () => {
+await test('with the deep flag, a historical question and a rating take the normal path', async () => {
   for (const message of ['Prime Zidane or prime Kaká?', 'rate Main Nine']) {
     const { opened } = await sendDeep(message);
     assert.equal(opened, false, message);
@@ -599,7 +598,7 @@ await test('a turn asks for deep through its flag or the default, and fast alway
   assert.equal(wantsDeep({}), DEEP_BY_DEFAULT, 'the default is the constant');
 });
 
-await test('with the default on, every turn the entry rule accepts takes the loop without a flag, and Fast does not', () => {
+await test('with the default on, every turn the entry rule accepts takes the loop without a flag, and the fast flag does not', () => {
   const r = (intent: string) => ({ intent }) as any;
   const on = { byDefault: true };
   assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false }), true);
@@ -611,7 +610,7 @@ await test('with the default on, every turn the entry rule accepts takes the loo
   assert.equal(takesDeepPath({ ...on, route: r('challenge_or_revise'), historical: false }), false);
   assert.equal(takesDeepPath({ ...on, route: r('archive_inventory'), historical: false }), false);
   assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, noRating: true }), false);
-  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, gaffa: true }), false);
+  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, gaffaTrade: true }), false);
   assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, image: true }), false);
 });
 
@@ -622,28 +621,14 @@ await test('with the default off, an unflagged turn never takes the loop and the
   assert.equal(takesDeepPath({ byDefault: false, deep: true, route: r('tactical_chat'), historical: false }), true);
 });
 
-await test('the toggle reads Deep and sends deep when the default is off, Fast and sends fast when it is on', () => {
-  assert.deepEqual(speedToggle(false), { text: 'Deep', tooltip: 'Deep: the scout takes longer and decides its own research', options: { deep: true } });
-  const fast = speedToggle(true);
-  assert.equal(fast.text, 'Fast');
-  assert.match(fast.tooltip, /answers quickly from a fixed research pass/);
-  assert.deepEqual(fast.options, { fast: true });
-  assert.equal(speedToggle().text, speedToggle(DEEP_BY_DEFAULT).text);
-});
-
-await test('the composer renders each label and wires its option', async () => {
+await test('the composer has no speed toggle: deep is the one path', async () => {
   const React = (await import('react')).default;
   const { renderToStaticMarkup } = await import('react-dom/server');
   const { ChatInput } = await import('../components/ChatInput');
   const props = { onSendMessage: () => {}, isLoading: false, loadingMessage: '', localCards: [], onScoutName: () => {} };
-  const off = renderToStaticMarkup(React.createElement(ChatInput, { ...props, deepByDefault: false }));
-  const on = renderToStaticMarkup(React.createElement(ChatInput, { ...props, deepByDefault: true }));
-  assert.match(off, /aria-pressed="false"[^>]*title="Deep: the scout takes longer and decides its own research"/);
-  assert.match(off, /toggle_off<\/span>Deep<\/button>/);
-  assert.match(on, /title="Fast: the scout answers quickly from a fixed research pass"/);
-  assert.match(on, /toggle_off<\/span>Fast<\/button>/);
-  assert.ok(!on.includes('>Deep<'), 'no Deep label when the default is on');
-  assert.ok(!off.includes('>Fast<'), 'no Fast label when the default is off');
+  const html = renderToStaticMarkup(React.createElement(ChatInput, props));
+  assert.doesNotMatch(html, />Fast<|>Deep<|toggle_off|toggle_on|aria-pressed/);
+  assert.match(html, /Send message/);
 });
 
 // --- The fallback -----------------------------------------------------------------------------
@@ -758,11 +743,11 @@ await test('with the default on, a present-day message runs the loop without a f
   assert.deepEqual(rating.paths, []);
 });
 
-await test('with the default on, Fast sends a present-day message to the stage pipeline', async () => {
+await test('with the default on, the fast flag sends a present-day message to the stage pipeline', async () => {
   const fast = await sendTurn(PRESENT, { deepByDefault: true, fast: true }, DEEP_ANSWER);
   assert.equal(fast.opened, false);
   assert.deepEqual(fast.paths, [{ path: 'stage' }]);
-  // Fast is not a fallback: nothing was warned and no label said the route changed.
+  // A forced stage turn is not a fallback: nothing was warned and no label said the route changed.
   assert.deepEqual(fast.warnings.filter((w) => w.includes('[deep]')), []);
   assert.ok(!fast.stages.includes(FALLBACK_STAGE_LABEL));
 });

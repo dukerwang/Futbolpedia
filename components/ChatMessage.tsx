@@ -59,11 +59,9 @@ interface ChatMessageProps {
     onRetry?: (messageId: string) => void;
     /** Given only on the latest reply: a chip sends its text as the next message. */
     onAsk?: (text: string) => void;
-    /** Given only on the latest reply: reruns the question in deep mode as a new turn. */
-    onGoDeeper?: (messageId: string) => void;
 }
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier, onScoutName, onRetry, onAsk, onGoDeeper }) => {
+export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier, onScoutName, onRetry, onAsk }) => {
     const { sender, content, timestamp } = message;
     const isUser = sender === 'user';
     const [copied, setCopied] = useState(false);
@@ -157,7 +155,6 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
                     onOpenDossier={onOpenDossier}
                     onScoutName={onScoutName}
                     onAsk={onAsk}
-                    onGoDeeper={onGoDeeper}
                 />
 
                 {!isError && (

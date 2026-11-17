@@ -72,8 +72,6 @@ export const INITIATIVE_RULES = {
     "Preparing: `prepare_club` is for the next step of the conversation, not for this answer. Call it for a club the thread is likely to move to next, and never for a club this answer already reads. It returns at once and changes nothing in this reply.",
   offer:
     "Offering: when your answer leans on a player who has no card for the version you discussed, call `offer_rating` with his name and that version, so the user can choose to have him scouted. You offer and never rate: invent no card numbers for him. Skip it for a player who has a card for that version and for one you only mention in passing.",
-  deeper:
-    "Going deeper: when your answer had to leave something unverified or unexplored that a longer look at the live sources would settle, call `request_deeper` with one sentence on what is missing, and still write the best answer you can. It is not a hedge and not a sign of effort: leave it out when the answer is complete, when the gap is one no source covers, and when the question asks for an opinion.",
 } as const;
 
 /**

@@ -243,7 +243,7 @@ export const GREP_SAVED_DOSSIERS_DECLARATION = {
   },
 };
 
-const GREP_GAFFA_MARKET_DECLARATION = {
+export const GREP_GAFFA_MARKET_DECLARATION = {
   name: 'grep_gaffa_market',
   description:
     'Instant (<1ms) structured grep and filter over the connected Gaffa league bag (unowned FA pool, club roster, open listings, and live auctions), cross-linked with calibrated Futbolpedia dossiers (scout_ovr, scout_pot, scout_archetype). Use this to find free agents or roster players by position, age (e.g. maxAge: 21 for Academy), market value, calibrated Scout OVR/POT, PL club, or name.',
@@ -401,22 +401,6 @@ export const OFFER_RATING_DECLARATION = {
   },
 };
 
-export const REQUEST_DEEPER_DECLARATION = {
-  name: 'request_deeper',
-  description:
-    'Tells the user that this question deserved more research than your time allowed, and gives them a button that reruns it with a longer look. Use it only when your answer had to leave something unverified or unexplored that a longer look would settle. It is not a hedge: an answer you could give fully does not need it. Write your answer as usual; this adds the button under it.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      reason: {
-        type: Type.STRING,
-        description: 'What stayed unverified or unexplored, in one short sentence.',
-      },
-    },
-    required: ['reason'],
-  },
-};
-
 /**
  * Handlers for the initiative tools. Each is optional: a turn passes only the tools it allows,
  * and the model is shown only those declarations.
@@ -425,14 +409,12 @@ export interface InitiativeToolHandlers {
   ask?: (args: { question?: unknown; options?: unknown }) => unknown;
   prepare?: (args: { club?: unknown }) => unknown;
   offer?: (args: { name?: unknown; edition?: unknown }) => Promise<unknown> | unknown;
-  deeper?: (args: { reason?: unknown }) => unknown;
 }
 
 const initiativeDeclarations = (tools?: InitiativeToolHandlers): any[] => [
   ...(tools?.ask ? [ASK_USER_DECLARATION] : []),
   ...(tools?.prepare ? [PREPARE_CLUB_DECLARATION] : []),
   ...(tools?.offer ? [OFFER_RATING_DECLARATION] : []),
-  ...(tools?.deeper ? [REQUEST_DEEPER_DECLARATION] : []),
 ];
 
 export const NETWORK_FUNCTION_DECLARATIONS = [
@@ -516,7 +498,7 @@ export interface GenerateProseTurnParams {
   dossiersPool?: PlayerProfile[];
   gaffaBag?: GaffaContextBag;
   dossierTools?: DossierToolHandlers;
-  /** The writer's initiative tools (ask, prepare, offer, go deeper); the default chat path only. */
+  /** The writer's initiative tools (ask, prepare, offer); the default chat path only. */
   initiativeTools?: InitiativeToolHandlers;
   /**
    * The view tools (pitch, table, comparison, ranking): each call draws a view in the reply where the
@@ -646,8 +628,6 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
             apiResult = params.initiativeTools.prepare(args);
           } else if (functionCall.name === 'offer_rating' && params.initiativeTools?.offer) {
             apiResult = await params.initiativeTools.offer(args);
-          } else if (functionCall.name === 'request_deeper' && params.initiativeTools?.deeper) {
-            apiResult = params.initiativeTools.deeper(args);
           } else if (Object.hasOwn(NETWORK_TOOL_ROUTES, functionCall.name)) {
             apiResult = await callNetworkTool(functionCall.name, args);
           } else {

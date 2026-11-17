@@ -56,6 +56,12 @@ export function blocksOf(message: ChatMessage): ReplyBlock[] {
   return blocks;
 }
 
+/** Kinds a stored reply may still hold but nothing draws: Go deeper reran a turn in deep mode, which every eligible turn now takes. */
+const RETIRED_KINDS = new Set<ReplyBlock['kind']>(['goDeeper']);
+
+/** The blocks a reply draws: `blocksOf` without the retired kinds. */
+export const drawnBlocksOf = (message: ChatMessage): ReplyBlock[] => blocksOf(message).filter((b) => !RETIRED_KINDS.has(b.kind));
+
 /** A reply's blocks with a dossier card ahead of the prose (after a scorecard), as a revised card is shown. */
 export function withDossierBlock(blocks: ReplyBlock[], dossier: ChatDossierRef): ReplyBlock[] {
   const at = blocks.findIndex((b) => b.kind !== 'scorecard');

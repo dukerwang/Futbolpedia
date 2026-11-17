@@ -1,6 +1,6 @@
 import type { ReadyBlock, ReplyBlock, ReplyBlockKind } from '../../types';
 
-export { blocksOf, proseTextOf, withDossierBlock, LEGACY_ERROR_PREFIX } from './blocksOf';
+export { blocksOf, drawnBlocksOf, proseTextOf, withDossierBlock, LEGACY_ERROR_PREFIX } from './blocksOf';
 export { ReplyComposer, type ComposerExtras, type ComposerOptions, type ComposerSnapshot } from './composer';
 export type { BlockEntry, BuildArgs, BuildContext, BuildResult } from './entry';
 export { copyTextOf, blockCopy, blockHistory, REPLY_BLOCKS, viewToolDeclarations } from './registry';

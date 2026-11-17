@@ -205,6 +205,29 @@ One turn whose need (what to learn from) differs from its words (which player is
 }
 ```
 
+### C5. A Gaffa market question in deep mode
+
+One market question with a Gaffa club attached, which takes the deep loop since 2026-11-17. It needs the same club as C1 (`EVAL_GAFFA_CLUB` and `FUTBOLPEDIA_READ_SECRET`). The checks hold whatever the league's market holds today.
+
+```json conversation
+{
+  "id": "C5",
+  "title": "A Gaffa market question in deep mode",
+  "gaffaClub": true,
+  "subjects": {},
+  "turns": [
+    {
+      "user": "Who's the best free agent I could nominate to strengthen my attack, and what would he cost me?",
+      "mustDo": [
+        "Names only players from the league's free-agent pool, auctions or listings, never a player owned elsewhere or remembered from the real transfer market.",
+        "Gives one recommendation with its opening cost under the league's floor rule, and says what the signing costs the club (Club Balance, a roster spot) as well as what it adds.",
+        "Checks the recommended player's current Premier League status (minutes or availability) rather than recommending him on reputation."
+      ]
+    }
+  ]
+}
+```
+
 ## Results
 
 Add one table per run.

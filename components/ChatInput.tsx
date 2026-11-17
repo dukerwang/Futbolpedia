@@ -4,7 +4,6 @@ import { fetchCardIndex, getCardKey, toBasePlayerSlug } from '../services/dossie
 import { searchPlayers, type PlayerMatch } from '../services/playerSearch';
 import { PlayerPicker, cardRows, type PickerRow } from './PlayerPicker';
 import { cardReference } from './pills';
-import { DEEP_BY_DEFAULT, speedToggle } from '../services/deepTurn';
 
 /** A card the message names with @, by the text that names it ("@Florian Wirtz"). */
 export interface Mention {
@@ -57,7 +56,6 @@ interface ChatInputProps {
     message: string,
     imageData?: string,
     mentions?: Mention[],
-    options?: { deep?: boolean; fast?: boolean },
   ) => void;
   isLoading: boolean;
   loadingMessage: string;
@@ -73,8 +71,6 @@ interface ChatInputProps {
   onScoutName: (name: string) => void;
   /** The card being challenged, shown as a chip until the user ends the challenge. */
   challenge?: { label: string; onEnd: () => void } | null;
-  /** Which meaning the speed toggle has; defaults to `DEEP_BY_DEFAULT`. Overridden only to render both. */
-  deepByDefault?: boolean;
 }
 
 // The text box and the mention tint behind it share every metric that decides where text wraps.
@@ -91,10 +87,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   mentionRequest,
   onScoutName,
   challenge,
-  deepByDefault = DEEP_BY_DEFAULT,
 }) => {
-  const speedLabel = speedToggle(deepByDefault);
-  const speedOptions = speedLabel.options;
   const [message, setMessage] = useState('');
   const [caret, setCaret] = useState(0);
   const [image, setImage] = useState<string | null>(null);
@@ -104,10 +97,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const [sharedCards, setSharedCards] = useState<PlayerProfile[]>([]);
   const [searching, setSearching] = useState(false);
-  // The speed toggle lives only in the composer: nothing about it is stored. Its meaning follows
-  // `DEEP_BY_DEFAULT`: off, it reads Deep and asks for the research loop; on, it reads Fast and
-  // asks for the fixed research pass.
-  const [speedOn, setSpeedOn] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
@@ -245,7 +234,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     e.preventDefault();
     if ((!message.trim() && !image) || isLoading) return;
     const named = mentions.filter((m) => message.includes(m.label));
-    onSendMessage(message, image || undefined, named.length > 0 ? named : undefined, speedOn ? speedOptions : undefined);
+    onSendMessage(message, image || undefined, named.length > 0 ? named : undefined);
     setMessage('');
     setMentions([]);
     setImage(null);
@@ -424,22 +413,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             </button>
 
             {gaffaControl}
-
-            <button
-              type="button"
-              onClick={() => setSpeedOn((on) => !on)}
-              aria-pressed={speedOn}
-              title={speedLabel.tooltip}
-              disabled={isLoading}
-              className={`flex items-center gap-1 min-h-10 px-2 text-[11px] font-sans font-bold uppercase tracking-widest transition-colors disabled:opacity-50 ${
-                speedOn
-                  ? 'text-emerald-700 dark:text-emerald-400'
-                  : 'text-cream-800 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50'
-              }`}
-            >
-              <span aria-hidden="true" className="material-symbols-outlined text-[18px] font-light">{speedOn ? 'toggle_on' : 'toggle_off'}</span>
-              {speedLabel.text}
-            </button>
           </div>
 
           <button
