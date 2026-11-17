@@ -27,7 +27,8 @@ import {
   recordDossierRevision,
 } from './dossierStore';
 import { gatherSearchFoundation } from './groundingService';
-import { formatBriefForWriter, runResearch, type ResearchBrief } from './researchAgent';
+import { formatBriefForWriter, formatBriefNeedForWriter, runResearch, type ResearchBrief } from './researchAgent';
+import { formatNeedForWriter } from './userNeed';
 import { liveToolset, type ToolOutcome } from './researchTools';
 import { liveClubSnapshots } from './clubSnapshots';
 import { formatSituation, type Situation } from './situationSnapshot';
@@ -347,6 +348,13 @@ export function proseToolMode(turn: { researched: boolean; isArchive: boolean; c
 }
 
 /**
+ * Whether a turn answered from records (the debate path) gives its writer the network tools: when a
+ * lookup failed, or came back too late, the writer checks it itself rather than calling it unknowable.
+ */
+export const writerNeedsNetwork = (ledger: EvidenceLedger | null | undefined): boolean =>
+  Boolean(ledger?.gaps.some((g) => g.status === 'failed' || g.status === 'slow'));
+
+/**
  * How tactical and squad answers use the club's recent team. The squad list says who is registered;
  * only recent lineups and the injury list say who plays, so the answer starts there.
  */
@@ -379,7 +387,7 @@ export function proseModeGuidance(
   } else if (analyticalMode === 'squad_or_recruitment') {
     return `Analyze the squad structure, lineup balance, or recruitment question like a Sporting Director and Chief Scout. ${teamRules} Name the specific current starters and rotational options, diagnose the specific functional profile the squad lacks, evaluate how candidate profiles complement existing starters, and pin player quality to the Section III tier scale and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
   } else if (analyticalMode === 'debate_or_verdict') {
-    return `Answer the question the way a knowledgeable person talks football: plain, direct prose with a clear view, never a formal debate. Give your view early, explain it through the evidence and the 25-attribute framework, separate a player's own quality from what his team and system did for his numbers where that matters, and give the other side its due in a sentence or two. If the user is questioning a fact or an earlier claim, check it against <factual_foundation>, correct a slip in one sentence, and answer what they asked. Match the length to the question. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
+    return `Answer the question the way a knowledgeable person talks football: plain, direct prose with a clear view, never a formal debate. Give your view early, explain it through the evidence and the 25-attribute framework, separate a player's own quality from what his team and system did for his numbers where that matters, and give the other side its due in a sentence or two. If the user is questioning a fact or an earlier claim, check it against <factual_foundation> or with a tool before agreeing or holding firm, correct a slip in one sentence, and answer what they asked. Match the length to the question. Stay 100% consistent with any ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.`;
   } else {
     return `Respond conversationally in Markdown prose as the Chief Scout and Senior Tactical Columnist. Match the depth and structure of your answer to the user's question, and tie every tactical claim to specific named players and their actual traits rather than generic tactical buzzwords. Use \`grep_saved_dossiers\` to search/filter the user's scouted player library, \`get_club_recent_team\` for a club's live results, starting XIs and availability, \`get_player_season\` for a Premier League player's season, or Google Search when you need live ${currentSeason} verification. Stay 100% consistent with any dossier numbers in <locked_dossiers> and <calibrated_peer_ledger> unless you explicitly state you are revising a figure. Never output a JSON dossier object.`;
   }
@@ -392,11 +400,11 @@ export function proseModeGuidance(
  * every prompt here: no players, ratings or sample phrases.
  */
 const PAST_DEBATE_RULES =
-  "First decide what the user's latest message actually asks, in the light of the conversation, and answer that. Write the way a knowledgeable person talks football with a friend: plain, warm, direct prose, never a formal debate. Use <debate_brief> as your reasoning, not as a layout. Where the user asked who was better, for an order, or how good a season or player was, give your answer early and plainly, the one the brief settled (for a ranking, its order), and explain it through the things that decide it, using the evidence from <factual_foundation> and the stored cards. Give the other side its due in a sentence or two where it matters, as part of the explanation. Don't write labelled sections for criteria, a counter-case or a verdict, and don't frame the answer as an argument to win; use headings only for a long answer that covers several players or seasons. Where the brief says the answer was held to the stored cards, say so in a sentence. Judge from evidence, never from reputation alone. Where the message questions your last answer, the cards or versions it used, or a fact, or asks something narrower, answer that point directly, admit a mistake in a sentence where you made one, and stop when it's answered. Stay consistent with the ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.";
+  "First decide what the user's latest message actually asks, in the light of the conversation, and answer that. Write the way a knowledgeable person talks football with a friend: plain, warm, direct prose, never a formal debate. Use <debate_brief> as your reasoning, not as a layout. Where the user asked who was better, for an order, or how good a season or player was, give your answer early and plainly, the one the brief settled (for a ranking, its order), and explain it through the things that decide it, using the evidence from <factual_foundation> and the stored cards. Give the other side its due in a sentence or two where it matters, as part of the explanation. Don't write labelled sections for criteria, a counter-case or a verdict, and don't frame the answer as an argument to win; use headings only for a long answer that covers several players or seasons. Where the brief says the answer was held to the stored cards, say so in a sentence. Judge from evidence, never from reputation alone. Where the message questions your last answer, the cards or versions it used, or a fact, or asks something narrower, answer that point directly: check a disputed fact against <factual_foundation> or with a tool before conceding or holding firm, admit a mistake in a sentence where you made one, and stop when it's answered. Stay consistent with the ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.";
 
 /** A message in a thread about the past that asks for no judgment (the brief's kind is `other`). */
 const PAST_CONVERSATION_RULES =
-  "The user's latest message isn't asking for a new judgment: it questions the last answer, the cards or versions it used, or a fact, or asks something narrower. Reply the way a knowledgeable person would in conversation: answer exactly what was asked, directly and at the length it needs, in plain prose. Where your last answer got something wrong, say so in a sentence and correct it. No section headings, criterion sections, counter-case or verdict. Use <debate_brief> and the evidence only as background. Stay consistent with the ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.";
+  "The user's latest message isn't asking for a new judgment: it questions the last answer, the cards or versions it used, or a fact, or asks something narrower. Reply the way a knowledgeable person would in conversation: answer exactly what was asked, directly and at the length it needs, in plain prose. Check a disputed fact against <factual_foundation> or with a tool before conceding or holding firm, never on the user's word alone; where your last answer got something wrong, say so in a sentence and correct it. No section headings, criterion sections, counter-case or verdict. Use <debate_brief> and the evidence only as background. Stay consistent with the ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.";
 
 const CURRENT_CUE = "(?:current|currently|now|today(?:'s)?|this season(?:'s)?|present[- ]day)";
 const PRIME_CUE = '(?:prime|peak|at (?:his|their) best)';
@@ -622,7 +630,7 @@ export const presentFactRules = (
   currentSeason: string,
   sources = "<situation_snapshot>, the numbered entries in <factual_foundation>, tool calls (`get_club_recent_team`, `get_player_season`, `get_league_table`, Google Search), or existing dossiers",
 ): string =>
-  `Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from ${sources}, never from memory. If the answer needs a fact that isn't there, look it up with a tool; if it still can't be verified, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach. A precise figure (a statistic, fee, percentage, table position, points total, the minute of an event, a shirt number, a quotation) goes in only when one of those sources gives it; for standings call \`get_league_table\`, and otherwise describe the pattern without a number.`;
+  `Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from ${sources}, never from memory. If the answer needs a fact, first look for it in every entry and tool result (partial evidence, such as a status or a percentage chance of playing, is an answer); if none gives it, look it up with a tool; only if that comes back empty, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach. A precise figure (a statistic, fee, percentage, table position, points total, the minute of an event, a shirt number, a quotation) goes in only when one of those sources gives it; for standings call \`get_league_table\`, and otherwise describe the pattern without a number.`;
 
 /** Who may be named as a club's coach. Shared with deep mode, which also accepts a tool result's verified coach. */
 export const MANAGER_FIDELITY_RULE =
@@ -976,7 +984,10 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
   const offersViews = Boolean(params.views && composer && route.intent !== 'challenge_or_revise' && !gaffaTurn?.scorecard);
   const viewNote = offersViews ? viewRules() : '';
   const extraRules = [initiativeNote, viewNote].filter(Boolean);
+  // What the user is trying to do, from whichever brief the turn wrote, read before everything else.
+  const needBlock = debate ? formatNeedForWriter(debate.need) : formatBriefNeedForWriter(brief);
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+${needBlock}
 ${gaffaBlock}
 ${ongoingThread}
 ${situationBlock}
@@ -1005,7 +1016,7 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
   // A debate turn already has its records; the writer reads cards locally and only searches when a
   // lookup failed.
   const toolMode: ProseToolMode = debate
-    ? ledger?.gaps.some((g) => g.status === 'failed')
+    ? writerNeedsNetwork(ledger)
       ? 'full'
       : 'local_only'
     : proseToolMode({

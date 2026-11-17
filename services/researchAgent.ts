@@ -22,6 +22,7 @@ import {
   type ToolOutcome,
 } from './researchTools';
 import type { ClubResearch, SnapshotSource } from './clubSnapshots';
+import { formatNeedForWriter, hasCheckableObjection, NEED_PROMPT, NEED_SCHEMA, readNeed, type NeedRead } from './userNeed';
 import { fileScoutNotes, liveScoutNotes, type ScoutNoteSource } from './scoutNotes';
 import { fileCardReviews, liveCardReviews, type CardReviewSource } from './cardReviewNotes';
 import {
@@ -65,8 +66,10 @@ export interface ResearchBrief {
   /** The points the answer should make, in order. */
   outline: string[];
   calls: ResearchCall[];
-  /** Things the answer needs that research couldn't establish, for the writer to say plainly. */
+  /** Things the answer needs that research couldn't establish, for the writer to check or say plainly. */
   unresolved: string[];
+  /** What the user is trying to do, and on pushback the checkable fact it rests on (`userNeed.ts`). */
+  need?: NeedRead | null;
 }
 
 export interface ResearchContext {
@@ -144,7 +147,7 @@ const CALL_ITEM_SCHEMA = {
   required: ['tool', 'subject', 'purpose', 'stage'],
 };
 
-const BRIEF_SCHEMA: Record<string, unknown> = {
+export const BRIEF_SCHEMA: Record<string, unknown> = {
   type: Type.OBJECT,
   properties: {
     understanding: { type: Type.STRING },
@@ -152,8 +155,9 @@ const BRIEF_SCHEMA: Record<string, unknown> = {
     timeframe: { type: Type.STRING, enum: ['live', 'historical', 'timeless'] },
     outline: { type: Type.ARRAY, items: { type: Type.STRING } },
     calls: { type: Type.ARRAY, items: CALL_ITEM_SCHEMA },
+    need: NEED_SCHEMA,
   },
-  required: ['understanding', 'focus', 'timeframe', 'outline', 'calls'],
+  required: ['understanding', 'need', 'focus', 'timeframe', 'outline', 'calls'],
 };
 
 const REFLECT_SCHEMA: Record<string, unknown> = {
@@ -178,13 +182,14 @@ A strong answer about the present explains what is distinctive about this team o
 
 Work out:
 1. understanding: what the user wants answered, read in the light of the conversation. Include what a good answer has to establish before it can answer: for a question about how a team plays, who has actually been playing and where; for a question about a player now, his current club, role and form; for a comparison, the same facts for each side.
+1b. ${NEED_PROMPT}
 2. focus: for a question about the present, what is distinctive about this team or player this season compared with last, and the likely reasons, written as the questions research has to settle. Leave it empty for a historical or timeless question.
 3. timeframe: "live" when the answer depends on the present season, "historical" when it is about past seasons or players' primes, "timeless" when it is about ideas rather than current facts.
 4. outline: the points a strong answer makes, in order, as short phrases. For a question about the present, lead with what has changed and why it matters.
 5. calls: the lookups, at most ${FIRST_ROUND_LIMIT}, in two stages:
    - stage "facts": the present, established first. The live tools for lineups, injuries, squads, player numbers and tables, and web searches for transfers and their dates, team news and recent results.
    - stage "analysis": web searches for tactical analysis and commentary. They run once the facts are in and are read against them, so ask for this season's analysis by name, and only where the answer needs interpretation the facts can't give.
-   Each call needs a purpose: the fact it is meant to establish. A historical or timeless question answered from stored cards may need no calls; don't fetch cards that are already in play. For a question about the present, live club data for the clubs named in the message is fetched without a call. A web search takes several seconds and the answer can't wait for many, so plan a search only for what the question needs beyond the research already running; the live tools are quick.
+   Each call needs a purpose: the fact it is meant to establish. When need.objectionFact is set, one call has to settle it, even when the cards or the conversation seem to cover the topic. A historical or timeless question answered from stored cards may need no calls; don't fetch cards that are already in play. For a question about the present, live club data for the clubs named in the message is fetched without a call. A web search takes several seconds and the answer can't wait for many, so plan a search only for what the question needs beyond the research already running; the live tools are quick.
 
 Tools:
 ${RESEARCH_TOOL_GUIDE}
@@ -239,6 +244,22 @@ export const fallbackBrief = (ctx: ResearchContext): ResearchBrief => ({
   unresolved: [],
 });
 
+/**
+ * A brief that records a disputed fact always researches it. When it planned no call, this adds the
+ * obvious ones: the season record of each player the router spotted and the recent team of each
+ * club, or, with no names, one search on the fact itself. A brief that planned calls is left alone.
+ */
+export const ensureObjectionCheck = (brief: ResearchBrief, ctx: Pick<ResearchContext, 'hints'>): ResearchBrief => {
+  if (!hasCheckableObjection(brief.need) || brief.calls.length > 0) return brief;
+  const fact = brief.need!.objectionFact;
+  const named = [
+    ...ctx.hints.players.map((player) => ({ tool: 'player_season', subject: player, stage: 'facts', purpose: fact })),
+    ...ctx.hints.clubs.map((club) => ({ tool: 'club_recent_team', subject: club, stage: 'facts', purpose: fact })),
+  ];
+  const calls = sanitizeCalls(named.length ? named : [{ tool: 'web_search', subject: fact, stage: 'facts', purpose: fact }], FIRST_ROUND_LIMIT);
+  return { ...brief, timeframe: brief.timeframe === 'timeless' && !named.length ? brief.timeframe : 'live', calls };
+};
+
 export interface ReflectVerdict {
   enough: boolean;
   calls: ResearchCall[];
@@ -268,6 +289,7 @@ export const liveResearchModel: ResearchModel = {
       outline: Array.isArray(raw?.outline) ? raw.outline.filter((p: unknown) => typeof p === 'string').slice(0, 8) : [],
       calls: sanitizeCalls(raw?.calls, FIRST_ROUND_LIMIT),
       unresolved: [],
+      need: readNeed(raw?.need),
     };
   },
   async reflect(brief, ledger) {
@@ -330,8 +352,9 @@ interface ClubJob {
   snapshot: Promise<ClubSnapshot | null> | null;
 }
 
-const TOO_SLOW: ToolOutcome = { status: 'failed', result: null, missing: [], note: 'still running when the writer started' };
-const SKIPPED: ToolOutcome = { status: 'failed', result: null, missing: [], note: 'not started: no time left for a web search' };
+// Both are unchecked, not unknowable: the ledger files them as `slow`, which the writer can check with its tools.
+const TOO_SLOW: ToolOutcome = { status: 'failed', result: null, missing: [], note: 'still running when the writer started', slow: true };
+const SKIPPED: ToolOutcome = { status: 'failed', result: null, missing: [], note: 'not started: no time left for a web search', slow: true };
 
 export async function runResearch(
   ctx: ResearchContext,
@@ -456,6 +479,7 @@ export async function runResearch(
     console.warn('[Research] Brief failed, planning from the names in the message:', e);
     brief = fallbackBrief(ctx);
   }
+  brief = ensureObjectionCheck(brief, ctx);
   options.perf?.(`brief (${brief.timeframe}, ${brief.calls.length} lookups)`);
   const isLive = brief.timeframe === 'live';
   if (brief.calls.length === 0 && !(isLive && (clubs.length > 0 || playerJobs.length > 0 || questionRun))) return { brief, ledger: emptyLedger(), situation: null };
@@ -613,7 +637,10 @@ export async function runResearch(
   return { brief, ledger, situation };
 }
 
-/** The brief as the writer reads it. */
+/** The need the brief read, as the writer's first block (`<user_need>`). */
+export const formatBriefNeedForWriter = (brief: ResearchBrief | null | undefined): string => formatNeedForWriter(brief?.need);
+
+/** The brief as the writer reads it. Its need goes ahead of every block, through `formatBriefNeedForWriter`. */
 export const formatBriefForWriter = (brief: ResearchBrief): string =>
   `<research_brief>
 What the user is asking: ${brief.understanding}
@@ -621,6 +648,6 @@ ${brief.focus ? `What's distinctive this season, for the answer to lead with: ${
     brief.outline.length ? `Planned outline (adapt it to what the evidence shows):\n${brief.outline.map((p) => `- ${p}`).join('\n')}\n` : ''
   }${
     brief.unresolved.length
-      ? `Research couldn't establish: ${brief.unresolved.join('; ')}. Say so where the answer depends on it, in one sentence each, rather than filling it in.\n`
+      ? `Research didn't establish: ${brief.unresolved.join('; ')}. Where the answer depends on one, check it with your tools first; if it still can't be settled, say so in one sentence rather than filling it in.\n`
       : ''
   }</research_brief>`;
