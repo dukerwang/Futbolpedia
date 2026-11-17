@@ -11,6 +11,8 @@
 import assert from 'node:assert/strict';
 import {
   createLiveFootball,
+  describeFplStatus,
+  findFplRosterPlayer,
   ESPN_SITE,
   ESPN_STANDINGS,
   findClub,
@@ -26,6 +28,7 @@ import {
 } from '../services/liveFootball';
 import { runCalls, type ResearchToolset } from '../services/researchTools';
 import { emptyLedger } from '../services/evidenceLedger';
+import { gateUnsupportedFigures } from '../services/figureGate';
 
 let passes = 0;
 let failures = 0;
@@ -129,13 +132,18 @@ const fplJson = {
     { id: 1, name: 'Club Utd' },
     { id: 2, name: 'Man Utd' },
     { id: 3, name: "Nott'm Forest" },
+    { id: 4, name: 'Aston Villa' },
   ],
   elements: [
     { id: 1, first_name: 'Benjamin', second_name: 'Striker', web_name: 'Striker', team: 1, element_type: 4, status: 'a', news: '', minutes: 700, starts: 8, goals_scored: 6, assists: 1 },
     { id: 2, first_name: 'Ten', second_name: 'Man', web_name: 'Man', team: 1, element_type: 3, status: 'i', news: 'Thigh injury - Unknown return date', minutes: 500, starts: 6, goals_scored: 2, assists: 3 },
-    { id: 3, first_name: 'Gabriel', second_name: 'dos Santos Magalhães', web_name: 'Gabriel', team: 1, element_type: 2, status: 'd', news: 'Hip injury - 75% chance of playing', chance_of_playing_next_round: 75, minutes: 720, starts: 8, goals_scored: 1, assists: 0, clean_sheets: 5 },
+    { id: 3, first_name: 'Gabriel', second_name: 'dos Santos Magalhães', web_name: 'Gabriel', team: 1, element_type: 2, status: 'd', news: 'Hip injury - 75% chance of playing', news_added: '2026-10-30T09:15:00.000Z', chance_of_playing_next_round: 75, chance_of_playing_this_round: 75, minutes: 720, starts: 8, goals_scored: 1, assists: 0, clean_sheets: 5 },
     { id: 4, first_name: 'Gone', second_name: 'Away', web_name: 'Away', team: 1, element_type: 3, status: 'u', news: 'Joined another club on loan', minutes: 0, starts: 0 },
     { id: 5, first_name: 'Gabriel', second_name: 'Other', web_name: 'G.Other', team: 2, element_type: 4, status: 'a', news: '', minutes: 90, starts: 1 },
+    { id: 6, first_name: 'Emiliano', second_name: 'Martínez Romero', web_name: 'Martínez', team: 4, element_type: 1, status: 'd', news: 'Head injury - 75% chance of playing', news_added: '2026-10-17T10:00:12.345Z', chance_of_playing_next_round: 75, chance_of_playing_this_round: 75, minutes: 900, starts: 10, clean_sheets: 3 },
+    { id: 7, first_name: 'Lisandro', second_name: 'Martínez', web_name: 'Martínez', team: 2, element_type: 2, status: 'a', news: '', minutes: 1100, starts: 12 },
+    { id: 8, first_name: 'Suspended', second_name: 'Midfielder', web_name: 'Suspended', team: 2, element_type: 3, status: 's', news: 'Suspended until 22 Nov', news_added: '2026-11-08T12:00:00.000Z', chance_of_playing_next_round: 0, minutes: 400, starts: 5 },
+    { id: 9, first_name: 'Knee', second_name: 'Injury', web_name: 'Injury', team: 2, element_type: 3, status: 'i', news: 'Knee injury - Expected back 12 Dec', news_added: '2026-11-02T08:00:00.000Z', chance_of_playing_next_round: 0, minutes: 300, starts: 4 },
   ],
 };
 
@@ -285,7 +293,10 @@ await test('player seasons use the name asked for, and tables read from ESPN sta
   const gabriel = await live.player('Gabriel Magalhães');
   assert.ok(gabriel.found);
   assert.equal(gabriel.name, 'Gabriel Magalhães');
-  assert.match(gabriel.text, /Defender\. .*8 starts, 720 minutes, 1 goal, 0 assists, 5 clean sheets\. Status: Hip injury - 75% chance of playing\./);
+  assert.match(
+    gabriel.text,
+    /Defender\. .*8 starts, 720 minutes, 1 goal, 0 assists, 5 clean sheets\. Status: doubtful: 75% chance of playing in the next Premier League gameweek \(Hip injury; FPL note dated 2026-10-30\)\./,
+  );
   const table = await live.table('Premier League');
   assert.ok(table.found);
   assert.equal(table.text, '1. Club United — 21 pts, P8 W7 D0 L1, GD +8');
@@ -348,6 +359,84 @@ await test("a lookup that says what it couldn't get files that, not a second gen
     ledger.lookups.map((l) => l.status),
     ['not_covered', 'not_covered', 'failed'],
   );
+});
+
+// --- FPL status wording and squad availability --------------------------------------------------
+
+const fplData = parseFpl(fplJson)!;
+const fplById = (id: number) => fplData.players.find((p) => p.id === id)!;
+
+await test('FPL status says what it means for the next match, with the note and its date', () => {
+  assert.equal(
+    describeFplStatus(fplById(6)),
+    'doubtful: 75% chance of playing in the next Premier League gameweek (Head injury; FPL note dated 2026-10-17)',
+  );
+  assert.equal(describeFplStatus(fplById(9)), 'injured: not expected to play in the next Premier League gameweek (Knee injury - Expected back 12 Dec; FPL note dated 2026-11-02)');
+  assert.equal(describeFplStatus(fplById(8)), 'suspended: not available for the next Premier League gameweek (Suspended until 22 Nov; FPL note dated 2026-11-08)');
+  assert.equal(describeFplStatus(fplById(4)), 'not with the squad (Joined another club on loan)');
+  assert.equal(describeFplStatus(fplById(1)), 'available: FPL lists no injury or suspension');
+  // A note with no date still reads, and a doubtful player with no percentage says so.
+  assert.equal(describeFplStatus({ ...fplById(6), newsAdded: null }), 'doubtful: 75% chance of playing in the next Premier League gameweek (Head injury)');
+  assert.match(describeFplStatus({ ...fplById(6), chance: null, news: '' }), /^doubtful: FPL gives no percentage for the next Premier League gameweek/);
+  // The current gameweek's chance is added only when it differs.
+  assert.match(describeFplStatus({ ...fplById(3), chanceThisRound: 50 }), /50% chance of playing in the current gameweek/);
+  assert.doesNotMatch(describeFplStatus(fplById(3)), /current gameweek/);
+});
+
+await test("a player's status line keeps its percentage and date as figures the evidence supports", async () => {
+  const live = createLiveFootball(fakeFeeds());
+  const result = await live.player('Emiliano Martínez');
+  assert.ok(result.found);
+  assert.match(result.text, /Status: doubtful: 75% chance of playing in the next Premier League gameweek \(Head injury; FPL note dated 2026-10-17\)\./);
+  const reply = 'He is doubtful, with a 75% chance of playing in the next Premier League gameweek, per an FPL note dated 2026-10-17.';
+  const gated = gateUnsupportedFigures(reply, result.text);
+  assert.deepEqual(gated.removed, []);
+  assert.equal(gated.text, reply);
+  // A figure FPL didn't give is still cut.
+  assert.ok(gateUnsupportedFigures('He is doubtful, with a 40% chance of playing in the next Premier League gameweek.', result.text).removed.length > 0);
+});
+
+await test('a roster name needs more than a surname: the club and the full name pick the player', () => {
+  const villa = 4;
+  const manUtd = 2;
+  assert.equal(findFplRosterPlayer('Emiliano Martínez', fplData, villa)?.id, 6);
+  assert.equal(findFplRosterPlayer('Lisandro Martínez', fplData, manUtd)?.id, 7);
+  // "Martinez" alone is two players, whatever the club or minutes.
+  assert.equal(findFplRosterPlayer('Martinez', fplData, null), null);
+  // With a club and the exact web name, the club's player is the match.
+  assert.equal(findFplRosterPlayer('Martínez', fplData, villa)?.id, 6);
+  // The wrong club falls back to the full name across the league, never to the other Martínez.
+  assert.equal(findFplRosterPlayer('Emiliano Martínez', fplData, manUtd)?.id, 6);
+  assert.equal(findFplRosterPlayer('Emiliano Martinez', fplData, null)?.id, 6);
+  // A first name alone, or a name FPL doesn't have, is no match; a shortened first name is.
+  assert.equal(findFplRosterPlayer('Gabriel', fplData, null), null);
+  assert.equal(findFplRosterPlayer('Gabriel Jesus', fplData, null), null);
+  assert.equal(findFplRosterPlayer('Ben Striker', fplData, 1)?.id, 1);
+});
+
+await test('availability answers a whole squad from one cached FPL read', async () => {
+  const log: string[] = [];
+  const live = createLiveFootball(fakeFeeds({}, log));
+  const squad = [
+    { name: 'Emiliano Martínez', club: 'Aston Villa' },
+    { name: 'Lisandro Martínez', club: 'Manchester United' },
+    { name: 'Martinez', club: null },
+    { name: 'Lionel Nobody', club: 'Arsenal' },
+  ];
+  const result = await live.availability(squad);
+  assert.ok(result.found);
+  assert.deepEqual(
+    result.players.map((p) => [p.name, p.fplName, p.team, p.status, p.available]),
+    [
+      ['Emiliano Martínez', 'Emiliano Martínez Romero', 'Aston Villa', 'd', false],
+      ['Lisandro Martínez', 'Lisandro Martínez', 'Man Utd', 'a', true],
+    ],
+  );
+  assert.match(result.players[0].line, /75% chance of playing in the next Premier League gameweek.*2026-10-17/);
+  await live.availability(squad);
+  assert.equal(log.filter((u) => u === FPL_BOOTSTRAP).length, 1, 'the feed is read once');
+  const down = createLiveFootball(fakeFeeds({ [FPL_BOOTSTRAP]: new Error('blocked') }));
+  assert.deepEqual(await down.availability(squad), { found: false, status: 'failed', reason: "the Fantasy Premier League feed didn't answer" });
 });
 
 console.log(`${passes} passed, ${failures} failed`);

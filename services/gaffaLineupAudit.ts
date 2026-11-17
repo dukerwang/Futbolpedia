@@ -495,20 +495,40 @@ export function inferInvolvedGaffaSlots(message: string, bag: GaffaContextBag): 
   }
 
   // 2. Explicit slot tokens, then football words for a slot
-  for (const slot of ALL_GAFFA_SLOTS) {
-    if (new RegExp(`\\b${slot}\\b`, 'i').test(message)) {
-      slots.add(slot);
-    }
-  }
-  for (const [pattern, aliasSlots] of SLOT_ALIASES) {
-    if (pattern.test(message)) aliasSlots.forEach((s) => slots.add(s));
-  }
+  explicitSlotsIn(message).forEach((s) => slots.add(s));
 
   if (slots.size === 0) {
     slots.add('ST');
   }
 
   return [...slots].slice(0, 4);
+}
+
+/** The slots a message names outright: slot tokens ("GK", "CB") and football words for a slot ("keeper", "winger"). */
+export function explicitSlotsIn(message: string): string[] {
+  const slots = new Set<string>();
+  for (const slot of ALL_GAFFA_SLOTS) {
+    if (new RegExp(`\\b${slot}\\b`, 'i').test(message)) slots.add(slot);
+  }
+  for (const [pattern, aliasSlots] of SLOT_ALIASES) {
+    if (pattern.test(message)) aliasSlots.forEach((s) => slots.add(s));
+  }
+  return [...slots];
+}
+
+/** The roster players a message names, by full name or by a surname of at least four letters, accents ignored. */
+export function rosterPlayersNamed(
+  message: string,
+  roster: GaffaRosterPlayer[],
+): Array<{ player: GaffaRosterPlayer; level: 'full' | 'surname' }> {
+  const folded = foldPlayerName(message);
+  const named: Array<{ player: GaffaRosterPlayer; level: 'full' | 'surname' }> = [];
+  for (const player of roster) {
+    const levels = [player.name, player.display_name].map((n) => matchPlayerName(n, folded));
+    const level = levels.includes('full') ? 'full' : levels.includes('surname') ? 'surname' : null;
+    if (level) named.push({ player, level });
+  }
+  return named;
 }
 
 export function buildRosterCapacityNote(bag: GaffaContextBag): string {
@@ -527,19 +547,40 @@ export function buildRosterCapacityNote(bag: GaffaContextBag): string {
   return `Squad ${activeCount}/${maxRoster} (${maxRoster - activeCount} open slot${maxRoster - activeCount === 1 ? '' : 's'}).`;
 }
 
+/** Wordings that ask what a signing takes: bids, floors and fees, and what a player costs, is priced at or would need paid. */
+const BID_MATH_CUES =
+  /\b(bid|bids|bidding|nominate|open an? auction|how much|floor|scout'?s? fee|fees?|release clause|severance|drop|claim|buy|sign|acquire|worth|costs?|costing|priced?|pricing|pay|paying|afford|spend)\b/i;
+
+/** The most free agents priced for a market question that names none. */
+const MARKET_CANDIDATE_LIMIT = 4;
+
+/**
+ * The slots a market question is about when it names no player: the ones it names, else the
+ * starters' lowest-rated slots from the scout's cards, else none (any position).
+ */
+function marketSlots(message: string, bag: GaffaContextBag, cards: PlayerProfile[]): string[] {
+  const named = explicitSlotsIn(message);
+  if (named.length) return named;
+  const rated = auditGaffaLineup(bag, cards).starters.filter((s) => s.scoutOvr != null);
+  if (!rated.length) return [];
+  const lowest = Math.min(...rated.map((s) => s.scoutOvr as number));
+  return [...new Set(rated.filter((s) => (s.scoutOvr as number) <= lowest + 2).map((s) => s.slot.toUpperCase()))].slice(0, 2);
+}
+
 /**
  * Deterministic Bid-Sizing, FA Floor, Scout's Fee (10% rebate), and Drop-Severance Calculator.
+ * `marketQuestion` is a question about free agents; when it names no player, the calculator prices
+ * the top unowned players at the positions it is about (at most four) rather than leave the sums
+ * to the writer.
  */
 export function buildGaffaBidValuationBlock(
   message: string,
   bag: GaffaContextBag,
   calibratedDossiers: PlayerProfile[] = [],
+  options: { marketQuestion?: boolean } = {},
 ): string {
   if (!bag.connected) return '';
-  const wantsBidMath =
-    /\b(bid|nominate|open an? auction|how much|floor|scout'?s? fee|release clause|severance|drop|claim|buy|sign|acquire|worth)\b/i.test(
-      message,
-    );
+  const wantsBidMath = BID_MATH_CUES.test(message) || Boolean(options.marketQuestion);
   if (!wantsBidMath) return '';
 
   const floorRate = faBidFloorRate(bag);
@@ -571,9 +612,24 @@ export function buildGaffaBidValuationBlock(
       )
       .map((m) => m.item);
 
-  const matchedFa: GaffaFreeAgent[] = keep(fa);
+  let matchedFa: GaffaFreeAgent[] = keep(fa);
   const matchedAuctions: GaffaOpenAuction[] = keep(auctions);
   const matchedListings: GaffaOpenListing[] = keep(listings);
+
+  // A question about free agents that names nobody: price the likeliest names.
+  let candidateNote = '';
+  if (options.marketQuestion && matchedFa.length === 0 && matchedAuctions.length === 0 && matchedListings.length === 0) {
+    const slots = marketSlots(message, bag, calibratedDossiers);
+    const fits = (p: GaffaFreeAgent) => slots.length === 0 || p.position.toUpperCase().split(/[/,\s]+/).some((t) => slots.includes(t));
+    const ovrOf = (p: GaffaFreeAgent) => lookupPlayerDossier(p.name, p.display_name, dossierMap)?.ratings.overall ?? 0;
+    matchedFa = (bag.free_agents ?? [])
+      .filter(fits)
+      .sort((a, b) => (b.market_value_eur_m ?? 0) - (a.market_value_eur_m ?? 0) || ovrOf(b) - ovrOf(a) || a.name.localeCompare(b.name))
+      .slice(0, MARKET_CANDIDATE_LIMIT);
+    if (matchedFa.length) {
+      candidateNote = `The question names no player, so these are the top unowned players by market value ${slots.length ? `at ${slots.join('/')}` : 'at any position'}: likely names to price, not a verdict on who fits best.`;
+    }
+  }
 
   if (
     matchedFa.length === 0 &&
@@ -588,6 +644,7 @@ export function buildGaffaBidValuationBlock(
     '<locked_bid_calculator>',
     `Club Balance: €${bag.budget_eur_m ?? 0}m · FA Floor Rule: ${Math.round(floorRate * 100)}% of MV (rounded down, min €1m) · Scout's Fee: 10% of winning FA bid to nominating manager (rebate if you win, cash payout if outbid).`,
     buildRosterCapacityNote(bag),
+    ...(candidateNote ? [candidateNote] : []),
   ];
 
   for (const fa of matchedFa.slice(0, 4)) {

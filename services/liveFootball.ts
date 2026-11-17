@@ -317,7 +317,12 @@ export interface FplPlayer {
   position: string;
   status: string;
   news: string;
+  /** The date (YYYY-MM-DD) FPL last changed the note, from `news_added`; null when there is no note. */
+  newsAdded: string | null;
+  /** FPL's chance of playing in the next gameweek (`chance_of_playing_next_round`), when it gives one. */
   chance: number | null;
+  /** FPL's chance of playing in the current gameweek (`chance_of_playing_this_round`), when it gives one. */
+  chanceThisRound: number | null;
   minutes: number;
   starts: number;
   goals: number;
@@ -355,7 +360,9 @@ export function parseFpl(json: any): FplData | null {
       position: FPL_POSITIONS[Number(p.element_type)] ?? 'Player',
       status: String(p.status ?? 'a'),
       news: String(p.news ?? '').trim(),
+      newsAdded: typeof p.news_added === 'string' && /^\d{4}-\d{2}-\d{2}/.test(p.news_added) && String(p.news ?? '').trim() ? p.news_added.slice(0, 10) : null,
       chance: optNum(p.chance_of_playing_next_round),
+      chanceThisRound: optNum(p.chance_of_playing_this_round),
       minutes: num(p.minutes),
       starts: num(p.starts),
       goals: num(p.goals_scored),
@@ -380,6 +387,45 @@ export function findFplTeam(club: EspnTeam, fpl: FplData): { id: number; name: s
 /** "Thigh injury - Unknown return date", or the status when FPL gave no note. */
 export const absenceNote = (p: FplPlayer): string => p.news || (p.status === 's' ? 'suspended' : p.status === 'i' ? 'injured' : 'doubtful');
 
+/** FPL's note without the percentage it repeats ("Hip injury - 75% chance of playing" becomes "Hip injury"). */
+const noteWithoutChance = (news: string): string => news.replace(/\s*[-–—:]?\s*\d{1,3}% chance of playing\.?/i, '').replace(/[\s\-–—:]+$/, '').trim();
+
+/**
+ * What a player's FPL status means for the next match, in words a reader can quote: the status, the
+ * chance of playing in the next Premier League gameweek, FPL's own note (so a return date it gives
+ * stays as FPL wrote it) and the date the note was written. A note can be weeks old, so the date
+ * stays beside the status. The percentage and date sit in this one line, so a reply that quotes
+ * them is supported by it.
+ */
+export function describeFplStatus(p: FplPlayer): string {
+  const note = noteWithoutChance(p.news);
+  const dated = p.newsAdded ? `FPL note dated ${p.newsAdded}` : null;
+  const detail = (...extra: (string | null)[]) => {
+    const bits = [note || null, ...extra, dated].filter((b): b is string => Boolean(b));
+    return bits.length ? ` (${bits.join('; ')})` : '';
+  };
+  const thisRound =
+    p.chanceThisRound !== null && p.chanceThisRound !== p.chance ? `${p.chanceThisRound}% chance of playing in the current gameweek` : null;
+  switch (p.status) {
+    case 'a':
+      return `available: FPL lists no injury or suspension${detail()}`;
+    case 'd':
+      return p.chance !== null
+        ? `doubtful: ${p.chance}% chance of playing in the next Premier League gameweek${detail(thisRound)}`
+        : `doubtful: FPL gives no percentage for the next Premier League gameweek${detail(thisRound)}`;
+    case 'i':
+      return `injured: not expected to play in the next Premier League gameweek${detail(thisRound)}`;
+    case 's':
+      return `suspended: not available for the next Premier League gameweek${detail(thisRound)}`;
+    case 'u':
+      return `not with the squad${detail() || ' (no note)'}`;
+    case 'n':
+      return `not in the Premier League squad list${detail()}`;
+    default:
+      return `${p.status || 'unknown'}${detail()}`;
+  }
+}
+
 /** Players FPL lists as injured, suspended or doubtful (not those who left the club). */
 export const fplAbsences = (players: FplPlayer[]): FplPlayer[] => players.filter((p) => ['i', 's', 'd', 'n'].includes(p.status));
 
@@ -393,6 +439,41 @@ export function findFplPlayer(query: string, fpl: FplData): FplPlayer | null {
     if (!best || score > best.score || (score === best.score && player.minutes > best.player.minutes)) best = { player, score };
   }
   return best?.player ?? null;
+}
+
+/**
+ * The FPL player a squad entry means, for a roster that gives a full name and a Premier League club.
+ * A bare surname never settles it ("Martinez" is two players), so a name needs a second word in
+ * common with the player's full name (a shortened first name counts), or to be his exact web name
+ * on the club he plays for. With the club known, only that club's players are candidates; without
+ * it, a name that fits more than one player matches none.
+ */
+export function findFplRosterPlayer(name: string, fpl: FplData, teamId: number | null): FplPlayer | null {
+  const q = nameTokens(name);
+  if (q.length === 0) return null;
+  const fits = (p: FplPlayer, onClub: boolean): number => {
+    const full = nameTokens(p.fullName);
+    if (sameTokens(q, full)) return 4;
+    if (q.length > 1 && inOrder(full, q)) return 3;
+    // "Ben" for "Benjamin": the same surname and a first name that starts the same way.
+    if (q.length > 1 && q[q.length - 1] === full[full.length - 1] && (full[0].startsWith(q[0]) || q[0].startsWith(full[0]))) return 2;
+    if (onClub && sameTokens(q, nameTokens(p.webName))) return 1;
+    return 0;
+  };
+  const pick = (candidates: FplPlayer[], onClub: boolean): FplPlayer | null => {
+    const scored = candidates.map((p) => ({ p, score: fits(p, onClub) })).filter((c) => c.score > 0);
+    if (scored.length === 0) return null;
+    const top = Math.max(...scored.map((c) => c.score));
+    const best = scored.filter((c) => c.score === top);
+    if (best.length === 1) return best[0].p;
+    // On one club, a tie goes to the player with more minutes; across the league it is ambiguous.
+    return onClub ? best.sort((a, b) => b.p.minutes - a.p.minutes)[0].p : null;
+  };
+  if (teamId !== null) {
+    const onClub = pick(fpl.players.filter((p) => p.teamId === teamId), true);
+    if (onClub) return onClub;
+  }
+  return q.length > 1 ? pick(fpl.players, false) : null;
 }
 
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -409,8 +490,7 @@ export function formatFplPlayer(p: FplPlayer, knownAs?: string): string {
     ...(p.xa !== null ? [`xA ${p.xa.toFixed(2)}`] : []),
     ...(p.position === 'Goalkeeper' || p.position === 'Defender' ? [count(p.cleanSheets, 'clean sheet')] : []),
   ].join(', ');
-  const status = p.status === 'a' ? 'available' : p.status === 'u' ? `not with the squad (${p.news || 'no note'})` : absenceNote(p);
-  return `${name} — ${p.team}, ${p.position}. Premier League this season (Fantasy Premier League data): ${line}. Status: ${status}.`;
+  return `${name} — ${p.team}, ${p.position}. Premier League this season (Fantasy Premier League data): ${line}. Status: ${describeFplStatus(p)}.`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -572,6 +652,20 @@ export interface LiveMissing {
   status: LiveStatus;
 }
 
+/** One squad player's FPL availability. `line` is `describeFplStatus`; `available` is false for anyone FPL lists as not fit to play. */
+export interface LiveAvailability {
+  /** The name as asked. */
+  name: string;
+  fplName: string;
+  team: string;
+  status: string;
+  available: boolean;
+  line: string;
+}
+export type LiveAvailabilityResult =
+  | { found: true; players: LiveAvailability[] }
+  | { found: false; status: LiveStatus; reason: string };
+
 export type LiveClubResult =
   | { found: true; team: string; league: string; text: string; missing: LiveMissing[]; report: LiveClubReport }
   | { found: false; status: LiveStatus; missing: LiveMissing[] };
@@ -670,6 +764,42 @@ export function createLiveFootball(getJson: GetJson, now: () => number = Date.no
     return { found: true, name: text.slice(0, text.indexOf(' — ')), team: match.team, text };
   }
 
+  /**
+   * FPL's status for each squad entry in one pass over the cached feed. A club that doesn't resolve
+   * leaves the name to match on its full name alone; a name FPL can't place is left out.
+   */
+  async function availability(entries: { name: string; club?: string | null }[]): Promise<LiveAvailabilityResult> {
+    const data = await fpl();
+    if (!data) return { found: false, status: 'failed', reason: "the Fantasy Premier League feed didn't answer" };
+    const index = entries.some((e) => e.club) ? await teamIndex() : [];
+    const teamOf = (club?: string | null): number | null => {
+      if (!club) return null;
+      const espn = index.length ? findClub(club, index) : null;
+      const viaEspn = espn ? findFplTeam(espn, data) : null;
+      if (viaEspn) return viaEspn.id;
+      let best: { id: number; score: number } | null = null;
+      for (const t of data.teams) {
+        const score = nameScore(club, [t.name]);
+        if (score > 0 && (!best || score > best.score)) best = { id: t.id, score };
+      }
+      return best?.id ?? null;
+    };
+    const players: LiveAvailability[] = [];
+    for (const entry of entries) {
+      const match = findFplRosterPlayer(entry.name, data, teamOf(entry.club));
+      if (!match) continue;
+      players.push({
+        name: entry.name,
+        fplName: match.fullName,
+        team: match.team,
+        status: match.status,
+        available: match.status === 'a',
+        line: describeFplStatus(match),
+      });
+    }
+    return { found: true, players };
+  }
+
   async function table(leagueName: string, country?: string): Promise<LiveTableResult> {
     const league = findLeague(leagueName, country);
     if (!league) return { found: false, status: 'not_covered', reason: `no table source for "${leagueName}"` };
@@ -701,5 +831,5 @@ export function createLiveFootball(getJson: GetJson, now: () => number = Date.no
     return { found: true, lineup };
   }
 
-  return { club, player, table, matchLineup };
+  return { club, player, table, matchLineup, availability };
 }

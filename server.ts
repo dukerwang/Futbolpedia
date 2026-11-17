@@ -20,7 +20,7 @@ import { createLiveFootball } from "./services/liveFootball";
 import { createHistoryFootball, type PermanentStore } from "./services/historyFootball";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { supabasePublishableKey, supabaseUrl } from "./services/dossierCache";
-import { createSnapshotServer, inProcessGet, supabaseSnapshotDb } from "./services/snapshotServer";
+import { createSnapshotServer, inProcessGet, parseAvailabilityNames, supabaseSnapshotDb } from "./services/snapshotServer";
 import { createXiPredictions, memoryXiStore, supabaseXiStore } from "./services/xiPredictions";
 import { SCOUT_DAY_DEFAULT_CALLS, createScoutDay, createScoutTally, liveScoutActors, liveScoutSources, memoryScoutStores, scoutJournalHandler, supabaseScoutStores } from "./services/scoutDay";
 import { subjectFromTitle } from "./services/eraSnapshots";
@@ -643,6 +643,21 @@ async function startServer() {
       return res.json(result);
     } catch (error: any) {
       console.warn(`[live] player "${name}" failed:`, error?.message || error);
+      return res.json({ found: false, status: "failed", reason: "lookup failed" });
+    }
+  });
+
+  // FPL availability for a squad in one request, read from the cached FPL feed (no model calls):
+  // `names` is "Full Name|Club" entries separated by ";". A player FPL can't place is left out.
+  app.get("/api/live/availability", async (req, res) => {
+    const entries = parseAvailabilityNames(typeof req.query.names === "string" ? req.query.names : "");
+    if (!entries.length) return res.status(400).json({ error: "Missing names" });
+    try {
+      const result = await live.availability(entries);
+      console.log(`[live] availability for ${entries.length}: ${"players" in result ? `${result.players.length} matched, ${result.players.filter((p) => !p.available).length} not available` : result.reason}`);
+      return res.json(result);
+    } catch (error: any) {
+      console.warn("[live] availability failed:", error?.message || error);
       return res.json({ found: false, status: "failed", reason: "lookup failed" });
     }
   });
