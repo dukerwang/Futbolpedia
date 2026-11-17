@@ -296,6 +296,56 @@ await test('without a club, chat is unchanged', async () => {
   assert.doesNotMatch(writer, /<gaffa_club>/);
 });
 
+
+// The composer's chip, rendered in each state. A new conversation's club is decided in App
+// (none unless picked or linked), so here the chip's own states and its off controls are checked.
+const React = (await import('react')).default;
+const { renderToStaticMarkup } = await import('react-dom/server');
+const { GaffaClubChip } = await import('../components/GaffaClubChip');
+const fixtureClubs = [
+  { club_id: bag.club_id, club_name: bag.club_name, budget_eur_m: 45, league_id: bag.league_id, league_name: bag.league_name },
+];
+const chipHtml = (over: Record<string, unknown>) =>
+  renderToStaticMarkup(
+    React.createElement(GaffaClubChip, {
+      connected: true,
+      clubs: fixtureClubs,
+      selected: null,
+      loadingClubs: false,
+      connecting: false,
+      error: null,
+      gaffaBaseUrl: 'https://gaffa.test',
+      onConnect: () => {},
+      onSelect: () => {},
+      onDisconnect: () => {},
+      ...over,
+    }),
+  );
+
+await test('the chip reads Gaffa with no detach button when nothing is attached', () => {
+  const none = chipHtml({});
+  assert.match(none, />Gaffa</);
+  assert.doesNotMatch(none, /No club/);
+  assert.doesNotMatch(none, /Detach Gaffa club/);
+  assert.doesNotMatch(none, /emerald/);
+  const signedOut = chipHtml({ connected: false });
+  assert.doesNotMatch(signedOut, /Detach Gaffa club/);
+});
+
+await test('an attached club turns the chip green, names it in the tooltip and offers a separate detach button', () => {
+  const out = chipHtml({ selected: { leagueId: bag.league_id, clubId: bag.club_id } });
+  assert.match(out, /Hackney Wanderers/);
+  assert.match(out, /Gaffa club: Hackney Wanderers · Sunday League/);
+  assert.match(out, /emerald/);
+  const detach = out.match(/<button[^>]*aria-label="Detach Gaffa club"[^>]*>[\s\S]*?<\/button>/);
+  assert.ok(detach, 'a button with its own accessible label');
+  assert.match(detach![0], /size-8 sm:size-7/, 'a hit area of at least 24px');
+  // Not nested in the toggle: the toggle's button closes before the detach button opens.
+  const toggle = out.match(/<button[^>]*aria-haspopup="dialog"[\s\S]*?<\/button>/);
+  assert.ok(toggle && !toggle[0].includes('Detach Gaffa club'));
+});
+
+console.log('');
 globalThis.fetch = realFetch;
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

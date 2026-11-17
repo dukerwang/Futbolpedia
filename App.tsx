@@ -109,18 +109,8 @@ const addMissingCards = (list: PlayerProfile[], cards: PlayerProfile[]): PlayerP
 const datedOrSelf = (p: PlayerProfile, fallbackMs: number): PlayerProfile =>
   ensureDossierDated(p, fallbackMs) ?? p;
 
-const LAST_GAFFA_CLUB_KEY = 'futbolpedia-gaffa-last-club';
-
-/** The club last attached to a conversation, while Gaffa is connected. */
-function lastGaffaClub(): GaffaClubRef | null {
-  if (!loadGrant()) return null;
-  try {
-    const parsed = JSON.parse(localStorage.getItem(LAST_GAFFA_CLUB_KEY) ?? 'null');
-    return parsed?.leagueId && parsed?.clubId ? { leagueId: parsed.leagueId, clubId: parsed.clubId } : null;
-  } catch {
-    return null;
-  }
-}
+/** Older builds stored the last club used and put it on every new conversation. It's cleared once on load. */
+const LEGACY_LAST_GAFFA_CLUB_KEY = 'futbolpedia-gaffa-last-club';
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -206,6 +196,10 @@ const App: React.FC = () => {
     } catch { /* unavailable */ }
   }, []);
 
+  useEffect(() => {
+    try { localStorage.removeItem(LEGACY_LAST_GAFFA_CLUB_KEY); } catch { /* unavailable */ }
+  }, []);
+
   // The grant can arrive from a popup tab or go when Gaffa refuses it.
   useEffect(() => onGrantChange(setGaffaGrant), []);
   useEffect(() => {
@@ -259,7 +253,6 @@ const App: React.FC = () => {
     void loadClubBag(gaffaClub).then((bag) => {
       if (active) setGaffaBag(bag.connected ? bag : null);
     });
-    try { localStorage.setItem(LAST_GAFFA_CLUB_KEY, JSON.stringify(gaffaClub)); } catch { /* unavailable */ }
     return () => {
       active = false;
     };
@@ -642,15 +635,11 @@ const App: React.FC = () => {
   const handleSelectGaffaClub = useCallback((club: GaffaClubRef | null) => {
     setGaffaClub(club);
     setGaffaError(null);
-    if (!club) {
-      try { localStorage.removeItem(LAST_GAFFA_CLUB_KEY); } catch { /* unavailable */ }
-    }
   }, []);
 
   const handleDisconnectGaffa = useCallback(async () => {
     await disconnectGaffa();
     clearClubBags();
-    try { localStorage.removeItem(LAST_GAFFA_CLUB_KEY); } catch { /* unavailable */ }
     setGaffaClub(null);
     setGaffaClubs([]);
     setGaffaBag(null);
@@ -1113,8 +1102,6 @@ const App: React.FC = () => {
       createdAt: Date.now(),
       activeProfile: null,
       allProfiles: [],
-      // A new conversation keeps the last club you used.
-      ...(lastGaffaClub() ? { gaffaClub: lastGaffaClub()! } : {}),
     };
 
     setConversations(prev => {
@@ -1130,7 +1117,8 @@ const App: React.FC = () => {
     setMessages([]);
     setActiveProfile(null);
     setAllProfiles([]);
-    setGaffaClub(newConv.gaffaClub ?? null);
+    // A new conversation starts with no club; one is attached only by a pick or a Gaffa link.
+    setGaffaClub(null);
     setChallengeCard(null);
     setIsPanelOpen(false);
   }, []);
