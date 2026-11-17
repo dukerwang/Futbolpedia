@@ -139,8 +139,9 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
     return [...groups.values()];
   }, [clubs]);
 
-  // Off reads as the product's name in the muted style; only an attached club turns the chip green.
-  const label = !connected ? 'Gaffa' : attached ? attached.club_name : selected && loadingClubs ? 'Gaffa club' : 'Gaffa';
+  // Off reads as Gaffa's wordmark in the muted style, whether or not Gaffa is connected; only an
+  // attached club (or one still loading) shows a name, and only an attached club turns the chip green.
+  const label = attached ? attached.club_name : selected && loadingClubs && connected ? 'Gaffa club' : null;
   const active = connected && Boolean(attached);
   const detachable = connected && Boolean(selected);
   const title = active
@@ -174,7 +175,7 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
           className={`h-full min-w-0 pl-2 flex items-center gap-1.5 rounded-l-full ${detachable ? 'pr-1' : 'pr-2.5 rounded-r-full'}`}
         >
           <GaffaMark className="size-[18px] shrink-0" />
-          {connected ? (
+          {connected && label ? (
             <span className="truncate text-xs font-sans font-semibold">{label}</span>
           ) : (
             <GaffaWordmark className="text-[12px] translate-y-px" />
