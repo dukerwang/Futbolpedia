@@ -9,13 +9,21 @@ if (!rootElement) {
 
 const root = ReactDOM.createRoot(rootElement);
 
-// The reply-view gallery exists only in dev: `import.meta.env.DEV` is false in a production
+// The reply-view and Gaffa chip galleries exist only in dev: `import.meta.env.DEV` is false in a production
 // build, so Vite drops this branch and its chunk is never emitted.
 if (import.meta.env.DEV && window.location.pathname.replace(/\/$/, '') === '/dev/blocks') {
   import('./components/views/BlocksGallery').then(({ BlocksGallery }) => {
     root.render(
       <React.StrictMode>
         <BlocksGallery />
+      </React.StrictMode>
+    );
+  });
+} else if (import.meta.env.DEV && window.location.pathname.replace(/\/$/, '') === '/dev/gaffa-chip') {
+  import('./components/GaffaChipGallery').then(({ GaffaChipGallery }) => {
+    root.render(
+      <React.StrictMode>
+        <GaffaChipGallery />
       </React.StrictMode>
     );
   });

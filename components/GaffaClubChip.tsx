@@ -85,14 +85,14 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
   // The composer clips overflow, so the menu is placed against the viewport, above the chip.
   const [anchor, setAnchor] = useState<{ left: number; bottom: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
+  const pillRef = useRef<HTMLDivElement>(null);
 
   const toggle = () => {
     if (open) {
       setOpen(false);
       return;
     }
-    const rect = buttonRef.current?.getBoundingClientRect();
+    const rect = pillRef.current?.getBoundingClientRect();
     if (rect) {
       const width = Math.min(288, window.innerWidth - 32);
       setAnchor({
@@ -139,8 +139,15 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
     return [...groups.values()];
   }, [clubs]);
 
-  const label = !connected ? 'Gaffa' : attached ? attached.club_name : selected && loadingClubs ? 'Gaffa club' : 'No club';
+  // Off reads as the product's name in the muted style; only an attached club turns the chip green.
+  const label = !connected ? 'Gaffa' : attached ? attached.club_name : selected && loadingClubs ? 'Gaffa club' : 'Gaffa';
   const active = connected && Boolean(attached);
+  const detachable = connected && Boolean(selected);
+  const title = active
+    ? `Gaffa club: ${attached!.club_name} · ${attached!.league_name}`
+    : connected
+      ? 'Gaffa: no club in this chat'
+      : 'Gaffa';
 
   const pick = (club: GaffaClubRef | null) => {
     onSelect(club);
@@ -149,28 +156,47 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
 
   return (
     <div ref={rootRef} className="relative">
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={toggle}
-        disabled={disabled}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        title={active ? `Gaffa club: ${attached!.club_name} · ${attached!.league_name}` : 'Gaffa club'}
-        className={`h-10 sm:h-9 max-w-[11rem] sm:max-w-[14rem] pl-2 pr-2.5 flex items-center gap-1.5 rounded-full border transition-colors disabled:opacity-60 ${
+      <div
+        ref={pillRef}
+        className={`h-10 sm:h-9 w-fit max-w-[12rem] sm:max-w-[15rem] flex items-center rounded-full border transition-colors ${
           active
             ? 'border-emerald-600/40 dark:border-emerald-400/40 text-emerald-700 dark:text-emerald-300 bg-emerald-50/60 dark:bg-emerald-400/10'
             : 'border-cream-300 dark:border-charcoal-border text-charcoal/60 dark:text-cream-400/70 hover:text-charcoal dark:hover:text-cream-100'
-        }`}
+        } ${disabled ? 'opacity-60' : ''}`}
       >
-        <GaffaMark className="size-[18px] shrink-0" />
-        {connected ? (
-          <span className="truncate text-xs font-sans font-semibold">{label}</span>
-        ) : (
-          <GaffaWordmark className="text-[12px] translate-y-px" />
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={disabled}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          title={title}
+          className={`h-full min-w-0 pl-2 flex items-center gap-1.5 rounded-l-full ${detachable ? 'pr-1' : 'pr-2.5 rounded-r-full'}`}
+        >
+          <GaffaMark className="size-[18px] shrink-0" />
+          {connected ? (
+            <span className="truncate text-xs font-sans font-semibold">{label}</span>
+          ) : (
+            <GaffaWordmark className="text-[12px] translate-y-px" />
+          )}
+          <span className="material-symbols-outlined text-[16px] shrink-0">{open ? 'expand_more' : 'expand_less'}</span>
+        </button>
+        {detachable && (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onSelect(null);
+            }}
+            disabled={disabled}
+            aria-label="Detach Gaffa club"
+            title="Detach Gaffa club from this chat"
+            className="shrink-0 size-8 sm:size-7 mr-1 flex items-center justify-center rounded-full hover:bg-emerald-600/15 dark:hover:bg-emerald-400/20 disabled:opacity-60"
+          >
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">close</span>
+          </button>
         )}
-        <span className="material-symbols-outlined text-[16px] shrink-0">{open ? 'expand_more' : 'expand_less'}</span>
-      </button>
+      </div>
 
       {open && (
         <div
@@ -275,7 +301,7 @@ export const GaffaClubChip: React.FC<GaffaClubChipProps> = ({
                 <span className="material-symbols-outlined text-[18px] text-emerald-600 dark:text-emerald-400 w-5">
                   {!attached ? 'check' : ''}
                 </span>
-                <span className="flex-1 italic text-charcoal/70 dark:text-cream-300/70">No club</span>
+                <span className="flex-1 italic text-charcoal/70 dark:text-cream-300/70">Don&apos;t use a club in this chat</span>
               </button>
               {error && <p className="px-3 py-1.5 text-xs font-sans text-red-600 dark:text-red-400">{error}</p>}
               <div className="my-1 border-t border-charcoal/10 dark:border-cream-400/10" />
