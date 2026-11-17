@@ -16,6 +16,18 @@ import type { ClubSnapshot } from './situationSnapshot';
 type LiveFootball = ReturnType<typeof createLiveFootball>;
 type HistoryFootball = ReturnType<typeof createHistoryFootball>;
 
+/** "Full Name|Club" entries separated by ";", as `/api/live/availability` takes them. */
+export function parseAvailabilityNames(names: string): { name: string; club: string | null }[] {
+  return names
+    .split(';')
+    .slice(0, 60)
+    .map((entry) => {
+      const [name, club] = entry.split('|');
+      return { name: (name ?? '').trim().slice(0, 80), club: (club ?? '').trim().slice(0, 80) || null };
+    })
+    .filter((entry) => entry.name);
+}
+
 /** The research toolset's live and history routes, answered in-process instead of over HTTP. */
 export function inProcessGet(routes: { live: LiveFootball; history: HistoryFootball }): LiveGet {
   return async <T>(url: string) => {
@@ -30,6 +42,8 @@ export function inProcessGet(routes: { live: LiveFootball; history: HistoryFootb
         // In-process only: there is no HTTP route for it. Scores XI predictions (services/xiPredictions.ts).
         case '/api/live/match':
           return { data: (await routes.live.matchLineup(q('name'), q('match'))) as T };
+        case '/api/live/availability':
+          return { data: (await routes.live.availability(parseAvailabilityNames(q('names')))) as T };
         case '/api/live/table':
           return { data: (await routes.live.table(q('league'), q('country') || undefined)) as T };
         case '/api/history/club-season':

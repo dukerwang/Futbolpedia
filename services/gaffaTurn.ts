@@ -1,10 +1,19 @@
 import type { ChatMessage, GaffaContextBag, GaffaTradeScorecard, PlayerProfile } from '../types';
-import { GAFFA_RULES_SNAPSHOT, buildLockedMarketTurnBlock } from '../constants/gaffaRules';
+import { GAFFA_MANAGER_REASONING, GAFFA_RULES_SNAPSHOT, buildLockedMarketTurnBlock } from '../constants/gaffaRules';
 import {
   buildGaffaBidValuationBlock,
   escapeRegExp,
   formatLineupAuditPromptBlock,
+  rosterPlayersNamed,
 } from './gaffaLineupAudit';
+import { foldPlayerName } from './dossierStore';
+import {
+  fetchSquadAvailability,
+  isNonActive,
+  playersWithAvailability,
+  type AvailabilityFetcher,
+  type SquadAvailability,
+} from './gaffaAvailability';
 
 /**
  * A Gaffa club attached to a native Futbolpedia conversation. Every turn gets a short block naming
@@ -105,16 +114,40 @@ const SQUAD_CUES = [
   /\b(weakest|strongest)\s+(slot|position|link|starter)\b/i,
 ];
 
+/** Whether the message names a roster player in full, accents ignored. */
 function mentionsRosterPlayer(message: string, bag: GaffaContextBag): boolean {
+  return rosterPlayersNamed(message, bag.roster ?? []).some((m) => m.level === 'full');
+}
+
+/** Words that open a name without naming a subject of their own. */
+const NOT_A_SUBJECT = new Set(['gaffa', 'premier', 'league', 'fpl', 'futbolpedia', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']);
+
+/**
+ * Whether a follow-up is about something other than the club: a capitalised word in the middle of
+ * a sentence that isn't part of the club, league or a roster player's name.
+ */
+function namesOtherSubject(message: string, bag: GaffaContextBag): boolean {
+  const known = new Set<string>();
+  const addWords = (text?: string) => text?.split(/\s+/).forEach((w) => known.add(foldWord(w)));
+  addWords(bag.club_name);
+  addWords(bag.league_name);
   for (const p of bag.roster ?? []) {
-    for (const raw of [p.name, p.display_name]) {
-      const n = (raw || '').trim();
-      if (n.length < 4) continue;
-      if (new RegExp(`(?<!\\p{L})${escapeRegExp(n)}(?!\\p{L})`, 'iu').test(message)) return true;
+    addWords(p.name);
+    addWords(p.display_name);
+    addWords(p.pl_team ?? undefined);
+  }
+  // The first word of each sentence is capitalised whatever it is, so only later words count.
+  for (const sentence of message.split(/[.!?]+\s+/)) {
+    for (const word of sentence.trim().split(/\s+/).slice(1)) {
+      if (!/^\p{Lu}\p{Ll}/u.test(word)) continue;
+      const folded = foldWord(word);
+      if (!known.has(folded) && !NOT_A_SUBJECT.has(folded)) return true;
     }
   }
   return false;
 }
+
+const foldWord = (w: string): string => foldPlayerName(w.replace(/[^\p{L}]/gu, ''));
 
 /** What one message asks about the attached club, by its wording alone. */
 function focusOfMessage(message: string, bag: GaffaContextBag): LeagueFocus {
@@ -126,20 +159,30 @@ function focusOfMessage(message: string, bag: GaffaContextBag): LeagueFocus {
   return 'none';
 }
 
+/** How many earlier user messages a follow-up looks back through for the thread's focus. */
+const FOCUS_LOOKBACK = 4;
+
 /**
- * The turn's league focus. A short follow-up with no cue of its own ("what about his backup?")
- * keeps the focus of the thread's last question.
+ * The turn's league focus. A follow-up with no cue of its own keeps the focus of the thread's last
+ * question that had one. A short follow-up always does; a longer one does when it names a roster
+ * player (by surname or without accents) or has no other subject, so explaining a point at length
+ * doesn't drop the club from the answer.
  */
 export function leagueFocusOf(message: string, history: ChatMessage[], bag: GaffaContextBag): LeagueFocus {
   if (!bag.connected) return 'none';
   const own = focusOfMessage(message, bag);
   if (own !== 'none') return own;
   const words = message.trim().split(/\s+/).filter(Boolean).length;
-  if (words > 14) return 'none';
-  for (let i = history.length - 1; i >= 0; i--) {
+  const followsThread =
+    words <= 14 || rosterPlayersNamed(message, bag.roster ?? []).length > 0 || !namesOtherSubject(message, bag);
+  if (!followsThread) return 'none';
+  let looked = 0;
+  for (let i = history.length - 1; i >= 0 && looked < FOCUS_LOOKBACK; i--) {
     const m = history[i];
     if (m.sender === 'user' && typeof m.content === 'string' && m.content.trim()) {
-      return focusOfMessage(m.content, bag);
+      looked++;
+      const focus = focusOfMessage(m.content, bag);
+      if (focus !== 'none') return focus;
     }
   }
   return 'none';
@@ -148,7 +191,7 @@ export function leagueFocusOf(message: string, history: ChatMessage[], bag: Gaff
 const SQUAD_LIMIT = 40;
 
 /** The short block every turn with a club attached gets. */
-export function formatGaffaClubBlock(bag: GaffaContextBag, focus: LeagueFocus): string {
+export function formatGaffaClubBlock(bag: GaffaContextBag, focus: LeagueFocus, availability: SquadAvailability | null = null): string {
   const s = bag.standings;
   const lines: string[] = [];
   lines.push(
@@ -174,12 +217,19 @@ export function formatGaffaClubBlock(bag: GaffaContextBag, focus: LeagueFocus): 
   if (bag.budget_eur_m != null) lines.push(`Club Balance: €${bag.budget_eur_m}m.`);
   const roster = bag.roster ?? [];
   if (roster.length) {
+    const real = playersWithAvailability(bag, availability);
     const squad = roster.slice(0, SQUAD_LIMIT).map((p) => {
       const pos = [p.primary_position, ...(p.secondary_positions ?? [])].join('/');
       const bits = [pos, p.pl_team || 'no PL club', p.status !== 'active' ? p.status : null].filter(Boolean);
-      return `${p.display_name || p.name} (${bits.join(', ')})`;
+      const fpl = real.get(p.player_id);
+      return `${p.display_name || p.name} (${bits.join(', ')}${fpl ? `; FPL: ${fpl.line}` : ''})`;
     });
     lines.push(`Squad (${roster.length}): ${squad.join('; ')}${roster.length > SQUAD_LIMIT ? '; …' : ''}.`);
+    if (availability && availability.size > 0 && roster.some(isNonActive)) {
+      lines.push(
+        "Gaffa's IR, and every other status except active, is a roster designation the manager chose, not a medical fact. The FPL line beside a player is his real availability for the next Premier League gameweek, as the Fantasy Premier League feed lists it, and its note date says how old that is. Read a player's availability from it, never from his Gaffa status.",
+      );
+    }
   }
   lines.push(
     'Fantasy points are never evidence of how good a footballer is. A squad player\'s Premier League club is the one listed here. Treat a player as available in this league only when the market list for this turn names him, never from memory or the web.',
@@ -220,10 +270,23 @@ export async function buildGaffaTurn(params: {
   cards: PlayerProfile[];
   ongoingThread: string;
   factualFoundation?: string;
+  /** Reads the squad's FPL availability; tests swap it. A failed read leaves the club block as it was. */
+  fetchAvailability?: AvailabilityFetcher;
 }): Promise<GaffaTurn> {
   const { message, history, bag, cards } = params;
   const focus = leagueFocusOf(message, history, bag);
-  const blocks = [formatGaffaClubBlock(bag, focus)];
+  // One request covers the squad, answered from the server's cached FPL feed. Only a question about
+  // the squad, lineup or market reads it.
+  let availability: SquadAvailability | null = null;
+  if (focus === 'squad' || focus === 'lineup' || focus === 'market' || focus === 'trade') {
+    try {
+      availability = await (params.fetchAvailability ?? fetchSquadAvailability)(bag.roster ?? []);
+    } catch {
+      availability = null;
+    }
+  }
+  const blocks = [formatGaffaClubBlock(bag, focus, availability)];
+  if (focus !== 'none') blocks.push(`<gaffa_manager_reasoning>\n${GAFFA_MANAGER_REASONING}\n</gaffa_manager_reasoning>`);
   if (focus === 'rules' || focus === 'lineup' || focus === 'market' || focus === 'trade') {
     blocks.push(`<gaffa_rules>\nPrefer these over memory for how Gaffa works.\n${GAFFA_RULES_SNAPSHOT}\n</gaffa_rules>`);
   }
@@ -233,7 +296,7 @@ export async function buildGaffaTurn(params: {
   }
   if (focus === 'market' || focus === 'trade') {
     blocks.push(buildLockedMarketTurnBlock(bag, cards));
-    const bid = buildGaffaBidValuationBlock(message, bag, cards);
+    const bid = buildGaffaBidValuationBlock(message, bag, cards, { marketQuestion: looksLikeGaffaMarketQuery(message) });
     if (bid) blocks.push(bid);
   }
   let scorecard: GaffaTradeScorecard | null = null;

@@ -102,6 +102,20 @@ FINANCE / ACADEMY / DEPARTURES (BRIEF)
 - Offseason reset exists — do not invent league-specific payout tables unless present here.
 `;
 
+/**
+ * How a good manager's advice is reasoned for this game. Descriptive on purpose: no player names,
+ * sample phrases or sample numbers, so the writer applies it to the squad in front of it.
+ */
+export const GAFFA_MANAGER_REASONING = `Reasoning for advice about this club:
+- Active roster spots and Club Balance are scarce. Every signing uses a spot and money that could have gone elsewhere, so name what the signing costs the club as well as what it adds.
+- Only one goalkeeper starts. At a position with a single starting slot, a starter and one backup are enough, and depth beyond that rarely earns points. Check how many players the squad already holds at a position before recommending another.
+- A player on IR is a roster designation the manager chose, and the manager expects him back. Judge a signing against the squad as it will be after his return, and check his real availability before treating him as out.
+- A healthy player on IR blocks bids. When a recommendation depends on placing a bid, say whether anyone on IR is healthy, and flag the rule if so.
+- Weigh the next few gameweeks' points against the long view (age, minutes, tenure at a Premier League club). Say which of the two a recommendation serves.
+- The weakest starting slot is the starter who adds the fewest points, not the position with the thinnest depth. Compare starters by what they add before choosing a slot to upgrade.
+- Recommend nothing that contradicts the manager's own roster constraints: roster size, IR and academy limits, held players, Club Balance, position eligibility.
+- When a fact the advice depends on can be checked with a tool or from this turn's data, check it before advising. A claim from the manager about a player's fitness or situation is a reason to check, not to defer.`;
+
 export function emptyGaffaContextBag(): GaffaContextBag {
   return {
     gaffa_rules_version: GAFFA_RULES_VERSION,
