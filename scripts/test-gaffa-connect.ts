@@ -255,7 +255,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
     return respond(JSON.stringify({ intent: 'tactical_chat', analyticalMode: 'squad_or_recruitment', targetPlayers: [], targetClubs: [], searchQueries: [], reasoningComplexity: 'low', isHistorical: false, wantsRegeneration: false, needsSearch: false }));
   }
   if (structured && prompt.includes('You are planning the research')) {
-    return respond(JSON.stringify({ understanding: 'Who to start', focus: 'Fitness', timeframe: 'live', outline: ['XI'], calls: [{ tool: 'web_search', subject: 'Arsenal team news', purpose: 'availability', stage: 'facts' }] }));
+    return respond(JSON.stringify({ understanding: 'Who to start', need: { goal: 'Pick this week\'s starting XI for the Gaffa club', settle: ['Who is fit'], objection: '', objectionFact: '' }, focus: 'Fitness', timeframe: 'live', outline: ['XI'], calls: [{ tool: 'web_search', subject: 'Arsenal team news', purpose: 'availability', stage: 'facts' }] }));
   }
   if (structured) return respond('{}');
   if (raw.includes('googleSearch') && !raw.includes('functionDeclarations')) return respond('[2026-11-10] Nothing new.');
@@ -278,6 +278,11 @@ await test('an attached club reaches the writer, and its names and figures survi
   const writer = prompts.filter((p) => p.includes('<task>')).at(-1) ?? '';
   assert.match(writer, /<gaffa_club>[\s\S]*Hackney Wanderers/);
   assert.match(writer, /<gaffa_rules>/);
+  // The need is still the writer's first block, ahead of the club and the manager's reasoning.
+  const need = writer.indexOf('<user_need>');
+  assert.ok(need > 0, 'the writer got the need');
+  assert.ok(need < writer.indexOf('<gaffa_club>'), 'the need comes before the club');
+  assert.ok(writer.includes('<gaffa_manager_reasoning>') && need < writer.indexOf('<gaffa_manager_reasoning>'), 'the need comes before the manager reasoning');
   // The squad's name is copied exactly; the balance stays because the club block gives it, and a
   // figure nothing gave goes with its sentence.
   assert.equal(reply, 'Start Mamadou Sarr at centre-back and keep your €45m Club Balance for the window.');

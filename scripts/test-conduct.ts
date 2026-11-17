@@ -151,7 +151,7 @@ await test('a brief with a disputed fact and no calls gets the lookups for the n
 await test('research on a pushback turn looks up the disputed fact even when the brief planned nothing', async () => {
   const asked: string[] = [];
   const tools = {
-    playerSeason: async (name: string) => (asked.push(`player:${name}`), { status: 'found', result: { kind: 'player_record', label: name, content: 'Status: doubtful, 75% chance of playing' }, missing: [] }),
+    playerSeason: async (name: string) => (asked.push(`player:${name}`), { status: 'found', result: { kind: 'player_record', label: name, content: 'Status: doubtful: 75% chance of playing in the next Premier League gameweek (Head injury; FPL note dated 2026-10-17)' }, missing: [] }),
     clubRecentTeam: async (club: string) => (asked.push(`club:${club}`), { status: 'empty', result: null, missing: [] }),
   } as unknown as ResearchToolset;
   const model: ResearchModel = { writeBrief: async () => briefOf([]), reflect: async () => ({ enough: true, calls: [], unresolved: [], discard: [] }) };
