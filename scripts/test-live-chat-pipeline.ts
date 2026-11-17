@@ -62,6 +62,7 @@ interface Call {
   prompt: string;
   structured: boolean;
   search: boolean;
+  raw: string;
 }
 const calls: Call[] = [];
 const liveAsked: string[] = [];
@@ -105,7 +106,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const prompt = JSON.stringify([body.contents ?? '', body.systemInstruction ?? '']);
   const structured = raw.includes('responseSchema') || raw.includes('responseJsonSchema');
   const search = raw.includes('googleSearch') && !raw.includes('functionDeclarations');
-  calls.push({ prompt, structured, search });
+  calls.push({ prompt, structured, search, raw });
 
   if (structured && prompt.includes('Automatic checks flagged some of its sentences')) {
     corrections++;
@@ -118,6 +119,23 @@ globalThis.fetch = (async (input: any, init?: any) => {
     if (prompt.includes('tactical analysis')) return respond(STALE_ANALYSIS);
     if (prompt.includes('transfers')) return respond('[2026-08-20] Southside signed New Fullback from abroad.');
     return respond('[2026-10-28] Eight Two is out with an ankle injury.');
+  }
+  if (structured && prompt.includes('You are planning the research') && prompt.includes(PUSHBACK)) {
+    return respond(
+      JSON.stringify({
+        understanding: 'Whether the last reply named the right left-back',
+        need: {
+          goal: 'Know who actually plays left-back for Southside now',
+          settle: ['Who has started at left-back in the recent XIs'],
+          objection: 'The last reply named the wrong left-back',
+          objectionFact: 'Who has started at left-back for Southside in recent matches?',
+        },
+        focus: '',
+        timeframe: 'live',
+        outline: [],
+        calls: [],
+      }),
+    );
   }
   if (structured && prompt.includes('You are planning the research')) {
     return respond(
@@ -164,6 +182,8 @@ globalThis.fetch = (async (input: any, init?: any) => {
   if (structured) return respond('{}');
   return respond('New Fullback starts at left-back in a back four. They allow a PPDA of 8.4 when they press. Main Nine leads the line.');
 }) as typeof fetch;
+
+const PUSHBACK = "I don't think that's who has been playing at left-back lately";
 
 const { sendMessageToAI } = await import('../services/geminiService');
 const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -240,6 +260,31 @@ await test('on the stage path, a flagged figure gets one correction round before
   assert.equal(reply, 'New Fullback starts at left-back in a back four. They press from a back four. Main Nine leads the line.');
   assert.ok(stages.includes('Checking the figures...'));
   assert.ok(perf.some((l) => l.startsWith('[Perf] gate feedback: flagged 1, fixed 1, dropped 0, removed 0')), perf.join('\n'));
+});
+
+await test('a pushback on a checkable fact: the need goes to the writer first, research runs, and the writer keeps its tools', async () => {
+  calls.length = 0;
+  const history: import('../types').ChatMessage[] = [
+    { id: 'u0', sender: 'user', content: "Break down Southside's build-up shape this season", timestamp: 0 },
+    { id: 'a0', sender: 'ai', content: 'Right Back starts at left-back in a back four, and Main Nine leads the line.', timestamp: 1 },
+  ];
+  await quietly(() => sendMessageToAI(PUSHBACK, history, undefined, [], [], { fast: true, conversationId: 'pushback-test' }));
+  const writerCall = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1);
+  assert.ok(writerCall, 'the writer ran');
+  const writer = writerCall.prompt;
+  // The need is the writer's first block, ahead of the thread and the evidence.
+  const need = writer.indexOf('<user_need>');
+  assert.ok(need > 0, 'the writer got the need');
+  assert.ok(need < writer.indexOf('<ongoing_thread>') && need < writer.indexOf('<factual_foundation>'), 'the need comes first');
+  assert.match(writer, /The fact the objection turns on: Who has started at left-back for Southside in recent matches\?/);
+  assert.match(writer, /Don't accept or reject it on the user's word/);
+  // The evidence that settles it is there: the club's recent XIs.
+  assert.match(writer, /LB New Fullback/);
+  // The conduct rules are in the system instruction, and the writer has its network tools.
+  assert.match(writer, /Reading the User/);
+  assert.match(writer, /Never describe your own lookups, searches, timeouts, tools/);
+  assert.match(writerCall.raw, /get_player_season/);
+  assert.match(writerCall.raw, /googleSearch/);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

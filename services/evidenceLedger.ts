@@ -46,7 +46,12 @@ export interface EvidenceEntry {
  * again won't help), or the call failed or was refused (a retry might work).
  */
 export type LookupStatus = 'found' | 'empty' | 'not_covered' | 'failed';
-export type GapStatus = Exclude<LookupStatus, 'found'>;
+/**
+ * A gap's status: a lookup's own (`empty`, `not_covered`, `failed`), or `slow` for one still running,
+ * or never started for lack of time, when the answer began. A slow lookup is unchecked rather than
+ * unknowable: the writer can check it with its tools. The lookup log keeps it as `failed`.
+ */
+export type GapStatus = Exclude<LookupStatus, 'found'> | 'slow';
 
 export interface EvidenceGap {
   label: string;
@@ -151,6 +156,7 @@ const KIND_NAMES: Record<EvidenceKind, string> = {
 };
 
 const GAP_HEADINGS: Record<GapStatus, string> = {
+  slow: "[Not back in time] These lookups were still running, or never started, when the answer began. They are unchecked, not unverifiable: where the answer depends on one, check it with your tools before saying it can't be confirmed, and never tell the user about the lookup itself:",
   not_covered: "[Not covered] No source covers these, so don't fill them from memory; say so where the answer depends on them:",
   failed: '[Lookup failed] These lookups failed or were refused; treat their subjects as unverified unless a tool call finds them:',
   empty: '[Not found] These lookups returned nothing; treat their subjects as unverified unless a tool call finds them:',
@@ -170,7 +176,7 @@ export function formatLedger(ledger: EvidenceLedger, options: { seasonStart?: st
         : '';
     return `[${e.id}] ${KIND_NAMES[e.kind]} — ${e.label}${older}\n${e.content.trim()}${sources}`;
   });
-  for (const status of ['not_covered', 'failed', 'empty'] as const) {
+  for (const status of ['not_covered', 'failed', 'slow', 'empty'] as const) {
     const gaps = ledger.gaps.filter((g) => g.status === status);
     if (gaps.length > 0) blocks.push(`${GAP_HEADINGS[status]}\n${gaps.map((g) => `- ${g.label}`).join('\n')}`);
   }

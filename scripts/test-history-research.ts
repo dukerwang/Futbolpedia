@@ -690,7 +690,8 @@ await test('a slow web search is left out of the answer instead of holding it ba
     { model: { writeBrief: async () => slowBrief }, searchBudgetMs: 20 },
   );
   assert.deepEqual(ledger.entries.map((e) => e.kind), ['career_record']);
-  assert.ok(ledger.gaps.some((g) => g.label.includes('took too long') && g.status === 'empty'));
+  // Filed as not back in time: unchecked, so the writer gets its tools to check it.
+  assert.ok(ledger.gaps.some((g) => g.label.includes('took too long') && g.status === 'slow'));
 });
 
 await test('a player window gets an era snapshot only when it is the size of a card window', () => {

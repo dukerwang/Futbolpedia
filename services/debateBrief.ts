@@ -26,6 +26,7 @@ import {
   type EraSnapshotSource,
 } from './eraSnapshots';
 import { addEvidence, emptyLedger, type EvidenceLedger } from './evidenceLedger';
+import { NEED_PROMPT, NEED_SCHEMA, readNeed, type NeedRead } from './userNeed';
 import { fileCardReviews, liveCardReviews, type CardReviewSource } from './cardReviewNotes';
 import {
   executeCall,
@@ -86,6 +87,8 @@ export interface DebateBrief {
   cardNotes: string[];
   /** Whether this brief was reused from a settled debate. */
   settled?: boolean;
+  /** What the user is trying to do, and on pushback the checkable fact it rests on (`userNeed.ts`). */
+  need?: NeedRead | null;
 }
 
 export interface DebateContext {
@@ -128,10 +131,11 @@ export const SEARCH_BUDGET_MS = 4_000;
 
 const KINDS: DebateKind[] = ['head_to_head', 'ranking', 'single', 'other'];
 
-const BRIEF_SCHEMA: Record<string, unknown> = {
+export const BRIEF_SCHEMA: Record<string, unknown> = {
   type: Type.OBJECT,
   properties: {
     understanding: { type: Type.STRING },
+    need: NEED_SCHEMA,
     kind: { type: Type.STRING, enum: KINDS },
     criterion: { type: Type.STRING, enum: [...DEBATE_CRITERIA] },
     criteria: {
@@ -165,7 +169,7 @@ const BRIEF_SCHEMA: Record<string, unknown> = {
       },
     },
   },
-  required: ['understanding', 'kind', 'criterion', 'criteria', 'versions', 'disagreement', 'counterCase', 'verdict', 'ranking', 'calls'],
+  required: ['understanding', 'need', 'kind', 'criterion', 'criteria', 'versions', 'disagreement', 'counterCase', 'verdict', 'ranking', 'calls'],
 };
 
 const placementText = (s: CardStanding): string => {
@@ -185,7 +189,8 @@ export const buildDebateBriefPrompt = (ctx: DebateContext): string => {
 
 Keep every field short: a sentence or two at most. Work out:
 1. understanding: what the user wants settled, read in the light of the conversation.
-2. kind: "head_to_head" for two sides compared, "ranking" for an order of several, "single" for one season, player or team examined, "other" for a message that asks for no judgment: in a conversation, a follow-up that questions the last answer, the cards or versions it used, or one of its facts, or asks for a clarification. Read the latest message for what it asks, not the thread's topic: a thread about a comparison can carry a follow-up that is no comparison. For "other", leave criteria, counterCase, verdict and ranking empty, and plan calls only for a fact the reply needs.
+1b. ${NEED_PROMPT}
+2. kind: "head_to_head" for two sides compared, "ranking" for an order of several, "single" for one season, player or team examined, "other" for a message that asks for no judgment: in a conversation, a follow-up that questions the last answer, the cards or versions it used, or one of its facts, or asks for a clarification. Read the latest message for what it asks, not the thread's topic: a thread about a comparison can carry a follow-up that is no comparison. For "other", leave criteria, counterCase, verdict and ranking empty, and plan calls only for a fact the reply needs; when need.objectionFact is set, plan the call that settles it.
 3. criterion: what the question turns on. "peak_level" is how good a version was at its best; "sustained_level" is how long it held a high level; "output" is goals, assists and numbers; "influence" is its effect on results and on the team; "versatility" is range of roles; "mixed" when the question is how good overall and no one of these decides it. Read it from the words the user chose.
 4. criteria: two to four criteria that settle this question, most important first, each with why it matters here. They should be things evidence can speak to. For each, figure: the one precise figure, if any, that decides it, described by what it counts, its competition (league, all competitions, a named cup or European competition, international) and its span (a named season, the window, a career), without the number itself. Leave it empty when the criterion is judged without numbers; most are. The answer quotes no other figures.
 5. versions: what is being compared, each with its period: a player's window (use the window on his card when he has one) or a club's season (YYYY-YY).
@@ -238,6 +243,7 @@ export function readDebateBrief(raw: any, ctx: Pick<DebateContext, 'message'>): 
     outline: list(raw?.outline, 8),
     calls: sanitizeCalls(raw?.calls, DEBATE_CALL_LIMIT),
     cardNotes: list(raw?.cardNotes, 8),
+    need: readNeed(raw?.need),
   };
 }
 
@@ -429,6 +435,7 @@ export async function runDebateResearch(
       },
       reviewSource,
     );
+  brief = ensureDebateObjectionCheck(brief, ctx);
   if (!brief.calls.length) return { brief, ledger: await fileReviews(emptyLedger()) };
 
   options.onStage?.(`Checking ${brief.calls.length} ${brief.calls.length === 1 ? 'record' : 'records'}...`);
@@ -455,7 +462,7 @@ export async function runDebateResearch(
   const outcomes: ToolOutcome[] = await Promise.all(
     runs.map((r, i) =>
       isSearch(i)
-        ? within(r, budget).then((o) => o ?? { status: 'empty' as const, result: null, missing: [], note: 'took too long, left out of this answer' })
+        ? within(r, budget).then((o) => o ?? { status: 'empty' as const, result: null, missing: [], note: 'took too long, left out of this answer', slow: true })
         : r,
     ),
   );
@@ -488,6 +495,17 @@ export function cardBrief(ctx: DebateContext): DebateBrief {
     calls: sanitizeCalls(ctx.hints.players.map((p) => ({ tool: 'player_career', subject: p })), DEBATE_CALL_LIMIT),
     cardNotes: order.length >= 2 ? ["The verdict follows the stored cards' order."] : [],
   };
+}
+
+/**
+ * A debate brief that records a disputed fact always looks it up. When it planned no call, this adds
+ * the career record of each player the router spotted, or, with no names, one search on the fact.
+ */
+export function ensureDebateObjectionCheck(brief: DebateBrief, ctx: Pick<DebateContext, 'hints'>): DebateBrief {
+  const fact = brief.need?.objectionFact;
+  if (!fact || brief.calls.length > 0) return brief;
+  const named = ctx.hints.players.map((p) => ({ tool: 'player_career', subject: p, purpose: fact }));
+  return { ...brief, calls: sanitizeCalls(named.length ? named : [{ tool: 'web_search', subject: fact, purpose: fact }], DEBATE_CALL_LIMIT) };
 }
 
 /** The figures the brief chose, one per criterion at most: the writer quotes only these. */

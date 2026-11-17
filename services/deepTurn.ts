@@ -408,7 +408,8 @@ In this conversation you decide your own research. Your tools read live club dat
 Budget for this turn: ${Math.round(budget.ms / 1000)} seconds of research, ${budget.calls} lookups (at most ${budget.searches} of them web searches) and ${budget.rounds} rounds of tool calls. The local dossier search and the show tools are free: drawing views costs no lookup, search or round. Every tool result ends with what's left. When any part of the budget runs out, research is over and your next reply must be the answer.
 
 How to research:
-- First work out what the answer has to establish, then look up only that. Stop researching as soon as you have what the answer needs; a question the conversation or the cards already answer needs no lookup.
+- First work out what the user is trying to decide or do, read from the whole conversation, and what a useful answer has to settle for that; then look up only that.
+- When the latest message pushes back on your last reply over a fact that can be checked, or asks why you didn't know something, look that fact up this turn and answer with it. The user's word neither settles it nor is dismissed, and a fact already in the conversation's evidence counts as looked up. Stop researching as soon as you have what the answer needs; a question the conversation or the cards already answer needs no lookup.
 - Call independent lookups together in one round: they run in parallel. Follow up only on what a result left open.
 - For who plays, results, availability and standings, use the live feeds. Use web search for what the feeds don't cover (tactical analysis, transfers and their dates, news, clubs or players outside the feeds), naming the season. A web search is the slowest and scarcest lookup: don't search for what a feed already gave you.
 - A lookup that came back not covered won't work if asked again.
@@ -731,7 +732,7 @@ ${params.savedDossiersBlock}
           const coach = researchCall.tool === 'club_recent_team' ? startManagers([researchCall.subject]) : null;
           const outcome =
             (await within(executeCall(researchCall, tools, context || undefined), timeLeft)) ??
-            ({ status: 'failed', result: null, missing: [], note: 'too slow: the time budget ran out' } as ToolOutcome);
+            ({ status: 'failed', result: null, missing: [], note: 'too slow: the time budget ran out', slow: true } as ToolOutcome);
           const response = describe(outcome);
           if (coach) {
             const found = (await within(coach, Math.min(timeLeft, 10_000))) ?? [];

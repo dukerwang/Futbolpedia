@@ -89,6 +89,11 @@ export interface ToolOutcome {
   missing: LiveMissing[];
   /** Why there's no result, in a few words. */
   note?: string;
+  /**
+   * Still running (or never started for lack of time) when the answer began: unchecked, not
+   * unknowable. Filed as a `slow` gap, which the writer can check with its own tools.
+   */
+  slow?: boolean;
 }
 
 /** The lookups behind each tool. Tests swap in fakes. */
@@ -278,7 +283,7 @@ export function fileOutcomes(ledger: EvidenceLedger, calls: ResearchCall[], outc
     const call = calls[i];
     // A lookup that says what it couldn't get files that instead of the generic gap.
     if (o.result) next = addEvidence(next, o.result);
-    else if (o.missing.length === 0) next = addGap(next, `${GAP_LABELS[call.tool](call)}${o.note ? `: ${o.note}` : ''}`, o.status === 'found' ? 'empty' : o.status);
+    else if (o.missing.length === 0) next = addGap(next, `${GAP_LABELS[call.tool](call)}${o.note ? `: ${o.note}` : ''}`, o.slow ? 'slow' : o.status === 'found' ? 'empty' : o.status);
     for (const m of o.missing) next = addGap(next, m.item, m.status);
     next = logLookup(next, {
       tool: call.tool,

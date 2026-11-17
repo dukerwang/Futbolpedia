@@ -211,8 +211,9 @@ await test("the writer's brief carries the outline and what couldn't be establis
   assert.match(text, /What the user is asking: Who plays and how the team builds up/);
   assert.match(text, /What's distinctive this season, for the answer to lead with: What is new in the build-up/);
   assert.match(text, /- First phase/);
-  assert.match(text, /couldn't establish: Who starts on the left/);
-  assert.doesNotMatch(formatBriefForWriter(brief([])), /couldn't establish/);
+  // An unresolved point is checked with the writer's tools first, and only then admitted.
+  assert.match(text, /didn't establish: Who starts on the left\. Where the answer depends on one, check it with your tools first/);
+  assert.doesNotMatch(formatBriefForWriter(brief([])), /didn't establish/);
 });
 
 await test('the brief prompt lists the tools and the names spotted, and asks for purposes', () => {
@@ -476,6 +477,8 @@ await test('a web search that cannot finish by the deadline is not started, and 
   const notes = ledger.lookups.map((l) => `${l.tool}:${l.status}:${l.note ?? ''}`);
   assert.ok(notes.includes('web_search:failed:not started: no time left for a web search'));
   assert.ok(notes.includes('player_season:failed:still running when the writer started'));
+  // Both read as unchecked rather than unknowable: their gaps are slow, under their own heading.
+  assert.deepEqual(ledger.gaps.filter((g) => g.status === 'slow').length, 2);
 });
 
 await test('a lookup that misses the deadline but finishes while reflect and the snapshot run still reaches the writer', async () => {

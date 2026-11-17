@@ -18,6 +18,13 @@
  *   npm run eval:live -- --set historical --only 2,3 --repeat 1 --no-builds   # a small, cheap subset
  *   npm run eval:live -- --deep --only 1,3 --label deep   # the live set through deep mode (services/deepTurn.ts)
  *   npm run eval:live -- --stage --label stage   # the same set through the stage pipeline, whatever DEEP_BY_DEFAULT says
+ *   npm run eval:live -- --conversations --only C1,C2   # the multi-turn cases, graded for conduct (scripts/eval-conversations.ts)
+ *
+ * `--conversations` runs the Conversations section of the live set: each tested turn with the turns
+ * before it as history (their recorded replies, or this run's answers where none was recorded), and
+ * a conduct grader (one call a turn, no search) checks what a good answer must do. A case that needs
+ * a Gaffa club reads EVAL_GAFFA_CLUB=<leagueId>/<clubId> with FUTBOLPEDIA_READ_SECRET and is skipped
+ * without them.
  *
  * `--deep` and `--stage` each force their path for every question the path accepts (questions
  * about the past, ratings and the like take the stage pipeline either way); with neither, a turn
@@ -229,7 +236,10 @@ function researchOf(
   return { path: 'stage', ...(path?.fallback ? { fallback: path.fallback } : {}), lookups: lookupLines.length, searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length, rounds, ...shown };
 }
 
-async function ask(question: string): Promise<RunResult> {
+async function ask(
+  question: string,
+  context: { history?: import('../types').ChatMessage[]; conversationId?: string; gaffaBag?: import('../types').GaffaContextBag } = {},
+): Promise<RunResult> {
   const perf: string[] = [];
   const { log, info, warn } = console;
   console.log = (...a: unknown[]) => {
@@ -243,7 +253,9 @@ async function ask(question: string): Promise<RunResult> {
   let attached: import('../types').ReplyBlock[] | null = null;
   let path: import('../services/deepTurn').PathInfo | null = null;
   try {
-    const reply = await sendMessageToAI(question, [], undefined, [], [], {
+    const reply = await sendMessageToAI(question, context.history ?? [], undefined, [], [], {
+      ...(context.conversationId ? { conversationId: context.conversationId } : {}),
+      ...(context.gaffaBag ? { gaffaBag: context.gaffaBag } : {}),
       onStreamChunk: () => {
         firstTokenMs ??= Date.now() - start;
       },
@@ -383,6 +395,46 @@ if (set === 'historical' && regrade) {
   const stamp = stampOf('historical-regraded-');
   writeFileSync(join(dir, `${stamp}.md`), markdown);
   writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(json, null, 2));
+  console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
+  process.exit(0);
+}
+
+if (args.includes('--conversations')) {
+  const conv = await import('./eval-conversations');
+  const cases = conv.readConversations(readFileSync(join(root, 'docs/superpowers/evals/live-questions.md'), 'utf8'));
+  const onlyCases = argValue('--only')?.split(',').map((x) => x.trim().toUpperCase());
+  const { fetchClubContextWithSecret } = await import('../services/gaffaChatApi');
+  const { mapResponseToBag } = await import('../services/gaffaContext');
+  const results: import('./eval-conversations').ConversationResult[] = [];
+  for (const c of cases.filter((x) => !onlyCases || onlyCases.includes(x.id.toUpperCase()))) {
+    let gaffaBag: import('../types').GaffaContextBag | undefined;
+    if (c.gaffaClub) {
+      const club = conv.gaffaClubFromEnv(process.env.EVAL_GAFFA_CLUB);
+      const res = club && process.env.FUTBOLPEDIA_READ_SECRET ? await fetchClubContextWithSecret(club.leagueId, club.clubId).catch(() => null) : null;
+      if (!res) {
+        console.log(`${c.id}: skipped (it needs EVAL_GAFFA_CLUB=<leagueId>/<clubId> and FUTBOLPEDIA_READ_SECRET, for a club Gaffa can read)`);
+        results.push({ id: c.id, title: c.title, skipped: 'Gaffa club not readable', turns: [] });
+        continue;
+      }
+      gaffaBag = mapResponseToBag(res);
+    }
+    process.stdout.write(`${c.id}: ${c.title} ... `);
+    const result = await conv.runConversation(c, {
+      ask: async (message, hist, options) => {
+        const r = await ask(message, { history: hist, conversationId: options.conversationId, gaffaBag });
+        return { answer: r.answer, error: r.error, totalMs: r.totalMs, perf: r.perf };
+      },
+      grade: (prompt) => graderCall(prompt, false),
+      facts: (subjects) => liveFacts({ clubs: subjects?.clubs ?? [], players: subjects?.players ?? [] }),
+    });
+    results.push(result);
+    const checks = result.turns.flatMap((t) => t.checks ?? []);
+    console.log(`${checks.filter((k) => k.met).length} of ${checks.length} checks met`);
+  }
+  mkdirSync(dir, { recursive: true });
+  const stamp = stampOf('conversations-');
+  writeFileSync(join(dir, `${stamp}.md`), conv.conversationReport(results, { today, label, model: FLASH_MODEL }));
+  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(results, null, 2));
   console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
   process.exit(0);
 }

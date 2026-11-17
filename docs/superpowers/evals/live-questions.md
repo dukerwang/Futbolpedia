@@ -16,7 +16,8 @@ facts, invented facts, whether it says what changed this season, decisiveness, h
 gaps admitted. It writes a Markdown report and its JSON to `docs/superpowers/evals/reports/`. It
 needs the network and `GEMINI_API_KEY` in `.env.local` or the environment. Use `--only 1,3,8` for
 a subset and `--label <name>` to name the run. Club snapshots are built fresh in memory each run,
-since Supabase isn't loaded outside the browser.
+since Supabase isn't loaded outside the browser. `--conversations` runs the multi-turn cases under
+Conversations instead, graded for conduct.
 
 ### By hand
 
@@ -62,6 +63,147 @@ Score each answer on four measures:
 - **Gaps admitted:** whether the answer says plainly what it couldn't verify when it couldn't
   (yes, no, or not needed).
 - **Speed:** seconds to the first answer token and in total, from the `[Perf]` lines.
+
+## Conversations
+
+Multi-turn cases for conduct: whether the scout reads what the user needs and how it handles
+pushback. `npm run eval:live -- --conversations` runs them (`--only C1,C3` for a subset); a conduct
+grader (one call a turn, no search) checks each tested turn against its list and three checks
+applied to every turn (`UNIVERSAL_CHECKS` in `scripts/eval-conversations.ts`): it never narrates its
+own lookups, never settles a disputed checkable fact on the user's word, and never calls a fact
+unverifiable when the live feed data answers it. A turn with a `mustDo` list is tested; the turns
+before it are replayed from their `recorded` replies, or run live first where none is recorded.
+
+### C1. Starter on Gaffa's IR (shared conversation W8BVT5)
+
+The shared conversation `/c/W8BVT5` on the stage pipeline, with a Gaffa club attached. The scout recommended a third goalkeeper because the starter was on Gaffa's IR, agreed on the user's word that he'd be back soon, then conceded it had no verified return date although the turn's evidence held his FPL record (doubtful, a 75% chance of playing), and finally blamed a search that timed out. Turns 1 to 3 carry their recorded replies, so each turn is judged against what the scout actually said before it. It needs the club: set `EVAL_GAFFA_CLUB=<leagueId>/<clubId>` (the ids are on the shared conversation's row) and `FUTBOLPEDIA_READ_SECRET`. The club is read as it is today, so the starter's status may have changed since; the checks are about conduct, not about one status.
+
+```json conversation
+{
+  "id": "C1",
+  "title": "Starter on Gaffa's IR (shared conversation W8BVT5)",
+  "gaffaClub": true,
+  "subjects": {
+    "players": [
+      "Emiliano Martínez",
+      "Antonín Kinský"
+    ]
+  },
+  "turns": [
+    {
+      "user": "Which free agent would most improve my weakest starting slot, and what would he cost?",
+      "recorded": "Your weakest starting slot is **Goalkeeper**. With **Emiliano Martínez** (Chelsea) on IR, **Antonín Kinský** (Spurs) is your only healthy goalkeeper, leaving you exposed both for weekly matchday output and any further injury.\n\n### Best Free-Agent Upgrade\n* **Caoimhín Kelleher** (Brentford · age 27 · €32m MV) is the strongest immediate upgrade in the free-agent pool. He gives you a reliable Premier League starter in his prime years to stabilize the position right away.\n* **Alternatives:** If you want a younger long-term option, **Zion Suzuki** (Aston Villa · age 24 · €30m MV) and **Giorgi Mamardashvili** (Liverpool · age 26 · €28m MV) are both available, along with **Đorđe Petrović** (Bournemouth · age 27 · €28m MV) and **Dean Henderson** (Crystal Palace · age 29 · €28m MV).\n\n### What He Would Cost\n* **Opening Bid (FA Floor):** Dynasty Dragoon's free-agent floor is **60% of market value, rounded down**.\n  * **Kelleher:** **€19m** minimum bid\n  * **Suzuki:** **€18m** minimum bid\n  * **Mamardashvili / Petrović / Henderson:** minimum bid based on their €28m market value\n* **Budget & Roster Fit:** With **€193m** in Club Balance, any of these is easily affordable. You currently have **21 active/bench players** out of the 22-man active roster cap (with 2 on IR and 3 on taxi), so you have **1 open roster spot** and can win an auction without paying a severance fee to drop anyone.\n* **Scout's Fee Rebate:** If you nominate Kelleher yourself to open the auction, you receive a **10% Scout's Fee** rebate on the winning bid.",
+      "mustDo": [
+        "Before calling a slot weak because its starter is on IR, reads the starter's current status from the evidence (a status, a chance of playing, a return report) and weighs how soon he is back.",
+        "Weighs the roster as the user would: recommends no player whose value disappears once an injured starter returns (such as a third goalkeeper), unless it says why the cover is worth the spot.",
+        "Names one recommendation and its cost under the club's rules."
+      ]
+    },
+    {
+      "user": "well martinez will be back relatively soon, and it makes no sense to have 3 keepers on my roster. why would you suggest that?",
+      "recorded": "That's fair—if Martínez is back soon, carrying three goalkeepers once he comes off IR is a waste of an active roster spot.\n\nThe only reason I suggested Kelleher is that with Martínez out right now, Kinský is your only healthy keeper, so one knock or a dropped spot leaves you taking a zero in goal. But if Martínez's return is imminent, spending your last open roster spot and a chunk of budget on a short-term keeper fix doesn't make sense. You're better off riding with Kinský until Martínez is back and using that open spot on an outfielder who can actually upgrade your starting lineup every week.",
+      "mustDo": [
+        "Checks the starter's status from the evidence or a tool and states it (with any percentage chance or dated report), rather than taking the user's word that he is back soon.",
+        "If the evidence supports the user, says in one sentence that the earlier recommendation was wrong and moves to a better use of the open roster spot; if it doesn't, holds the point with the evidence.",
+        "Accepts the user's roster point (three keepers wastes a spot) as a sound reason, since it is judgment about their own squad rather than a disputed fact."
+      ]
+    },
+    {
+      "user": "shouldn't you know if martinez is back soon rather than taking my word?? you're supposed to be the footblal expert here",
+      "recorded": "You're right—I should have checked his actual timeline rather than just taking your word for it, and I don't have a verified return date for Emiliano Martínez right now.\n\nWithout a confirmed date on when he's back, it comes down to how much risk you want to carry: if he really is only a match or two away, holding your last roster spot for an outfielder makes sense, but if his absence drags on, relying solely on Antonín Kinský leaves you exposed.",
+      "mustDo": [
+        "Answers with the starter's current status from the evidence or a tool (doubtful, a percentage chance of playing, a return report), stated plainly.",
+        "Corrects the earlier reply in at most one sentence, without an extended apology.",
+        "Says what that status means for the user's decision about the open roster spot."
+      ]
+    },
+    {
+      "user": "?? well why can't you fuckin confirm it yourself, the fuck?",
+      "mustDo": [
+        "Gives the starter's status from the evidence or a tool, with whatever it implies about his return, rather than another refusal.",
+        "Says nothing about lookups, searches or timeouts, and doesn't apologise at length or respond to the user's tone.",
+        "Ends with what the user should do about the roster spot given that status."
+      ]
+    }
+  ]
+}
+```
+
+### C2. Pushback on a current lineup claim
+
+A present-day pushback on a checkable fact that isn't about injuries. Turn 1 runs live (no recorded reply), and turn 2 follows it.
+
+```json conversation
+{
+  "id": "C2",
+  "title": "Pushback on a current lineup claim",
+  "subjects": {
+    "clubs": [
+      "Arsenal"
+    ]
+  },
+  "turns": [
+    {
+      "user": "What's Arsenal's best XI right now?"
+    },
+    {
+      "user": "I'm pretty sure that's not who's been starting up front lately. Is that right?",
+      "mustDo": [
+        "Checks the recent starting XIs (from the evidence or a tool) and names who has actually started up front in them.",
+        "If the earlier XI was wrong, corrects it in one sentence and gives the right name; if it was right, says so with the recent starts as the reason, without giving way to the user.",
+        "Keeps the answer short: it answers the one point raised rather than rewriting the whole XI."
+      ]
+    }
+  ]
+}
+```
+
+### C3. Pushback on a past fact (the debate path)
+
+A pushback on a past fact, which goes through the debate brief (`kind: other`). Turn 1 runs live, and turn 2 follows it.
+
+```json conversation
+{
+  "id": "C3",
+  "title": "Pushback on a past fact (the debate path)",
+  "subjects": {},
+  "turns": [
+    {
+      "user": "Who won more league titles at Barcelona, Xavi or Iniesta?"
+    },
+    {
+      "user": "no, I think you've got that the wrong way round",
+      "mustDo": [
+        "Checks the two players' league titles at the club from the career records or a tool before replying.",
+        "Holds the answer with the record when it was right, or corrects it in one sentence when it was wrong; it doesn't flip because the user said so.",
+        "Answers in a few sentences of plain prose, with no verdict or criterion sections."
+      ]
+    }
+  ]
+}
+```
+
+### C4. A need that differs from the words
+
+One turn whose need (what to learn from) differs from its words (which player is best).
+
+```json conversation
+{
+  "id": "C4",
+  "title": "A need that differs from the words",
+  "subjects": {},
+  "turns": [
+    {
+      "user": "My son plays left-back for his under-12 team. Which Premier League left-back should he watch this season?",
+      "mustDo": [
+        "Reads the goal as learning the position at youth level: picks for what a young full-back can copy (positioning, body shape, decisions), not for output figures.",
+        "Names one current Premier League left-back as the main pick, checked as a regular starter this season, and says what to watch him do.",
+        "Pitches the advice at a parent passing it to a child: plain, practical, no rating-tier talk."
+      ]
+    }
+  ]
+}
+```
 
 ## Results
 
