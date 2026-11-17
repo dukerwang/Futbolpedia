@@ -3,7 +3,11 @@ import { readyBlock, type BlockEntry } from './entry';
 
 export const goDeeperBlock = (id: string, goDeeper: GoDeeper): ReadyBlock<'goDeeper'> => readyBlock('goDeeper', id, goDeeper);
 
-/** The chip that reruns the question in deep mode. */
+/**
+ * The Go deeper flag of replies written while deep mode was opt-in. Nothing writes one now: the
+ * entry stays so stored conversations still read, and `ReplyBody` draws it as nothing, since its
+ * only action reran the turn in deep mode, which every eligible turn now takes.
+ */
 export const goDeeperEntry: BlockEntry<'goDeeper'> = {
   kind: 'goDeeper',
   async build(goDeeper, ctx) {

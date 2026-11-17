@@ -244,7 +244,6 @@ await test('copyTextOf joins the scorecard and the prose, and leaves views and c
   composer.addView(pitchBlock(composer.newId(), view('Southside')));
   composer.showCard(card('Florian Wirtz'));
   composer.offerScout('Pedri');
-  composer.setGoDeeper({ reason: 'x' });
   const text = copyTextOf(composer.finish('The prose.'));
   assert.match(text, /^Take · high confidence/);
   assert.ok(text.endsWith('The prose.'));
@@ -288,13 +287,12 @@ await test('a pending view holds its place, then resolves or fails; one left pen
 
 await test('code-added blocks go where their feature puts them today', () => {
   const composer = new ReplyComposer();
-  composer.setGoDeeper({ reason: 'More to read.' });
   composer.offerScout('Pedri');
   composer.showCard(card('Florian Wirtz'));
   composer.addView(pitchBlock(composer.newId(), view('Southside')));
   composer.setScorecard(scorecard);
   composer.setText('The reply.');
-  assert.deepEqual(kinds(composer.finish('The reply.')), ['scorecard', 'prose', 'pitch', 'card', 'scoutOffer', 'goDeeper']);
+  assert.deepEqual(kinds(composer.finish('The reply.')), ['scorecard', 'prose', 'pitch', 'card', 'scoutOffer']);
 });
 
 await test('a card replaces a plain offer for the same player, and a player is offered once', () => {
@@ -310,17 +308,14 @@ await test('a card replaces a plain offer for the same player, and a player is o
   assert.equal(composer.viewsOf('card').length, 1);
 });
 
-await test('a question is the whole reply: it drops cards, XIs and the Go deeper flag, and keeps offers', () => {
+await test('a question is the whole reply: it drops cards and XIs, and keeps offers', () => {
   const composer = new ReplyComposer();
   composer.offerScout('Pedri');
   composer.showCard(card('Florian Wirtz'));
   composer.addView(pitchBlock(composer.newId(), view('Southside')));
-  composer.setGoDeeper({ reason: 'x' });
   composer.addView(pitchBlock(composer.newId(), view('Beta')), { inline: true });
   composer.setAsk({ question: 'Which season?', options: ['This one', 'Last one'] });
   assert.deepEqual(kinds(composer.blocks()), ['scoutOffer', 'ask']);
-  composer.setGoDeeper({ reason: 'later' });
-  assert.equal(composer.goDeeper?.reason, 'later', 'the writer, not the composer, stops a flag after a question');
 });
 
 await test('snapshot and restore drop what a failed attempt added, text included', () => {
@@ -710,7 +705,6 @@ await test('history reads a block reply in order, with each view as its stub', (
   composer.addView(pitchBlock(composer.newId(), view('Southside')), { inline: true });
   composer.setText('Before. After.');
   composer.showCard(card('Florian Wirtz'));
-  composer.setGoDeeper({ reason: 'x' });
   const blocks = composer.finish('Before. After.');
   const history = buildHistoryContents([
     { id: 'u', sender: 'user', content: 'Who plays?', timestamp: 0 },

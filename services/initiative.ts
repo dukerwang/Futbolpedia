@@ -1,8 +1,7 @@
 /**
  * The writer's initiative: choices a turn makes about the conversation itself, not about the
  * football. The model may end a turn with a question (`ask_user`), start a club's research for
- * the next step (`prepare_club`), offer to rate a player (`offer_rating`) and flag that a question
- * deserved a longer look (`request_deeper`). This file holds the parts that are plain code: what
+ * the next step (`prepare_club`) and offer to rate a player (`offer_rating`). This file holds the parts that are plain code: what
  * counts as a usable question, the once-per-conversation record of prepared clubs, and whether a
  * player was asked about directly. The handlers that write onto a reply are built in
  * `conversationalScout.ts`, beside the helpers they call.
@@ -14,7 +13,6 @@ export const ASK_MAX_OPTIONS = 4;
 /** A chip is a few words; a longer option is cut at a word. */
 export const ASK_OPTION_MAX_CHARS = 60;
 export const ASK_QUESTION_MAX_CHARS = 240;
-export const DEEPER_REASON_MAX_CHARS = 200;
 
 /** Prepared clubs a conversation may have, and the most one turn may start. */
 export const PREPARE_PER_CONVERSATION = 3;
@@ -50,10 +48,6 @@ export function validateAsk(question: unknown, options: unknown): { ok: true; as
   }
   return { ok: true, ask: { question: clip(text, ASK_QUESTION_MAX_CHARS), options: cleaned.slice(0, ASK_MAX_OPTIONS) } };
 }
-
-/** The reason on a Go deeper chip: one line, or nothing when the model gave none. */
-export const cleanReason = (reason: unknown): string =>
-  typeof reason === 'string' ? clip(collapse(reason), DEEPER_REASON_MAX_CHARS) : '';
 
 // ---------------------------------------------------------------------------------------------
 // Prepared clubs

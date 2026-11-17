@@ -2,11 +2,10 @@
 /**
  * Offline checks for the writer's initiative: a chat turn runs for real through sendMessageToAI
  * with Gemini faked at the fetch layer (no network, Supabase or API keys, no model calls). The
- * faked writer is scripted to call ask_user, prepare_club, offer_rating and request_deeper, and the
- * checks are what the turn does with them: a question ends the turn and carries its chips, a club
- * is prepared once per conversation, an offer never repeats a shown card, the go-deeper flag
- * attaches only where deep mode would accept the message, and Gaffa's panel and challenge turns
- * never see the tools. The control (a clear question with its card in play, a writer that doesn't
+ * faked writer is scripted to call ask_user, prepare_club and offer_rating, and the checks are
+ * what the turn does with them: a question ends the turn and carries its chips, a club is prepared
+ * once per conversation, an offer never repeats a shown card, the retired request_deeper is never
+ * offered, and Gaffa's panel and challenge turns never see the tools. The control (a clear question with its card in play, a writer that doesn't
  * ask) answers normally.
  *
  * Usage:
@@ -188,7 +187,7 @@ async function runTurn(
   return { reply: reply as string, attached, writer: writerRequests.slice(before) };
 }
 const call = (name: string, args: Record<string, unknown>): Part => ({ functionCall: { name, args } });
-const INITIATIVE = ['ask_user', 'prepare_club', 'offer_rating', 'request_deeper'];
+const INITIATIVE = ['ask_user', 'prepare_club', 'offer_rating'];
 
 // ---------------------------------------------------------------------------------------------
 // Ask instead of answer
@@ -240,20 +239,15 @@ await test('an asking reply drops what was drawn for an answer, and keeps scout 
   composer.showCard(card('Florian Wirtz'));
   composer.offerScout('Pedri');
   composer.addView(pitchBlock(composer.newId(), { club: 'Southside' } as any));
-  composer.setGoDeeper({ reason: 'x' });
   const { tools, endTurn } = createInitiativeTools({
-    composer, cardsInPlay: [], localCards: [], historical: false, conversationId: 'conv-unit', clubsInPlay: [], deeper: true, startBuild: () => {},
+    composer, cardsInPlay: [], localCards: [], historical: false, conversationId: 'conv-unit', clubsInPlay: [], startBuild: () => {},
   });
   assert.equal(endTurn(), null);
   tools.ask!({ question: 'Which season?', options: ['This one', 'Last one'] });
   assert.equal(endTurn(), 'Which season?');
   assert.deepEqual(composer.cards, []);
   assert.equal(composer.viewsOf('pitch').length, 0);
-  assert.equal(composer.goDeeper, null);
   assert.deepEqual(composer.scoutOffers, ['Pedri']);
-  // Once asked, a later go-deeper flag doesn't attach.
-  tools.deeper!({ reason: 'More to read.' });
-  assert.equal(composer.goDeeper, null);
 });
 
 await test('options are cleaned: clipped, deduplicated, at most four', () => {
@@ -388,47 +382,21 @@ await test('the routing rule still offers a target player who has no card', asyn
 });
 
 // ---------------------------------------------------------------------------------------------
-// Go deeper
+// Go deeper, retired
 
-await test('request_deeper attaches on a turn deep mode would accept, with the reason', async () => {
-  const t = await runTurn(playerQuestion, {
-    first: [call('request_deeper', { reason: 'His recent minutes were not checked against the injury list.' })],
-    final: 'The best answer the fast path could give.',
-  });
-  assert.equal(t.reply, 'The best answer the fast path could give.');
-  assert.deepEqual(attachedIn(t.attached).goDeeper, { reason: 'His recent minutes were not checked against the injury list.' });
-  assert.ok(t.writer[0].tools.includes('request_deeper'));
-});
-
-await test('request_deeper is not offered, and attaches nothing, where deep mode would not take the message', async () => {
-  // A question about the past keeps the debate brief, so the rerun would not take the deep path.
-  const past = await runTurn('How good was prime Florian Wirtz?', {
-    route: pastRoute,
-    first: [call('request_deeper', { reason: 'More to read.' })],
-    final: 'An answer about the past.',
-  });
-  assert.ok(!past.writer[0].tools.includes('request_deeper'));
-  assert.equal(attachedIn(past.attached).goDeeper, undefined);
-  assert.ok(!(past.writer[0].prompt ?? '').includes('`request_deeper`'), 'its rule is left out of the prompt too');
-  // Ask, prepare and offer stay available on that turn.
-  assert.ok(['ask_user', 'prepare_club', 'offer_rating'].every((n) => past.writer[0].tools.includes(n)));
-  // A Gaffa club attached in the app takes the default path for good.
-  const gaffa = await runTurn(playerQuestion, {
-    options: { gaffaBag: { connected: true, club_id: 1, club_name: 'Gaffa FC', league_id: 2, league_name: 'League' } as any },
-    first: [call('request_deeper', { reason: 'More to read.' })],
-  });
-  assert.ok(!gaffa.writer[0].tools.includes('request_deeper'));
-  assert.equal(attachedIn(gaffa.attached).goDeeper, undefined);
-});
-
-await test('a blank reason attaches nothing', async () => {
-  const t = await runTurn(playerQuestion, { first: [call('request_deeper', { reason: '   ' })], final: 'Done.' });
-  assert.equal(attachedIn(t.attached).goDeeper, undefined);
-});
-
-await test('the writer is told go deeper is not a hedge', async () => {
-  const t = await runTurn(playerQuestion);
-  assert.ok((t.writer[0].prompt ?? '').includes('It is not a hedge and not a sign of effort'));
+await test('request_deeper is never offered and its rule never sent, on any stage turn', async () => {
+  const present = await runTurn(playerQuestion, { first: [call('request_deeper', { reason: 'More to read.' })], final: 'The stage answer.' });
+  const forced = await runTurn(playerQuestion, { options: { deepByDefault: true, fast: true }, final: 'The stage answer.' });
+  const past = await runTurn('How good was prime Florian Wirtz?', { route: pastRoute, final: 'An answer about the past.' });
+  for (const t of [present, forced, past]) {
+    assert.ok(!t.writer[0].tools.includes('request_deeper'));
+    assert.ok(!(t.writer[0].prompt ?? '').includes('request_deeper'), 'no rule for it');
+    assert.equal(attachedIn(t.attached).goDeeper, undefined);
+    assert.ok(INITIATIVE.every((n) => t.writer[0].tools.includes(n)), 'ask, prepare and offer stay');
+  }
+  // A call to it anyway is an unknown tool: the turn still answers.
+  assert.equal(present.reply, 'The stage answer.');
+  assert.equal(INITIATIVE_RULES.hasOwnProperty('deeper'), false);
 });
 
 
@@ -544,7 +512,6 @@ await test('Gaffa’s panel (noRating) is shown none of the four tools, and a ca
       call('ask_user', { question: 'Which?', options: ['A', 'B'] }),
       call('prepare_club', { club: 'Southside' }),
       call('offer_rating', { name: 'Pedri', edition: 'current' }),
-      call('request_deeper', { reason: 'More to read.' }),
     ],
     final: 'A plain answer for the panel.',
   });
@@ -553,7 +520,6 @@ await test('Gaffa’s panel (noRating) is shown none of the four tools, and a ca
   assert.equal(t.reply, 'A plain answer for the panel.');
   const a = attachedIn(t.attached);
   assert.equal(a.ask, undefined);
-  assert.equal(a.goDeeper, undefined);
   assert.deepEqual(a.scoutOffers, []);
 });
 
@@ -584,7 +550,7 @@ await test('deep mode keeps its own tool set', async () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// Go deeper where deep mode is the default
+// Deep mode as the default
 
 type DeepModel = import('../services/deepTurn').DeepModel;
 type DeepScript = ({ text: string; calls: { name: string; args: Record<string, unknown> }[]; finishReason?: string } | (() => never))[];
@@ -625,7 +591,7 @@ async function deepTurn(loop: ReturnType<typeof deepLoop>, options: Record<strin
   return { ...t, labels };
 }
 
-await test('default on: a present-day turn runs the loop, never reaches the writer and carries no Go deeper chip', async () => {
+await test('default on: a present-day turn runs the loop and never reaches the writer', async () => {
   const loop = deepLoop([says('The deep answer.')]);
   const t = await deepTurn(loop, { deepByDefault: true });
   assert.equal(t.reply, 'The deep answer.');
@@ -635,49 +601,27 @@ await test('default on: a present-day turn runs the loop, never reaches the writ
   assert.equal(attachedIn(t.attached).goDeeper, undefined);
 });
 
-await test('default on: a turn sent with Fast takes the stage pipeline and can raise the chip', async () => {
-  const loop = deepLoop([says('The deep answer.')]);
-  const labels: string[] = [];
-  const t = await runTurn(playerQuestion, {
-    first: [call('request_deeper', { reason: 'The recent lineups were not read.' })],
-    final: 'The fast answer.',
-    options: { deepByDefault: true, fast: true, deepDeps: loop.deps(), onStageChange: (l: string) => labels.push(l) },
-  });
-  assert.equal(t.reply, 'The fast answer.');
-  assert.equal(loop.opened.length, 0, 'the loop was not opened');
-  assert.ok(t.writer[0].tools.includes('request_deeper'));
-  assert.deepEqual(attachedIn(t.attached).goDeeper, { reason: 'The recent lineups were not read.' });
-  assert.ok(!labels.includes(FALLBACK_LABEL), 'Fast is not a fallback');
-});
-
-await test('default on: a past thread takes the stage pipeline with no Go deeper tool, and the other three tools stay', async () => {
+await test('default on: a past thread takes the stage pipeline, with the three initiative tools', async () => {
   const loop = deepLoop([says('The deep answer.')]);
   const t = await deepTurn(loop, { deepByDefault: true }, { message: 'How good was prime Florian Wirtz?', route: pastRoute });
   assert.equal(loop.opened.length, 0);
   assert.equal(t.writer.length > 0, true);
-  assert.ok(!t.writer[0].tools.includes('request_deeper'));
   assert.ok(OTHER_THREE.every((n) => t.writer[0].tools.includes(n)));
 });
 
-await test('default off: an unflagged turn offers the chip as before, and a Deep turn runs the loop with none', async () => {
+await test('default off: an unflagged turn takes the stage pipeline, and a deep turn runs the loop', async () => {
   const plain = deepLoop([says('The deep answer.')]);
-  const stage = await runTurn(playerQuestion, {
-    first: [call('request_deeper', { reason: 'More to read.' })],
-    final: 'The stage answer.',
-    options: { deepByDefault: false, deepDeps: plain.deps() },
-  });
+  const stage = await runTurn(playerQuestion, { final: 'The stage answer.', options: { deepByDefault: false, deepDeps: plain.deps() } });
   assert.equal(plain.opened.length, 0);
-  assert.ok(stage.writer[0].tools.includes('request_deeper'));
-  assert.deepEqual(attachedIn(stage.attached).goDeeper, { reason: 'More to read.' });
+  assert.equal(stage.reply, 'A direct answer.');
 
   const loop = deepLoop([says('The deep answer.')]);
   const deep = await deepTurn(loop, { deepByDefault: false, deep: true });
   assert.equal(deep.reply, 'The deep answer.');
   assert.equal(deep.writer.length, 0);
-  assert.equal(attachedIn(deep.attached).goDeeper, undefined);
 });
 
-await test('a loop that fails runs the writer once, without the Go deeper tool, after an error, an empty reply and a spent budget', async () => {
+await test('a loop that fails runs the writer once, after an error, an empty reply and a spent budget', async () => {
   const cases: [string, DeepScript, Record<string, unknown>][] = [
     [
       'error',
@@ -701,9 +645,7 @@ await test('a loop that fails runs the writer once, without the Go deeper tool, 
     assert.equal(t.reply, 'The stage answer.', name);
     assert.equal(loop.opened.length, 1, `${name}: the loop made one attempt`);
     assert.equal(t.writer.length, 1, `${name}: the writer ran once`);
-    assert.ok(!t.writer[0].tools.includes('request_deeper'), `${name}: no Go deeper tool after a fallback`);
     assert.ok(OTHER_THREE.every((n) => t.writer[0].tools.includes(n)), name);
-    assert.equal(attachedIn(t.attached).goDeeper, undefined, name);
     assert.equal(t.labels.filter((l) => l === FALLBACK_LABEL).length, 1, name);
   }
 });
@@ -732,7 +674,8 @@ await test('the rules are descriptive: no quoted sample phrases, no names', () =
 // ---------------------------------------------------------------------------------------------
 // The chips
 
-const { AskChips, GoDeeperChip } = await import('../components/ReplyChips');
+const ReplyChips = await import('../components/ReplyChips');
+const { AskChips } = ReplyChips;
 
 await test('the ask chips draw one button per option', () => {
   const html = renderToStaticMarkup(React.createElement(AskChips, { options: ['His current form', 'His prime'], onAsk: () => {} }));
@@ -743,10 +686,22 @@ await test('the ask chips draw one button per option', () => {
   assert.doesNotMatch(html, /disabled=""/);
 });
 
-await test('the go deeper chip carries its reason as the tooltip', () => {
-  const html = renderToStaticMarkup(React.createElement(GoDeeperChip, { reason: 'His minutes were not checked.', onGoDeeper: () => {} }));
-  assert.match(html, /title="His minutes were not checked\."/);
-  assert.match(html, />Go deeper</);
+await test('the Go deeper chip is gone, and a stored Go deeper flag still reads but draws nothing', async () => {
+  assert.equal('GoDeeperChip' in ReplyChips, false);
+  const { blocksOf, drawnBlocksOf } = await import('../services/replyBlocks');
+  const old = {
+    id: 'old-reply',
+    sender: 'ai',
+    content: 'An answer from when deep mode was opt-in.',
+    timestamp: 0,
+    goDeeper: { reason: 'The recent lineups were not read.' },
+  } as any;
+  assert.deepEqual(blocksOf(old).map((b) => b.kind), ['prose', 'goDeeper'], 'the stored field still parses');
+  assert.deepEqual(drawnBlocksOf(old).map((b) => b.kind), ['prose']);
+  const stored = { ...old, goDeeper: undefined, blocks: blocksOf(old) };
+  assert.deepEqual(drawnBlocksOf(stored).map((b) => b.kind), ['prose'], 'a reply stored as blocks too');
+  const source = await (await import('node:fs/promises')).readFile(new URL('../components/ReplyBody.tsx', import.meta.url), 'utf8');
+  assert.match(source, /drawnBlocksOf\(message\)/);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

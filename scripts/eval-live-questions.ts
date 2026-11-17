@@ -69,9 +69,9 @@ const argValue = (flag: string) => {
 };
 const only = argValue('--only')?.split(',').map((n) => Number(n.trim()));
 const warm = args.includes('--warm');
-/** `--deep`: send every question with the Deep toggle on, so questions about the present go through deep mode. */
+/** `--deep`: send every question with `deep: true`, so questions about the present go through deep mode whatever DEEP_BY_DEFAULT says. */
 const deep = args.includes('--deep');
-/** `--stage`: send every question with the Fast toggle on, so it takes the stage pipeline even where deep mode would take it. */
+/** `--stage`: send every question with `fast: true`, so it takes the stage pipeline even where deep mode would take it. */
 const stage = args.includes('--stage');
 if (deep && stage) {
   console.error('Pass --deep or --stage, not both.');

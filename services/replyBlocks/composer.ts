@@ -1,9 +1,8 @@
-import type { AskPrompt, DataBlock, GaffaTradeScorecard, GoDeeper, PlayerProfile, ReadyBlock, ReplyBlock, ReplyBlockKind, ViewHint } from '../../types';
+import type { AskPrompt, DataBlock, GaffaTradeScorecard, PlayerProfile, ReadyBlock, ReplyBlock, ReplyBlockKind, ViewHint } from '../../types';
 import { isPrimeCard, toBasePlayerSlug } from '../dossierCards';
 import { getCardKey } from '../dossierStore';
 import { askBlock } from './ask';
 import { cardBlockOf } from './card';
-import { goDeeperBlock } from './goDeeper';
 import { proseBlock } from './prose';
 import { scorecardBlock } from './scorecard';
 import { scoutOfferBlock } from './scoutOffer';
@@ -41,13 +40,12 @@ export interface ComposerSnapshot {
   cards: { profile: PlayerProfile; block: ReadyBlock<'card'>; inline?: boolean }[];
   offers: ReadyBlock<'scoutOffer'>[];
   ask: ReadyBlock<'ask'> | null;
-  goDeeper: ReadyBlock<'goDeeper'> | null;
 }
 
 /**
  * A reply as it is composed: prose segments with views between them, and the blocks code adds
  * (the scorecard first, then after the last prose the views placed at the end, cards, Scout
- * offers, the question and the Go deeper flag, in that order). It replaces the fixed attachment
+ * offers and the question, in that order). It replaces the fixed attachment
  * fields: whatever a turn shows, it shows through here, and `blocks()` is what the reader sees.
  *
  * Segments rather than character offsets, so a gate that removes a sentence from one segment moves
@@ -64,7 +62,6 @@ export class ReplyComposer {
   private cardList: { profile: PlayerProfile; block: ReadyBlock<'card'>; inline?: boolean }[] = [];
   private offerList: ReadyBlock<'scoutOffer'>[] = [];
   private askBlock_: ReadyBlock<'ask'> | null = null;
-  private goDeeperBlock_: ReadyBlock<'goDeeper'> | null = null;
   private counter = 0;
   private gate: ProseGate | null = null;
   /** The last gate run, so a notice that changes no text doesn't run the gates again. */
@@ -103,7 +100,6 @@ export class ReplyComposer {
     if (tail?.trim()) out.push(proseBlock('prose-tail', tail));
     out.push(...this.endViews, ...this.cardList.filter((c) => !c.inline).map((c) => c.block), ...this.offerList);
     if (this.askBlock_) out.push(this.askBlock_);
-    if (this.goDeeperBlock_) out.push(this.goDeeperBlock_);
     return out;
   }
 
@@ -161,10 +157,6 @@ export class ReplyComposer {
 
   get ask(): AskPrompt | null {
     return this.askBlock_?.data ?? null;
-  }
-
-  get goDeeper(): GoDeeper | null {
-    return this.goDeeperBlock_?.data ?? null;
   }
 
   /** Whether the reply holds anything besides prose. */
@@ -281,12 +273,6 @@ export class ReplyComposer {
   setAsk(ask: AskPrompt): void {
     this.askBlock_ = askBlock(this.newId(), ask);
     this.dropAnswerViews();
-    this.goDeeperBlock_ = null;
-    this.notify(true);
-  }
-
-  setGoDeeper(goDeeper: GoDeeper): void {
-    this.goDeeperBlock_ = goDeeperBlock(this.newId(), goDeeper);
     this.notify(true);
   }
 
@@ -294,7 +280,6 @@ export class ReplyComposer {
   dropAnswerViews(): void {
     this.endViews = [];
     this.cardList = [];
-    this.goDeeperBlock_ = null;
     const kept: Segment[] = [];
     for (const seg of this.segments) {
       const last = kept[kept.length - 1];
@@ -318,7 +303,6 @@ export class ReplyComposer {
       cards: [...this.cardList],
       offers: [...this.offerList],
       ask: this.askBlock_,
-      goDeeper: this.goDeeperBlock_,
     };
   }
 
@@ -332,7 +316,6 @@ export class ReplyComposer {
     this.cardList = [...saved.cards];
     this.offerList = [...saved.offers];
     this.askBlock_ = saved.ask;
-    this.goDeeperBlock_ = saved.goDeeper;
     this.finalProse = null;
     this.gate = null;
     this.gated = null;

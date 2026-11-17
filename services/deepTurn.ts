@@ -1,11 +1,13 @@
 import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration } from '@google/genai';
-import type { ChatMessage, PlayerProfile } from '../types';
+import type { ChatMessage, GaffaContextBag, PlayerProfile } from '../types';
+import { grepGaffaBag, type GaffaMarketGrepParams } from '../constants/gaffaRules';
 import { resolveTaskModelConfig, samplingFor, type ThinkingTier } from '../constants/modelProfiles';
 import { buildConversationalScoutInstruction, viewRules } from '../prompts/chatPrompt';
 import {
   blockedOrEmptyResponseError,
   getAi,
   getCurrentSeasonInfo,
+  GREP_GAFFA_MARKET_DECLARATION,
   GREP_SAVED_DOSSIERS_DECLARATION,
   LOOK_UP_DOSSIER_DECLARATION,
   NETWORK_FUNCTION_DECLARATIONS,
@@ -42,6 +44,8 @@ import {
   type EvidenceLedger,
 } from './evidenceLedger';
 import { expandTables, type FigureClaim } from './figureGate';
+import type { AvailabilityFetcher } from './gaffaAvailability';
+import { buildGaffaTurn, finishGaffaReply, type GaffaTurn } from './gaffaTurn';
 import { correctReply, formatGateFeedback, gateFeedbackEnabled, GATE_FEEDBACK_STAGE_LABEL, type CorrectionModel, type GateFeedbackStats } from './gateFeedback';
 import { createViewTools, gateSegments, joinSegments, makeCardLookup, MAX_REPLY_VIEWS, ReplyComposer, splitSegments, viewToolDeclarations } from './replyBlocks';
 import {
@@ -67,9 +71,8 @@ import { extractThreadClubs, type TurnRoute } from './turnRouter';
 import type { VerifiedClubManager } from '../packages/engine/src/gates/managerMentions.ts';
 
 /**
- * Deep mode: a chat path where one model loop decides every lookup (opt-in with the Deep toggle, or
- * the default for present-day questions once `DEEP_BY_DEFAULT` is on, with the stage pipeline as its
- * fallback). Instead of the brief,
+ * Deep mode: the chat path where one model loop decides every lookup, the default for present-day
+ * questions (`DEEP_BY_DEFAULT`), with the stage pipeline as its fallback. Instead of the brief,
  * reflect and situation calls the default path runs in an order code sets, the chat model gets the
  * conversation, the cards in play, each spotted club's stored snapshot and today's date, plus every
  * tool the writer and research have, and is told its budget. It calls what it wants, in the order
@@ -115,11 +118,10 @@ export const DEFAULT_DEEP_BUDGET: DeepBudget = {
 // Entry
 
 /**
- * Whether deep mode is the default for a turn that carries no flag. It ships off: a turn takes the
- * deep loop only when the user sent Deep (`deep: true`). Turned on, every turn `takesDeepPath`
- * accepts runs the loop, the composer's toggle reads Fast and sends `fast: true`, and Fast sends
- * the turn to the stage pipeline. The `deep` and `fast` flags still force either path whatever this
- * says, which is how the eval runs both. Flip it only on the strength of the eval in PR 77.
+ * Whether deep mode is the default for a turn that carries no flag. On, every turn `takesDeepPath`
+ * accepts runs the loop. It is the kill switch: set to false, every chat turn takes the stage
+ * pipeline, since nothing in the app asks for deep. The `deep` and `fast` flags still force either
+ * path whatever this says, which is how the eval and the tests run both.
  */
 export const DEEP_BY_DEFAULT = true;
 
@@ -132,18 +134,12 @@ export function wantsDeep(turn: { deep?: boolean; fast?: boolean }, byDefault: b
   return Boolean(turn.deep) || byDefault;
 }
 
-/** What the composer's one toggle says and sends, by `DEEP_BY_DEFAULT`: Deep when off, Fast when on. */
-export function speedToggle(byDefault: boolean = DEEP_BY_DEFAULT): { text: string; tooltip: string; options: { deep: true } | { fast: true } } {
-  return byDefault
-    ? { text: 'Fast', tooltip: 'Fast: the scout answers quickly from a fixed research pass', options: { fast: true } }
-    : { text: 'Deep', tooltip: 'Deep: the scout takes longer and decides its own research', options: { deep: true } };
-}
-
 /**
  * Whether a turn takes the deep path. It must have asked for it (`wantsDeep`), and questions about
- * the past keep the debate brief, ratings and challenges keep their pipelines, and Gaffa turns (the
- * panel, or a club attached in the app) keep the club blocks only the stage pipeline builds. Images
- * and archive questions stay on the stage pipeline too. Every other turn that asked takes the loop.
+ * the past keep the debate brief, ratings and challenges keep their pipelines, and Gaffa's own panel
+ * (`noRating`, on a daily turn budget) and a Gaffa trade (whose scorecard is shown above a capped
+ * reply) keep the stage pipeline. Images and archive questions stay on the stage pipeline too. Every
+ * other turn that asked takes the loop, a club attached in the app included.
  */
 export function takesDeepPath(turn: {
   deep?: boolean;
@@ -153,10 +149,11 @@ export function takesDeepPath(turn: {
   route: Pick<TurnRoute, 'intent'>;
   historical: boolean;
   noRating?: boolean;
-  gaffa?: boolean;
+  /** A Gaffa club is attached and the turn is a trade (`isGaffaTrade`). */
+  gaffaTrade?: boolean;
   image?: boolean;
 }): boolean {
-  if (!wantsDeep(turn, turn.byDefault) || turn.historical || turn.noRating || turn.gaffa || turn.image) return false;
+  if (!wantsDeep(turn, turn.byDefault) || turn.historical || turn.noRating || turn.gaffaTrade || turn.image) return false;
   return !['single_dossier', 'challenge_or_revise', 'archive_inventory'].includes(turn.route.intent);
 }
 
@@ -334,7 +331,7 @@ const DEEP_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
   ...viewToolDeclarations(),
 ];
 
-/** Every tool the deep loop offers, the writer's and research's together. */
+/** Every tool the deep loop offers, the writer's and research's together. A Gaffa turn adds `grep_gaffa_market`. */
 export const DEEP_DECLARATIONS: FunctionDeclaration[] = [
   GREP_SAVED_DOSSIERS_DECLARATION,
   LOOK_UP_DOSSIER_DECLARATION,
@@ -356,10 +353,14 @@ const RESEARCH_FUNCTIONS: Record<string, (args: Record<string, unknown>) => Rese
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
+/** The tools a turn offers: a club attached adds the market filter. */
+export const deepDeclarations = (gaffa: boolean): FunctionDeclaration[] =>
+  gaffa ? [...DEEP_DECLARATIONS, GREP_GAFFA_MARKET_DECLARATION as FunctionDeclaration] : DEEP_DECLARATIONS;
+
 /** Tools that draw something in the reply. They are free, and a round that only calls them keeps its text. */
 const PRESENTATION = new Set(['show_pitch', 'show_table', 'show_comparison', 'show_ranking', 'show_dossier']);
 
-/** Tools that cost a lookup. The local grep and the presentation tools are free. */
+/** Tools that cost a lookup. The local greps (dossiers, the Gaffa market) and the presentation tools are free. */
 const COUNTED = new Set([...Object.keys(RESEARCH_FUNCTIONS), 'look_up_dossier']);
 
 /** The progress line for one tool call. */
@@ -392,6 +393,8 @@ export function stageLabel(call: DeepFunctionCall): string {
       return `Drawing the ranking${str(a.title) ? `: ${str(a.title).slice(0, 60)}` : ''}`;
     case 'grep_saved_dossiers':
       return 'Searching your dossiers';
+    case 'grep_gaffa_market':
+      return "Searching your league's market";
     default:
       return 'Researching';
   }
@@ -427,6 +430,10 @@ const DEEP_TEAM_RULES =
 
 const DEEP_FACT_SOURCES =
   'your tool results this turn, <stored_snapshots>, the numbered entries in <factual_foundation>, or existing dossiers';
+
+/** The turn's rule when a Gaffa club is attached: where its facts are and which tools read the rest. */
+export const DEEP_GAFFA_RULE =
+  "The user's Gaffa club is in <gaffa_club> and the blocks after it: they are the source for its squad, saved lineup, Club Balance, league market and rules. grep_gaffa_market filters the league's free agents, squad, listings and auctions at no cost; get_player_season gives any Premier League player's FPL status, including a player who isn't in the squad.";
 
 const RESEARCH_OVER =
   'Research is over: the budget is spent. Write the whole answer now from what you have, and say plainly what you could not verify.';
@@ -509,6 +516,8 @@ export interface DeepTurnParams {
   lockedDossiersBlock: string;
   savedDossiersBlock: string;
   peerLedgerBlock?: string;
+  /** The Gaffa club attached in the app. Never a trade or Gaffa's panel: those take the stage pipeline. */
+  gaffaBag?: GaffaContextBag;
   /** What the reply shows besides its prose; a turn run without one keeps its views to itself. */
   composer?: ReplyComposer;
   onStreamChunk?: (accumulatedText: string) => void;
@@ -529,6 +538,10 @@ export interface DeepTurnDeps {
   onStats?: (stats: DeepStats) => void;
   /** The gate feedback round's model, for tests. */
   gateFeedback?: CorrectionModel;
+  /** Reads a Gaffa squad's FPL availability, for tests. */
+  gaffaAvailability?: AvailabilityFetcher;
+  /** Called with the Gaffa turn the loop built, for tests. */
+  onGaffaTurn?: (turn: GaffaTurn) => void;
 }
 
 export interface DeepStats {
@@ -574,8 +587,23 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
   const tools = deps.tools ?? liveToolset([...lockedCards, ...allCalibrated]);
   const gaps = editionGaps(lockedCards, false, message, matchedCards);
 
-  // Free context: each spotted club's stored snapshot and today's coaches, waited for briefly.
-  const spottedClubs = (route.targetClubs?.length ? route.targetClubs : extractThreadClubs(message, history)).slice(0, MAX_CONTEXT_CLUBS);
+  // A Gaffa club attached in the app: its blocks, as the focus decides, before the first round. A
+  // trade never reaches the loop, and no scorecard call is made here whatever the focus says.
+  const ongoingThread = buildOngoingThreadBlock(history);
+  const gaffaBag = params.gaffaBag?.connected ? params.gaffaBag : undefined;
+  let gaffaTurn: GaffaTurn | null = null;
+  if (gaffaBag) {
+    params.onStageChange?.('Reading your Gaffa club...');
+    gaffaTurn = await buildGaffaTurn({ message, history, bag: gaffaBag, cards: allCalibrated, ongoingThread, fetchAvailability: deps.gaffaAvailability, scorecard: false });
+    deps.onGaffaTurn?.(gaffaTurn);
+    perf?.(`gaffa club (${gaffaTurn.focus})`);
+  }
+  const gaffaBlock = gaffaTurn?.block ?? '';
+
+  // Free context: each spotted club's stored snapshot and today's coaches, waited for briefly. A
+  // question about the Gaffa squad adds the Premier League clubs most of its starters play for.
+  const routeClubs = route.targetClubs?.length ? route.targetClubs : extractThreadClubs(message, history);
+  const spottedClubs = [...new Set([...routeClubs, ...(gaffaTurn?.squadClubs ?? [])])].slice(0, MAX_CONTEXT_CLUBS);
   const managerJobs: Promise<VerifiedClubManager[]>[] = [];
   const startManagers = (clubs: string[]): Promise<VerifiedClubManager[]> => {
     const job = clubs.filter(Boolean).length ? lookUpManagers(clubs).catch(() => []) : Promise.resolve([]);
@@ -594,14 +622,14 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
 
   // A follow-up in the same thread starts from what the last turn found.
   const thread = threadStateFor(params.conversationId ?? 'local');
-  const signature = getThreadSignature(history, message);
+  // Switching clubs mid-conversation starts the follow-up state afresh, as on the stage pipeline.
+  const signature = getThreadSignature(history, message) + (gaffaBag ? `|${gaffaBag.club_id}` : '');
   let ledger: EvidenceLedger = emptyLedger();
   if (signature === thread.signature && thread.grounding) {
     ledger = addEvidence(ledger, { kind: 'prior_turn', label: 'Research from the previous turn', content: thread.grounding.slice(0, 1400) });
   }
   const priorFoundation = hasEvidence(ledger) ? `<factual_foundation>\n${formatLedger(ledger)}\n</factual_foundation>` : '';
 
-  const ongoingThread = buildOngoingThreadBlock(history);
   const analyticalMode = route.analyticalMode ?? (route.intent === 'compare' ? 'head_to_head' : route.targetPlayers.length === 1 ? 'player_qa' : 'debate_or_verdict');
   const shownNames = composer.cards.map((c) => c.basicInfo.name);
   const shownNote = shownNames.length
@@ -613,6 +641,7 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
     : '';
   const gapNote = gaps.length ? ` ${gaps.map(editionGapNote).join(' ')}` : '';
   const prompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
+${gaffaBlock}
 ${ongoingThread}
 ${storedBlock}
 ${priorFoundation}
@@ -624,14 +653,14 @@ ${params.savedDossiersBlock}
 1. ${proseModeGuidance(route, analyticalMode, currentSeason, null, DEEP_TEAM_RULES)}${shownNote}${missingNote}${gapNote}
 2. ${presentFactRules(currentSeason, DEEP_FACT_SOURCES)}
 3. ${MANAGER_FIDELITY_RULE} A <verified_managers> block in a tool result counts too.
-4. ${CONTINUITY_REMINDER}
+4. ${CONTINUITY_REMINDER}${gaffaBag ? `\n5. ${DEEP_GAFFA_RULE}` : ''}
 </instructions>
 <task>${message}</task>`;
 
   const conversation = model.open({
     systemInstruction: `${buildConversationalScoutInstruction(params.isEAFCRequest)}\n\n${deepModeRules(budget)}`,
     history: buildHistoryContents(history, params.conversationDossiers),
-    declarations: DEEP_DECLARATIONS,
+    declarations: deepDeclarations(Boolean(gaffaBag)),
     thinkingLevel: deps.thinkingLevel,
   });
 
@@ -664,6 +693,7 @@ ${params.savedDossiersBlock}
         params.peerLedgerBlock ?? '',
         params.savedDossiersBlock,
         formatVerifiedManagersBlock(verified),
+        gaffaBlock,
         ongoingThread,
         message,
         ...cardsInPlay.map(serializeProfileForHistory),
@@ -676,7 +706,9 @@ ${params.savedDossiersBlock}
 
   // The reply's prose passes the gates a segment at a time, together, so a view stays where the model
   // called it however much a segment loses.
-  composer.setGate((segments) => gateSegments(segments, clean));
+  // A reply about the Gaffa club then passes the market rule and the roster name lock.
+  const finishGaffa = (text: string, log = false) => finishGaffaReply(text, gaffaBag, gaffaTurn, log);
+  composer.setGate((segments) => gateSegments(segments, clean).map((t) => finishGaffa(t)));
 
   // Deep mode's text always streams from the model, so views and cards sit inside the reply.
   const dossierTools = createDossierTools({ cardsInPlay, localCards: allCalibrated, historical: false, composer, inline: true });
@@ -751,6 +783,9 @@ ${params.savedDossiersBlock}
             return { response: (await dossierTools.show(args as { name?: string })) as Record<string, unknown> };
           case 'grep_saved_dossiers':
             return { response: grepDossiers(dossiersPool, args as DossierGrepParams) as unknown as Record<string, unknown> };
+          case 'grep_gaffa_market':
+            if (!gaffaBag) return { response: { error: 'No Gaffa club is attached to this conversation.' } };
+            return { response: grepGaffaBag(gaffaBag, args as GaffaMarketGrepParams, dossiersPool) as unknown as Record<string, unknown> };
           default:
             return { response: { error: `Unknown tool: ${call.name}` } };
         }
@@ -874,7 +909,9 @@ ${params.savedDossiersBlock}
   } else {
     finalJoined = sanitizeScoutProse(joinSegments(segments), managerContext(), cardsInPlay, finalFigures);
   }
-  const parts = splitSegments(finalJoined, segments.length) ?? segments.map((seg) => sanitizeScoutProse(seg, managerContext(), cardsInPlay, finalFigures));
+  const parts = (splitSegments(finalJoined, segments.length) ?? segments.map((seg) => sanitizeScoutProse(seg, managerContext(), cardsInPlay, finalFigures))).map((part) =>
+    finishGaffa(part, true),
+  );
   composer.settle(parts);
   const finalText = parts.filter((p) => p.trim()).join('\n\n');
 

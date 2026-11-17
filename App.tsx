@@ -672,7 +672,6 @@ const App: React.FC = () => {
     userMessageText: string,
     imageData?: string,
     mentions: Mention[] = [],
-    sendOptions?: { deep?: boolean; fast?: boolean },
   ) => {
     if (!userMessageText.trim() && !imageData) return;
     // A shared conversation's address (`/c/<code>`) stops describing it once you add to it.
@@ -804,8 +803,6 @@ const App: React.FC = () => {
           gaffaBag: clubBag?.connected ? clubBag : undefined,
           conversationId: activeConversationId ?? undefined,
           challengeCardKey: challengeCard ? getCardKey(challengeCard) : undefined,
-          deep: sendOptions?.deep,
-          fast: sendOptions?.fast,
           onStreamChunk: (accumulatedText) => {
             const now = Date.now();
             if (streamStarted && now - lastStreamFlushAt < 45) return;
@@ -1020,18 +1017,6 @@ const App: React.FC = () => {
     if (isLoading) return;
     void handleSendMessage(text);
   }, [isLoading, handleSendMessage]);
-
-  // Go deeper reruns the message the reply answered in deep mode, as a new turn under a new user
-  // message: the first reply stays where it is.
-  const handleGoDeeper = useCallback((replyId: string) => {
-    if (isLoading) return;
-    const replyIndex = messages.findIndex(m => m.id === replyId);
-    let userIndex = replyIndex - 1;
-    while (userIndex >= 0 && messages[userIndex].sender !== 'user') userIndex--;
-    const userMessage = messages[userIndex];
-    if (!userMessage || typeof userMessage.content !== 'string' || userMessage.rating) return;
-    void handleSendMessage(userMessage.content, undefined, [], { deep: true });
-  }, [isLoading, messages, handleSendMessage]);
 
   useEffect(() => {
     if (!pendingRetry || isLoading) return;
@@ -1455,7 +1440,6 @@ const App: React.FC = () => {
                 onOpenDossier={handleOpenDossier}
                 onRetry={handleRetry}
                 onAsk={handleAskOption}
-                onGoDeeper={handleGoDeeper}
             />
             
             {/* Input Container - Sticky Bottom */}

@@ -23,23 +23,3 @@ export const AskChips: React.FC<{ options: string[]; onAsk: (text: string) => vo
         </div>
     );
 };
-
-/** The writer's flag that a longer look would settle something: one tap reruns the question in deep mode. */
-export const GoDeeperChip: React.FC<{ reason: string; onGoDeeper: () => void }> = ({ reason, onGoDeeper }) => {
-    const [sent, setSent] = useState(false);
-    return (
-        <div>
-            <button
-                type="button"
-                disabled={sent}
-                title={reason}
-                aria-label={`Go deeper. ${reason}`}
-                onClick={() => { setSent(true); onGoDeeper(); }}
-                className={chipClass}
-            >
-                <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-emerald-600 dark:text-emerald-400">{sent ? 'check' : 'travel_explore'}</span>
-                <span className="font-bold uppercase tracking-widest text-[11px]">{sent ? 'Looking deeper' : 'Go deeper'}</span>
-            </button>
-        </div>
-    );
-};

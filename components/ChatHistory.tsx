@@ -18,8 +18,6 @@ interface ChatHistoryProps {
   onRetry?: (messageId: string) => void;
   /** A chip under the latest reply sends its text as the next message. */
   onAsk?: (text: string) => void;
-  /** Reruns the message a reply answered in deep mode, as a new turn. */
-  onGoDeeper?: (replyId: string) => void;
 }
 
 const STARTER_PROMPTS: { icon: string; label: string; prompt: string }[] = [
@@ -46,7 +44,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   onOpenDossier,
   onRetry,
   onAsk,
-  onGoDeeper,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -212,7 +209,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               onRetry={onRetry && !isLoading && i > lastUserIndex ? onRetry : undefined}
               // Chips answer the latest reply only; an older one would send into a moved-on thread.
               onAsk={!isLoading && i === messages.length - 1 ? onAsk : undefined}
-              onGoDeeper={!isLoading && i === messages.length - 1 ? onGoDeeper : undefined}
             />
           ))}
 
