@@ -28,6 +28,7 @@ import {
 import { addEvidence, emptyLedger, type EvidenceLedger } from './evidenceLedger';
 import { NEED_PROMPT, NEED_SCHEMA, readNeed, type NeedRead } from './userNeed';
 import { fileCardReviews, liveCardReviews, type CardReviewSource } from './cardReviewNotes';
+import { disagreementsFromSwaps, reportCardDisagreements } from './cardDisagreements';
 import {
   executeCall,
   fileOutcomes,
@@ -247,12 +248,16 @@ export function readDebateBrief(raw: any, ctx: Pick<DebateContext, 'message'>): 
   };
 }
 
-/** The brief held to the cards: a ranking reordered, a head-to-head verdict corrected, with notes. */
+/**
+ * The brief held to the cards: a ranking reordered, a head-to-head verdict corrected, with notes.
+ * Each pair the cards turned round is reported for card review (services/cardDisagreements.ts).
+ */
 export function checkBriefAgainstCards(brief: DebateBrief, cards: CardStanding[]): DebateBrief {
   if (!cards.length || !cardsSettle(brief.criterion)) return brief;
   if (brief.kind === 'ranking' && brief.ranking.length > 1) {
     const check = checkOrderAgainstCards(brief.ranking, cards);
     if (!check.moves.length) return brief;
+    reportCardDisagreements(disagreementsFromSwaps(check.swaps, 'debate'));
     return { ...brief, ranking: check.order, cardNotes: [...brief.cardNotes, ...check.moves.map((m) => `Moved ${m}.`)] };
   }
   if (brief.kind === 'head_to_head') {
@@ -260,6 +265,7 @@ export function checkBriefAgainstCards(brief: DebateBrief, cards: CardStanding[]
     // The verdict names the winner first; match it on its opening words.
     const winner = sides.find((s) => matchStanding(s, cards) && brief.verdict.toLowerCase().includes(s.toLowerCase().split(' ').pop()!)) ?? brief.verdict;
     const check = checkVerdictAgainstCards(winner, sides, cards, brief.criterion);
+    if (check.swap) reportCardDisagreements(disagreementsFromSwaps([check.swap], 'debate'));
     if (check.changed) return { ...brief, verdict: check.verdict, cardNotes: [...brief.cardNotes, check.note!] };
     if (check.note) return { ...brief, cardNotes: [...brief.cardNotes, check.note] };
   }
