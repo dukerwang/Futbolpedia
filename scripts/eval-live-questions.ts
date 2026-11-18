@@ -18,6 +18,7 @@
  *   npm run eval:live -- --set historical --only 2,3 --repeat 1 --no-builds   # a small, cheap subset
  *   npm run eval:live -- --deep --only 1,3 --label deep   # the live set through deep mode (services/deepTurn.ts)
  *   npm run eval:live -- --stage --label stage   # the same set through the stage pipeline, whatever DEEP_BY_DEFAULT says
+ *   npm run eval:live -- --only 11 --principles --label principles   # the chat writer reads the principle set (PRINCIPLES_PROMPT)
  *   npm run eval:live -- --conversations --only C1,C2   # the multi-turn cases, graded for conduct (scripts/eval-conversations.ts)
  *   npm run eval:live -- --deep --repeat 2 --only 4,11,1 --dry-run   # price a repeat run: calls, tokens and cost, with no call made
  *   npm run eval:live -- --deep --repeat 2 --only 4,11,1 --shared-cards --label drift   # how far deep-mode answers vary between runs
@@ -80,6 +81,12 @@ const warm = args.includes('--warm');
 const deep = args.includes('--deep');
 /** `--stage`: send every question with `fast: true`, so it takes the stage pipeline even where deep mode would take it. */
 const stage = args.includes('--stage');
+/**
+ * `--principles`: send every question with `principles: true`, so the chat writer reads the principle
+ * set (`PRINCIPLES_PROMPT` in prompts/chatPrompt.ts) whatever the constant says. It combines with
+ * `--deep`, `--stage` and `--set historical`.
+ */
+const principlesFlag = args.includes('--principles');
 if (deep && stage) {
   console.error('Pass --deep or --stage, not both.');
   process.exit(1);
@@ -304,6 +311,7 @@ async function ask(
         path = p;
       },
       ...(deep ? { deep: true } : stage ? { fast: true } : {}),
+      ...(principlesFlag ? { principles: true } : {}),
       deepDeps: { onStats: (s) => (stats = s) },
     });
     const answer = typeof reply === 'string' ? reply : `[Rated a card instead of answering: ${reply.basicInfo.name}]`;

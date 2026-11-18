@@ -287,5 +287,40 @@ await test('a pushback on a checkable fact: the need goes to the writer first, r
   assert.match(writerCall.raw, /googleSearch/);
 });
 
+await test('with the principle set on, the writer reads the principles once and its instructions carry only the turn\'s data', async () => {
+  calls.length = 0;
+  const history: import('../types').ChatMessage[] = [
+    { id: 'u0', sender: 'user', content: "Break down Southside's build-up shape this season", timestamp: 0 },
+    { id: 'a0', sender: 'ai', content: 'Right Back starts at left-back in a back four, and Main Nine leads the line.', timestamp: 1 },
+  ];
+  await quietly(() => sendMessageToAI(PUSHBACK, history, undefined, [], [], { fast: true, principles: true, conversationId: 'principles-test' }));
+  const writerCall = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1);
+  assert.ok(writerCall, 'the writer ran');
+  const writer = writerCall.prompt;
+  assert.equal(writer.split('VIII. CHAT PRINCIPLES').length - 1, 1, 'the principles, once');
+  assert.doesNotMatch(writer, /Reading the User|CONVERSATIONAL SCOUTING|Chief Football Scout/);
+  const instructions = writer.slice(writer.indexOf('<instructions>'), writer.indexOf('</instructions>'));
+  assert.match(instructions, /^<instructions>\\n1\. This turn's facts are in <situation_snapshot>/);
+  for (const retired of ['Build the team', 'CRITICAL MANAGER FIDELITY', 'THREAD CONTINUITY', 'Views:', 'Asking:', 'Offering:', 'Current-state facts', 'phases of play']) {
+    assert.ok(!instructions.includes(retired), retired);
+  }
+  // The blocks describe themselves: the need states the disputed fact, the snapshot what it holds.
+  assert.match(writer, /The fact the objection turns on, to check this turn: Who has started at left-back/);
+  assert.doesNotMatch(writer, /Don't accept or reject it on the user's word/);
+  assert.doesNotMatch(writer, /Argue from it: name the first-choice player/);
+  assert.match(writer, /LB New Fullback/);
+  assert.match(writerCall.raw, /get_player_season/);
+});
+
+await test('with the principle set off, the writer reads the instructions it always did', async () => {
+  calls.length = 0;
+  await quietly(() => sendMessageToAI(PUSHBACK, [], undefined, [], [], { fast: true, principles: false, conversationId: 'legacy-test' }));
+  const writer = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1)?.prompt ?? '';
+  assert.match(writer, /Reading the User/);
+  assert.doesNotMatch(writer, /VIII\. CHAT PRINCIPLES/);
+  assert.match(writer, /3\. CRITICAL MANAGER FIDELITY/);
+  assert.match(writer, /4\. THREAD CONTINUITY/);
+});
+
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

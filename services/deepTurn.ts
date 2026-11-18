@@ -2,7 +2,14 @@ import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration
 import type { ChatMessage, GaffaContextBag, PlayerProfile } from '../types';
 import { grepGaffaBag, type GaffaMarketGrepParams } from '../constants/gaffaRules';
 import { resolveTaskModelConfig, samplingFor, type ThinkingTier } from '../constants/modelProfiles';
-import { buildConversationalScoutInstruction, viewRules } from '../prompts/chatPrompt';
+import {
+  buildConversationalScoutInstruction,
+  GAFFA_CLUB_SOURCES,
+  PRINCIPLE_SOURCES,
+  principleInstructions,
+  PRINCIPLES_PROMPT,
+  viewRules,
+} from '../prompts/chatPrompt';
 import {
   blockedOrEmptyResponseError,
   getAi,
@@ -432,11 +439,58 @@ const DEEP_FACT_SOURCES =
   'your tool results this turn, <stored_snapshots>, the numbered entries in <factual_foundation>, or existing dossiers';
 
 /** The turn's rule when a Gaffa club is attached: where its facts are and which tools read the rest. */
-export const DEEP_GAFFA_RULE =
-  "The user's Gaffa club is in <gaffa_club> and the blocks after it: they are the source for its squad, saved lineup, Club Balance, league market and rules. grep_gaffa_market filters the league's free agents, squad, listings and auctions at no cost; get_player_season gives any Premier League player's FPL status, including a player who isn't in the squad.";
+export const DEEP_GAFFA_RULE = GAFFA_CLUB_SOURCES;
+
+/**
+ * The loop's `<instructions>`. Off (`principles` false), exactly the block built before the principle
+ * set: the router's answer template with deep's team rules, the fact, manager and continuity rules,
+ * and the Gaffa line. On, only the turn's data. Pinned in `scripts/test-chat-prompt.ts`.
+ */
+export function deepInstructions(args: {
+  principles: boolean;
+  route: TurnRoute;
+  analyticalMode: string;
+  currentSeason: string;
+  notes: string;
+  gaffa: boolean;
+}): string {
+  const { principles, route, analyticalMode, currentSeason, notes, gaffa } = args;
+  if (principles) return principleInstructions([PRINCIPLE_SOURCES.deep, notes, gaffa ? GAFFA_CLUB_SOURCES : '']);
+  return `<instructions>
+1. ${proseModeGuidance(route, analyticalMode, currentSeason, null, DEEP_TEAM_RULES)}${notes}
+2. ${presentFactRules(currentSeason, DEEP_FACT_SOURCES)}
+3. ${MANAGER_FIDELITY_RULE} A <verified_managers> block in a tool result counts too.
+4. ${CONTINUITY_REMINDER}${gaffa ? `\n5. ${DEEP_GAFFA_RULE}` : ''}
+</instructions>`;
+}
 
 const RESEARCH_OVER =
   'Research is over: the budget is spent. Write the whole answer now from what you have, and say plainly what you could not verify.';
+
+/** The same note under the chat principle set, which already says when to name what couldn't be verified. */
+const RESEARCH_OVER_PRINCIPLES = 'Research is over: the budget is spent. Write the whole answer now from what you have.';
+
+/**
+ * Deep mode's part of the system instruction under the chat principle set: the budget and how to
+ * spend it, and nothing the principles already say about the need, pushback or views. Descriptive only.
+ */
+export const deepResearchRules = (budget: DeepBudget): string => `## Deep mode
+
+In this conversation you decide your own research. Your tools read live club data, Premier League player seasons, league tables, past club seasons, player careers, the web, the stored dossier cards and the user's saved dossiers; the show tools draw views in your reply.
+
+Budget for this turn: ${Math.round(budget.ms / 1000)} seconds of research, ${budget.calls} lookups (at most ${budget.searches} of them web searches) and ${budget.rounds} rounds of tool calls. The local dossier search and the show tools are free: drawing views costs no lookup, search or round. Every tool result ends with what's left. When any part of the budget runs out, research is over and your next reply must be the answer.
+
+How to research:
+- Look up only what the user's need requires. A fact the user disputes is looked up this turn, and a fact already in the conversation's evidence counts as looked up. Stop researching as soon as you have what the answer needs; a question the conversation or the cards already answer needs no lookup.
+- Call independent lookups together in one round: they run in parallel. Follow up only on what a result left open.
+- For who plays, results, availability and standings, use the live feeds. Use web search for what the feeds don't cover (tactical analysis, transfers and their dates, news, clubs or players outside the feeds), naming the season. A web search is the slowest and scarcest lookup: don't search for what a feed already gave you.
+- A lookup that came back not covered won't work if asked again.
+- For a question about the present, find out what is different this season for the club or player (the people, the coach, the shape, the role or the form), unless the conversation, a stored snapshot or a result already says it.
+- For who is missing or doubtful, read team news as well as the injury list: no free source records knocks between list updates, and news reports them first.
+- Each result also lists what is still unchecked for the clubs and players in the question. Spend on those only where the answer needs them.
+- Write nothing to the user while you look things up: text you write in a round that also calls a lookup is discarded. When research is done, write the answer. To place a view inside it, write the part that leads into the view, call the view tool in that same turn, and carry on with the rest after its result; a turn that only draws views keeps its text.
+
+${RESEARCH_COVERAGE_NOTE}`;
 
 const formatBudget = (left: DeepBudget): string =>
   `Budget left: ${Math.max(0, Math.round(left.ms / 1000))} s, ${Math.max(0, left.calls)} lookups, ${Math.max(0, left.searches)} web searches, ${Math.max(0, left.rounds)} rounds.`;
@@ -524,6 +578,8 @@ export interface DeepTurnParams {
   onStageChange?: (stageLabel: string) => void;
   perf?: (label: string) => void;
   conversationId?: string;
+  /** Which instruction set the loop reads; left out, `PRINCIPLES_PROMPT` decides (`chatPrompt.ts`). */
+  principles?: boolean;
 }
 
 export interface DeepTurnDeps {
@@ -571,6 +627,8 @@ const noLive: Promise<ToolOutcome> = Promise.resolve({ status: 'empty', result: 
 
 export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {}): Promise<string> {
   const { message, route, history, perf } = params;
+  const principles = params.principles ?? PRINCIPLES_PROMPT;
+  const researchOver = principles ? RESEARCH_OVER_PRINCIPLES : RESEARCH_OVER;
   const composer = params.composer ?? new ReplyComposer();
   const model = deps.model ?? liveDeepModel;
   const now = deps.now ?? Date.now;
@@ -594,7 +652,7 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
   let gaffaTurn: GaffaTurn | null = null;
   if (gaffaBag) {
     params.onStageChange?.('Reading your Gaffa club...');
-    gaffaTurn = await buildGaffaTurn({ message, history, bag: gaffaBag, cards: allCalibrated, ongoingThread, fetchAvailability: deps.gaffaAvailability, scorecard: false });
+    gaffaTurn = await buildGaffaTurn({ message, history, bag: gaffaBag, cards: allCalibrated, ongoingThread, fetchAvailability: deps.gaffaAvailability, scorecard: false, principles });
     deps.onGaffaTurn?.(gaffaTurn);
     perf?.(`gaffa club (${gaffaTurn.focus})`);
   }
@@ -649,16 +707,13 @@ ${formatVerifiedManagersBlock(managersAtStart ?? [])}
 ${params.peerLedgerBlock ?? ''}
 ${params.lockedDossiersBlock}
 ${params.savedDossiersBlock}
-<instructions>
-1. ${proseModeGuidance(route, analyticalMode, currentSeason, null, DEEP_TEAM_RULES)}${shownNote}${missingNote}${gapNote}
-2. ${presentFactRules(currentSeason, DEEP_FACT_SOURCES)}
-3. ${MANAGER_FIDELITY_RULE} A <verified_managers> block in a tool result counts too.
-4. ${CONTINUITY_REMINDER}${gaffaBag ? `\n5. ${DEEP_GAFFA_RULE}` : ''}
-</instructions>
+${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `${shownNote}${missingNote}${gapNote}`, gaffa: Boolean(gaffaBag) })}
 <task>${message}</task>`;
 
   const conversation = model.open({
-    systemInstruction: `${buildConversationalScoutInstruction(params.isEAFCRequest)}\n\n${deepModeRules(budget)}`,
+    systemInstruction: principles
+      ? `${buildConversationalScoutInstruction(params.isEAFCRequest, true)}\n\n${deepResearchRules(budget)}`
+      : `${buildConversationalScoutInstruction(params.isEAFCRequest, false)}\n\n${deepModeRules(budget)}`,
     history: buildHistoryContents(history, params.conversationDossiers),
     declarations: deepDeclarations(Boolean(gaffaBag)),
     thinkingLevel: deps.thinkingLevel,
@@ -854,7 +909,7 @@ ${params.savedDossiersBlock}
     const uncheckedLine = formatUnchecked(uncheckedFor({ clubs: spottedClubs, players: route.targetPlayers }, ledger, stored));
     const results = responses.map((r) => ({
       name: r.name,
-      response: { ...r.response, ...(over ? { researchOver: RESEARCH_OVER } : {}), unchecked: uncheckedLine, budget: budgetLine },
+      response: { ...r.response, ...(over ? { researchOver: researchOver } : {}), unchecked: uncheckedLine, budget: budgetLine },
     }));
     for (const r of results) toolResults.push(JSON.stringify(r.response));
     params.onStageChange?.(over ? 'Writing scouting analysis...' : 'Weighing what came back...');
@@ -867,7 +922,7 @@ ${params.savedDossiersBlock}
   // A reply with no text (or calls the model was told it couldn't make) gets one plain request to write,
   // unless views came with their own text.
   if (!reply.text.trim() && !kept.trim()) {
-    reply = await conversation.send(RESEARCH_OVER, { tools: false, onText: (t) => onText(t, true) });
+    reply = await conversation.send(researchOver, { tools: false, onText: (t) => onText(t, true) });
   }
   if (!reply.text.trim() && !kept.trim()) {
     const why = blockedOrEmptyResponseError(reply.finishReason).message;

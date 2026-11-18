@@ -286,6 +286,11 @@ export async function buildGaffaTurn(params: {
   fetchAvailability?: AvailabilityFetcher;
   /** False on deep mode, which never takes a trade: no scorecard call is made whatever the focus. */
   scorecard?: boolean;
+  /**
+   * Under the chat principle set (`PRINCIPLES_PROMPT`), the manager's reasoning leaves out its last
+   * point, checking a fact before advising, which the principles already make.
+   */
+  principles?: boolean;
 }): Promise<GaffaTurn> {
   const { message, history, bag, cards } = params;
   const focus = leagueFocusOf(message, history, bag);
@@ -300,7 +305,8 @@ export async function buildGaffaTurn(params: {
     }
   }
   const blocks = [formatGaffaClubBlock(bag, focus, availability)];
-  if (focus !== 'none') blocks.push(`<gaffa_manager_reasoning>\n${GAFFA_MANAGER_REASONING}\n</gaffa_manager_reasoning>`);
+  const reasoning = params.principles ? GAFFA_MANAGER_REASONING.split('\n').slice(0, -1).join('\n') : GAFFA_MANAGER_REASONING;
+  if (focus !== 'none') blocks.push(`<gaffa_manager_reasoning>\n${reasoning}\n</gaffa_manager_reasoning>`);
   if (focus === 'rules' || focus === 'lineup' || focus === 'market' || focus === 'trade') {
     blocks.push(`<gaffa_rules>\nPrefer these over memory for how Gaffa works.\n${GAFFA_RULES_SNAPSHOT}\n</gaffa_rules>`);
   }

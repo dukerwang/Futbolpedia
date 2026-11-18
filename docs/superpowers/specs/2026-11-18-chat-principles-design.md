@@ -1,6 +1,6 @@
 # Chat principles
 
-Date: 2026-11-18. Status: approved, with the decisions below. No live calls.
+Date: 2026-11-18. Status: steps 1 to 6 built; the switch ships off, pending the live check. No live calls.
 
 Builds on the card-mentions edits (branch `card-mentions-judgment`). When this spec was written
 those edits were still uncommitted in the main checkout (`/Users/dukewang/Futbolpedia`), so this
@@ -22,6 +22,27 @@ Taken on 2026-11-18, after review. Where they differ from the design below, they
   step 2's release.
 - **One copy per tool.** Tool descriptions are the one copy of when to use a tool (step 5), on the
   new path only while the switch exists.
+
+## Build notes
+
+Steps 2 to 6 are built behind `PRINCIPLES_PROMPT`, off. Where the build differs from the design below:
+
+- **Proof of the off state.** A full `npm test` run captured every writer prompt (system
+  instruction, turn prompt and deep tool declarations: 67 stage, 62 deep, 3 challenge) on `main`
+  and on the branch with `main`'s tests; all 132 were identical. `scripts/test-chat-prompt.ts` pins
+  the assembled instructions per path (`stageInstructions`, `deepInstructions`,
+  `challengeInstructions`, with fixed inputs for every router mode and debate kind), the block
+  headers and the tool declarations by hash.
+- **The debate brief's header.** `debateBrief.ts` is unchanged: "the reasoning settled before
+  writing, not a layout" is in the past path's sources line (`PRINCIPLE_SOURCES.past`), and a
+  `kind: other` brief adds `PRINCIPLE_SOURCES.pastOther`.
+- **Tool descriptions.** Only `prepare_club` and `offer_rating` needed a sentence from their turn
+  rules; the ask and view descriptions already said everything their rules did. The view rules'
+  intro is in principle 8.
+- **The router mode as a label.** Not printed yet: the eval report already names the path each
+  answer took, and the label waits for the flip PR, which removes the field.
+- **The principle text** is in `prompts/chatPrompt.ts`; it differs from the draft below only in
+  wording, and keeps the card-mentions and card-order sentences.
 
 ## Problem
 
@@ -423,23 +444,23 @@ Run one command at a time in this order, and stop at the first HTTP 429, so a ca
 the most informative answers:
 
 ```bash
-npm run eval:live -- --only 11 --label principles
+npm run eval:live -- --only 11 --principles --label principles
 ```
 
 ```bash
-npm run eval:live -- --set historical --only 5 --repeat 1 --no-builds --label principles
+npm run eval:live -- --set historical --only 5 --repeat 1 --no-builds --principles --label principles
 ```
 
 ```bash
-npm run eval:live -- --only 1 --label principles
+npm run eval:live -- --only 1 --principles --label principles
 ```
 
 ```bash
-npm run eval:live -- --set historical --only 1 --repeat 1 --no-builds --label principles
+npm run eval:live -- --set historical --only 1 --repeat 1 --no-builds --principles --label principles
 ```
 
 ```bash
-npm run eval:live -- --only 8 --label principles
+npm run eval:live -- --only 8 --principles --label principles
 ```
 
 | Type | Question | Read for |
