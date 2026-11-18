@@ -103,7 +103,7 @@ export const rankingEntry: BlockEntry<'ranking'> = {
     criterion: data.criterion,
     order: data.entries.map((e, i) => rankLine(e, i + 1)),
     ...(data.moves.length
-      ? { moves: data.moves, note: "The order follows the cards' ratings: write your prose in this order, and say so in a sentence where it differs from your first order." }
+      ? { moves: data.moves, note: "The order follows the cards' ratings: write your prose in this order, and mention the change only if it matters to the reader." }
       : {}),
   }),
   toHistory: ({ data }) => `[shown: ranking "${data.title}" by ${data.criterion}: ${data.entries.map((e) => e.name).join(', ')}]`,

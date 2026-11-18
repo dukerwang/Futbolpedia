@@ -231,7 +231,7 @@ export const buildLockedDossiersBlock = (dossiers: PlayerProfile[]): string => {
   const body = dossiers.map(serializeProfileForHistory).join('\n\n');
   return `
     <locked_dossiers>
-    The player(s) below were ALREADY rated earlier in this conversation. These dossiers are LAW: reuse the EXACT Overall, Potential, and all attribute values shown — do NOT recompute or drift them. Prose may be reworded, but every number must match. Only a player NOT listed here may be rated fresh from the factual foundation.
+    The player(s) below were ALREADY rated earlier in this conversation. They are your settled analysis: any Overall, Potential or attribute value you state must match them exactly, never recomputed or drifted. They constrain what you say, not what you bring up: quote their numbers only where they help the reader, for the version under discussion. Only a player NOT listed here may be rated fresh from the factual foundation.
     ${body}
     </locked_dossiers>`;
 };
