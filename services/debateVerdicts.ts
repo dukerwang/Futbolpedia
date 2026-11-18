@@ -38,7 +38,7 @@ import { eraKey, isMissingTable, normalizePeriod } from './eraSnapshots';
  * a verdict, so the public settle route makes no call and stores nothing. Migration step 3 moves
  * this switch to `services/chatTurn.ts` with the loop it turns on, and this module reads it there.
  */
-export const PAST_MODE = false;
+export const PAST_MODE = true;
 
 /**
  * Whether the settle route may spend calls: only while past questions are on (`pastMode`), or when

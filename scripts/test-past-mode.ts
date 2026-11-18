@@ -221,10 +221,10 @@ function pastDeps(over: Record<string, unknown> = {}) {
 
 // --- The switch and the entry -----------------------------------------------------------------
 
-await test('PAST_MODE is off, and with it off a question about the past never takes the loop', () => {
-  assert.equal(PAST_MODE, false);
+await test('PAST_MODE is on: a question about the past takes the loop, and with it off it never does', () => {
+  assert.equal(PAST_MODE, true);
   const r = (intent: string) => ({ intent }) as any;
-  assert.equal(takesChatLoop({ route: r('compare'), historical: true }), false);
+  assert.equal(takesChatLoop({ route: r('compare'), historical: true }), true);
   assert.equal(takesChatLoop({ route: r('compare'), historical: true, pastMode: false }), false);
   assert.equal(takesChatLoop({ route: r('compare'), historical: true, pastMode: true }), true);
   assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: true, pastMode: true }), true);
@@ -254,7 +254,10 @@ await test('through sendMessageToAI: off, a past question takes the debate path;
     );
     return { opened, briefAsked: fetched.some((f) => f.body.includes(BRIEF_PROMPT)), system: opened ? fake.opened().systemInstruction : '' };
   };
-  const off = await run();
+  const byDefault = await run();
+  assert.equal(byDefault.opened, true, 'by default (PAST_MODE on): the loop answers');
+  assert.equal(byDefault.briefAsked, false, 'by default: no debate brief is written');
+  const off = await run(false);
   assert.equal(off.opened, false, 'off: the debate pipeline answers');
   assert.equal(off.briefAsked, true, 'off: the early debate brief starts as before');
   const on = await run(true);
@@ -554,8 +557,8 @@ await test('with past mode off, the loop builds exactly what it built before, pa
     await quietly(() => runChatTurn(p, { ...h.deps, model: fake.model, onStats: (s) => (stats = s) }));
     return { prompt: String(fake.sent[0].message), system: fake.opened().systemInstruction, declarations: fake.opened().declarations, stats: stats!, settled: h.net.settled, pairs: h.pairs };
   };
-  const before = await runOnce({});
-  for (const extra of [{ pastMode: false }, { pastMode: false, historical: true }, { historical: true }]) {
+  const before = await runOnce({ pastMode: false });
+  for (const extra of [{ pastMode: false, historical: true }]) {
     const after = await runOnce(extra);
     assert.equal(after.prompt, before.prompt, JSON.stringify(extra));
     assert.equal(after.system, before.system);
