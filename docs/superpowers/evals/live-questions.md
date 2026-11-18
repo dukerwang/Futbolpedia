@@ -11,13 +11,15 @@ compare.
 ### Automated
 
 `npm run eval:live` runs questions 1 to 14 through the chat pipeline in-process (no server
-needed) and has a grader model, with Google Search and the live feeds, score each answer for stale
-facts, invented facts, whether it says what changed this season, decisiveness, hedged roles and
-gaps admitted. It writes a Markdown report and its JSON to `docs/superpowers/evals/reports/`. It
-needs the network and `GEMINI_API_KEY` in `.env.local` or the environment. Use `--only 1,3,8` for
-a subset and `--label <name>` to name the run. Club snapshots are built fresh in memory each run,
+needed) and saves the answers for a person to read. With `--grade`, a grader model, with Google
+Search and the live feeds, scores each answer for stale facts, invented facts, whether it says what
+changed this season, decisiveness, hedged roles and gaps admitted. It writes a Markdown report and its
+JSON to `docs/superpowers/evals/reports/`. It needs the network and `EVAL_GEMINI_API_KEY` in
+`.env.local` or the environment, a key from a separate project with a small cap, never the live
+app's `GEMINI_API_KEY` ([README.md](README.md)). The smallest useful check is three questions, each
+run once, no grader (`--only 11,4,1`). Use `--only 1,3,8` for a subset and `--label <name>` to name the run. Club snapshots are built fresh in memory each run,
 since Supabase isn't loaded outside the browser. `--conversations` runs the multi-turn cases under
-Conversations instead, graded for conduct. `--repeat 2` (or more) asks each question that many
+Conversations instead (graded for conduct with `--grade`). `--repeat 2` (or more) asks each question that many
 times, one run at a time, and measures how far the answers vary: the spread of each rubric measure,
 contradictions between the runs' verdicts, starters and claims about what changed, whether the runs
 looked up different things, and card figures quoted. `--dry-run` prices a run without a call. See

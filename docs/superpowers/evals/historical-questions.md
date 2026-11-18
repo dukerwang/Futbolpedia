@@ -6,15 +6,17 @@ uses the same runner. Keep the questions unchanged between runs so the scores co
 
 ## How to run
 
-`npm run eval:live -- --set historical` runs every question twice through the chat pipeline
-in-process, each run in a new chat, and has a grader model with Google Search score each answer.
-A second grader call compares the two runs of each question, and the answers to each pair of
-paraphrases below, for whether they reach the same verdict. It needs the network and
-`GEMINI_API_KEY`. Use `--only 1,4` for a subset, `--repeat 1` to skip the second run, and
-`--label <name>` to name the run. `--no-builds` reads era snapshots without building any, which
-keeps a small run cheap. Every run spends the project's Gemini budget, which the live app shares,
-so run the smallest subset that answers the question. `--regrade <report.json>` runs a saved report's answers through
-the figure check again without re-asking the questions. Reports go to
+`npm run eval:live -- --set historical` runs every question once through the chat pipeline
+in-process, each run in a new chat, and saves the answers for a person to read. It needs the network
+and `EVAL_GEMINI_API_KEY`, a key from a separate project with a small cap (never the live app's
+`GEMINI_API_KEY`; see [README.md](README.md)). Nothing is graded unless you pass `--grade`, which has
+a grader model with Google Search score each answer and, for the paraphrases below, compare the
+answers for whether they reach the same verdict. `--figure-check` (which implies `--grade`) also
+lists and checks every precise figure. `--repeat 2` runs each question twice and adds one verdict
+comparison per question. Use `--only 1,4` for a subset and `--label <name>` to name the run. Era
+snapshot builds are off unless you pass `--builds`. Price any run first with `--dry-run`, and run the
+smallest subset that answers the question. `--regrade <report.json>` runs a saved report's answers
+through the figure check again without re-asking the questions. Reports go to
 `docs/superpowers/evals/reports/`.
 
 The runner reads the shared dossier cards from Supabase, as the app does, and never writes to it,
@@ -36,7 +38,7 @@ rating on a question that doesn't turn on how good the players were.
 The run that decides whether `PAST_MODE` turns on, not yet run:
 
 ```bash
-npm run eval:live -- --set historical --past-mode --only 1,3,5,6,13,14 --no-builds --label past-mode
+npm run eval:live -- --set historical --past-mode --only 1,3,5,6,13,14 --repeat 2 --grade --label past-mode
 ```
 
 Estimate: 12 answers at about three loop calls each (two rounds and the correction round, about

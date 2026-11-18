@@ -1,45 +1,55 @@
 #!/usr/bin/env npx tsx
 /**
  * Runs the live question set (docs/superpowers/evals/live-questions.md) through the real chat
- * pipeline and has a grader model score each answer. Users never see any of this.
+ * pipeline. Users never see any of this. The run writes a Markdown report and its JSON to
+ * docs/superpowers/evals/reports/.
  *
- * The grader reads the answer with fresh Google Search and the same live feeds the app uses (ESPN
- * match data and the Fantasy Premier League feed), and scores stale facts, invented facts, whether
- * the answer says what changed this season, and how decisive it is. The run writes a Markdown
- * report and its JSON to docs/superpowers/evals/reports/.
+ * Evals are cheap by default and can't spend the live app's Gemini budget:
  *
- * It needs the network and a Gemini key, so it isn't part of `npm test`. Put GEMINI_API_KEY in
- * .env.local (or the environment), then:
+ *  - They read EVAL_GEMINI_API_KEY (a key from a separate Google project with a small cap) and refuse
+ *    to start without it. They never fall back to GEMINI_API_KEY, the live app's key; --use-app-key
+ *    is the explicit, warned way to spend it (scripts/eval-guard.ts).
+ *  - Before the first real call, one request with maxOutputTokens 1. A 429 that names the spending cap
+ *    ends the run with nothing else sent. A 429 or cap error during a run stops it at once, with the
+ *    report so far kept and nothing retried.
+ *  - Nothing is graded unless you pass --grade: without it, answers are saved for a person to read.
+ *    --figure-check (historical set) lists and verifies each precise figure and implies --grade.
+ *  - The historical set runs each question once (--repeat 2 for twice). Era snapshot builds are opt-in
+ *    (--builds). Grounded search results are cached on disk for the day under .cache/eval-search/
+ *    (--fresh-search bypasses the cache); the app never reads or writes it.
+ *  - Every report and the end of every run give the real input, output and thinking tokens and the
+ *    grounded searches, counted from the model's usageMetadata.
+ *  - --dry-run prices any set with no key and no call, from the usage the saved reports record.
  *
- *   npm run eval:live
- *   npm run eval:live -- --only 1,3,8 --label after-snapshots
- *   npm run eval:live -- --warm      # answer each question once first, so the graded run reuses today's club snapshots
- *   npm run eval:live -- --set historical   # the historical set, each question twice (--repeat 1 to run once)
- *   npm run eval:live -- --set historical --only 2,3 --repeat 1 --no-builds   # a small, cheap subset
+ * Needs the network and EVAL_GEMINI_API_KEY (in .env.local or the environment), so it isn't part of
+ * `npm test`. The smallest useful check is three targeted questions, each run once, no grader:
+ *
+ *   npm run eval:live -- --only 11,4,1 --shared-cards --label check
+ *   npm run eval:live -- --only 11,4,1 --dry-run                      # what it would cost, no call
+ *   npm run eval:live -- --only 1,3,8 --grade --label after-snapshots  # the same, scored by a grader
+ *   npm run eval:live -- --warm                # answer each question once first, so the run reuses today's club snapshots
+ *   npm run eval:live -- --set historical --only 2,3   # the historical set, each question once
+ *   npm run eval:live -- --set historical --only 2,3 --repeat 2 --grade --figure-check   # twice, graded, figures checked
  *   npm run eval:live -- --set historical --past-mode --only 2,3   # questions about the past through the chat loop (PAST_MODE)
  *   npm run eval:live -- --stage --label stage   # the live set through the stage pipeline instead of the chat loop
  *   npm run eval:live -- --only 11 --principles --label principles   # the chat writer reads the principle set (PRINCIPLES_PROMPT)
- *   npm run eval:live -- --conversations --only C1,C2   # the multi-turn cases, graded for conduct (scripts/eval-conversations.ts)
- *   npm run eval:live -- --repeat 2 --only 4,11,1 --dry-run   # price a repeat run: calls, tokens and cost, with no call made
- *   npm run eval:live -- --repeat 2 --only 4,11,1 --shared-cards --label drift   # how far the chat loop's answers vary between runs
+ *   npm run eval:live -- --conversations --only C1,C2   # the multi-turn cases (--grade to score their conduct)
+ *   npm run eval:live -- --repeat 2 --only 4,11,1 --grade --shared-cards --label drift   # how far the chat loop's answers vary between runs
  *
- * `--repeat N` (2 or more) on the live set asks each question N times, one run after another, and
- * measures drift (scripts/eval-consistency.ts): each run on the live rubric and the range between
- * runs, one comparison per question of the judgments the runs commit to (the verdict, who starts,
- * what changed) with the contradictions listed, whether the runs looked up different things, and
- * card figures quoted (a rating, a tier or an attribute score: whether it helped the answer, and
- * whether it belonged to another version than the one discussed). `--only` keeps the order given,
- * `--max-questions K` keeps the first K, `--no-card-mentions` skips the card scoring,
- * `--shared-cards` reads the shared cards from Supabase (read-only) so cards can come into play,
- * and `--dry-run` prints the estimate (`--price-in`, `--price-out` and `--price-search` replace the
- * placeholder prices) and exits before any call or key check. A spending cap or rate limit stops the
- * run at once. The report goes to docs/superpowers/evals/reports/ with a `consistency-` prefix.
+ * `--repeat N` (2 or more) on the live set asks each question N times, one run after another. With
+ * --grade it measures drift (scripts/eval-consistency.ts): each run on the live rubric and the range
+ * between runs, one comparison per question of the judgments the runs commit to (the verdict, who
+ * starts, what changed) with the contradictions listed, and card figures quoted. Without --grade it
+ * still compares what each run looked up, from the turns' own logs. `--only` keeps the order given,
+ * `--max-questions K` keeps the first K, `--no-card-mentions` skips the card scoring, and
+ * `--shared-cards` reads the shared cards from Supabase (read-only) so cards can come into play.
+ * `--price-in`, `--price-out` and `--price-search` replace the placeholder prices in the estimate.
  *
  * `--conversations` runs the Conversations section of the live set: each tested turn with the turns
- * before it as history (their recorded replies, or this run's answers where none was recorded), and
- * a conduct grader (one call a turn, no search) checks what a good answer must do. A case that needs
- * a Gaffa club reads EVAL_GAFFA_CLUB=<leagueId>/<clubId> with FUTBOLPEDIA_READ_SECRET and is skipped
- * without them.
+ * before it as history (their recorded replies, or this run's answers where none was recorded). With
+ * --grade a conduct grader (one call a turn, no search) checks what a good answer must do. A case that
+ * needs a Gaffa club reads EVAL_GAFFA_CLUB=<leagueId>/<clubId> with FUTBOLPEDIA_READ_SECRET and is
+ * skipped without them.
  *
  * Without flags, a turn goes where the app would send it: a question about the present to the chat
  * loop (services/chatTurn.ts). `--stage` sends every question the loop would take to the stage
@@ -53,24 +63,18 @@
  * cards from Supabase through a read-only client (`scripts/eval-history.ts`), so its answers see
  * the cards a user would, and the run never writes to the shared tables.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ThinkingLevel, Type } from '@google/genai';
+import { finishRun, loadEnvFiles, parseEvalFlags, repeatFor, startEvalSessionOrExit, usageLine, usageSection, type EvalSession, type Usage } from './eval-guard';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // --- Setup ------------------------------------------------------------------------------------
 
-/** Reads KEY=value lines from the env files, without overriding the environment. */
-for (const file of ['.env.local', '.env']) {
-  const path = join(root, file);
-  if (!existsSync(path)) continue;
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"\n]*)"?\s*$/);
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
-  }
-}
+// KEY=value lines from the env files, without overriding the environment (EVAL_GEMINI_API_KEY goes here).
+loadEnvFiles(root);
 const args = process.argv.slice(2);
 const argValue = (flag: string) => {
   const i = args.indexOf(flag);
@@ -103,45 +107,63 @@ if (pastMode && stage) {
   process.exit(1);
 }
 const set = argValue('--set') === 'historical' ? 'historical' : 'live';
-const repeat = Math.max(1, Number(argValue('--repeat') ?? (set === 'historical' ? 2 : 1)) || 1);
+const flags = parseEvalFlags(args);
+/** Runs of each question: one unless `--repeat N` says otherwise, on the historical set too. */
+const repeat = repeatFor(args);
 /** The live set's repeat flow: two or more runs of each question, or card scoring asked for on its own. */
 const repeatFlow = set === 'live' && !args.includes('--conversations') && (repeat > 1 || args.includes('--card-mentions'));
 const maxQuestions = Number(argValue('--max-questions')) || undefined;
-/** `--dry-run`: print the estimate for the flags given and exit, before the key is read or anything is called. */
-const dryRun = args.includes('--dry-run');
 /** `--shared-cards`: read the shared cards (and stored club snapshots) from Supabase through a read-only client. */
 const sharedCards = args.includes('--shared-cards');
 const label = (argValue('--label') ?? (pastMode ? 'past-mode' : stage ? 'stage' : warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
+const reportsDir = join(root, 'docs/superpowers/evals/reports');
 
-if (dryRun) {
-  const { estimateRun, formatEstimate, readLiveQuestionsFile, selectQuestions, ASSUMED_PRICES } = await import('./eval-consistency');
-  if (set === 'historical' || args.includes('--conversations') || stage) {
-    console.error('--dry-run estimates the live set on the chat loop, the default path. The historical set, --conversations and --stage aren\'t modelled.');
-    process.exit(1);
-  }
+if (flags.dryRun) {
+  // Prices any set from the saved reports with no key and no call (scripts/eval-estimate.ts).
+  const { formatEstimate, readLiveQuestionsFile, selectQuestions, ASSUMED_PRICES } = await import('./eval-consistency');
+  const { estimateSet, readReportBaseline } = await import('./eval-estimate');
   const { researchRules, DEFAULT_RESEARCH_BUDGET, CHAT_DECLARATIONS } = await import('../services/chatTurn');
   const { buildConversationalScoutInstruction } = await import('../prompts/chatPrompt');
   const chars = buildConversationalScoutInstruction(false).length + researchRules(DEFAULT_RESEARCH_BUDGET).length + JSON.stringify(CHAT_DECLARATIONS).length;
-  const picked = selectQuestions(readLiveQuestionsFile(join(root, 'docs/superpowers/evals/live-questions.md')), { only, max: maxQuestions });
   const price = (flag: string, fallback: number) => (Number.isFinite(Number(argValue(flag))) && argValue(flag) !== undefined ? Number(argValue(flag)) : fallback);
-  const estimate = estimateRun({
-    questions: picked.map((q) => q.n),
+  const prices = { inputPerMillion: price('--price-in', ASSUMED_PRICES.inputPerMillion), outputPerMillion: price('--price-out', ASSUMED_PRICES.outputPerMillion), perGroundedSearch: price('--price-search', ASSUMED_PRICES.perGroundedSearch) };
+  const common = {
     repeat,
-    consistency: repeat > 1,
-    cardMentions: repeatFlow && !args.includes('--no-card-mentions'),
-    prices: { inputPerMillion: price('--price-in', ASSUMED_PRICES.inputPerMillion), outputPerMillion: price('--price-out', ASSUMED_PRICES.outputPerMillion), perGroundedSearch: price('--price-search', ASSUMED_PRICES.perGroundedSearch) },
+    grade: flags.grade,
+    figureCheck: flags.figureCheck,
+    builds: flags.builds,
+    stage,
+    pastMode,
+    prices,
     sizes: { chatFixedTokens: Math.round(chars / 4) },
-  });
-  console.log(formatEstimate(estimate, { questions: picked.map((q) => q.n), repeat, path: 'the chat loop' }));
+    baseline: readReportBaseline(reportsDir),
+  };
+  const flagsLine = `Flags reflected: ${[flags.grade ? '--grade' : 'no --grade', flags.figureCheck ? '--figure-check' : '', `--repeat ${repeat}`, flags.builds ? '--builds' : '', stage ? '--stage' : '', pastMode ? '--past-mode' : ''].filter(Boolean).join(', ')}.`;
+  const liveFile = join(root, 'docs/superpowers/evals/live-questions.md');
+  if (args.includes('--conversations')) {
+    const conv = await import('./eval-conversations');
+    const onlyCases = argValue('--only')?.split(',').map((x) => x.trim().toUpperCase());
+    const cases = conv.readConversations(readFileSync(liveFile, 'utf8')).filter((c) => !onlyCases || onlyCases.includes(c.id.toUpperCase()));
+    const counts = conv.conversationTurnCounts(cases);
+    const e = estimateSet({ ...common, set: 'conversations', questions: [], pairs: 0, cardMentions: false, conversationTurns: { ...counts, cases: cases.length } });
+    console.log(formatEstimate(e, { questions: [], repeat: 1, path: 'the chat loop', header: `Dry run, conversations: ${cases.length} case${cases.length === 1 ? '' : 's'} (${cases.map((c) => c.id).join(', ')}), ${counts.live} turns run live, ${counts.tested} of them tested. No call is made.\n${flagsLine}`, notes: e.notes }));
+  } else if (set === 'historical') {
+    const hist = await import('./eval-history');
+    const all = hist.readQuestionTable(join(root, 'docs/superpowers/evals/historical-questions.md'));
+    const picked = all.filter((q) => !only || only.includes(q.n));
+    const pairs = hist.paraphrasePairs(all).filter(([a, b]) => picked.some((q) => q.n === a) && picked.some((q) => q.n === b)).length;
+    const e = estimateSet({ ...common, set: 'historical', questions: picked.map((q) => q.n), pairs, cardMentions: false });
+    console.log(formatEstimate(e, { questions: picked.map((q) => q.n), repeat, path: pastMode ? 'the chat loop in past mode' : 'the stage pipeline', header: `Dry run, historical set: ${picked.length} question${picked.length === 1 ? '' : 's'} (${picked.map((q) => q.n).join(', ')}) × ${repeat} run${repeat === 1 ? '' : 's'} = ${e.turns} turns through ${pastMode ? 'the chat loop in past mode' : 'the stage pipeline'}. No call is made.\n${flagsLine}`, notes: e.notes }));
+  } else {
+    const picked = selectQuestions(readLiveQuestionsFile(liveFile), { only, max: maxQuestions });
+    const e = estimateSet({ ...common, set: 'live', questions: picked.map((q) => q.n), pairs: 0, cardMentions: repeatFlow && !args.includes('--no-card-mentions') });
+    console.log(formatEstimate(e, { questions: picked.map((q) => q.n), repeat, path: stage ? 'the stage pipeline' : 'the chat loop', header: `Dry run: ${picked.length} question${picked.length === 1 ? '' : 's'} (${picked.map((q) => q.n).join(', ')}) × ${repeat} run${repeat === 1 ? '' : 's'} = ${e.turns} turns through ${stage ? 'the stage pipeline' : 'the chat loop'}. No call is made.\n${flagsLine}`, notes: e.notes }));
+  }
   process.exit(0);
 }
 
-const key = process.env.GEMINI_API_KEY || process.env.API_KEY;
-if (!key) {
-  console.error('No Gemini key. Add GEMINI_API_KEY=... to .env.local (or export it), then run `npm run eval:live` again.');
-  process.exit(1);
-}
-process.env.API_KEY = key;
+// Everything below makes model calls: the key, the cap check and the usage count come first (scripts/eval-guard.ts).
+const session: EvalSession = await startEvalSessionOrExit(flags, root);
 
 const history = await import('./eval-history');
 if (set === 'historical' || sharedCards) history.installReadOnlySupabase();
@@ -256,9 +278,10 @@ globalThis.fetch = (async (input: any, init?: any) => {
 }) as typeof fetch;
 
 const { sendMessageToAI } = await import('../services/geminiService');
-// `--no-builds`: read era snapshots but never build one, so a small run doesn't pay for background
-// builds (two searches and a call each) that only later turns would use.
-if (args.includes('--no-builds')) {
+// Era snapshot builds are opt-in (`--builds`): by default a turn reads stored era snapshots and never
+// builds one, so a small run doesn't pay for background builds (two searches and a call each) that
+// only later turns would use. (`--no-builds` is the default now and still accepted.)
+if (!flags.builds) {
   const { liveEraSnapshots } = await import('../services/eraSnapshots');
   liveEraSnapshots.get = liveEraSnapshots.stored;
 }
@@ -274,6 +297,8 @@ interface RunResult {
   perf: string[];
   /** What the turn looked up and showed, so chat loop and stage runs compare. */
   research?: Research;
+  /** What the turn cost, counted from the model's usage metadata (the answer's own calls, not the grader's). */
+  usage?: Usage;
 }
 
 interface Research {
@@ -354,10 +379,20 @@ function researchOf(
   return { path: 'stage', ...(path?.fallback ? { fallback: path.fallback } : {}), lookups: lookupLines.length, searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length, rounds, ...shown };
 }
 
-async function ask(
-  question: string,
-  context: { history?: import('../types').ChatMessage[]; conversationId?: string; gaffaBag?: import('../types').GaffaContextBag } = {},
-): Promise<RunResult> {
+type AskContext = { history?: import('../types').ChatMessage[]; conversationId?: string; gaffaBag?: import('../types').GaffaContextBag };
+
+/**
+ * One turn through the pipeline, with what it cost. A 429 or spending-cap error that stopped the run
+ * during the turn is the turn's error, so every runner's own limit check sees it.
+ */
+async function ask(question: string, context: AskContext = {}): Promise<RunResult> {
+  const mark = session.tally.mark();
+  const run = await session.tally.within('answer', () => askInner(question, context));
+  const stopped = session.stopReason();
+  return { ...run, usage: session.tally.since(mark), ...(stopped && !run.error ? { error: stopped } : {}) };
+}
+
+async function askInner(question: string, context: AskContext = {}): Promise<RunResult> {
   const perf: string[] = [];
   const { log, info, warn } = console;
   console.log = (...a: unknown[]) => {
@@ -457,7 +492,9 @@ Futbolpedia's dossier ratings (an Overall and attribute scores on a 1 to 99 scal
 
 Reply with one JSON object with exactly these keys and nothing else.`;
 
-async function grade(question: string, answer: string, today: string): Promise<{ grade: Grade | null; raw: string }> {
+const grade = (question: string, answer: string, today: string) => session.tally.within('grade', () => gradeInner(question, answer, today));
+
+async function gradeInner(question: string, answer: string, today: string): Promise<{ grade: Grade | null; raw: string }> {
   const facts = await liveFacts(await subjectsOf(question, answer));
   const res = await getAi().models.generateContent({
     model: FLASH_MODEL,
@@ -491,7 +528,8 @@ const today = new Date().toISOString().slice(0, 10);
 const dir = join(root, 'docs/superpowers/evals/reports');
 const stampOf = (prefix: string) => `${today}-${new Date().toISOString().slice(11, 16).replace(':', '')}-${prefix}${label}`;
 
-const graderCall = async (prompt: string, withSearch: boolean) => {
+const graderCall = (prompt: string, withSearch: boolean) => session.tally.within('grade', () => graderCallInner(prompt, withSearch));
+const graderCallInner = async (prompt: string, withSearch: boolean) => {
   const res = await getAi().models.generateContent({
     model: FLASH_MODEL,
     contents: prompt,
@@ -500,24 +538,34 @@ const graderCall = async (prompt: string, withSearch: boolean) => {
   return res.text ?? '';
 };
 
+/** The usage section of a report, from the session's tally and each answer's own usage. */
+const usageBlock = (answers: { label: string; usage?: Usage }[] = []) => usageSection(session.tally, answers);
+const write = (stamp: string, markdown: string, json: unknown) => {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${stamp}.md`), markdown);
+  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(json, null, 2));
+};
+const reportLine = (stamp: string) => console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
+
 // `--regrade <report.json>`: run a saved historical report's answers through the figure check again.
 const regrade = argValue('--regrade');
 if (set === 'historical' && regrade) {
   const saved = JSON.parse(readFileSync(regrade, 'utf8'));
+  const stamp = stampOf('historical-regraded-');
   const { markdown, json } = await history.regradeFigures(saved, {
     grade: graderCall,
+    stopReason: session.stopReason,
+    usage: (runs: { q: { n: number }; attempt: number; run: { usage?: Usage } }[]) => usageBlock(runs.map((r) => ({ label: `Q${r.q.n}, run ${r.attempt}`, usage: r.run.usage }))),
     today,
     label: `${label}-regraded`,
     model: FLASH_MODEL,
     repeat: Math.max(...saved.runs.map((r: any) => r.attempt)),
     questions: [...new Map(saved.runs.map((r: any) => [r.q.n, r.q])).values()] as any,
   });
-  mkdirSync(dir, { recursive: true });
-  const stamp = stampOf('historical-regraded-');
-  writeFileSync(join(dir, `${stamp}.md`), markdown);
-  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(json, null, 2));
-  console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
-  process.exit(0);
+  write(stamp, markdown, json);
+  reportLine(stamp);
+  finishRun(session);
+  process.exit(process.exitCode ?? 0);
 }
 
 if (args.includes('--conversations')) {
@@ -527,7 +575,11 @@ if (args.includes('--conversations')) {
   const { fetchClubContextWithSecret } = await import('../services/gaffaChatApi');
   const { mapResponseToBag } = await import('../services/gaffaContext');
   const results: import('./eval-conversations').ConversationResult[] = [];
+  const stamp = stampOf('conversations-');
+  const answersOf = () => results.flatMap((r) => r.turns.map((t) => ({ label: `${r.id}, turn ${t.turn + 1}`, usage: t.run?.usage })));
+  const writeConversations = () => write(stamp, conv.conversationReport(results, { today, label, model: FLASH_MODEL, graded: flags.grade, usage: usageBlock(answersOf()) }), results);
   for (const c of cases.filter((x) => !onlyCases || onlyCases.includes(x.id.toUpperCase()))) {
+    if (session.stopReason()) break;
     let gaffaBag: import('../types').GaffaContextBag | undefined;
     if (c.gaffaClub) {
       const club = conv.gaffaClubFromEnv(process.env.EVAL_GAFFA_CLUB);
@@ -543,42 +595,51 @@ if (args.includes('--conversations')) {
     const result = await conv.runConversation(c, {
       ask: async (message, hist, options) => {
         const r = await ask(message, { history: hist, conversationId: options.conversationId, gaffaBag });
-        return { answer: r.answer, error: r.error, totalMs: r.totalMs, perf: r.perf };
+        return { answer: r.answer, error: r.error, totalMs: r.totalMs, perf: r.perf, usage: r.usage };
       },
-      grade: (prompt) => graderCall(prompt, false),
-      facts: (subjects) => liveFacts({ clubs: subjects?.clubs ?? [], players: subjects?.players ?? [] }),
+      ...(flags.grade
+        ? {
+            grade: (prompt: string) => graderCall(prompt, false),
+            facts: (subjects: import('./eval-conversations').ConversationCase['subjects']) => liveFacts({ clubs: subjects?.clubs ?? [], players: subjects?.players ?? [] }),
+          }
+        : {}),
+      stopReason: session.stopReason,
     });
     results.push(result);
     const checks = result.turns.flatMap((t) => t.checks ?? []);
-    console.log(`${checks.filter((k) => k.met).length} of ${checks.length} checks met`);
+    console.log(flags.grade ? `${checks.filter((k) => k.met).length} of ${checks.length} checks met` : `${result.turns.length} turns answered, not graded`);
+    writeConversations();
   }
-  mkdirSync(dir, { recursive: true });
-  const stamp = stampOf('conversations-');
-  writeFileSync(join(dir, `${stamp}.md`), conv.conversationReport(results, { today, label, model: FLASH_MODEL }));
-  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(results, null, 2));
-  console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
-  process.exit(0);
+  writeConversations();
+  reportLine(stamp);
+  finishRun(session);
+  process.exit(process.exitCode ?? 0);
 }
 
 if (set === 'historical') {
   const all = history.readQuestionTable(join(root, 'docs/superpowers/evals/historical-questions.md'));
   const picked = all.filter((q) => !only || only.includes(q.n));
-  const { markdown, json } = await history.runHistoricalSet({
+  const stamp = stampOf('historical-');
+  const deps = {
     questions: picked,
     pairs: history.paraphrasePairs(all).filter(([a, b]) => picked.some((q) => q.n === a) && picked.some((q) => q.n === b)),
     repeat,
     ask,
-    grade: graderCall,
+    ...(flags.grade ? { grade: graderCall } : {}),
+    figureCheck: flags.figureCheck,
+    stopReason: session.stopReason,
+    // Rewritten after every run, so a run cut short (a crash, a spending cap) keeps what it finished.
+    onUpdate: (r: { markdown: string; json: unknown }) => write(stamp, r.markdown, r.json),
+    usage: (runs: { q: { n: number }; attempt: number; run: { usage?: Usage } }[]) => usageBlock(runs.map((r) => ({ label: `Q${r.q.n}, run ${r.attempt}`, usage: r.run.usage }))),
     today,
     label,
     model: FLASH_MODEL,
-  });
-  mkdirSync(dir, { recursive: true });
-  const stamp = stampOf('historical-');
-  writeFileSync(join(dir, `${stamp}.md`), markdown);
-  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(json, null, 2));
-  console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
-  process.exit(0);
+  };
+  const { markdown, json } = await history.runHistoricalSet(deps);
+  write(stamp, markdown, json);
+  reportLine(stamp);
+  finishRun(session);
+  process.exit(process.exitCode ?? 0);
 }
 
 const questions = consistency.selectQuestions(readQuestions(), { only, max: maxQuestions });
@@ -586,62 +647,53 @@ const questions = consistency.selectQuestions(readQuestions(), { only, max: maxQ
 if (repeatFlow) {
   // Each question `repeat` times, one run after another; the report is rewritten after every run.
   const stampRepeat = stampOf('consistency-');
-  const cardMentions = !args.includes('--no-card-mentions');
+  const cardMentions = flags.grade && !args.includes('--no-card-mentions');
   const path = stage ? 'the stage pipeline (`--stage`)' : 'the chat loop';
-  const write = (r: import('./eval-consistency').RepeatResult) => {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${stampRepeat}.md`), consistency.repeatReport(r, { today, label, model: FLASH_MODEL, repeat, path, cardMentions, sharedCards }));
-    writeFileSync(join(dir, `${stampRepeat}.json`), JSON.stringify({ ...r, totals: consistency.totalsOf(r) }, null, 2));
-  };
+  const writeRepeat = (r: import('./eval-consistency').RepeatResult) =>
+    write(
+      stampRepeat,
+      consistency.repeatReport(r, { today, label, model: FLASH_MODEL, repeat, path, cardMentions, sharedCards, graded: flags.grade, usage: usageBlock(r.runs.map((x) => ({ label: `Q${x.q.n}, run ${x.attempt}`, usage: x.run.usage }))) }),
+      { ...r, totals: consistency.totalsOf(r), usage: { total: session.tally.total(), byPhase: session.tally.byPhase() } },
+    );
   const outcome = await consistency.runRepeats({
     questions,
     repeat,
     ask: (text) => ask(text),
-    gradeRubric: async (text, answer) => (await grade(text, answer, today)).grade,
-    grade: (prompt) => graderCall(prompt, false),
+    ...(flags.grade ? { gradeRubric: async (text: string, answer: string) => (await grade(text, answer, today)).grade, grade: (prompt: string) => graderCall(prompt, false) } : {}),
+    stopReason: session.stopReason,
     cardMentions,
-    onUpdate: write,
+    onUpdate: writeRepeat,
   });
-  write(outcome);
-  console.log(`\nReport: docs/superpowers/evals/reports/${stampRepeat}.md`);
-  process.exit(0);
-}
-
-const results: { q: Question; run: RunResult; grade: Grade | null; graderRaw: string }[] = [];
-
-if (warm) {
-  // Snapshots live in memory here, so a first pass stands in for the shared table's daily rows.
-  for (const q of questions) {
-    process.stdout.write(`Warming Q${q.n} ... `);
-    const run = await ask(q.text);
-    console.log(run.error ? `failed: ${run.error}` : `${(run.totalMs / 1000).toFixed(1)}s`);
-  }
-  await new Promise((r) => setTimeout(r, 20_000));
+  writeRepeat(outcome);
+  reportLine(stampRepeat);
+  finishRun(session);
+  process.exit(process.exitCode ?? 0);
 }
 
 // Written after every question, so a run cut short (a crash, a spend cap) keeps what it finished.
 const stamp = stampOf('');
-function writeReport(): void {
-const secs = (ms: number | null) => (ms === null ? '–' : (ms / 1000).toFixed(1));
-const graded = results.filter((r) => r.grade);
-const sum = (f: (g: Grade) => number) => graded.reduce((n, r) => n + f(r.grade!), 0);
-const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : null);
+let stoppedEarly: string | undefined;
+function writeReport(results: import('./eval-plain').PlainResult<Grade, RunResult>[]): void {
+  const secs = (ms: number | null) => (ms === null ? '–' : (ms / 1000).toFixed(1));
+  const graded = results.filter((r) => r.grade);
+  const sum = (f: (g: Grade) => number) => graded.reduce((n, r) => n + f(r.grade!), 0);
+  const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : null);
+  const tokens = (u?: Usage) => (u ? `${u.inputTokens} / ${u.outputTokens + u.thinkingTokens} / ${u.searches}` : '–');
+  const gateTotals = `- Gate feedback (flagged sentences the model fixed, dropped, or lost to the second pass): ${results.reduce((n, r) => n + (r.run.research?.gateFeedback?.fixed ?? 0), 0)} fixed, ${results.reduce((n, r) => n + (r.run.research?.gateFeedback?.dropped ?? 0), 0)} dropped, ${results.reduce((n, r) => n + (r.run.research?.gateFeedback?.removed ?? 0), 0)} removed, across ${results.filter((r) => r.run.research?.gateFeedback).length} turns with a correction round. A turn with no round (nothing flagged, a spent budget, a late reply or a failed call) shows 0, 0, 0.`;
 
-const report = `# Live question eval: ${today}, ${label}
-
-Ran ${results.length} questions through the ${stage ? 'stage pipeline (`--stage`)' : 'chat loop'}${warm ? ', each answered once beforehand so club snapshots were already built' : stage ? ', cold: every club snapshot built during the run' : ', cold: no stored club snapshots (the chat loop reads them but never builds one)'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
-
-The grader is the same model that writes the answers, so it can share their blind spots and misjudge facts its own search doesn't reach. Compare runs with each other rather than reading any score as absolute.
+  const intro = `Ran ${results.length} questions through the ${stage ? 'stage pipeline (`--stage`)' : 'chat loop'}${warm ? ', each answered once beforehand so club snapshots were already built' : stage ? ', cold: every club snapshot built during the run' : ', cold: no stored club snapshots (the chat loop reads them but never builds one)'}; ${
+    flags.grade ? `${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.` : 'none were graded (no `--grade`): the answers are saved below for a person to read. Pass `--grade` to have a grader model score them.'
+  }${stoppedEarly ? `\n\n**Run stopped early:** ${stoppedEarly.replace(/\|/g, '/')}. Nothing was retried; the sections below cover what finished.` : ''}`;
+  const stats = flags.grade
+    ? `The grader is the same model that writes the answers, so it can share their blind spots and misjudge facts its own search doesn't reach. Compare runs with each other rather than reading any score as absolute.
 
 - Stale facts: ${sum((g) => g.staleFacts.length)} in total
 - Invented facts: ${sum((g) => g.inventedFacts.length)} in total
 - Says what changed: ${graded.filter((r) => r.grade!.saysWhatChanged === 'yes').length} of ${graded.filter((r) => r.grade!.saysWhatChanged !== 'not_needed').length} that needed it
-- Mean decisiveness: ${graded.length ? (sum((g) => g.decisiveness) / graded.length).toFixed(1) : '–'} / 5
-- Median first token: ${secs(median(results.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s
-- Gate feedback (flagged sentences the model fixed, dropped, or lost to the second pass): ${results.reduce((n, r) => n + (r.run.research?.gateFeedback?.fixed ?? 0), 0)} fixed, ${results.reduce((n, r) => n + (r.run.research?.gateFeedback?.dropped ?? 0), 0)} dropped, ${results.reduce((n, r) => n + (r.run.research?.gateFeedback?.removed ?? 0), 0)} removed, across ${results.filter((r) => r.run.research?.gateFeedback).length} turns with a correction round. A turn with no round (nothing flagged, a spent budget, a late reply or a failed call) shows 0, 0, 0.
-
-| # | Stale | Invented | What changed | Decisive | Hedged roles | Gaps admitted | Path | Lookups | Searches | Rounds | Views | Gate fixed | Gate dropped | Gate removed | First token (s) | Total (s) | Notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+- Mean decisiveness: ${graded.length ? (sum((g) => g.decisiveness) / graded.length).toFixed(1) : '–'} / 5`
+    : '';
+  const table = `| # | Stale | Invented | What changed | Decisive | Hedged roles | Gaps admitted | Path | Lookups | Searches | Rounds | Views | Gate fixed | Gate dropped | Gate removed | First token (s) | Total (s) | Tokens in / out / searches | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${results
   .map((r) => {
     const x = r.run.research;
@@ -649,10 +701,20 @@ ${results
     const gate = x?.gateFeedback ? `${x.gateFeedback.fixed} | ${x.gateFeedback.dropped} | ${x.gateFeedback.removed}` : '0 | 0 | 0';
     const research = x ? `${x.fallback ? `chat, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${viewsLine(x.views)} | ${gate}` : '– | – | – | – | – | – | – | –';
     return r.grade
-      ? `| ${r.q.n} | ${r.grade.staleFacts.length} | ${r.grade.inventedFacts.length} | ${r.grade.saysWhatChanged} | ${r.grade.decisiveness} | ${r.grade.hedgedRoles} | ${r.grade.gapsAdmitted} | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.grade.notes.replace(/\|/g, '/').replace(/\n/g, ' ')} |`
-      : `| ${r.q.n} | – | – | – | – | – | – | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${r.run.error}` : 'Grading failed'} |`;
+      ? `| ${r.q.n} | ${r.grade.staleFacts.length} | ${r.grade.inventedFacts.length} | ${r.grade.saysWhatChanged} | ${r.grade.decisiveness} | ${r.grade.hedgedRoles} | ${r.grade.gapsAdmitted} | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${tokens(r.run.usage)} | ${r.grade.notes.replace(/\|/g, '/').replace(/\n/g, ' ')} |`
+      : `| ${r.q.n} | – | – | – | – | – | – | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${tokens(r.run.usage)} | ${r.run.error ? `Pipeline failed: ${r.run.error.replace(/\|/g, '/')}` : flags.grade ? 'Grading failed' : 'Not graded'} |`;
   })
-  .join('\n')}
+  .join('\n')}`;
+
+  const report = `# Live question eval: ${today}, ${label}
+
+${intro}
+
+${stats}
+- Median first token: ${secs(median(results.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s
+${gateTotals}
+
+${table}
 
 ${results
   .map(
@@ -660,7 +722,7 @@ ${results
 
 ${r.q.tests}
 
-${r.grade?.staleFacts.length ? `Stale facts:\n${r.grade.staleFacts.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${
+${r.run.usage ? `Usage: ${usageLine(r.run.usage)}.\n\n` : ''}${r.grade?.staleFacts.length ? `Stale facts:\n${r.grade.staleFacts.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${
       r.grade?.inventedFacts.length ? `Invented facts:\n${r.grade.inventedFacts.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''
     }${r.run.research?.toolCalls ? `Loop tool calls (${r.run.research.stop}): ${r.run.research.toolCalls.join(', ') || 'none'}\n\n` : ''}<details><summary>Answer</summary>
 
@@ -675,26 +737,23 @@ ${r.run.perf.map((l) => `    ${l}`).join('\n') || '    (no perf lines)'}
 </details>
 `,
   )
-  .join('\n')}`;
-
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${stamp}.md`), report);
-  writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(results, null, 2));
+  .join('\n')}
+${usageBlock(results.map((r) => ({ label: `Q${r.q.n}`, usage: r.run.usage })))}
+`;
+  write(stamp, report, { results, usage: { total: session.tally.total(), byPhase: session.tally.byPhase() }, ...(stoppedEarly ? { stoppedEarly } : {}) });
 }
 
-for (const q of questions) {
-  process.stdout.write(`Q${q.n}: ${q.text} ... `);
-  const run = await ask(q.text);
-  const graded = run.answer ? await grade(q.text, run.answer, today).catch((e) => ({ grade: null, raw: String(e) })) : { grade: null, raw: '' };
-  results.push({ q, run, grade: graded.grade, graderRaw: graded.raw });
-  console.log(
-    run.error
-      ? `failed: ${run.error}`
-      : `${((run.firstTokenMs ?? run.totalMs) / 1000).toFixed(1)}s first token, ${(run.totalMs / 1000).toFixed(1)}s total${
-          graded.grade ? `; stale ${graded.grade.staleFacts.length}, invented ${graded.grade.inventedFacts.length}, decisive ${graded.grade.decisiveness}/5` : '; grading failed'
-        }`,
-  );
-  writeReport();
-}
-
-console.log(`\nReport: docs/superpowers/evals/reports/${stamp}.md`);
+const outcome = await (await import('./eval-plain')).runPlainSet<Grade, RunResult>({
+  questions,
+  warm,
+  ask: (text) => ask(text),
+  ...(flags.grade ? { gradeAnswer: (text: string, answer: string) => grade(text, answer, today).catch((e) => ({ grade: null, raw: String(e) })) } : {}),
+  describeGrade: (g) => `stale ${g.staleFacts.length}, invented ${g.inventedFacts.length}, decisive ${g.decisiveness}/5`,
+  stopReason: session.stopReason,
+  onResult: writeReport,
+});
+stoppedEarly = outcome.stoppedEarly;
+writeReport(outcome.results);
+reportLine(stamp);
+finishRun(session);
+process.exit(process.exitCode ?? 0);
