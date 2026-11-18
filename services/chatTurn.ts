@@ -897,6 +897,14 @@ ${
   // The loop's text always streams from the model, so views and cards sit inside the reply.
   const dossierTools = createDossierTools({ cardsInPlay, localCards: allCalibrated, historical: past, composer, inline: true });
   const dossiersPool = [...params.savedDossiers, ...params.conversationDossiers];
+  // The turn's card lookup: your dossiers, then the shared cards. A card it finds joins the cards in play.
+  const cardLookup = makeCardLookup({
+    pool: [...cardsInPlay, ...allCalibrated],
+    preferPrime: (name) => wantsPrimeOf(message, name, past),
+    onCard: (card) => {
+      if (!cardsInPlay.some((c) => getCardKey(c) === getCardKey(card))) cardsInPlay.push(card);
+    },
+  });
   const viewTools = createViewTools({
     composer,
     inline: true,
@@ -904,16 +912,23 @@ ${
       tools,
       ledger: { read: () => ledger, write: (next) => { ledger = next; } },
       stored,
-      cards: makeCardLookup({
-        pool: [...cardsInPlay, ...allCalibrated],
-        preferPrime: (name) => wantsPrimeOf(message, name, past),
-        onCard: (card) => {
-          if (!cardsInPlay.some((c) => getCardKey(c) === getCardKey(card))) cardsInPlay.push(card);
-        },
-      }),
+      cards: cardLookup,
       now,
     },
   });
+
+  /**
+   * Before a commitment is checked, the versions it names that no card in play matches yet are read
+   * through the turn's card lookup, so a ranking the model committed without looking each player up
+   * is still held to the cards. The reads cost no lookup: they are the same shared-card reads a view makes.
+   */
+  const resolveCommitCards = async (args: Record<string, unknown>): Promise<void> => {
+    const named = [...(Array.isArray(args.sides) ? args.sides : []), ...(Array.isArray(args.order) ? args.order : []), args.verdict];
+    const names = [...new Set(named.filter((n): n is string => typeof n === 'string' && n.trim() !== ''))].slice(0, 15);
+    const known = standingsOf([...lockedCards, ...cardsInPlay]);
+    const bare = (n: string) => n.replace(/\(.*?\)/g, '').replace(/\b(prime|peak)\b/gi, '').replace(/\s+/g, ' ').trim();
+    await Promise.all(names.filter((n) => !matchStanding(n, known)).map((n) => cardLookup.lookUp(bare(n)).catch(() => null)));
+  };
 
   /** The model's view of a lookup's outcome. */
   const describe = (outcome: ToolOutcome): Record<string, unknown> => ({
@@ -972,6 +987,7 @@ ${
             return { response: grepGaffaBag(gaffaBag, args as GaffaMarketGrepParams, dossiersPool) as unknown as Record<string, unknown> };
           case 'commit_verdict':
             if (!commitTool) return { response: { error: `Unknown tool: ${call.name}` } };
+            await resolveCommitCards(args);
             return { response: commitTool.handle(args) };
           default:
             return { response: { error: `Unknown tool: ${call.name}` } };
