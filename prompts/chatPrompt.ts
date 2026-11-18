@@ -205,6 +205,8 @@ export const PRINCIPLE_SOURCES = {
     "This question is about the past. Its facts are in <factual_foundation> and the stored cards. <debate_brief> is the reasoning settled before writing, not a layout, and lists the only precise figures to quote; a claim an era snapshot lists as often misstated is wrong.",
   pastOther:
     'The latest message asks for no new judgment: <debate_brief> and the evidence are background to answering exactly what it asks.',
+  deepPast:
+    'This question is about the past. Its facts come from your tool results, the records and era snapshots in <factual_foundation>, and the cards; a precise figure is quoted only where it decides part of the judgment, as you named it in commit_verdict.',
   archive: "The user's saved dossiers are listed in <saved_dossier_archive>, and `grep_saved_dossiers` searches them.",
 } as const;
 

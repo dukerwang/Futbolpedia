@@ -17,7 +17,7 @@ import {
 } from './conversationalScout';
 import { lookUpDossier, replaceSupersededPrimes } from './dossierLookup';
 import { ReplyComposer, type ComposerExtras } from './replyBlocks';
-import { DEEP_BY_DEFAULT, runDeepTurn, runDeepWithFallback, takesDeepPath, wantsDeep, type DeepTurnDeps, type PathInfo } from './deepTurn';
+import { DEEP_BY_DEFAULT, DEEP_PAST, runDeepTurn, runDeepWithFallback, takesDeepPath, wantsDeep, type DeepTurnDeps, type PathInfo } from './deepTurn';
 import {
   CALIBRATION_EPOCH_MS,
   buildHistoryContents,
@@ -217,6 +217,12 @@ export interface SendMessageOptions {
   fast?: boolean;
   /** Overrides `DEEP_BY_DEFAULT` for one turn, for tests and the eval. */
   deepByDefault?: boolean;
+  /**
+   * Overrides `DEEP_PAST` (`deepTurn.ts`) for one turn: true sends a question about the past to the
+   * deep loop, and lets a present turn comparing carded versions commit its verdict. The eval's
+   * `--set historical --deep` and the tests set it.
+   */
+  deepPast?: boolean;
   /**
    * Overrides `PRINCIPLES_PROMPT` (`prompts/chatPrompt.ts`) for one turn: true has the chat writer
    * read the principle set, false the instructions from before it. Tests and the eval's
@@ -814,8 +820,10 @@ export const sendMessageToAI = async (
   const gaffaThread = { userOnly: Boolean(options?.gaffaBag?.connected) };
   const deepFirst = wantsDeep(options ?? {}, byDefault) && !options?.noRating && !gaffaTrade;
   const questionSearch = imageData || deepFirst ? null : startQuestionSearch(message, liveToolset([]));
-  // One that looks like it's about the past, in a new chat, starts its debate brief.
-  const debateBrief = imageData || history.length ? null : startDebateBrief(message, { debates: liveDebateRecords });
+  // One that looks like it's about the past, in a new chat, starts its debate brief, unless past
+  // questions take the loop (`DEEP_PAST`), which writes no brief.
+  const deepPast = options?.deepPast ?? DEEP_PAST;
+  const debateBrief = imageData || history.length || (deepPast && deepFirst) ? null : startDebateBrief(message, { debates: liveDebateRecords });
   let route = await classifyTurn({
     message,
     history,
@@ -924,15 +932,17 @@ export const sendMessageToAI = async (
   // 5. Deep mode: one model loop decides the research, for a question about the present (by default,
   // `DEEP_BY_DEFAULT`), a Gaffa club attached in the app included. Every other turn takes the
   // conversational scout, and so does a deep turn whose loop gives up.
+  const historicalThread = threadIsHistorical(route, history, message, gaffaThread);
   const deep = takesDeepPath({
     deep: options?.deep,
     fast: options?.fast,
     byDefault,
     route,
-    historical: threadIsHistorical(route, history, message, gaffaThread),
+    historical: historicalThread,
     noRating: options?.noRating,
     gaffaTrade,
     image: Boolean(imageData),
+    pastDeep: deepPast,
   });
   // The writer's initiative (ask, prepare, offer) belongs to the app's own chat: Gaffa's panel
   // (`noRating`) can't draw chips or offers.
@@ -984,13 +994,16 @@ export const sendMessageToAI = async (
             lockedDossiersBlock,
             savedDossiersBlock,
             peerLedgerBlock,
-            gaffaBag: options?.gaffaBag,
+            // A thread about the past runs without the club, as the stage pipeline does.
+            gaffaBag: deepPast && historicalThread ? undefined : options?.gaffaBag,
             composer,
             onStreamChunk,
             onStageChange: options?.onStageChange,
             conversationId: options?.conversationId,
             principles,
             perf,
+            // Past mode reads these only while it is on; off, they change nothing.
+            ...(deepPast ? { deepPast, historical: historicalThread } : {}),
           },
           options?.deepDeps,
         ),

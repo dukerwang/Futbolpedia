@@ -192,3 +192,60 @@ export const standingsFor = (cards: PlayerProfile[], historical: boolean): CardS
   }
   return [...best.values()].map(toStanding);
 };
+
+// ---------------------------------------------------------------------------------------------
+// A commitment the deep loop made (`commit_verdict`), checked against the cards
+
+/** What the model committed to before writing a judgment about the past. */
+export interface Commitment {
+  kind: 'head_to_head' | 'ranking' | 'single';
+  criterion: string;
+  /** The versions compared, as the reply names them. */
+  sides: string[];
+  /** The winning side, for a head-to-head. */
+  verdict?: string;
+  /** Best first, for a ranking. */
+  order?: string[];
+}
+
+export interface CommitmentCheck {
+  /**
+   * `agree`: the cards put the carded sides the same way. `level`: they are level, so the criteria
+   * decide. `against`: a carded side sits above one its card is rated below. `unsettled`: the
+   * criterion isn't one the cards settle. `uncarded`: fewer than two sides have a card.
+   */
+  cards: 'agree' | 'level' | 'against' | 'unsettled' | 'uncarded';
+  /** What the cards say, for the model, naming each card's version and Overall; null when there's nothing to say. */
+  note: string | null;
+  /** The pairs the commitment put the other way, for card review. */
+  swaps: CardSwap[];
+  /** For a ranking, the order the cards give the carded entries (the others in place). */
+  cardOrder?: string[];
+}
+
+/**
+ * A commitment against the cards. Nothing is changed: the result says what the cards say, and the
+ * model decides whether to argue their order or to say why it departs. Pure.
+ */
+export function checkCommitment(c: Commitment, standings: CardStanding[]): CommitmentCheck {
+  if (!cardsSettle(c.criterion)) return { cards: 'unsettled', note: null, swaps: [] };
+  if (c.kind === 'ranking') {
+    const order = c.order ?? [];
+    const check = checkOrderAgainstCards(order, standings);
+    if (check.carded.length < 2) return { cards: 'uncarded', note: null, swaps: [] };
+    if (!check.swaps.length) {
+      const sorted = cardOrder(check.carded.map((e) => e.standing));
+      const level = sorted.some((s, i) => i > 0 && !cardAbove(sorted[i - 1], s));
+      return { cards: level ? 'level' : 'agree', note: level ? 'Some of these cards are level, so the criteria decide between them.' : null, swaps: [], cardOrder: check.order };
+    }
+    return { cards: 'against', note: `The cards order these the other way: ${check.moves.join('; ')}.`, swaps: check.swaps, cardOrder: check.order };
+  }
+  if (c.kind !== 'head_to_head' || c.sides.length !== 2 || !c.verdict) return { cards: 'uncarded', note: null, swaps: [] };
+  const [a, b] = c.sides.map((s) => matchStanding(s, standings));
+  if (!a || !b || a.slug === b.slug) return { cards: 'uncarded', note: null, swaps: [] };
+  const check = checkVerdictAgainstCards(c.verdict, c.sides, standings, c.criterion);
+  if (!check.changed) {
+    return check.note ? { cards: 'level', note: check.note, swaps: [] } : { cards: 'agree', note: null, swaps: [] };
+  }
+  return { cards: 'against', note: check.note, swaps: check.swap ? [check.swap] : [] };
+}

@@ -12,9 +12,13 @@ import type { CardSwap } from './debateConsistency';
  * the planner. Design: docs/superpowers/specs/2026-11-18-card-order-disagreement-design.md.
  */
 
-/** Where the cards turned the order round. */
-export type DisagreementPath = 'debate' | 'ranking';
-export const DISAGREEMENT_PATHS: readonly DisagreementPath[] = ['debate', 'ranking'];
+/**
+ * Where the cards turned the order round: the debate check, a drawn ranking, or a deep loop's
+ * commitment (`commit_verdict`) that put a pair the other way, whether it then argued the cards'
+ * order or said why it departed.
+ */
+export type DisagreementPath = 'debate' | 'ranking' | 'deep';
+export const DISAGREEMENT_PATHS: readonly DisagreementPath[] = ['debate', 'ranking', 'deep'];
 
 /** One pair: the model put `lower` above `higher`; the cards put `higher` above `lower`. Card keys. */
 export interface CardDisagreement {
@@ -127,7 +131,8 @@ export interface DisagreementHit {
   days: number;
   firstDay: string;
   lastDay: string;
-  via: Record<DisagreementPath, number>;
+  /** Reports by path; `deep` appears only once a deep answer has reported the pair. */
+  via: Record<Exclude<DisagreementPath, 'deep'>, number> & { deep?: number };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -181,11 +186,11 @@ export function createDisagreementTally(now: () => number = Date.now) {
       for (const e of pairs.values()) {
         const days = [...e.days.entries()].filter(([d]) => d >= from).sort(([a], [b]) => a.localeCompare(b));
         if (!days.length) continue;
-        const via: Record<DisagreementPath, number> = { debate: 0, ranking: 0 };
+        const via: DisagreementHit['via'] = { debate: 0, ranking: 0 };
         let reports = 0;
         for (const [, sources] of days) {
           for (const path of sources.values()) {
-            via[path] += 1;
+            via[path] = (via[path] ?? 0) + 1;
             reports += 1;
           }
         }

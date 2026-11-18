@@ -55,6 +55,32 @@ import type { AvailabilityFetcher } from './gaffaAvailability';
 import { buildGaffaTurn, finishGaffaReply, type GaffaTurn } from './gaffaTurn';
 import { correctReply, formatGateFeedback, gateFeedbackEnabled, GATE_FEEDBACK_STAGE_LABEL, type CorrectionModel, type GateFeedbackStats } from './gateFeedback';
 import { createViewTools, gateSegments, joinSegments, makeCardLookup, MAX_REPLY_VIEWS, ReplyComposer, splitSegments, viewToolDeclarations } from './replyBlocks';
+import { DEEP_PAST, type VerdictDb } from './debateVerdicts';
+import type { CardDisagreement } from './cardDisagreements';
+import { liveEraSnapshots, normalizePeriod, type EraSnapshotSource } from './eraSnapshots';
+import { matchStanding } from './debateConsistency';
+import { MAX_ERA_BUILDS } from './debateBrief';
+import {
+  CARD_ANCHOR_NOTE,
+  MAX_COMMITS,
+  COMMIT_VERDICT_DECLARATION,
+  comparesVersions,
+  createCommitTool,
+  DEEP_PAST_BUDGET,
+  eraEvidence,
+  finishPastTurn,
+  formatCardsInPlay,
+  formatSettledVerdicts,
+  liveTurnNetwork,
+  loadPastContext,
+  PAST_RESEARCH_NOTE,
+  pastFigureBudget,
+  pastInstructions,
+  pastUncheckedFor,
+  standingsOf,
+  type PastContext,
+  type PastNetwork,
+} from './pastTurn';
 import {
   executeCall,
   fileOutcomes,
@@ -159,8 +185,11 @@ export function takesDeepPath(turn: {
   /** A Gaffa club is attached and the turn is a trade (`isGaffaTrade`). */
   gaffaTrade?: boolean;
   image?: boolean;
+  /** Overrides `DEEP_PAST`: whether a question about the past takes the loop. */
+  pastDeep?: boolean;
 }): boolean {
-  if (!wantsDeep(turn, turn.byDefault) || turn.historical || turn.noRating || turn.gaffaTrade || turn.image) return false;
+  const pastOff = turn.historical && !(turn.pastDeep ?? DEEP_PAST);
+  if (!wantsDeep(turn, turn.byDefault) || pastOff || turn.noRating || turn.gaffaTrade || turn.image) return false;
   return !['single_dossier', 'challenge_or_revise', 'archive_inventory'].includes(turn.route.intent);
 }
 
@@ -360,9 +389,19 @@ const RESEARCH_FUNCTIONS: Record<string, (args: Record<string, unknown>) => Rese
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
-/** The tools a turn offers: a club attached adds the market filter. */
-export const deepDeclarations = (gaffa: boolean): FunctionDeclaration[] =>
-  gaffa ? [...DEEP_DECLARATIONS, GREP_GAFFA_MARKET_DECLARATION as FunctionDeclaration] : DEEP_DECLARATIONS;
+/** The tools a turn offers: a club attached adds the market filter, and a turn the cards anchor adds `commit_verdict`. */
+export const deepDeclarations = (gaffa: boolean, commit = false): FunctionDeclaration[] => {
+  const base = gaffa ? [...DEEP_DECLARATIONS, GREP_GAFFA_MARKET_DECLARATION as FunctionDeclaration] : DEEP_DECLARATIONS;
+  return commit ? [...base, COMMIT_VERDICT_DECLARATION] : base;
+};
+
+/**
+ * Whether questions about the past take the loop. Off, every path behaves as it did before past
+ * mode existed: past turns take the debate pipeline, and no present turn gets the card order or
+ * `commit_verdict`. Defined beside the settled-verdict store (`debateVerdicts.ts`), whose public
+ * route it also gates.
+ */
+export { DEEP_PAST };
 
 /** Tools that draw something in the reply. They are free, and a round that only calls them keeps its text. */
 const PRESENTATION = new Set(['show_pitch', 'show_table', 'show_comparison', 'show_ranking', 'show_dossier']);
@@ -402,6 +441,8 @@ export function stageLabel(call: DeepFunctionCall): string {
       return 'Searching your dossiers';
     case 'grep_gaffa_market':
       return "Searching your league's market";
+    case 'commit_verdict':
+      return 'Weighing the verdict';
     default:
       return 'Researching';
   }
@@ -580,6 +621,10 @@ export interface DeepTurnParams {
   conversationId?: string;
   /** Which instruction set the loop reads; left out, `PRINCIPLES_PROMPT` decides (`chatPrompt.ts`). */
   principles?: boolean;
+  /** The thread is about the past (`threadIsHistorical`). Read only when past mode is on. */
+  historical?: boolean;
+  /** Overrides `DEEP_PAST` for this turn, for tests and the eval. */
+  deepPast?: boolean;
 }
 
 export interface DeepTurnDeps {
@@ -598,6 +643,11 @@ export interface DeepTurnDeps {
   gaffaAvailability?: AvailabilityFetcher;
   /** Called with the Gaffa turn the loop built, for tests. */
   onGaffaTurn?: (turn: GaffaTurn) => void;
+  /** Past mode: stored era snapshots, the settled-verdict table, and where proposals, departures and card pairs go. */
+  eras?: EraSnapshotSource | null;
+  verdicts?: VerdictDb | null;
+  pastNetwork?: PastNetwork;
+  reportDisagreements?: (pairs: CardDisagreement[]) => void;
 }
 
 export interface DeepStats {
@@ -611,6 +661,29 @@ export interface DeepStats {
   stop: 'answered' | 'time' | 'calls' | 'searches' | 'rounds';
   /** The gate feedback round's counts (`gateFeedback.ts`); null when no round finished. A round that ran is also counted in `calls`. */
   gateFeedback: GateFeedbackStats | null;
+  /** Set only on a turn the cards anchor (past mode, or versions compared): its commitment and what it met. */
+  past?: PastStats;
+}
+
+/** What a past turn, or a present one comparing carded versions, committed to and met. */
+export interface PastStats {
+  /** The thread is about the past (false: a present turn comparing carded versions). */
+  historical: boolean;
+  committed: boolean;
+  kind: string | null;
+  criterion: string | null;
+  /** The committed winner or order, as the model named them. */
+  verdict: string[];
+  /** How the commitment stood against the cards. */
+  cards: string | null;
+  /** How it stood against a settled verdict: `agree`, `against` or `none`. */
+  settled: 'agree' | 'against' | 'none';
+  departed: boolean;
+  departedSilently: boolean;
+  /** The settled verdicts the first message carried, by status. */
+  priors: { current: number; stale: number; contested: number };
+  /** For a ranking question: whether a stored ranking for its field was found. */
+  rankingPriorFound: boolean | null;
 }
 
 /** The promise's value, or null once `ms` has passed. */
@@ -632,7 +705,10 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
   const composer = params.composer ?? new ReplyComposer();
   const model = deps.model ?? liveDeepModel;
   const now = deps.now ?? Date.now;
-  const budget: DeepBudget = { ...DEFAULT_DEEP_BUDGET, ...deps.budget };
+  // Past mode (`DEEP_PAST`): a question about the past, read with its cards, era snapshots and settled verdicts.
+  const deepPast = params.deepPast ?? DEEP_PAST;
+  const past = deepPast && Boolean(params.historical);
+  const budget: DeepBudget = { ...DEFAULT_DEEP_BUDGET, ...(past ? DEEP_PAST_BUDGET : {}), ...deps.budget };
   const snapshots = deps.snapshots === undefined ? liveClubSnapshots : deps.snapshots;
   const lookUpManagers = deps.managers ?? getVerifiedClubManagers;
   const start = now();
@@ -640,10 +716,12 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
 
   // The cards in play, as the default path picks them.
   const allCalibrated = mergeAllCalibratedDossiers(params.savedDossiers, params.conversationDossiers);
-  const { matchedCards, lockedCards } = cardsForTurn(message, route.targetPlayers, allCalibrated, false);
+  const { matchedCards, lockedCards } = cardsForTurn(message, route.targetPlayers, allCalibrated, past);
   const cardsInPlay: PlayerProfile[] = [...lockedCards];
   const tools = deps.tools ?? liveToolset([...lockedCards, ...allCalibrated]);
-  const gaps = editionGaps(lockedCards, false, message, matchedCards);
+  const gaps = editionGaps(lockedCards, past, message, matchedCards);
+  // The cards anchor a judgment on a past turn, and on a present one comparing two or more carded versions.
+  const anchored = deepPast && (past || comparesVersions(lockedCards));
 
   // A Gaffa club attached in the app: its blocks, as the focus decides, before the first round. A
   // trade never reaches the loop, and no scorecard call is made here whatever the focus says.
@@ -668,11 +746,28 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
     managerJobs.push(job);
     return job;
   };
-  const firstManagers = startManagers([...spottedClubs, ...lockedCards.map((c) => c.basicInfo.club)]);
-  const storedJobs = snapshots ? spottedClubs.map((c) => snapshots.stored(c, noLive).catch(() => null)) : [];
-  const [storedRaw, managersAtStart] = await Promise.all([
+  // A past turn names past coaches only from its evidence, and today's club snapshots don't bear on it.
+  const firstManagers = startManagers(past ? [] : [...spottedClubs, ...lockedCards.map((c) => c.basicInfo.club)]);
+  const storedJobs = snapshots && !past ? spottedClubs.map((c) => snapshots.stored(c, noLive).catch(() => null)) : [];
+  const analyticalModeEarly = route.analyticalMode ?? '';
+  const eras = deps.eras === undefined ? liveEraSnapshots : deps.eras;
+  const pastJob: Promise<PastContext | null> = anchored
+    ? loadPastContext({
+        cards: lockedCards,
+        clubs: routeClubs,
+        season: route.requestedSeason ?? null,
+        message,
+        ranking: analyticalModeEarly === 'ranking_or_tierlist',
+        tools,
+        eras,
+        verdicts: deps.verdicts,
+        waitMs: DEEP_CONTEXT_WAIT_MS,
+      }).catch(() => null)
+    : Promise.resolve(null);
+  const [storedRaw, managersAtStart, pastContext] = await Promise.all([
     Promise.all(storedJobs.map((j) => within(j, DEEP_CONTEXT_WAIT_MS))),
     within(firstManagers, DEEP_CONTEXT_WAIT_MS),
+    pastJob,
   ]);
   const stored = storedRaw.filter((s): s is ClubSnapshot => Boolean(s));
   const storedBlock = formatStoredSnapshots(stored);
@@ -686,6 +781,9 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
   if (signature === thread.signature && thread.grounding) {
     ledger = addEvidence(ledger, { kind: 'prior_turn', label: 'Research from the previous turn', content: thread.grounding.slice(0, 1400) });
   }
+  // Stored era snapshots are evidence like any record: the model reads them and the figure gate counts them.
+  for (const s of pastContext?.snapshots ?? []) ledger = addEvidence(ledger, eraEvidence(s));
+  if (pastContext) perf?.(`past context (${pastContext.snapshots.length} era snapshots, ${pastContext.settled.length} settled verdicts)`);
   const priorFoundation = hasEvidence(ledger) ? `<factual_foundation>\n${formatLedger(ledger)}\n</factual_foundation>` : '';
 
   const analyticalMode = route.analyticalMode ?? (route.intent === 'compare' ? 'head_to_head' : route.targetPlayers.length === 1 ? 'player_qa' : 'debate_or_verdict');
@@ -698,6 +796,7 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
     ? ` No stored card exists for ${missingCards.join(' or ')}; they were already checked, so don't look them up.`
     : '';
   const gapNote = gaps.length ? ` ${gaps.map(editionGapNote).join(' ')}` : '';
+  const anchoredBlocks = anchored ? [formatCardsInPlay(standingsOf(lockedCards)), formatSettledVerdicts(pastContext?.settled ?? [])].filter(Boolean).join('\n') : '';
   const prompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${gaffaBlock}
 ${ongoingThread}
@@ -706,16 +805,21 @@ ${priorFoundation}
 ${formatVerifiedManagersBlock(managersAtStart ?? [])}
 ${params.peerLedgerBlock ?? ''}
 ${params.lockedDossiersBlock}
-${params.savedDossiersBlock}
-${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `${shownNote}${missingNote}${gapNote}`, gaffa: Boolean(gaffaBag) })}
+${params.savedDossiersBlock}${anchoredBlocks ? `\n${anchoredBlocks}` : ''}
+${
+  past
+    ? pastInstructions({ principles, notes: `${shownNote}${missingNote}${gapNote}` })
+    : deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `${shownNote}${missingNote}${gapNote}`, gaffa: Boolean(gaffaBag) })
+}
 <task>${message}</task>`;
 
+  const pastNotes = `${past ? `\n\n${PAST_RESEARCH_NOTE}` : ''}${anchored ? `\n\n${CARD_ANCHOR_NOTE}` : ''}`;
   const conversation = model.open({
     systemInstruction: principles
-      ? `${buildConversationalScoutInstruction(params.isEAFCRequest, true)}\n\n${deepResearchRules(budget)}`
-      : `${buildConversationalScoutInstruction(params.isEAFCRequest, false)}\n\n${deepModeRules(budget)}`,
+      ? `${buildConversationalScoutInstruction(params.isEAFCRequest, true)}\n\n${deepResearchRules(budget)}${pastNotes}`
+      : `${buildConversationalScoutInstruction(params.isEAFCRequest, false)}\n\n${deepModeRules(budget)}${pastNotes}`,
     history: buildHistoryContents(history, params.conversationDossiers),
-    declarations: deepDeclarations(Boolean(gaffaBag)),
+    declarations: deepDeclarations(Boolean(gaffaBag), anchored),
     thinkingLevel: deps.thinkingLevel,
   });
 
@@ -756,7 +860,40 @@ ${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `$
       ].join('\n'),
     grounded: [],
   };
-  const managerContext = () => ({ verifiedFacts: [formatLedger(ledger)].filter(Boolean), clubManagers: verified });
+  // The commitment a turn the cards anchor makes before it writes (`commit_verdict`).
+  const commitTool = anchored
+    ? createCommitTool({
+        standings: () => standingsOf([...lockedCards, ...cardsInPlay]),
+        ledger: () => ledger,
+        settled: pastContext?.settled ?? [],
+        message,
+        ...(deps.reportDisagreements ? { report: deps.reportDisagreements } : {}),
+      })
+    : null;
+  // A record the model read on a past turn whose era snapshot nobody has built starts one build, for the next person who asks.
+  let eraBuilds = 0;
+  const startEraBuild = (filed: { call: ResearchCall; outcome: ToolOutcome }[]) => {
+    if (!eras) return;
+    for (const { call, outcome } of filed) {
+      if (eraBuilds >= MAX_ERA_BUILDS || !outcome.result) continue;
+      const window = call.tool === 'player_career' ? normalizePeriod(matchStanding(call.subject, standingsOf(lockedCards))?.period ?? '') : null;
+      const req =
+        call.tool === 'club_season' && call.season
+          ? { kind: 'club_season' as const, subject: call.subject, period: call.season, facts: Promise.resolve(outcome) }
+          : window
+          ? { kind: 'player_window' as const, subject: call.subject, period: window, facts: Promise.resolve(outcome) }
+          : null;
+      if (!req) continue;
+      eraBuilds += 1;
+      void eras.stored(req).then((hit) => (hit ? null : eras.get(req))).catch(() => null);
+    }
+  };
+  // A past answer's figures are held to their season, competition and span, and to the figures it committed to.
+  if (past) {
+    Object.defineProperty(figureCheck, 'options', { enumerable: true, get: () => ({ scoped: true, budget: pastFigureBudget(commitTool?.state ?? null) }) });
+  }
+  // A past answer names past coaches only from its evidence: today's coach scrub would rewrite them.
+  const managerContext = () => ({ verifiedFacts: [formatLedger(ledger)].filter(Boolean), clubManagers: verified, ...(past ? { past: true } : {}) });
   const clean = (text: string) => sanitizeScoutProse(text, managerContext(), cardsInPlay, figureCheck);
 
   // The reply's prose passes the gates a segment at a time, together, so a view stays where the model
@@ -766,7 +903,7 @@ ${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `$
   composer.setGate((segments) => gateSegments(segments, clean).map((t) => finishGaffa(t)));
 
   // Deep mode's text always streams from the model, so views and cards sit inside the reply.
-  const dossierTools = createDossierTools({ cardsInPlay, localCards: allCalibrated, historical: false, composer, inline: true });
+  const dossierTools = createDossierTools({ cardsInPlay, localCards: allCalibrated, historical: past, composer, inline: true });
   const dossiersPool = [...params.savedDossiers, ...params.conversationDossiers];
   const viewTools = createViewTools({
     composer,
@@ -777,7 +914,7 @@ ${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `$
       stored,
       cards: makeCardLookup({
         pool: [...cardsInPlay, ...allCalibrated],
-        preferPrime: (name) => wantsPrimeOf(message, name, false),
+        preferPrime: (name) => wantsPrimeOf(message, name, past),
         onCard: (card) => {
           if (!cardsInPlay.some((c) => getCardKey(c) === getCardKey(card))) cardsInPlay.push(card);
         },
@@ -841,6 +978,9 @@ ${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `$
           case 'grep_gaffa_market':
             if (!gaffaBag) return { response: { error: 'No Gaffa club is attached to this conversation.' } };
             return { response: grepGaffaBag(gaffaBag, args as GaffaMarketGrepParams, dossiersPool) as unknown as Record<string, unknown> };
+          case 'commit_verdict':
+            if (!commitTool) return { response: { error: `Unknown tool: ${call.name}` } };
+            return { response: commitTool.handle(args) };
           default:
             return { response: { error: `Unknown tool: ${call.name}` } };
         }
@@ -852,6 +992,7 @@ ${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `$
     // Filed in call order, so ledger ids follow the round.
     const filed = done.flatMap((d) => (d.filed ? [d.filed] : []));
     ledger = fileOutcomes(ledger, filed.map((f) => f.call), filed.map((f) => f.outcome));
+    if (past) startEraBuild(filed);
     // A card the model read is evidence too.
     round.forEach((call, i) => {
       const card = done[i].response.card;
@@ -886,15 +1027,18 @@ ${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `$
   const toolCalls: string[] = [];
   let stop: DeepStats['stop'] = 'answered';
   let viewRounds = 0;
+  let commitRounds = 0;
   params.onStageChange?.('Planning the research...');
   let reply = await conversation.send(prompt, { tools: true, onText: (t) => onText(t, false) });
   while (reply.calls.length > 0) {
     // Drawing is free: a round that only draws costs no round, and keeps its text as part of the answer.
     const drawsOnly = reply.calls.every((c) => PRESENTATION.has(c.name));
     // A model that only draws, forever, runs into the views ceiling and then the round budget.
+    // Committing is free too, but its round's text is a preamble like any other.
+    const commitsOnly = Boolean(commitTool) && reply.calls.every((c) => c.name === 'commit_verdict' || PRESENTATION.has(c.name)) && !drawsOnly;
     if (drawsOnly && ++viewRounds <= MAX_REPLY_VIEWS) {
       if (reply.text.trim()) kept = answerSoFar(reply.text);
-    } else rounds++;
+    } else if (!(commitsOnly && ++commitRounds <= MAX_COMMITS)) rounds++;
     // The composer holds exactly the kept text, so a view lands after it and a dropped preamble is gone.
     composer.setText(kept);
     if (drawsOnly && kept && params.onStreamChunk) {
@@ -906,7 +1050,11 @@ ${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `$
     const responses = await runRound(reply.calls);
     const over = spentOn();
     const budgetLine = formatBudget(left());
-    const uncheckedLine = formatUnchecked(uncheckedFor({ clubs: spottedClubs, players: route.targetPlayers }, ledger, stored));
+    const uncheckedLine = formatUnchecked(
+      past
+        ? pastUncheckedFor({ cards: lockedCards, clubs: routeClubs, season: route.requestedSeason ?? null }, ledger)
+        : uncheckedFor({ clubs: spottedClubs, players: route.targetPlayers }, ledger, stored),
+    );
     const results = responses.map((r) => ({
       name: r.name,
       response: { ...r.response, ...(over ? { researchOver: researchOver } : {}), unchecked: uncheckedLine, budget: budgetLine },
@@ -971,11 +1119,34 @@ ${deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `$
   const finalText = parts.filter((p) => p.trim()).join('\n\n');
 
   const stats: DeepStats = { rounds, calls, searches, toolCalls, stop, gateFeedback: feedback };
+  if (commitTool) {
+    const c = commitTool.state;
+    const priors = pastContext?.settled ?? [];
+    stats.past = {
+      historical: past,
+      committed: c.commitment !== null,
+      kind: c.commitment?.kind ?? null,
+      criterion: c.commitment?.criterion ?? null,
+      verdict: c.commitment ? (c.commitment.kind === 'ranking' ? c.commitment.order ?? [] : c.commitment.verdict ? [c.commitment.verdict] : []) : [],
+      cards: c.check?.cards ?? null,
+      settled: c.settled,
+      departed: c.departed,
+      departedSilently: c.departedSilently,
+      priors: {
+        current: priors.filter((v) => v.status === 'current').length,
+        stale: priors.filter((v) => v.status === 'stale').length,
+        contested: priors.filter((v) => v.status === 'contested').length,
+      },
+      rankingPriorFound: analyticalMode === 'ranking_or_tierlist' ? priors.some((v) => v.kind === 'ranking') : null,
+    };
+    // The commitment is proposed to the settled-verdict store, and a departure from a current one recorded.
+    finishPastTurn(c, standingsOf([...lockedCards, ...cardsInPlay]), ledger, message, deps.pastNetwork ?? liveTurnNetwork);
+  }
   deps.onStats?.(stats);
   perf?.(`deep turn: ${rounds} rounds, ${calls} lookups (${searches} searches), stop ${stop}, tools ${toolCalls.join(', ') || 'none'}, gate feedback ${feedback ? formatGateFeedback(feedback) : 'none'}`);
 
   // A normal follow-up reads this turn's research the way it reads research's.
-  const thisTurn = formatLedger({ ...ledger, entries: ledger.entries.filter((e) => e.kind !== 'prior_turn') }, { seasonStart: seasonStartDate(seasonStartYear) });
+  const thisTurn = formatLedger({ ...ledger, entries: ledger.entries.filter((e) => e.kind !== 'prior_turn') }, past ? {} : { seasonStart: seasonStartDate(seasonStartYear) });
   if (ledger.entries.some((e) => e.kind !== 'prior_turn')) {
     thread.signature = signature;
     thread.grounding = thisTurn;
