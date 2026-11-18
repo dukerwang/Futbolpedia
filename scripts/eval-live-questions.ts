@@ -16,12 +16,12 @@
  *   npm run eval:live -- --warm      # answer each question once first, so the graded run reuses today's club snapshots
  *   npm run eval:live -- --set historical   # the historical set, each question twice (--repeat 1 to run once)
  *   npm run eval:live -- --set historical --only 2,3 --repeat 1 --no-builds   # a small, cheap subset
- *   npm run eval:live -- --deep --only 1,3 --label deep   # the live set through deep mode (services/deepTurn.ts)
- *   npm run eval:live -- --stage --label stage   # the same set through the stage pipeline, whatever DEEP_BY_DEFAULT says
+ *   npm run eval:live -- --set historical --past-mode --only 2,3   # questions about the past through the chat loop (PAST_MODE)
+ *   npm run eval:live -- --stage --label stage   # the live set through the stage pipeline instead of the chat loop
  *   npm run eval:live -- --only 11 --principles --label principles   # the chat writer reads the principle set (PRINCIPLES_PROMPT)
  *   npm run eval:live -- --conversations --only C1,C2   # the multi-turn cases, graded for conduct (scripts/eval-conversations.ts)
- *   npm run eval:live -- --deep --repeat 2 --only 4,11,1 --dry-run   # price a repeat run: calls, tokens and cost, with no call made
- *   npm run eval:live -- --deep --repeat 2 --only 4,11,1 --shared-cards --label drift   # how far deep-mode answers vary between runs
+ *   npm run eval:live -- --repeat 2 --only 4,11,1 --dry-run   # price a repeat run: calls, tokens and cost, with no call made
+ *   npm run eval:live -- --repeat 2 --only 4,11,1 --shared-cards --label drift   # how far the chat loop's answers vary between runs
  *
  * `--repeat N` (2 or more) on the live set asks each question N times, one run after another, and
  * measures drift (scripts/eval-consistency.ts): each run on the live rubric and the range between
@@ -41,9 +41,10 @@
  * a Gaffa club reads EVAL_GAFFA_CLUB=<leagueId>/<clubId> with FUTBOLPEDIA_READ_SECRET and is skipped
  * without them.
  *
- * `--deep` and `--stage` each force their path for every question the path accepts (questions
- * about the past, ratings and the like take the stage pipeline either way); with neither, a turn
- * goes where the app would send it. Each report row names the path the answer took, and a deep
+ * Without flags, a turn goes where the app would send it: a question about the present to the chat
+ * loop (services/chatTurn.ts). `--stage` sends every question the loop would take to the stage
+ * pipeline instead, and `--set historical --past-mode` sends questions about the past to the loop
+ * (`PAST_MODE`, overridden per turn). Each report row names the path the answer took, and a chat
  * turn that gave up and ran the stage pipeline shows its fallback reason.
  *
  * The live routes run in-process, so no server is needed. Supabase isn't loaded outside the
@@ -77,26 +78,28 @@ const argValue = (flag: string) => {
 };
 const only = argValue('--only')?.split(',').map((n) => Number(n.trim())).filter((n) => Number.isFinite(n));
 const warm = args.includes('--warm');
-/** `--deep`: send every question with `deep: true`, so questions about the present go through deep mode whatever DEEP_BY_DEFAULT says. */
-const deep = args.includes('--deep');
-/** `--stage`: send every question with `fast: true`, so it takes the stage pipeline even where deep mode would take it. */
+/** `--stage`: send every question with `stage: true`, so it takes the stage pipeline even where the chat loop would take it. */
 const stage = args.includes('--stage');
+if (args.includes('--deep')) {
+  console.error('--deep is gone: the chat loop is the default path. On the historical set, --past-mode sends questions about the past through it.');
+  process.exit(1);
+}
 /**
  * `--principles`: send every question with `principles: true`, so the chat writer reads the principle
  * set (`PRINCIPLES_PROMPT` in prompts/chatPrompt.ts) whatever the constant says. It combines with
- * `--deep`, `--stage` and `--set historical`.
+ * `--stage`, `--past-mode` and `--set historical`.
  */
 const principlesFlag = args.includes('--principles');
 /**
- * `--no-prior`: on `--set historical --deep`, every question starts with an empty settled-verdict
+ * `--no-prior`: on `--set historical --past-mode`, every question starts with an empty settled-verdict
  * store, to measure the loop's own consistency. Without it, run 2 and each paraphrase read what an
  * earlier answer settled, as a later user would.
  */
 const noPrior = args.includes('--no-prior');
-/** `--set historical --deep` sends questions about the past through the loop (`DEEP_PAST`, overridden per turn). */
-const pastDeep = deep && argValue('--set') === 'historical';
-if (deep && stage) {
-  console.error('Pass --deep or --stage, not both.');
+/** `--set historical --past-mode` sends questions about the past through the chat loop (`PAST_MODE`, overridden per turn). */
+const pastMode = args.includes('--past-mode') && argValue('--set') === 'historical';
+if (pastMode && stage) {
+  console.error('Pass --past-mode or --stage, not both.');
   process.exit(1);
 }
 const set = argValue('--set') === 'historical' ? 'historical' : 'live';
@@ -108,17 +111,17 @@ const maxQuestions = Number(argValue('--max-questions')) || undefined;
 const dryRun = args.includes('--dry-run');
 /** `--shared-cards`: read the shared cards (and stored club snapshots) from Supabase through a read-only client. */
 const sharedCards = args.includes('--shared-cards');
-const label = (argValue('--label') ?? (deep ? 'deep' : stage ? 'stage' : warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
+const label = (argValue('--label') ?? (pastMode ? 'past-mode' : stage ? 'stage' : warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
 
 if (dryRun) {
   const { estimateRun, formatEstimate, readLiveQuestionsFile, selectQuestions, ASSUMED_PRICES } = await import('./eval-consistency');
   if (set === 'historical' || args.includes('--conversations') || stage) {
-    console.error('--dry-run estimates the live set on the deep path (the default, or --deep). The historical set, --conversations and --stage aren\'t modelled.');
+    console.error('--dry-run estimates the live set on the chat loop, the default path. The historical set, --conversations and --stage aren\'t modelled.');
     process.exit(1);
   }
-  const { deepModeRules, DEFAULT_DEEP_BUDGET, DEEP_DECLARATIONS } = await import('../services/deepTurn');
+  const { researchRules, DEFAULT_RESEARCH_BUDGET, CHAT_DECLARATIONS } = await import('../services/chatTurn');
   const { buildConversationalScoutInstruction } = await import('../prompts/chatPrompt');
-  const chars = buildConversationalScoutInstruction(false).length + deepModeRules(DEFAULT_DEEP_BUDGET).length + JSON.stringify(DEEP_DECLARATIONS).length;
+  const chars = buildConversationalScoutInstruction(false).length + researchRules(DEFAULT_RESEARCH_BUDGET).length + JSON.stringify(CHAT_DECLARATIONS).length;
   const picked = selectQuestions(readLiveQuestionsFile(join(root, 'docs/superpowers/evals/live-questions.md')), { only, max: maxQuestions });
   const price = (flag: string, fallback: number) => (Number.isFinite(Number(argValue(flag))) && argValue(flag) !== undefined ? Number(argValue(flag)) : fallback);
   const estimate = estimateRun({
@@ -127,9 +130,9 @@ if (dryRun) {
     consistency: repeat > 1,
     cardMentions: repeatFlow && !args.includes('--no-card-mentions'),
     prices: { inputPerMillion: price('--price-in', ASSUMED_PRICES.inputPerMillion), outputPerMillion: price('--price-out', ASSUMED_PRICES.outputPerMillion), perGroundedSearch: price('--price-search', ASSUMED_PRICES.perGroundedSearch) },
-    sizes: { deepFixedTokens: Math.round(chars / 4) },
+    sizes: { chatFixedTokens: Math.round(chars / 4) },
   });
-  console.log(formatEstimate(estimate, { questions: picked.map((q) => q.n), repeat, path: 'deep mode' }));
+  console.log(formatEstimate(estimate, { questions: picked.map((q) => q.n), repeat, path: 'the chat loop' }));
   process.exit(0);
 }
 
@@ -177,7 +180,7 @@ const pastSeasons = createHistoryFootball({
 const { createSnapshotServer, inProcessGet } = await import('../services/snapshotServer');
 const snapshots = createSnapshotServer({ get: inProcessGet({ live, history: pastSeasons }), db: null });
 // The run's settled verdicts: an in-memory store with the server's settler in front of it, so a
-// `--set historical --deep` run proposes and reads verdicts as the app will, and writes nothing shared.
+// `--set historical --past-mode` run proposes and reads verdicts as the app will, and writes nothing shared.
 // The settle call is a real model call (about one for each new question a run settles).
 const { createVerdictSettler, memoryVerdictDb, nameFromSubject } = await import('../services/debateVerdicts');
 const evalVerdicts = memoryVerdictDb();
@@ -269,30 +272,30 @@ interface RunResult {
   firstTokenMs: number | null;
   totalMs: number;
   perf: string[];
-  /** What the turn looked up and showed, so default and deep runs compare. */
+  /** What the turn looked up and showed, so chat loop and stage runs compare. */
   research?: Research;
 }
 
 interface Research {
-  /** The path that produced the answer: the deep loop, or the stage pipeline (also after a deep turn gave up). */
-  path: 'stage' | 'deep';
-  /** Set when a deep turn gave up and the stage pipeline answered: why the loop gave up. */
-  fallback?: import('../services/deepTurn').DeepFallbackReason;
+  /** The path that produced the answer: the chat loop, or the stage pipeline (also after a chat turn gave up). */
+  path: 'stage' | 'chat';
+  /** Set when a chat turn gave up and the stage pipeline answered: why the loop gave up. */
+  fallback?: import('../services/chatTurn').FallbackReason;
   /** Lookups the turn ran (live feeds, history routes, web searches, cards), snapshot builds included. */
   lookups: number;
   searches: number;
-  /** Model rounds that called tools: research rounds and writer tool rounds, or deep rounds. */
+  /** Model rounds that called tools: research rounds and writer tool rounds, or the loop's rounds. */
   rounds: number;
-  /** Deep mode only: every tool the model called, in order. */
+  /** Chat loop only: every tool the model called, in order. */
   toolCalls?: string[];
-  /** Deep mode only: why research ended. */
+  /** Chat loop only: why research ended. */
   stop?: string;
   /** The views the reply drew, by kind (pitch, table, comparison, ranking, card), in the order of `VIEW_KINDS`. */
   views: Record<string, number>;
   /** The gate feedback round's counts (`services/gateFeedback.ts`); absent when no round finished. */
   gateFeedback?: { flagged: number; fixed: number; dropped: number; removed: number };
-  /** Past mode only: the turn's commitment and what it met (`DeepStats.past`). */
-  past?: import('../services/deepTurn').PastStats;
+  /** Past mode only: the turn's commitment and what it met (`TurnStats.past`). */
+  past?: import('../services/chatTurn').PastStats;
   /** Past mode only: what the settle route answered for each proposal the turn made. */
   settles?: string[];
 }
@@ -321,12 +324,12 @@ function viewsDrawn(attached: import('../types').ReplyBlock[] | null): Record<st
 const viewsLine = (views: Record<string, number> | undefined): string =>
   Object.entries(views ?? {}).map(([kind, n]) => `${n} ${kind}`).join(', ') || '–';
 
-/** The turn's research, from its perf lines and, in deep mode, the loop's own count. */
+/** The turn's research, from its perf lines and, in the chat loop, the loop's own count. */
 function researchOf(
   perf: string[],
-  stats: import('../services/deepTurn').DeepStats | null,
+  stats: import('../services/chatTurn').TurnStats | null,
   attached: import('../types').ReplyBlock[] | null,
-  path: import('../services/deepTurn').PathInfo | null,
+  path: import('../services/chatTurn').PathInfo | null,
 ): Research {
   const lookupLines = perf.filter((l) => l.startsWith('[Perf] lookup '));
   const feedback = gateFeedbackOf(perf);
@@ -336,7 +339,7 @@ function researchOf(
   };
   if (stats && path?.path !== 'stage') {
     return {
-      path: 'deep',
+      path: 'chat',
       lookups: lookupLines.length,
       searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length,
       rounds: stats.rounds,
@@ -364,9 +367,9 @@ async function ask(
   console.info = console.warn = () => {};
   const start = Date.now();
   let firstTokenMs: number | null = null;
-  let stats: import('../services/deepTurn').DeepStats | null = null;
+  let stats: import('../services/chatTurn').TurnStats | null = null;
   let attached: import('../types').ReplyBlock[] | null = null;
-  let path: import('../services/deepTurn').PathInfo | null = null;
+  let path: import('../services/chatTurn').PathInfo | null = null;
   try {
     const reply = await sendMessageToAI(question, context.history ?? [], undefined, [], [], {
       ...(context.conversationId ? { conversationId: context.conversationId } : {}),
@@ -380,17 +383,17 @@ async function ask(
       onPath: (p) => {
         path = p;
       },
-      ...(deep ? { deep: true } : stage ? { fast: true } : {}),
+      ...(stage ? { stage: true } : {}),
       ...(principlesFlag ? { principles: true } : {}),
-      ...(pastDeep ? { deepPast: true } : {}),
-      deepDeps: { onStats: (s) => (stats = s), ...(pastDeep ? { verdicts: noPrior ? memoryVerdictDb() : evalVerdicts } : {}) },
+      ...(pastMode ? { pastMode: true } : {}),
+      chatDeps: { onStats: (s) => (stats = s), ...(pastMode ? { verdicts: noPrior ? memoryVerdictDb() : evalVerdicts } : {}) },
     });
     const answer = typeof reply === 'string' ? reply : `[Rated a card instead of answering: ${reply.basicInfo.name}]`;
     const totalMs = Date.now() - start;
     const research = researchOf(perf, stats, attached, path);
     // A proposal is sent after the answer; wait for the store's answer (outside the timing) so the
     // next question reads what this one settled, and the report says what happened to it.
-    if (pastDeep) {
+    if (pastMode) {
       const from = settleLog.length;
       await Promise.race([Promise.all(pendingSettles.splice(0)), new Promise((r) => setTimeout(r, SETTLE_WAIT_MS))]);
       research.settles = settleLog.slice(from);
@@ -584,7 +587,7 @@ if (repeatFlow) {
   // Each question `repeat` times, one run after another; the report is rewritten after every run.
   const stampRepeat = stampOf('consistency-');
   const cardMentions = !args.includes('--no-card-mentions');
-  const path = deep ? 'the deep mode loop (`--deep`)' : stage ? 'the stage pipeline (`--stage`)' : 'the chat pipeline';
+  const path = stage ? 'the stage pipeline (`--stage`)' : 'the chat loop';
   const write = (r: import('./eval-consistency').RepeatResult) => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${stampRepeat}.md`), consistency.repeatReport(r, { today, label, model: FLASH_MODEL, repeat, path, cardMentions, sharedCards }));
@@ -626,7 +629,7 @@ const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math
 
 const report = `# Live question eval: ${today}, ${label}
 
-Ran ${results.length} questions through the ${deep ? 'deep mode loop (`--deep`)' : stage ? 'stage pipeline (`--stage`)' : 'chat pipeline'}${warm ? ', each answered once beforehand so club snapshots were already built' : deep ? ', cold: no stored club snapshots (deep mode reads them but never builds one)' : ', cold: every club snapshot built during the run'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
+Ran ${results.length} questions through the ${stage ? 'stage pipeline (`--stage`)' : 'chat loop'}${warm ? ', each answered once beforehand so club snapshots were already built' : stage ? ', cold: every club snapshot built during the run' : ', cold: no stored club snapshots (the chat loop reads them but never builds one)'}; ${graded.length} were graded. Graded by ${FLASH_MODEL} with Google Search and the live feeds.
 
 The grader is the same model that writes the answers, so it can share their blind spots and misjudge facts its own search doesn't reach. Compare runs with each other rather than reading any score as absolute.
 
@@ -644,7 +647,7 @@ ${results
     const x = r.run.research;
     // A turn with nothing flagged shows 0, 0, 0: no round ran. The counts are those of `[GateFeedback]`.
     const gate = x?.gateFeedback ? `${x.gateFeedback.fixed} | ${x.gateFeedback.dropped} | ${x.gateFeedback.removed}` : '0 | 0 | 0';
-    const research = x ? `${x.fallback ? `deep, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${viewsLine(x.views)} | ${gate}` : '– | – | – | – | – | – | – | –';
+    const research = x ? `${x.fallback ? `chat, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${viewsLine(x.views)} | ${gate}` : '– | – | – | – | – | – | – | –';
     return r.grade
       ? `| ${r.q.n} | ${r.grade.staleFacts.length} | ${r.grade.inventedFacts.length} | ${r.grade.saysWhatChanged} | ${r.grade.decisiveness} | ${r.grade.hedgedRoles} | ${r.grade.gapsAdmitted} | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.grade.notes.replace(/\|/g, '/').replace(/\n/g, ' ')} |`
       : `| ${r.q.n} | – | – | – | – | – | – | ${research} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${r.run.error}` : 'Grading failed'} |`;
@@ -659,7 +662,7 @@ ${r.q.tests}
 
 ${r.grade?.staleFacts.length ? `Stale facts:\n${r.grade.staleFacts.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${
       r.grade?.inventedFacts.length ? `Invented facts:\n${r.grade.inventedFacts.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''
-    }${r.run.research?.toolCalls ? `Deep tool calls (${r.run.research.stop}): ${r.run.research.toolCalls.join(', ') || 'none'}\n\n` : ''}<details><summary>Answer</summary>
+    }${r.run.research?.toolCalls ? `Loop tool calls (${r.run.research.stop}): ${r.run.research.toolCalls.join(', ') || 'none'}\n\n` : ''}<details><summary>Answer</summary>
 
 ${r.run.answer || r.run.error || '(empty)'}
 

@@ -249,7 +249,7 @@ await test('on the stage path, a flagged figure gets one correction round before
   let reply: string | import('../types').PlayerProfile;
   try {
     reply = await sendMessageToAI("Break down Southside's build-up shape this season", [], undefined, [], [], {
-      fast: true,
+      stage: true,
       onStageChange: (s) => stages.push(s),
     });
   } finally {
@@ -268,7 +268,7 @@ await test('a pushback on a checkable fact: the need goes to the writer first, r
     { id: 'u0', sender: 'user', content: "Break down Southside's build-up shape this season", timestamp: 0 },
     { id: 'a0', sender: 'ai', content: 'Right Back starts at left-back in a back four, and Main Nine leads the line.', timestamp: 1 },
   ];
-  await quietly(() => sendMessageToAI(PUSHBACK, history, undefined, [], [], { fast: true, conversationId: 'pushback-test' }));
+  await quietly(() => sendMessageToAI(PUSHBACK, history, undefined, [], [], { stage: true, conversationId: 'pushback-test' }));
   const writerCall = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1);
   assert.ok(writerCall, 'the writer ran');
   const writer = writerCall.prompt;
@@ -293,7 +293,7 @@ await test('with the principle set on, the writer reads the principles once and 
     { id: 'u0', sender: 'user', content: "Break down Southside's build-up shape this season", timestamp: 0 },
     { id: 'a0', sender: 'ai', content: 'Right Back starts at left-back in a back four, and Main Nine leads the line.', timestamp: 1 },
   ];
-  await quietly(() => sendMessageToAI(PUSHBACK, history, undefined, [], [], { fast: true, principles: true, conversationId: 'principles-test' }));
+  await quietly(() => sendMessageToAI(PUSHBACK, history, undefined, [], [], { stage: true, principles: true, conversationId: 'principles-test' }));
   const writerCall = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1);
   assert.ok(writerCall, 'the writer ran');
   const writer = writerCall.prompt;
@@ -314,7 +314,7 @@ await test('with the principle set on, the writer reads the principles once and 
 
 await test('with the principle set off, the writer reads the instructions it always did', async () => {
   calls.length = 0;
-  await quietly(() => sendMessageToAI(PUSHBACK, [], undefined, [], [], { fast: true, principles: false, conversationId: 'legacy-test' }));
+  await quietly(() => sendMessageToAI(PUSHBACK, [], undefined, [], [], { stage: true, principles: false, conversationId: 'legacy-test' }));
   const writer = calls.filter((c) => !c.structured && !c.search && !c.prompt.includes('first-team head coach')).at(-1)?.prompt ?? '';
   assert.match(writer, /Reading the User/);
   assert.doesNotMatch(writer, /VIII\. CHAT PRINCIPLES/);

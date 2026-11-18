@@ -17,7 +17,7 @@ import {
 } from './conversationalScout';
 import { lookUpDossier, replaceSupersededPrimes } from './dossierLookup';
 import { ReplyComposer, type ComposerExtras } from './replyBlocks';
-import { DEEP_BY_DEFAULT, DEEP_PAST, runDeepTurn, runDeepWithFallback, takesDeepPath, wantsDeep, type DeepTurnDeps, type PathInfo } from './deepTurn';
+import { PAST_MODE, runChatTurn, runChatWithFallback, takesChatLoop, type ChatTurnDeps, type PathInfo } from './chatTurn';
 import {
   CALIBRATION_EPOCH_MS,
   buildHistoryContents,
@@ -205,34 +205,26 @@ export interface SendMessageOptions {
    */
   challengeCardKey?: string;
   /**
-   * Forces deep mode (`deepTurn.ts`), one model loop that decides its own research, for a turn it
-   * accepts, whatever `DEEP_BY_DEFAULT` says. The eval's `--deep` and the tests send it; the app
-   * doesn't need to, since deep is the default.
+   * Sends a turn the chat loop (`chatTurn.ts`) would take to the stage pipeline instead: the eval's
+   * `--stage` and the tests send it. The app never does.
    */
-  deep?: boolean;
+  stage?: boolean;
   /**
-   * Forces the stage pipeline even where deep mode would take the turn: the eval's `--stage` and
-   * the tests send it. Wins over `deep` when both arrive.
+   * Overrides `PAST_MODE` (`chatTurn.ts`) for one turn: true sends a question about the past to the
+   * chat loop, and lets a present turn comparing carded versions commit its verdict. The eval's
+   * `--set historical --past-mode` and the tests set it.
    */
-  fast?: boolean;
-  /** Overrides `DEEP_BY_DEFAULT` for one turn, for tests and the eval. */
-  deepByDefault?: boolean;
-  /**
-   * Overrides `DEEP_PAST` (`deepTurn.ts`) for one turn: true sends a question about the past to the
-   * deep loop, and lets a present turn comparing carded versions commit its verdict. The eval's
-   * `--set historical --deep` and the tests set it.
-   */
-  deepPast?: boolean;
+  pastMode?: boolean;
   /**
    * Overrides `PRINCIPLES_PROMPT` (`prompts/chatPrompt.ts`) for one turn: true has the chat writer
    * read the principle set, false the instructions from before it. Tests and the eval's
    * `--principles` set it.
    */
   principles?: boolean;
-  /** Called as each path starts: once for the path chosen, and again on the stage run that follows a deep turn's failure. */
+  /** Called as each path starts: once for the path chosen, and again on the stage run that follows a chat turn's failure. */
   onPath?: (info: PathInfo) => void;
-  /** Fakes and overrides for deep mode's model, tools and budget, for tests and the eval. */
-  deepDeps?: DeepTurnDeps;
+  /** Fakes and overrides for the chat loop's model, tools and budget, for tests and the eval. */
+  chatDeps?: ChatTurnDeps;
 }
 
 /**
@@ -812,18 +804,17 @@ export const sendMessageToAI = async (
   // 1. Classify turn via Structured Turn Router (warm Supabase pool in background without blocking routing).
   // A question that looks like it's about the present starts its web search now, while routing runs.
   void fetchSupabaseCalibratedPool();
-  // A deep turn decides its own searches, so nothing is started for it. Gaffa's panel and a Gaffa
-  // trade take the stage pipeline, so they keep their search: the stage pipeline reads it.
-  const byDefault = options?.deepByDefault ?? DEEP_BY_DEFAULT;
+  // A chat loop turn decides its own searches, so nothing is started for it. Gaffa's panel and a
+  // Gaffa trade take the stage pipeline, so they keep their search: the stage pipeline reads it.
   const gaffaTrade = isGaffaTrade(message, history, options?.gaffaBag);
   // A conversation with a club attached is about the present unless the user's own words say otherwise.
   const gaffaThread = { userOnly: Boolean(options?.gaffaBag?.connected) };
-  const deepFirst = wantsDeep(options ?? {}, byDefault) && !options?.noRating && !gaffaTrade;
-  const questionSearch = imageData || deepFirst ? null : startQuestionSearch(message, liveToolset([]));
+  const loopFirst = !options?.stage && !options?.noRating && !gaffaTrade;
+  const questionSearch = imageData || loopFirst ? null : startQuestionSearch(message, liveToolset([]));
   // One that looks like it's about the past, in a new chat, starts its debate brief, unless past
-  // questions take the loop (`DEEP_PAST`), which writes no brief.
-  const deepPast = options?.deepPast ?? DEEP_PAST;
-  const debateBrief = imageData || history.length || (deepPast && deepFirst) ? null : startDebateBrief(message, { debates: liveDebateRecords });
+  // questions take the loop (`PAST_MODE`), which writes no brief.
+  const pastMode = options?.pastMode ?? PAST_MODE;
+  const debateBrief = imageData || history.length || (pastMode && loopFirst) ? null : startDebateBrief(message, { debates: liveDebateRecords });
   let route = await classifyTurn({
     message,
     history,
@@ -929,20 +920,18 @@ export const sendMessageToAI = async (
   const context = buildTurnContext(message, route, conversationDossiers, turnDossiers, principles);
   const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock } = context;
 
-  // 5. Deep mode: one model loop decides the research, for a question about the present (by default,
-  // `DEEP_BY_DEFAULT`), a Gaffa club attached in the app included. Every other turn takes the
-  // conversational scout, and so does a deep turn whose loop gives up.
+  // 5. The chat loop: one model loop decides the research, for a question about the present, a Gaffa
+  // club attached in the app included. Every other turn takes the conversational scout, and so does
+  // a turn whose loop gives up.
   const historicalThread = threadIsHistorical(route, history, message, gaffaThread);
-  const deep = takesDeepPath({
-    deep: options?.deep,
-    fast: options?.fast,
-    byDefault,
+  const loop = takesChatLoop({
+    stage: options?.stage,
     route,
     historical: historicalThread,
     noRating: options?.noRating,
     gaffaTrade,
     image: Boolean(imageData),
-    pastDeep: deepPast,
+    pastMode,
   });
   // The writer's initiative (ask, prepare, offer) belongs to the app's own chat: Gaffa's panel
   // (`noRating`) can't draw chips or offers.
@@ -978,12 +967,12 @@ export const sendMessageToAI = async (
     });
   let fellBack = false;
   let reply: string;
-  if (deep) {
+  if (loop) {
     // What the loop attached before it gave up goes with it; the stage run builds its own.
     const before = composer.snapshot();
-    reply = await runDeepWithFallback(
+    reply = await runChatWithFallback(
       () =>
-        runDeepTurn(
+        runChatTurn(
           {
             message,
             route,
@@ -995,7 +984,7 @@ export const sendMessageToAI = async (
             savedDossiersBlock,
             peerLedgerBlock,
             // A thread about the past runs without the club, as the stage pipeline does.
-            gaffaBag: deepPast && historicalThread ? undefined : options?.gaffaBag,
+            gaffaBag: pastMode && historicalThread ? undefined : options?.gaffaBag,
             composer,
             onStreamChunk,
             onStageChange: options?.onStageChange,
@@ -1003,9 +992,9 @@ export const sendMessageToAI = async (
             principles,
             perf,
             // Past mode reads these only while it is on; off, they change nothing.
-            ...(deepPast ? { deepPast, historical: historicalThread } : {}),
+            ...(pastMode ? { pastMode, historical: historicalThread } : {}),
           },
-          options?.deepDeps,
+          options?.chatDeps,
         ),
       () => {
         fellBack = true;
@@ -1018,7 +1007,7 @@ export const sendMessageToAI = async (
     options?.onPath?.({ path: 'stage' });
     reply = await runStage();
   }
-  perf(deep && !fellBack ? 'deep turn' : 'conversational scout');
+  perf(loop && !fellBack ? 'chat turn' : 'conversational scout');
   // The reply's blocks, with its final text: what the app stores.
   composer.finish(reply);
   return reply;

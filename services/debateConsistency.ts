@@ -194,7 +194,7 @@ export const standingsFor = (cards: PlayerProfile[], historical: boolean): CardS
 };
 
 // ---------------------------------------------------------------------------------------------
-// A commitment the deep loop made (`commit_verdict`), checked against the cards
+// A commitment the chat loop made (`commit_verdict`), checked against the cards
 
 /** What the model committed to before writing a judgment about the past. */
 export interface Commitment {

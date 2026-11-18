@@ -20,10 +20,10 @@ the figure check again without re-asking the questions. Reports go to
 The runner reads the shared dossier cards from Supabase, as the app does, and never writes to it,
 so answers see the same cards a user would.
 
-### Through the deep loop
+### Past Mode
 
-`--deep` with `--set historical` sends each question through the deep loop in past mode, whatever
-`DEEP_PAST` says. The run keeps its own in-memory settled-verdict store, with the server's settle
+`--past-mode` with `--set historical` sends each question through the chat loop in past mode, whatever
+`PAST_MODE` says. The run keeps its own in-memory settled-verdict store, with the server's settle
 call in front of it (a real model call for each new question a run settles), so run 2 and each
 paraphrase read what run 1 settled, as a later user would; `--no-prior` empties the store for every
 question to measure the loop's own consistency. The report adds a research table (path, lookups,
@@ -33,10 +33,10 @@ the cards and the settled verdict, and whether a ranking found its stored field)
 committed verdicts in code beside the grader's comparison, and counts answers that quoted a card's
 rating on a question that doesn't turn on how good the players were.
 
-The run that decides whether `DEEP_PAST` turns on, not yet run:
+The run that decides whether `PAST_MODE` turns on, not yet run:
 
 ```bash
-npm run eval:live -- --set historical --deep --only 1,3,5,6,13,14 --no-builds --label past-deep
+npm run eval:live -- --set historical --past-mode --only 1,3,5,6,13,14 --no-builds --label past-mode
 ```
 
 Estimate: 12 answers at about three loop calls each (two rounds and the correction round, about
@@ -92,7 +92,7 @@ The grader scores each answer on:
 
 ### Run: 2026-11-18, past mode in the deep loop
 
-Questions 1, 3, 5, 6, 13 and 14, twice each, `--deep --no-builds` on `gemini-4-hydrogen`, before the
+Questions 1, 3, 5, 6, 13 and 14, twice each, `--deep --no-builds` (now `--past-mode`) on `gemini-4-hydrogen`, before the
 fixes below. Report: `reports/2026-11-18-0727-historical-past-deep.md`. No same-day stage control.
 
 | Measure | Bar | Result |

@@ -378,7 +378,7 @@ const RECENT_TEAM_RULES =
   'Build the team from the first-choice XI in <situation_snapshot>, and otherwise from the recent starting XIs and the injury list in <factual_foundation>, never from the registered squad or memory. Name one player for each role and commit to him; mention another only where the snapshot marks an even split, as the alternative, never as a joint holder of the role or a pair of names in a heading. A player listed as out is unavailable and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes override what you remember of the club. If neither block has recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
 
 /**
- * The writer's guidance for the kind of answer the turn asks for. Deep mode passes its own rules
+ * The writer's guidance for the kind of answer the turn asks for. The chat loop passes its own rules
  * for building a team, since it reads recent lineups from its tool results rather than a snapshot.
  */
 export function proseModeGuidance(
@@ -518,7 +518,7 @@ export function createDossierTools(args: {
   onRead?: (card: PlayerProfile) => void;
   /**
    * Whether a lookup that finds no card offers the player to Scout by rule. Left out, every missing
-   * player is offered (deep mode). The default chat path offers only a player the user asked about
+   * player is offered (the chat loop). The default chat path offers only a player the user asked about
    * directly, and leaves the rest to the writer's `offer_rating`.
    */
   offerMissing?: (name: string) => boolean;
@@ -616,7 +616,7 @@ export const initiativeRules = (): string => [INITIATIVE_RULES.ask, INITIATIVE_R
 /**
  * What a turn about the present may state as fact, and how precise figures are sourced: facts
  * only from the turn's evidence, tools or cards, judgment left to the scout. Shared by the
- * researched writer and deep mode (`deepTurn.ts`), so both keep the same code of conduct.
+ * researched writer and the chat loop (`chatTurn.ts`), so both keep the same code of conduct.
  * `sources` names where this turn's facts sit.
  */
 export const presentFactRules = (
@@ -625,7 +625,7 @@ export const presentFactRules = (
 ): string =>
   `Current-state facts (club, manager, squad membership, who starts and where, injuries, transfers, results, ${currentSeason} stats) must come from ${sources}, never from memory. If the answer needs a fact, first look for it in every entry and tool result (partial evidence, such as a status or a percentage chance of playing, is an answer); if none gives it, look it up with a tool; only if that comes back empty, say so in one sentence and build the rest of the answer on what is verified. Never name an unverified head coach. A precise figure (a statistic, fee, percentage, table position, points total, the minute of an event, a shirt number, a quotation) goes in only when one of those sources gives it; for standings call \`get_league_table\`, and otherwise describe the pattern without a number.`;
 
-/** Who may be named as a club's coach. Shared with deep mode, which also accepts a tool result's verified coach. */
+/** Who may be named as a club's coach. Shared with the chat loop, which also accepts a tool result's verified coach. */
 export const MANAGER_FIDELITY_RULE =
   "CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.";
 

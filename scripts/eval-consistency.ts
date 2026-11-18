@@ -11,7 +11,7 @@
  *  - Consistency: one grader call per question compares the runs on the judgments they commit to
  *    (the verdict, who starts in each role, the main claim about what changed) and lists
  *    contradictions.
- *  - Lookups: whether the runs looked up different things. The tool sets come from the deep loop's
+ *  - Lookups: whether the runs looked up different things. The tool sets come from the chat loop's
  *    tool calls and the `[Perf] lookup` lines; this is where agentic variance starts.
  *  - Card mentions: whether a reply quoted a rating, a tier or an attribute score, whether the
  *    figure helped the answer or only decorated it, and whether it quoted a version other than the
@@ -68,12 +68,12 @@ export interface RubricGrade {
 
 /** What a turn looked up, as the runner records it. */
 export interface RunResearch {
-  path: 'stage' | 'deep';
+  path: 'stage' | 'chat';
   fallback?: string;
   lookups: number;
   searches: number;
   rounds: number;
-  /** Deep mode only: every tool the model called, in order. */
+  /** Chat loop only: every tool the model called, in order. */
   toolCalls?: string[];
   stop?: string;
   views: Record<string, number>;
@@ -150,7 +150,7 @@ export interface LookupVariance {
   lookupsRange: number;
   searchesRange: number;
   roundsRange: number;
-  /** Runs that answered on another path than the first run (a deep turn that fell back to the stage pipeline). */
+  /** Runs that answered on another path than the first run (a chat turn that fell back to the stage pipeline). */
   pathChanges: number;
   perRun: { attempt: number; path: string; lookups: number; searches: number; rounds: number; tools: string; subjects: string[] }[];
 }
@@ -171,7 +171,7 @@ export function lookupVariance(n: number, runs: RepeatRun[]): LookupVariance | n
       overlaps.push(union ? both / union : 1);
     }
   }
-  const pathOf = (r: RepeatRun) => (r.run.research!.fallback ? `deep, then stage (${r.run.research!.fallback})` : r.run.research!.path);
+  const pathOf = (r: RepeatRun) => (r.run.research!.fallback ? `chat, then stage (${r.run.research!.fallback})` : r.run.research!.path);
   return {
     n,
     runs: withResearch.length,
@@ -665,7 +665,7 @@ export function repeatReport(result: RepeatResult, meta: { today: string; label:
       }
     }
   }
-  lines.push('', '## Lookups', '', 'Tools the model called in each run (views left out), from the deep loop; the subject column lists what non-search lookups were about.', '', '| # | Run | Path | Lookups | Searches | Rounds | Tools | Subjects |', '| --- | --- | --- | --- | --- | --- | --- | --- |');
+  lines.push('', '## Lookups', '', 'Tools the model called in each run (views left out), from the chat loop; the subject column lists what non-search lookups were about.', '', '| # | Run | Path | Lookups | Searches | Rounds | Tools | Subjects |', '| --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const n of numbers) {
     const v = lookupVariance(n, byQ(n));
     if (v) {
@@ -748,7 +748,7 @@ export interface EstimateTotals {
 
 export interface Estimate {
   expected: { components: EstimateComponent[]; total: EstimateTotals };
-  /** Every deep turn spending its whole budget: the most the run can cost on the deep path. */
+  /** Every chat turn spending its whole budget: the most the run can cost on the chat loop. */
   ceiling: { components: EstimateComponent[]; total: EstimateTotals };
   turns: number;
   controlTurns: number;
@@ -757,12 +757,12 @@ export interface Estimate {
 
 /** Sizes that come from the repo's real prompts (`promptSizes` in the runner) so the estimate follows them. */
 export interface PromptSizes {
-  /** System instruction, deep rules and tool declarations, in tokens: sent on every round of a deep turn. */
-  deepFixedTokens: number;
+  /** System instruction, research rules and tool declarations, in tokens: sent on every round of a chat turn. */
+  chatFixedTokens: number;
 }
 
 /**
- * What a deep turn does, from the twelve-question deep run of 2026-11-16 (2.4 lookups, 1.1
+ * What a chat turn does, from the twelve-question chat loop run of 2026-11-16 (2.4 lookups, 1.1
  * searches and 2 research rounds on average; a ceiling run uses the whole budget). Every
  * figure is a token count including the model's thinking.
  */
@@ -775,11 +775,11 @@ export interface TurnShape {
 }
 
 export const EXPECTED_TURN: TurnShape = { rounds: 2, lookups: 2.4, searches: 1.1, gateRounds: 0.3 };
-/** `DEEP_MAX_ROUNDS`, `DEEP_MAX_CALLS`, `DEEP_MAX_SEARCHES` and one correction round. */
+/** `CHAT_MAX_ROUNDS`, `CHAT_MAX_CALLS`, `CHAT_MAX_SEARCHES` and one correction round. */
 export const CEILING_TURN: TurnShape = { rounds: 10, lookups: 12, searches: 4, gateRounds: 1 };
 
 const TOKENS = {
-  /** First user message of a deep turn: the conversation, cards in play, stored snapshots, coaches, the date. */
+  /** First user message of a chat turn: the conversation, cards in play, stored snapshots, coaches, the date. */
   firstMessage: 3_000,
   /** The route call for a turn the fast paths don't settle. */
   route: { input: 1_500, output: 200 },
@@ -807,20 +807,20 @@ const TOKENS = {
   control: { calls: 5, input: 40_000, output: 8_000, grounded: 1 },
 };
 
-/** The calls, input and output of one deep turn of this shape. Each round re-sends everything before it. */
-export function deepTurnComponent(shape: TurnShape, sizes: PromptSizes): EstimateComponent {
+/** The calls, input and output of one chat turn of this shape. Each round re-sends everything before it. */
+export function chatTurnComponent(shape: TurnShape, sizes: PromptSizes): EstimateComponent {
   const modelCalls = shape.rounds + 1;
   const perRoundResults = (shape.lookups * TOKENS.toolResult) / Math.max(1, shape.rounds);
   let input = 0;
   let output = 0;
   for (let i = 0; i < modelCalls; i++) {
-    input += sizes.deepFixedTokens + TOKENS.firstMessage + i * (perRoundResults + TOKENS.toolRoundOutput);
+    input += sizes.chatFixedTokens + TOKENS.firstMessage + i * (perRoundResults + TOKENS.toolRoundOutput);
     output += i < shape.rounds ? TOKENS.toolRoundOutput : TOKENS.answerOutput;
   }
   input += shape.searches * TOKENS.search.input + shape.gateRounds * TOKENS.gate.input + TOKENS.route.input;
   output += shape.searches * TOKENS.search.output + shape.gateRounds * TOKENS.gate.output + TOKENS.route.output;
   return {
-    name: 'Deep turn (route, loop rounds, searches, gate feedback)',
+    name: 'Chat turn (route, loop rounds, searches, gate feedback)',
     calls: modelCalls + shape.searches + shape.gateRounds + 1,
     inputTokens: Math.round(input),
     outputTokens: Math.round(output),
@@ -861,12 +861,12 @@ const totalOf = (components: EstimateComponent[], prices: Prices): EstimateTotal
 export function estimateRun(input: EstimateInput): Estimate {
   const prices = input.prices ?? ASSUMED_PRICES;
   const controls = input.questions.filter((n) => CONTROL_QUESTIONS.has(n)).length;
-  const deepTurns = input.questions.length - controls;
+  const chatTurns = input.questions.length - controls;
   const turnsOf = (n: number) => n * input.repeat;
   const build = (shape: TurnShape): EstimateComponent[] => {
     const answers = input.questions.length * input.repeat;
     const out: EstimateComponent[] = [];
-    if (deepTurns) out.push(scale(deepTurnComponent(shape, input.sizes), turnsOf(deepTurns), `Deep turns, ${turnsOf(deepTurns)}`));
+    if (chatTurns) out.push(scale(chatTurnComponent(shape, input.sizes), turnsOf(chatTurns), `Chat turns, ${turnsOf(chatTurns)}`));
     if (controls) out.push({ name: `Stage-path controls, ${turnsOf(controls)}`, calls: TOKENS.control.calls * turnsOf(controls), inputTokens: TOKENS.control.input * turnsOf(controls), outputTokens: TOKENS.control.output * turnsOf(controls), grounded: TOKENS.control.grounded * turnsOf(controls) });
     if (input.rubric !== false) {
       out.push({ name: `Rubric grade, ${answers} (a subject call and a grounded call each)`, calls: 2 * answers, inputTokens: (TOKENS.rubric.input + TOKENS.subjects.input) * answers, outputTokens: (TOKENS.rubric.output + TOKENS.subjects.output) * answers, grounded: answers });
@@ -905,9 +905,9 @@ export function formatEstimate(e: Estimate, meta: { questions: number[]; repeat:
     ...rows(e.expected.components),
     '',
     line('Expected', e.expected.total),
-    line('Ceiling (every deep turn spends its whole budget)', e.ceiling.total),
+    line('Ceiling (every chat turn spends its whole budget)', e.ceiling.total),
     '',
     `Prices used: ${usd(e.prices.inputPerMillion)}/M input, ${usd(e.prices.outputPerMillion)}/M output, $${e.prices.perGroundedSearch.toFixed(3)} per grounded search. The model profiles carry no prices; these are placeholders, so confirm them or pass --price-in, --price-out and --price-search. Implicit caching of the repeated prompt prefix is ignored, which makes the figure higher than a billed one.`,
-    'Token counts are modelled from the 2026-11-16 deep run (2.4 lookups, 1.1 searches and 2 research rounds a turn) and the real prompt sizes. Thinking tokens count as output.',
+    'Token counts are modelled from the 2026-11-16 chat loop run (2.4 lookups, 1.1 searches and 2 research rounds a turn) and the real prompt sizes. Thinking tokens count as output.',
   ].join('\n');
 }

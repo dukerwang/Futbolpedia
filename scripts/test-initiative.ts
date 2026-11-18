@@ -177,8 +177,8 @@ async function runTurn(
   const reply = await quietly(() =>
     sendMessageToAI(message, [], undefined, opts.cards ?? [card('Florian Wirtz')], [], {
       conversationId: 'conv-default',
-      // These tests exercise the stage pipeline's writer tools, whatever `DEEP_BY_DEFAULT` says.
-      deepByDefault: false,
+      // These tests exercise the stage pipeline's writer tools.
+      stage: true,
       ...opts.options,
       onBlocks: (blocks) => (attached = blocks),
       ...(opts.stream ? { onStreamChunk: () => {} } : {}),
@@ -214,7 +214,7 @@ await test('ask_user ends a streamed turn too, and the stream carries the questi
   const reply = await quietly(() =>
     sendMessageToAI(playerQuestion, [], undefined, [card('Florian Wirtz')], [], {
       conversationId: 'conv-stream',
-      deepByDefault: false,
+      stage: true,
       onBlocks: (blocks) => (attached = blocks),
       onStreamChunk: (text) => chunks.push(text),
     }),
@@ -364,10 +364,10 @@ await test('a player the model looked up and found missing is offered by rule on
   const asked = (await tools.lookUp({ name: 'Pedri' })) as any;
   assert.equal(asked.found, false);
   assert.deepEqual(composer.scoutOffers, ['Pedri'], 'a player asked about directly keeps the rule');
-  // Deep mode passes no filter, so its behaviour is unchanged: every missing player is offered.
-  const deep = new ReplyComposer();
-  await createDossierTools({ cardsInPlay: [], localCards: [], historical: false, composer: deep }).lookUp({ name: 'Gavi' });
-  assert.deepEqual(deep.scoutOffers, ['Gavi']);
+  // The chat loop passes no filter, so its behaviour is unchanged: every missing player is offered.
+  const unfiltered = new ReplyComposer();
+  await createDossierTools({ cardsInPlay: [], localCards: [], historical: false, composer: unfiltered }).lookUp({ name: 'Gavi' });
+  assert.deepEqual(unfiltered.scoutOffers, ['Gavi']);
   assert.equal(askedDirectly('Florian Wirtz', [], 'Is Wirtz better than him?'), false, 'the full name is needed');
   assert.equal(askedDirectly('Wirtz', [], 'Is Wirtz better than him?'), true);
 });
@@ -386,7 +386,7 @@ await test('the routing rule still offers a target player who has no card', asyn
 
 await test('request_deeper is never offered and its rule never sent, on any stage turn', async () => {
   const present = await runTurn(playerQuestion, { first: [call('request_deeper', { reason: 'More to read.' })], final: 'The stage answer.' });
-  const forced = await runTurn(playerQuestion, { options: { deepByDefault: true, fast: true }, final: 'The stage answer.' });
+  const forced = await runTurn(playerQuestion, { options: { stage: true }, final: 'The stage answer.' });
   const past = await runTurn('How good was prime Florian Wirtz?', { route: pastRoute, final: 'An answer about the past.' });
   for (const t of [present, forced, past]) {
     assert.ok(!t.writer[0].tools.includes('request_deeper'));
@@ -544,22 +544,22 @@ await test('a challenge turn that falls back to prose is shown none of the four 
   assert.equal(attachedIn(t.attached).ask, undefined);
 });
 
-await test('deep mode keeps its own tool set', async () => {
-  const source = await (await import('node:fs/promises')).readFile(new URL('../services/deepTurn.ts', import.meta.url), 'utf8');
+await test('the chat loop keeps its own tool set', async () => {
+  const source = await (await import('node:fs/promises')).readFile(new URL('../services/chatTurn.ts', import.meta.url), 'utf8');
   assert.ok(!/ask_user|prepare_club|offer_rating|request_deeper|initiativeTools/.test(source));
 });
 
 // ---------------------------------------------------------------------------------------------
-// Deep mode as the default
+// The chat loop as the default
 
-type DeepModel = import('../services/deepTurn').DeepModel;
-type DeepScript = ({ text: string; calls: { name: string; args: Record<string, unknown> }[]; finishReason?: string } | (() => never))[];
+type ChatModel = import('../services/chatTurn').ChatModel;
+type LoopScript = ({ text: string; calls: { name: string; args: Record<string, unknown> }[]; finishReason?: string } | (() => never))[];
 
-/** A deep loop that plays back `script`, one entry per send; a function entry throws when reached. */
-function deepLoop(script: DeepScript) {
+/** A chat loop that plays back `script`, one entry per send; a function entry throws when reached. */
+function fakeLoop(script: LoopScript) {
   const opened: string[][] = [];
   let sends = 0;
-  const model: DeepModel = {
+  const model: ChatModel = {
     open(args) {
       opened.push(args.declarations.map((d) => String(d.name)));
       return {
@@ -579,50 +579,50 @@ const says = (text: string) => ({ text, calls: [] as { name: string; args: Recor
 const OTHER_THREE = ['ask_user', 'prepare_club', 'offer_rating'];
 const FALLBACK_LABEL = 'Taking the standard route...';
 
-/** A turn with the stage writer scripted (it answers plainly) and the deep loop as given; returns what each side saw. */
-async function deepTurn(loop: ReturnType<typeof deepLoop>, options: Record<string, unknown>, opts: { message?: string; route?: Record<string, unknown>; deepDeps?: Record<string, unknown> } = {}) {
+/** A turn with the stage writer scripted (it answers plainly) and the chat loop as given; returns what each side saw. */
+async function loopTurn(loop: ReturnType<typeof fakeLoop>, options: Record<string, unknown>, opts: { message?: string; route?: Record<string, unknown>; chatDeps?: Record<string, unknown> } = {}) {
   const labels: string[] = [];
   const t = await runTurn(opts.message ?? playerQuestion, {
     route: opts.route,
     first: [{ text: 'The stage answer.' }],
     final: 'The stage answer.',
-    options: { ...options, deepDeps: loop.deps(opts.deepDeps), onStageChange: (l: string) => labels.push(l) },
+    options: { ...options, chatDeps: loop.deps(opts.chatDeps), onStageChange: (l: string) => labels.push(l) },
   });
   return { ...t, labels };
 }
 
-await test('default on: a present-day turn runs the loop and never reaches the writer', async () => {
-  const loop = deepLoop([says('The deep answer.')]);
-  const t = await deepTurn(loop, { deepByDefault: true });
-  assert.equal(t.reply, 'The deep answer.');
+await test('a present-day turn runs the loop and never reaches the writer', async () => {
+  const loop = fakeLoop([says('The loop answer.')]);
+  const t = await loopTurn(loop, { stage: false });
+  assert.equal(t.reply, 'The loop answer.');
   assert.equal(t.writer.length, 0, 'the stage writer was not asked');
   assert.equal(loop.opened.length, 1);
   assert.ok(!loop.opened[0].includes('request_deeper'));
   assert.equal(attachedIn(t.attached).goDeeper, undefined);
 });
 
-await test('default on: a past thread takes the stage pipeline, with the three initiative tools', async () => {
-  const loop = deepLoop([says('The deep answer.')]);
-  const t = await deepTurn(loop, { deepByDefault: true }, { message: 'How good was prime Florian Wirtz?', route: pastRoute });
+await test('a past thread takes the stage pipeline, with the three initiative tools', async () => {
+  const loop = fakeLoop([says('The loop answer.')]);
+  const t = await loopTurn(loop, { stage: false }, { message: 'How good was prime Florian Wirtz?', route: pastRoute });
   assert.equal(loop.opened.length, 0);
   assert.equal(t.writer.length > 0, true);
   assert.ok(OTHER_THREE.every((n) => t.writer[0].tools.includes(n)));
 });
 
-await test('default off: an unflagged turn takes the stage pipeline, and a deep turn runs the loop', async () => {
-  const plain = deepLoop([says('The deep answer.')]);
-  const stage = await runTurn(playerQuestion, { final: 'The stage answer.', options: { deepByDefault: false, deepDeps: plain.deps() } });
+await test('the stage flag sends a present-day turn to the writer, and without it the loop answers', async () => {
+  const plain = fakeLoop([says('The loop answer.')]);
+  const stage = await runTurn(playerQuestion, { final: 'The stage answer.', options: { chatDeps: plain.deps() } });
   assert.equal(plain.opened.length, 0);
   assert.equal(stage.reply, 'A direct answer.');
 
-  const loop = deepLoop([says('The deep answer.')]);
-  const deep = await deepTurn(loop, { deepByDefault: false, deep: true });
-  assert.equal(deep.reply, 'The deep answer.');
-  assert.equal(deep.writer.length, 0);
+  const loop = fakeLoop([says('The loop answer.')]);
+  const answered = await loopTurn(loop, { stage: false });
+  assert.equal(answered.reply, 'The loop answer.');
+  assert.equal(answered.writer.length, 0);
 });
 
 await test('a loop that fails runs the writer once, after an error, an empty reply and a spent budget', async () => {
-  const cases: [string, DeepScript, Record<string, unknown>][] = [
+  const cases: [string, LoopScript, Record<string, unknown>][] = [
     [
       'error',
       [
@@ -640,8 +640,8 @@ await test('a loop that fails runs the writer once, after an error, an empty rep
     ],
   ];
   for (const [name, script, extra] of cases) {
-    const loop = deepLoop(script);
-    const t = await deepTurn(loop, { deepByDefault: true }, { deepDeps: extra });
+    const loop = fakeLoop(script);
+    const t = await loopTurn(loop, { stage: false }, { chatDeps: extra });
     assert.equal(t.reply, 'The stage answer.', name);
     assert.equal(loop.opened.length, 1, `${name}: the loop made one attempt`);
     assert.equal(t.writer.length, 1, `${name}: the writer ran once`);
@@ -652,11 +652,11 @@ await test('a loop that fails runs the writer once, after an error, an empty rep
 
 await test('a slow loop that answers is never followed by the writer', async () => {
   let clock = 0;
-  const loop = deepLoop([{ text: '', calls: [{ name: 'get_league_table', args: { league: 'A' } }] }, says('The late deep answer.')]);
-  const t = await deepTurn(loop, { deepByDefault: true }, {
-    deepDeps: { now: () => (clock += 60_000), tools: { leagueTable: async () => ({ status: 'empty', result: null, missing: [] }) } },
+  const loop = fakeLoop([{ text: '', calls: [{ name: 'get_league_table', args: { league: 'A' } }] }, says('The late loop answer.')]);
+  const t = await loopTurn(loop, { stage: false }, {
+    chatDeps: { now: () => (clock += 60_000), tools: { leagueTable: async () => ({ status: 'empty', result: null, missing: [] }) } },
   });
-  assert.equal(t.reply, 'The late deep answer.');
+  assert.equal(t.reply, 'The late loop answer.');
   assert.equal(t.writer.length, 0);
   assert.ok(!t.labels.includes(FALLBACK_LABEL));
 });
@@ -692,7 +692,7 @@ await test('the Go deeper chip is gone, and a stored Go deeper flag still reads 
   const old = {
     id: 'old-reply',
     sender: 'ai',
-    content: 'An answer from when deep mode was opt-in.',
+    content: 'An answer from when the chat loop was opt-in.',
     timestamp: 0,
     goDeeper: { reason: 'The recent lineups were not read.' },
   } as any;

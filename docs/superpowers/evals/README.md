@@ -6,7 +6,7 @@ that answers the question.
 
 | Set | Flag | What it measures |
 | --- | --- | --- |
-| Live questions | none, `--deep`, `--stage` | One answer per question to a present-day question, scored on stale facts, invented facts, what changed, decisiveness and hedged roles ([live-questions.md](live-questions.md)). |
+| Live questions | none, `--stage` | One answer per question to a present-day question, scored on stale facts, invented facts, what changed, decisiveness and hedged roles ([live-questions.md](live-questions.md)). |
 | Repeat runs | `--repeat N` | How far answers vary between runs of the same question (see Repeat Runs below). |
 | Historical questions | `--set historical` | Past seasons and all-time debates, each run twice, with figures checked ([historical-questions.md](historical-questions.md)). |
 | Conversations | `--conversations` | Multi-turn cases graded for conduct. |
@@ -20,7 +20,7 @@ gives, and each question's runs finish before the next question starts, so a run
 complete sets of runs for the first questions.
 
 ```bash
-npm run eval:live -- --deep --repeat 2 --only 11,4,1 --shared-cards --label drift
+npm run eval:live -- --repeat 2 --only 11,4,1 --shared-cards --label drift
 ```
 
 The report is `reports/<date>-<time>-consistency-<label>.md`, with its JSON beside it. It is
@@ -36,10 +36,10 @@ retried, and the report says where it stopped.
   judgments they commit to: the verdict, who starts in each role, and the main claim about what
   changed. It returns an agreement (`same`, `partly`, `different`) and lists each contradiction
   with what each run said. "Same" next to a listed contradiction is read as "partly".
-- **Lookups.** The tools each run called (the deep loop's tool calls, view tools left out), how
+- **Lookups.** The tools each run called (the chat loop's tool calls, view tools left out), how
   often, and what the non-search lookups were about (the `[Perf] lookup` lines). The report counts
   the questions where the runs used different tools, different numbers of calls or different
-  subjects, and where a deep turn fell back to the stage pipeline in one run and not in another.
+  subjects, and where a chat turn fell back to the stage pipeline in one run and not in another.
   Web searches count by tool only, since a query's wording always differs.
 - **Card mentions.** A cheap scan finds sentences that might quote a rating, a tier or an
   attribute score. A grader call (without search) runs only for an answer the scan flags, so
@@ -62,16 +62,16 @@ retried, and the report says where it stopped.
 | `--shared-cards` | Read the shared cards and stored club snapshots from Supabase through a read-only client. Without it no card is ever in play, so card mentions can't happen. |
 | `--no-card-mentions` | Skip card scoring. |
 | `--card-mentions` | With `--repeat 1`, score card mentions on a single run. |
-| `--deep`, `--stage` | Force a path, as for the live set. The estimate models deep mode only. |
+| `--stage` | Send each question to the stage pipeline, as for the live set. The estimate models the chat loop only. |
 
 `--only` also keeps its order, and `--max-questions` applies, in the plain live run.
 
 ### Estimate
 
-`--dry-run` prices a run without a call. Token counts are modelled from the 2026-11-16 deep run
+`--dry-run` prices a run without a call. Token counts are modelled from the 2026-11-16 chat loop run
 (2.4 lookups, 1.1 searches and 2 research rounds a turn on average) and from the real prompt
-sizes (the system instruction, deep rules and tool declarations, about 12,000 tokens, sent on
-every round). The expected figure assumes turns like those; the ceiling assumes every deep turn
+sizes (the system instruction, research rules and tool declarations, about 12,000 tokens, sent on
+every round). The expected figure assumes turns like those; the ceiling assumes every chat turn
 spends its whole budget (12 lookups, 4 searches, 10 rounds). Thinking tokens count as output.
 
 The model profiles carry no prices. The dollar figures use placeholders ($0.50 per million input
@@ -81,11 +81,11 @@ and `--price-search` before relying on them. Token and call counts don't depend 
 
 ### Smallest Run
 
-The smallest run that answers "do deep-mode answers drift?" is three questions, twice each, six
-deep turns:
+The smallest run that answers "do the chat loop's answers drift?" is three questions, twice each,
+six turns:
 
 ```bash
-npm run eval:live -- --deep --repeat 2 --only 11,4,1 --shared-cards --label drift
+npm run eval:live -- --repeat 2 --only 11,4,1 --shared-cards --label drift
 ```
 
 | Question | Why |
@@ -99,7 +99,7 @@ hits the cap still leaves complete pairs for the first ones. Two runs per questi
 that can show a contradiction; it can show drift, but a clean result from two runs doesn't prove
 stability. If the budget is tighter, `--only 11,4` is four turns.
 
-Dry run of both (`--deep --repeat 2 --shared-cards --dry-run`, with the placeholder prices):
+Dry run of both (`--repeat 2 --shared-cards --dry-run`, with the placeholder prices):
 
 | Run | Turns | Calls | Input tokens | Output tokens | Grounded searches | Cost, expected | Cost, ceiling |
 | --- | --- | --- | --- | --- | --- | --- | --- |

@@ -1,16 +1,16 @@
 #!/usr/bin/env npx tsx
 /**
- * Offline checks for a Gaffa club in deep mode: a turn with a club attached in the app takes the
- * deep loop with the club's blocks in its first message (squad, market and lineup questions), the
+ * Offline checks for a Gaffa club in the chat loop: a turn with a club attached in the app takes
+ * the loop with the club's blocks in its first message (squad, market and lineup questions), the
  * loop gets `grep_gaffa_market` and runs it free, the market rule removes an unlisted free agent
- * from a deep reply on the stream and the final reply, a trade and Gaffa's panel stay on the stage
+ * from the loop's reply on the stream and the final reply, a trade and Gaffa's panel stay on the stage
  * pipeline, a failing loop falls back to the stage pipeline with the club, and the four turns of
  * the shared conversation /c/W8BVT5 (case C1 in the live set) replay through the loop. Gemini is
- * refused at fetch and the deep model, tools and squad availability are faked: no network,
+ * refused at fetch and the loop's model, tools and squad availability are faked: no network,
  * Supabase or API keys, and no model calls.
  *
  * Usage:
- *   npx tsx scripts/test-gaffa-deep.ts
+ *   npx tsx scripts/test-gaffa-chat-turn.ts
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -45,15 +45,15 @@ globalThis.fetch = (async (input: any, init?: RequestInit) => {
 }) as typeof fetch;
 
 const { sendMessageToAI } = await import('../services/geminiService');
-const { takesDeepPath, DEEP_GAFFA_RULE, FALLBACK_STAGE_LABEL } = await import('../services/deepTurn');
+const { takesChatLoop, CHAT_GAFFA_RULE, FALLBACK_STAGE_LABEL } = await import('../services/chatTurn');
 const { gateGaffaMarket, finishGaffaReply, isGaffaTrade } = await import('../services/gaffaTurn');
 const { readConversations, historyFor } = await import('./eval-conversations');
-type DeepModel = import('../services/deepTurn').DeepModel;
-type DeepReply = import('../services/deepTurn').DeepReply;
-type DeepToolResponse = import('../services/deepTurn').DeepToolResponse;
-type DeepStats = import('../services/deepTurn').DeepStats;
+type ChatModel = import('../services/chatTurn').ChatModel;
+type ChatRoundReply = import('../services/chatTurn').ChatRoundReply;
+type ChatToolResponse = import('../services/chatTurn').ChatToolResponse;
+type TurnStats = import('../services/chatTurn').TurnStats;
 type GaffaTurn = import('../services/gaffaTurn').GaffaTurn;
-type PathInfo = import('../services/deepTurn').PathInfo;
+type PathInfo = import('../services/chatTurn').PathInfo;
 
 // --- Fixtures ----------------------------------------------------------------------------------
 
@@ -126,11 +126,11 @@ interface Opened {
   declarations: string[];
 }
 
-/** A deep model that plays back `script`, one reply per send; a function entry sees what was sent. */
-function fakeModel(script: (DeepReply | ((sent: (string | DeepToolResponse[])[]) => DeepReply))[]) {
-  const sent: (string | DeepToolResponse[])[] = [];
+/** A loop model that plays back `script`, one reply per send; a function entry sees what was sent. */
+function fakeModel(script: (ChatRoundReply | ((sent: (string | ChatToolResponse[])[]) => ChatRoundReply))[]) {
+  const sent: (string | ChatToolResponse[])[] = [];
   let opened: Opened | null = null;
-  const model: DeepModel = {
+  const model: ChatModel = {
     open(args) {
       opened = { systemInstruction: args.systemInstruction, history: args.history, declarations: args.declarations.map((d) => String(d.name)) };
       return {
@@ -146,8 +146,8 @@ function fakeModel(script: (DeepReply | ((sent: (string | DeepToolResponse[])[])
   };
   return { model, sent, opened: () => opened };
 }
-const answer = (text: string): DeepReply => ({ text, calls: [] });
-const calls = (...list: { name: string; args: Record<string, unknown> }[]): DeepReply => ({ text: '', calls: list });
+const answer = (text: string): ChatRoundReply => ({ text, calls: [] });
+const calls = (...list: { name: string; args: Record<string, unknown> }[]): ChatRoundReply => ({ text: '', calls: list });
 
 /** Runs `fn` with the console quiet, keeping what was logged. */
 async function quietly<T>(fn: () => Promise<T>): Promise<{ value: T; logs: string[] }> {
@@ -161,7 +161,7 @@ async function quietly<T>(fn: () => Promise<T>): Promise<{ value: T; logs: strin
   }
 }
 
-/** One turn through sendMessageToAI with a club attached, the deep model faked. */
+/** One turn through sendMessageToAI with a club attached, the loop's model faked. */
 async function sendGaffa(
   message: string,
   script: Parameters<typeof fakeModel>[0],
@@ -173,7 +173,7 @@ async function sendGaffa(
   const stages: string[] = [];
   const chunks: string[] = [];
   let gaffaTurn: GaffaTurn | null = null;
-  let stats: DeepStats | null = null;
+  let stats: TurnStats | null = null;
   const geminiBefore = geminiBodies.length;
   const { value, logs } = await quietly(() =>
     sendMessageToAI(message, opts.history ?? [], undefined, [], [], {
@@ -183,7 +183,7 @@ async function sendGaffa(
       onStageChange: (l) => stages.push(l),
       onStreamChunk: (t) => chunks.push(t),
       ...opts.options,
-      deepDeps: {
+      chatDeps: {
         model: fake.model,
         tools,
         snapshots: null,
@@ -206,7 +206,7 @@ async function sendGaffa(
     asked,
     logs,
     gaffaTurn: gaffaTurn as GaffaTurn | null,
-    stats: stats as DeepStats | null,
+    stats: stats as TurnStats | null,
     stageGemini: geminiBodies.slice(geminiBefore),
   };
 }
@@ -218,10 +218,10 @@ const ai = (content: string): ChatMessage => ({ id: `a-${content.length}`, sende
 
 await test('a club attached in the app no longer keeps a turn off the loop; a trade and the panel still do', () => {
   const r = { intent: 'tactical_chat' } as any;
-  assert.equal(takesDeepPath({ byDefault: true, route: r, historical: false }), true);
-  assert.equal(takesDeepPath({ byDefault: true, route: r, historical: false, gaffaTrade: true }), false);
-  assert.equal(takesDeepPath({ byDefault: true, route: r, historical: false, noRating: true }), false);
-  assert.equal(takesDeepPath({ byDefault: true, route: r, historical: true }), false);
+  assert.equal(takesChatLoop({ route: r, historical: false }), true);
+  assert.equal(takesChatLoop({ route: r, historical: false, gaffaTrade: true }), false);
+  assert.equal(takesChatLoop({ route: r, historical: false, noRating: true }), false);
+  assert.equal(takesChatLoop({ route: r, historical: true }), false);
 });
 
 await test('a trade is read from the message, or from a trade thread a short follow-up continues', () => {
@@ -245,7 +245,7 @@ await test("a club's thread is about the present unless the user's own words nam
 
 await test('a squad question takes the loop with the club block, its FPL line, the reasoning and the lineup audit', async () => {
   const t = await sendGaffa('Who is the weakest starter in my squad right now?', [answer('Kinský is the weakest starter.')]);
-  assert.deepEqual(t.paths, [{ path: 'deep' }]);
+  assert.deepEqual(t.paths, [{ path: 'chat' }]);
   assert.ok(t.opened, 'the loop was opened');
   assert.equal(t.gaffaTurn?.focus, 'squad');
   assert.match(t.first, /<gaffa_club>[\s\S]*Harbour Athletic[\s\S]*<\/gaffa_club>/);
@@ -253,7 +253,7 @@ await test('a squad question takes the loop with the club block, its FPL line, t
   assert.match(t.first, /<gaffa_manager_reasoning>/);
   assert.match(t.first, /<locked_lineup_audit>/);
   assert.doesNotMatch(t.first, /<locked_market>/, 'a squad question carries no market lock');
-  assert.ok(t.first.includes(DEEP_GAFFA_RULE));
+  assert.ok(t.first.includes(CHAT_GAFFA_RULE));
   assert.ok(t.first.indexOf('<gaffa_club>') < t.first.indexOf('<task>'));
   assert.ok(t.opened!.declarations.includes('grep_gaffa_market'));
   assert.ok(t.opened!.declarations.includes('get_player_season'));
@@ -266,7 +266,7 @@ await test('a squad question takes the loop with the club block, its FPL line, t
 
 await test('a market question takes the loop with the rules, the market lock and the bid calculator', async () => {
   const t = await sendGaffa('Which free agent should I bid on to cover goalkeeper, and what would it cost?', [answer('Kelleher.')]);
-  assert.deepEqual(t.paths, [{ path: 'deep' }]);
+  assert.deepEqual(t.paths, [{ path: 'chat' }]);
   assert.equal(t.gaffaTurn?.focus, 'market');
   assert.match(t.first, /<gaffa_club>/);
   assert.match(t.first, /<gaffa_manager_reasoning>/);
@@ -278,16 +278,16 @@ await test('a market question takes the loop with the rules, the market lock and
 
 await test('a lineup question takes the loop with the rules and the lineup audit', async () => {
   const t = await sendGaffa('Check my lineup for this gameweek.', [answer('Your lineup is set.')]);
-  assert.deepEqual(t.paths, [{ path: 'deep' }]);
+  assert.deepEqual(t.paths, [{ path: 'chat' }]);
   assert.equal(t.gaffaTurn?.focus, 'lineup');
   assert.match(t.first, /<gaffa_rules>/);
   assert.match(t.first, /<locked_lineup_audit>/);
   assert.doesNotMatch(t.first, /<locked_bid_calculator>/);
 });
 
-await test('a question that isn\'t about the club still carries the club block, and only the deep loop\'s own tools plus the grep', async () => {
+await test('a question that isn\'t about the club still carries the club block, and only the chat loop\'s own tools plus the grep', async () => {
   const t = await sendGaffa("Break down Southside's build-up shape this season", [answer('A back three in possession.')]);
-  assert.deepEqual(t.paths, [{ path: 'deep' }]);
+  assert.deepEqual(t.paths, [{ path: 'chat' }]);
   assert.equal(t.gaffaTurn?.focus, 'none');
   assert.match(t.first, /<gaffa_club>[\s\S]*may not be about their Gaffa club/);
   assert.doesNotMatch(t.first, /<gaffa_manager_reasoning>/);
@@ -298,13 +298,13 @@ await test('a turn with no club offers no market grep and no Gaffa rule', async 
   const fake = fakeModel([answer('An answer.')]);
   await quietly(() =>
     sendMessageToAI("Break down Southside's build-up shape this season", [], undefined, [], [], {
-      deepDeps: { model: fake.model, tools: fakeTools().tools, snapshots: null, managers: async () => [] },
+      chatDeps: { model: fake.model, tools: fakeTools().tools, snapshots: null, managers: async () => [] },
     }),
   );
   assert.ok(fake.opened());
   assert.ok(!fake.opened()!.declarations.includes('grep_gaffa_market'));
   assert.ok(!(fake.sent[0] as string).includes('<gaffa_club>'));
-  assert.ok(!(fake.sent[0] as string).includes(DEEP_GAFFA_RULE));
+  assert.ok(!(fake.sent[0] as string).includes(CHAT_GAFFA_RULE));
 });
 
 // --- Tools ---------------------------------------------------------------------------------------
@@ -314,7 +314,7 @@ await test('grep_gaffa_market reads the bag and costs nothing; get_player_season
     calls({ name: 'grep_gaffa_market', args: { pool: 'free_agents', position: 'GK' } }, { name: 'get_player_season', args: { name: 'Emiliano Martínez' } }),
     answer('Kelleher is the pick.'),
   ]);
-  const results = t.sent[1] as DeepToolResponse[];
+  const results = t.sent[1] as ChatToolResponse[];
   const grep = results.find((r) => r.name === 'grep_gaffa_market')!.response as any;
   const names = JSON.stringify(grep);
   assert.ok(names.includes('Caoimhín Kelleher') && names.includes('Dean Henderson'));
@@ -325,7 +325,7 @@ await test('grep_gaffa_market reads the bag and costs nothing; get_player_season
   assert.ok(t.stages.includes("Searching your league's market"));
 });
 
-// --- The market rule on a deep reply -----------------------------------------------------------
+// --- The market rule on a loop reply -----------------------------------------------------------
 
 const UNLISTED = 'Alisson Becker';
 const marketReply = [
@@ -337,9 +337,9 @@ const marketReply = [
   `If you want a cheaper route, nominate ${UNLISTED.split(' ')[1]} anyway. Otherwise bid on Kelleher at the €19m floor.`,
 ].join('\n');
 
-await test('the market rule removes an unlisted free agent from a deep reply, on the stream and the final reply', async () => {
+await test('the market rule removes an unlisted free agent from a loop reply, on the stream and the final reply', async () => {
   const t = await sendGaffa('Which free agent should I bid on to cover goalkeeper, and what would it cost?', [answer(marketReply)]);
-  assert.deepEqual(t.paths, [{ path: 'deep' }]);
+  assert.deepEqual(t.paths, [{ path: 'chat' }]);
   assert.ok(!t.reply.includes('Alisson') && !t.reply.includes('Becker'), t.reply);
   assert.match(t.reply, /Caoimhín Kelleher\*\* \(Brentford/);
   assert.match(t.reply, /bid on Kelleher at the €19m floor/);
@@ -401,22 +401,20 @@ await test("Gaffa's panel stays on the stage pipeline", async () => {
   assert.deepEqual(t.paths, [{ path: 'stage' }]);
 });
 
-await test('the fast flag and a disabled default still send a club turn to the stage pipeline', async () => {
-  const fast = await sendGaffa('Who is the weakest starter in my squad right now?', [answer('SHOULD NOT RUN')], { options: { fast: true } });
-  assert.equal(fast.opened, null);
-  const off = await sendGaffa('Who is the weakest starter in my squad right now?', [answer('SHOULD NOT RUN')], { options: { deepByDefault: false } });
-  assert.equal(off.opened, null);
+await test('the stage flag still sends a club turn to the stage pipeline', async () => {
+  const forced = await sendGaffa('Who is the weakest starter in my squad right now?', [answer('SHOULD NOT RUN')], { options: { stage: true } });
+  assert.equal(forced.opened, null);
 });
 
 // --- Fallback ------------------------------------------------------------------------------------
 
-await test('a deep Gaffa turn that gives up falls back to the stage pipeline with the club', async () => {
+await test('a Gaffa turn whose loop gives up falls back to the stage pipeline with the club', async () => {
   const t = await sendGaffa('Who is the weakest starter in my squad right now?', [
     () => {
       throw new Error('model unavailable');
     },
   ]);
-  assert.deepEqual(t.paths, [{ path: 'deep' }, { path: 'stage', fallback: 'error' }]);
+  assert.deepEqual(t.paths, [{ path: 'chat' }, { path: 'stage', fallback: 'error' }]);
   assert.ok(t.stages.includes(FALLBACK_STAGE_LABEL));
   assert.equal(t.stages.filter((l) => l === 'Reading your Gaffa club...').length, 2, 'both runs read the club');
   assert.ok(t.stageGemini.some((body) => body.includes('<gaffa_club>') && body.includes('Harbour Athletic')), 'the stage writer got the club block');
@@ -438,7 +436,7 @@ await test('C1 (/c/W8BVT5): every turn takes the loop with the club, the starter
       conversationId: 'eval-C1',
     });
     focuses.push(t.gaffaTurn?.focus ?? 'none');
-    assert.deepEqual(t.paths, [{ path: 'deep' }], `turn ${i}`);
+    assert.deepEqual(t.paths, [{ path: 'chat' }], `turn ${i}`);
     assert.equal(t.opened!.history.length, i * 2, `turn ${i}: the recorded turns before it are the loop's history`);
     assert.match(t.first, /<gaffa_club>/, `turn ${i}`);
     assert.ok(t.first.includes(`FPL: ${DOUBTFUL}`), `turn ${i}: the starter's FPL status`);
@@ -446,7 +444,7 @@ await test('C1 (/c/W8BVT5): every turn takes the loop with the club, the starter
     assert.ok(t.first.includes(`<task>${c1.turns[i].user}</task>`), `turn ${i}`);
     assert.ok(t.opened!.declarations.includes('grep_gaffa_market'), `turn ${i}`);
     assert.ok(t.opened!.declarations.includes('get_player_season'), `turn ${i}`);
-    assert.match(t.opened!.systemInstruction, /## Deep mode/);
+    assert.match(t.opened!.systemInstruction, /## Research\n/);
     if (i === 0) {
       assert.match(t.first, /<locked_market>[\s\S]*Caoimhín Kelleher/, 'the first question is about the market');
       assert.match(t.first, /<locked_bid_calculator>/);

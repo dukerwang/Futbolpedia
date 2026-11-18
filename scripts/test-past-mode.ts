@@ -1,16 +1,16 @@
 #!/usr/bin/env npx tsx
 /**
- * Offline checks for past mode in the deep loop (`services/pastTurn.ts`, `services/deepTurn.ts`,
- * behind `DEEP_PAST`): which turns take the loop with the switch on and off, the first message's
+ * Offline checks for past mode in the chat loop (`services/pastTurn.ts`, `services/chatTurn.ts`,
+ * behind `PAST_MODE`): which turns take the loop with the switch on and off, the first message's
  * cards, era snapshots and settled verdicts, the past budget and instructions under both
  * instruction sets, `commit_verdict` against the cards and a settled verdict, card pairs reported
- * with path `deep`, proposals and departures sent to the settled-verdict store, the figure budget
+ * with path `commit`, proposals and departures sent to the settled-verdict store, the figure budget
  * from a commitment, a present turn comparing carded versions, and that with the switch off every
  * path builds exactly what it built before. The model, tools, stores and network are faked; Gemini
  * is refused at fetch.
  *
  * Usage:
- *   npx tsx scripts/test-deep-past.ts
+ *   npx tsx scripts/test-past-mode.ts
  */
 import assert from 'node:assert/strict';
 import type { PlayerProfile } from '../types';
@@ -41,7 +41,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
 const { CALIBRATION_EPOCH_MS } = await import('../services/dossierCache');
 const { getCardKey } = await import('../services/dossierCards');
 const { ReplyComposer } = await import('../services/replyBlocks');
-const { DEEP_PAST, runDeepTurn, takesDeepPath, DEFAULT_DEEP_BUDGET } = await import('../services/deepTurn');
+const { PAST_MODE, runChatTurn, takesChatLoop, DEFAULT_RESEARCH_BUDGET } = await import('../services/chatTurn');
 const {
   CARD_ANCHOR_NOTE,
   COMMIT_VERDICT_DECLARATION,
@@ -58,10 +58,10 @@ const { memoryVerdictDb, verdictKey, fingerprintOf, DEBATE_VERDICT_VERSION } = a
 const { readDisagreementReport } = await import('../services/cardDisagreements');
 const { PRINCIPLE_SOURCES } = await import('../prompts/chatPrompt');
 const { addEvidence, emptyLedger } = await import('../services/evidenceLedger');
-type DeepModel = import('../services/deepTurn').DeepModel;
-type DeepReply = import('../services/deepTurn').DeepReply;
-type DeepToolResponse = import('../services/deepTurn').DeepToolResponse;
-type DeepStats = import('../services/deepTurn').DeepStats;
+type ChatModel = import('../services/chatTurn').ChatModel;
+type ChatRoundReply = import('../services/chatTurn').ChatRoundReply;
+type ChatToolResponse = import('../services/chatTurn').ChatToolResponse;
+type TurnStats = import('../services/chatTurn').TurnStats;
 
 // --- Fakes ------------------------------------------------------------------------------------
 
@@ -106,14 +106,14 @@ function fakeTools(log: string[] = []): ResearchToolset {
 }
 
 interface Sent {
-  message: string | DeepToolResponse[];
+  message: string | ChatToolResponse[];
   tools: boolean;
 }
 
-function fakeModel(script: (DeepReply | ((sent: Sent[]) => DeepReply))[]) {
+function fakeModel(script: (ChatRoundReply | ((sent: Sent[]) => ChatRoundReply))[]) {
   const sent: Sent[] = [];
   let opened: { systemInstruction: string; declarations: string[] } | null = null;
-  const model: DeepModel = {
+  const model: ChatModel = {
     open(args) {
       opened = { systemInstruction: args.systemInstruction, declarations: args.declarations.map((d) => String(d.name)) };
       return {
@@ -130,9 +130,9 @@ function fakeModel(script: (DeepReply | ((sent: Sent[]) => DeepReply))[]) {
   return { model, sent, opened: () => opened! };
 }
 const call = (name: string, args: Record<string, unknown>) => ({ name, args });
-const callsReply = (...calls: { name: string; args: Record<string, unknown> }[]): DeepReply => ({ text: '', calls });
-const answer = (text: string): DeepReply => ({ text, calls: [] });
-const responsesOf = (s: Sent): DeepToolResponse[] => (Array.isArray(s.message) ? s.message : []);
+const callsReply = (...calls: { name: string; args: Record<string, unknown> }[]): ChatRoundReply => ({ text: '', calls });
+const answer = (text: string): ChatRoundReply => ({ text, calls: [] });
+const responsesOf = (s: Sent): ChatToolResponse[] => (Array.isArray(s.message) ? s.message : []);
 
 const route = (over: Record<string, unknown> = {}) =>
   ({
@@ -203,7 +203,7 @@ function pastDeps(over: Record<string, unknown> = {}) {
   const net = { settled: [] as Record<string, unknown>[], departed: [] as string[] };
   const pairs: unknown[] = [];
   const managersAsked: string[][] = [];
-  let stats: DeepStats | null = null;
+  let stats: TurnStats | null = null;
   const deps = {
     tools: fakeTools(),
     snapshots: null,
@@ -212,7 +212,7 @@ function pastDeps(over: Record<string, unknown> = {}) {
     verdicts: memoryVerdictDb(),
     pastNetwork: { settle: (b: Record<string, unknown>) => net.settled.push(b), depart: (k: string) => net.departed.push(k) },
     reportDisagreements: (p: unknown[]) => pairs.push(...p),
-    onStats: (s: DeepStats) => (stats = s),
+    onStats: (s: TurnStats) => (stats = s),
     ...over,
   };
   return { deps, net, pairs, managersAsked, stats: () => stats! };
@@ -220,19 +220,19 @@ function pastDeps(over: Record<string, unknown> = {}) {
 
 // --- The switch and the entry -----------------------------------------------------------------
 
-await test('DEEP_PAST is off, and with it off a question about the past never takes the loop', () => {
-  assert.equal(DEEP_PAST, false);
+await test('PAST_MODE is off, and with it off a question about the past never takes the loop', () => {
+  assert.equal(PAST_MODE, false);
   const r = (intent: string) => ({ intent }) as any;
-  assert.equal(takesDeepPath({ deep: true, route: r('compare'), historical: true }), false);
-  assert.equal(takesDeepPath({ deep: true, route: r('compare'), historical: true, pastDeep: false }), false);
-  assert.equal(takesDeepPath({ deep: true, route: r('compare'), historical: true, pastDeep: true }), true);
-  assert.equal(takesDeepPath({ byDefault: true, route: r('tactical_chat'), historical: true, pastDeep: true }), true);
+  assert.equal(takesChatLoop({ route: r('compare'), historical: true }), false);
+  assert.equal(takesChatLoop({ route: r('compare'), historical: true, pastMode: false }), false);
+  assert.equal(takesChatLoop({ route: r('compare'), historical: true, pastMode: true }), true);
+  assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: true, pastMode: true }), true);
   // Every other exclusion holds with past mode on.
-  for (const extra of [{ fast: true }, { noRating: true }, { gaffaTrade: true }, { image: true }]) {
-    assert.equal(takesDeepPath({ deep: true, route: r('compare'), historical: true, pastDeep: true, ...extra }), false, JSON.stringify(extra));
+  for (const extra of [{ stage: true }, { noRating: true }, { gaffaTrade: true }, { image: true }]) {
+    assert.equal(takesChatLoop({ route: r('compare'), historical: true, pastMode: true, ...extra }), false, JSON.stringify(extra));
   }
   for (const intent of ['single_dossier', 'challenge_or_revise', 'archive_inventory']) {
-    assert.equal(takesDeepPath({ deep: true, route: r(intent), historical: true, pastDeep: true }), false, intent);
+    assert.equal(takesChatLoop({ route: r(intent), historical: true, pastMode: true }), false, intent);
   }
 });
 
@@ -240,16 +240,15 @@ const BRIEF_PROMPT = "planning a football analyst's answer to a question about t
 
 await test('through sendMessageToAI: off, a past question takes the debate path; on, the loop, with no early debate brief', async () => {
   const { sendMessageToAI } = await import('../services/geminiService');
-  const run = async (deepPast?: boolean) => {
+  const run = async (pastMode?: boolean) => {
     fetched.length = 0;
-    const fake = fakeModel([answer('A deep answer about the past.')]);
+    const fake = fakeModel([answer('A loop answer about the past.')]);
     let opened = false;
-    const wrapped: DeepModel = { open: (a) => ((opened = true), fake.model.open(a)) };
+    const wrapped: ChatModel = { open: (a) => ((opened = true), fake.model.open(a)) };
     await quietly(() =>
       sendMessageToAI('Prime Zidane or prime Kaká?', [], undefined, [], [], {
-        deep: true,
-        ...(deepPast === undefined ? {} : { deepPast }),
-        deepDeps: { model: wrapped, tools: fakeTools(), snapshots: null, managers: async () => [], eras: null, verdicts: memoryVerdictDb(false), pastNetwork: { settle: () => {}, depart: () => {} } },
+        ...(pastMode === undefined ? {} : { pastMode }),
+        chatDeps: { model: wrapped, tools: fakeTools(), snapshots: null, managers: async () => [], eras: null, verdicts: memoryVerdictDb(false), pastNetwork: { settle: () => {}, depart: () => {} } },
       }).catch(() => ''),
     );
     return { opened, briefAsked: fetched.some((f) => f.body.includes(BRIEF_PROMPT)), system: opened ? fake.opened().systemInstruction : '' };
@@ -269,10 +268,9 @@ await test('a Gaffa-club conversation whose user names the past runs the loop wi
   const fake = fakeModel([answer('An answer about two primes.')]);
   await quietly(() =>
     sendMessageToAI('Prime Zidane or prime Kaká?', [], undefined, [], [], {
-      deep: true,
-      deepPast: true,
+      pastMode: true,
       gaffaBag: { connected: true, club_id: 'c1', league_id: 'l1', club_name: 'Club' } as any,
-      deepDeps: { model: fake.model, tools: fakeTools(), snapshots: null, managers: async () => [], eras: null, verdicts: memoryVerdictDb(false), pastNetwork: { settle: () => {}, depart: () => {} }, onGaffaTurn: () => (gaffaBuilt = true) },
+      chatDeps: { model: fake.model, tools: fakeTools(), snapshots: null, managers: async () => [], eras: null, verdicts: memoryVerdictDb(false), pastNetwork: { settle: () => {}, depart: () => {} }, onGaffaTurn: () => (gaffaBuilt = true) },
     }).catch(() => ''),
   );
   assert.ok(fake.opened(), 'the loop ran');
@@ -307,7 +305,7 @@ await test('a past turn reads the cards in order, their era snapshots and the se
   const eras = eraStore('2026-11-01T00:00:00Z');
   const h = pastDeps({ verdicts: db, eras: eras.source });
   const fake = fakeModel([answer('An answer about two primes.')]);
-  await quietly(() => runDeepTurn(params('Prime Stopper or prime Marker?', [LOW, HIGH], { historical: true, deepPast: true }), { ...h.deps, model: fake.model }));
+  await quietly(() => runChatTurn(params('Prime Stopper or prime Marker?', [LOW, HIGH], { historical: true, pastMode: true }), { ...h.deps, model: fake.model }));
   const prompt = String(fake.sent[0].message);
   assert.match(prompt, /<cards_in_play>[\s\S]*1\. Aldo Stopper's prime \(2003-06\) card, 93[\s\S]*2\. Bruno Marker's prime \(2004-07\) card, 90[\s\S]*judged better than Carlo Sweeper[\s\S]*<\/cards_in_play>/);
   assert.match(prompt, /<settled_verdicts>\n- output: Bruno Marker \(prime, 2004-07\) over Aldo Stopper \(prime, 2003-06\) \(settled 2026-11-15, current\)\. Argued on: Goals from set pieces\. Against it: The other won more\.\n<\/settled_verdicts>/);
@@ -326,16 +324,16 @@ await test('a past turn reads the cards in order, their era snapshots and the se
 await test('under the principle set, a past turn\'s instructions carry only its data line', async () => {
   const h = pastDeps();
   const fake = fakeModel([answer('An answer.')]);
-  await quietly(() => runDeepTurn(params('Prime Stopper or prime Marker?', [HIGH, LOW], { historical: true, deepPast: true, principles: true }), { ...h.deps, model: fake.model }));
+  await quietly(() => runChatTurn(params('Prime Stopper or prime Marker?', [HIGH, LOW], { historical: true, pastMode: true, principles: true }), { ...h.deps, model: fake.model }));
   const prompt = String(fake.sent[0].message);
-  assert.match(prompt, new RegExp(`<instructions>\\n1\\. ${PRINCIPLE_SOURCES.deepPast.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n</instructions>`));
+  assert.match(prompt, new RegExp(`<instructions>\\n1\\. ${PRINCIPLE_SOURCES.pastMode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n</instructions>`));
   assert.ok(!prompt.includes(PAST_LOOP_RULES));
   assert.ok(fake.opened().systemInstruction.includes(PAST_RESEARCH_NOTE));
 });
 
 // --- commit_verdict ---------------------------------------------------------------------------
 
-await test('a commitment against the cards: told so, asked for a reason, the pair reported as deep, and the reason recorded', async () => {
+await test('a commitment against the cards: told so, asked for a reason, the pair reported as a commitment, and the reason recorded', async () => {
   const h = pastDeps();
   const commit = (departs?: string) =>
     call('commit_verdict', { kind: 'head_to_head', criterion: 'peak_level', sides: ['Aldo Stopper', 'Bruno Marker'], verdict: 'Bruno Marker', ...(departs ? { departs } : {}) });
@@ -344,14 +342,14 @@ await test('a commitment against the cards: told so, asked for a reason, the pai
     callsReply(commit('His record in those seasons was stronger.')),
     answer('Marker, though the cards rate Stopper higher: his record in those seasons was stronger.'),
   ]);
-  await quietly(() => runDeepTurn(params('Prime Stopper or prime Marker?', [HIGH, LOW], { historical: true, deepPast: true }), { ...h.deps, model: fake.model }));
+  await quietly(() => runChatTurn(params('Prime Stopper or prime Marker?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: fake.model }));
   const first = responsesOf(fake.sent[1]).find((r) => r.name === 'commit_verdict')!.response;
   assert.equal(first.cards, 'against');
   assert.match(String(first.cardsSay), /Aldo Stopper's prime \(2003-06\) card, 93 is rated above Bruno Marker's prime \(2004-07\) card, 90/);
   assert.match(String(first.next), /call commit_verdict again with departs/);
   const second = responsesOf(fake.sent[2]).find((r) => r.name === 'commit_verdict')!.response;
   assert.equal(second.next, 'Write the answer.');
-  assert.deepEqual(h.pairs, [{ higher: getCardKey(HIGH), lower: getCardKey(LOW), via: 'deep' }], 'reported once, as deep');
+  assert.deepEqual(h.pairs, [{ higher: getCardKey(HIGH), lower: getCardKey(LOW), via: 'commit' }], 'reported once, as a commitment');
   assert.deepEqual(readDisagreementReport({ pairs: h.pairs }), h.pairs, 'the server route accepts the deep path');
   const s = h.stats();
   assert.equal(s.past?.committed, true);
@@ -368,7 +366,7 @@ await test('a second commitment against the cards with no reason is recorded as 
   const h = pastDeps();
   const commit = call('commit_verdict', { kind: 'head_to_head', criterion: 'mixed', sides: ['Aldo Stopper', 'Bruno Marker'], verdict: 'Bruno Marker' });
   const fake = fakeModel([callsReply(commit), callsReply(commit), answer('Marker.')]);
-  await quietly(() => runDeepTurn(params('Stopper or Marker at their best?', [HIGH, LOW], { historical: true, deepPast: true }), { ...h.deps, model: fake.model }));
+  await quietly(() => runChatTurn(params('Stopper or Marker at their best?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: fake.model }));
   assert.equal(h.stats().past?.departedSilently, true);
   assert.equal(h.pairs.length, 1, 'the pair is reported once a turn');
 });
@@ -381,7 +379,7 @@ await test('a commitment on a measure the cards do not settle is not held to the
   ] as const) {
     const h = pastDeps();
     const fake = fakeModel([callsReply(call('commit_verdict', { kind: 'head_to_head', criterion, sides: ['Aldo Stopper', 'Bruno Marker'], verdict })), answer('An answer.')]);
-    await quietly(() => runDeepTurn(params('Stopper or Marker?', [HIGH, LOW], { historical: true, deepPast: true }), { ...h.deps, model: fake.model }));
+    await quietly(() => runChatTurn(params('Stopper or Marker?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: fake.model }));
     const r = responsesOf(fake.sent[1])[0].response;
     assert.equal(r.cards, cards, criterion);
     assert.equal(r.next, 'Write the answer.');
@@ -415,7 +413,7 @@ await test('departing from a current settled verdict is recorded against its key
     callsReply(call('commit_verdict', { kind: 'head_to_head', criterion: 'influence', sides: ['Aldo Stopper', 'Bruno Marker'], verdict: 'Aldo Stopper', departs: 'His side lost far less often with him.' })),
     answer('Stopper.'),
   ]);
-  await quietly(() => runDeepTurn(params('Who mattered more to his side?', [HIGH, LOW], { historical: true, deepPast: true }), { ...h.deps, model: fake.model }));
+  await quietly(() => runChatTurn(params('Who mattered more to his side?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: fake.model }));
   const r = responsesOf(fake.sent[1])[0].response;
   assert.equal(r.settledVerdict, 'differs');
   assert.deepEqual(h.net.departed, [key]);
@@ -480,7 +478,7 @@ await test('a past answer to a question asking for numbers keeps every figure it
   const reply = 'Aldo Stopper scored 30 league goals in 2004-05. He added 5 Champions League goals and 3 FA Cup goals. He scored 1 Community Shield goal. He scored 18 goals with his right foot and 9 goals with his left foot. He scored 3 headed goals. He scored 11 goals from outside the box. He made 9 league assists.';
   const fake = fakeModel([answer(reply)]);
   const out = await quietly(() =>
-    runDeepTurn(params('How many goals did Aldo Stopper score in 2004-05?', [HIGH], { route: route({ intent: 'tactical_chat', analyticalMode: 'player_qa', targetPlayers: ['Aldo Stopper'], requestedSeason: '2004-05' }), historical: true, deepPast: true }), {
+    runChatTurn(params('How many goals did Aldo Stopper score in 2004-05?', [HIGH], { route: route({ intent: 'tactical_chat', analyticalMode: 'player_qa', targetPlayers: ['Aldo Stopper'], requestedSeason: '2004-05' }), historical: true, pastMode: true }), {
       ...h.deps,
       model: fake.model,
     }),
@@ -497,7 +495,7 @@ await test('a past reply is held to its committed figures, by the scoped gate', 
     callsReply(call('player_career', { name: 'Aldo Stopper' }), call('commit_verdict', { kind: 'head_to_head', criterion: 'output', sides: ['Aldo Stopper', 'Bruno Marker'], verdict: 'Aldo Stopper', figures })),
     answer('Stopper played 120 league matches from 2003 to 2006. He also won 7 trophies in one night. He scored 45 league goals in 2004-05.'),
   ]);
-  const reply = await quietly(() => runDeepTurn(params('Stopper or Marker?', [HIGH, LOW], { historical: true, deepPast: true }), { ...h.deps, model: fake.model, gateFeedback: async () => ({ replacements: [] }) }));
+  const reply = await quietly(() => runChatTurn(params('Stopper or Marker?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: fake.model, gateFeedback: async () => ({ replacements: [] }) }));
   assert.match(reply, /120 league matches/, 'a figure the record gives stays');
   assert.doesNotMatch(reply, /45 league goals|7 trophies/, 'figures no source gives go');
 });
@@ -518,7 +516,7 @@ await test('a record read on a past turn whose era snapshot is missing starts on
   const eras = eraStore();
   const h = pastDeps({ eras: eras.source });
   const fake = fakeModel([callsReply(call('player_career', { name: 'Bruno Marker' }), call('club_season', { club: 'Northside', season: '2004-05' })), answer('An answer.')]);
-  await quietly(() => runDeepTurn(params('Stopper or Marker?', [HIGH, LOW], { historical: true, deepPast: true }), { ...h.deps, model: fake.model }));
+  await quietly(() => runChatTurn(params('Stopper or Marker?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: fake.model }));
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(eras.builds, ['player_window:Bruno Marker:2004-07']);
 });
@@ -529,7 +527,7 @@ await test('a present turn comparing two carded versions gets the card order and
   const h = pastDeps({ eras: null });
   const fake = fakeModel([answer('An answer.')]);
   await quietly(() =>
-    runDeepTurn(params('Is Dario Current already better than prime Aldo Stopper?', [HIGH, NOW], { route: route({ isHistorical: false, targetPlayers: ['Dario Current', 'Aldo Stopper'] }), historical: false, deepPast: true }), {
+    runChatTurn(params('Is Dario Current already better than prime Aldo Stopper?', [HIGH, NOW], { route: route({ isHistorical: false, targetPlayers: ['Dario Current', 'Aldo Stopper'] }), historical: false, pastMode: true }), {
       ...h.deps,
       model: fake.model,
     }),
@@ -539,7 +537,7 @@ await test('a present turn comparing two carded versions gets the card order and
   assert.ok(fake.opened().declarations.includes('commit_verdict'));
   assert.ok(fake.opened().systemInstruction.includes(CARD_ANCHOR_NOTE));
   assert.ok(!fake.opened().systemInstruction.includes(PAST_RESEARCH_NOTE));
-  assert.match(fake.opened().systemInstruction, new RegExp(`Budget for this turn: ${DEFAULT_DEEP_BUDGET.ms / 1000} seconds`), 'the present budget');
+  assert.match(fake.opened().systemInstruction, new RegExp(`Budget for this turn: ${DEFAULT_RESEARCH_BUDGET.ms / 1000} seconds`), 'the present budget');
   assert.ok(!prompt.includes(PAST_LOOP_RULES));
   assert.equal(h.stats().past?.historical, false);
 });
@@ -550,13 +548,13 @@ await test('with past mode off, the loop builds exactly what it built before, pa
   const runOnce = async (extra: Record<string, unknown>) => {
     const h = pastDeps({ eras: null });
     const fake = fakeModel([answer('An answer.')]);
-    let stats: DeepStats | null = null;
+    let stats: TurnStats | null = null;
     const p = params('Is Dario Current already better than prime Aldo Stopper?', [HIGH, NOW], { route: route({ isHistorical: false, targetPlayers: ['Dario Current', 'Aldo Stopper'] }), conversationId: 'same', ...extra });
-    await quietly(() => runDeepTurn(p, { ...h.deps, model: fake.model, onStats: (s) => (stats = s) }));
+    await quietly(() => runChatTurn(p, { ...h.deps, model: fake.model, onStats: (s) => (stats = s) }));
     return { prompt: String(fake.sent[0].message), system: fake.opened().systemInstruction, declarations: fake.opened().declarations, stats: stats!, settled: h.net.settled, pairs: h.pairs };
   };
   const before = await runOnce({});
-  for (const extra of [{ deepPast: false }, { deepPast: false, historical: true }, { historical: true }]) {
+  for (const extra of [{ pastMode: false }, { pastMode: false, historical: true }, { historical: true }]) {
     const after = await runOnce(extra);
     assert.equal(after.prompt, before.prompt, JSON.stringify(extra));
     assert.equal(after.system, before.system);
@@ -581,7 +579,7 @@ await test('the card note tells the loop that level cards leave the order to the
 });
 
 await test('the past notes and the tool description are descriptive: no players, clubs or quoted phrases', () => {
-  for (const text of [PAST_RESEARCH_NOTE, CARD_ANCHOR_NOTE, PAST_LOOP_RULES, String(COMMIT_VERDICT_DECLARATION.description), PRINCIPLE_SOURCES.deepPast]) {
+  for (const text of [PAST_RESEARCH_NOTE, CARD_ANCHOR_NOTE, PAST_LOOP_RULES, String(COMMIT_VERDICT_DECLARATION.description), PRINCIPLE_SOURCES.pastMode]) {
     assert.doesNotMatch(text, /["“”]/);
     assert.doesNotMatch(text, /\b(Arsenal|Barcelona|Milan|Madrid|Zidane|Messi|Maldini|\d{2} Overall)\b/);
   }
@@ -592,7 +590,7 @@ await test('the past notes and the tool description are descriptive: no players,
 await test('the historical report compares committed verdicts in code and lists each run\'s research and commitment', async () => {
   const { sameCommitment, researchTable, researchSummary, parseHistoryGrade } = await import('./eval-history');
   const past = (verdict: string[], extra: Record<string, unknown> = {}) => ({
-    path: 'deep' as const,
+    path: 'chat' as const,
     lookups: 2,
     searches: 0,
     rounds: 1,
@@ -608,12 +606,12 @@ await test('the historical report compares committed verdicts in code and lists 
     { q, attempt: 2, run: { answer: 'b', firstTokenMs: 1, totalMs: 2, perf: [], research: past(['Bruno Marker'], { cards: 'against', departed: true }) }, grade: null },
   ] as any;
   const table = researchTable(runs);
-  assert.match(table, /\| 1 \| 1 \| deep \| 2 \| 0 \| 1 \| 1 ranking \| 0\/0\/0 \| head_to_head, peak_level: Aldo Stopper \| agree \| none \(1 current, 0 stale\) \| – \| – \|/);
+  assert.match(table, /\| 1 \| 1 \| chat \| 2 \| 0 \| 1 \| 1 ranking \| 0\/0\/0 \| head_to_head, peak_level: Aldo Stopper \| agree \| none \(1 current, 0 stale\) \| – \| – \|/);
   const stored = researchTable([{ q, attempt: 1, run: { answer: 'a', firstTokenMs: 1, totalMs: 2, perf: [], research: { ...past(['Aldo Stopper']), settles: ['invalid (club_season:x-fc:2003-04)'] } }, grade: null }] as any);
   assert.match(stored, /\| invalid \(club_season:x-fc:2003-04\) \|$/m, 'what the store answered, with the subject it could not resolve');
   assert.match(researchSummary([{ q, attempt: 1, run: { answer: 'a', firstTokenMs: 1, totalMs: 2, perf: [], research: { ...past(['A']), settles: ['stored', 'refused', 'stored'] } }, grade: null }] as any), /Settled-verdict store: 3 proposals; 2 stored, 1 refused/);
   assert.match(table, /against, departed/);
-  assert.match(researchSummary(runs), /Committed a verdict: 2 of 2 deep answers; against the cards 1 \(departed with a reason 1, silently 0\)/);
+  assert.match(researchSummary(runs), /Committed a verdict: 2 of 2 chat loop answers; against the cards 1 \(departed with a reason 1, silently 0\)/);
   assert.equal(researchTable([{ q, attempt: 1, run: { answer: 'a', firstTokenMs: 1, totalMs: 2, perf: [] }, grade: null }] as any), '', 'a stage run reports no research table');
   const grade = parseHistoryGrade('{"wrongFigures":[],"blendedSeasons":[],"myths":[],"criteria":4,"counterCase":"yes","decisiveness":5,"verdict":"A","notes":"n","ratingsOutOfPlace":"yes"}');
   assert.equal(grade?.ratingsOutOfPlace, 'yes');

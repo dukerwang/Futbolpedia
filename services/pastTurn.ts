@@ -33,7 +33,7 @@ import { PRINCIPLE_SOURCES, principleInstructions } from '../prompts/chatPrompt'
 import { CONTINUITY_REMINDER } from './chatContinuity';
 
 /**
- * Questions about the past in the deep loop (`deepTurn.ts`), behind `DEEP_PAST`. The loop reads
+ * Questions about the past in the chat loop (`chatTurn.ts`), behind `PAST_MODE`. The loop reads
  * what the debate brief used to settle in advance: the cards in play in their order, the stored
  * era snapshots of the versions compared, and the scout's settled verdicts on them. It decides its
  * own records, criteria, figures and verdict, and commits to the verdict with `commit_verdict`
@@ -42,11 +42,11 @@ import { CONTINUITY_REMINDER } from './chatContinuity';
  * proposed to the server's settled-verdict store. Design:
  * docs/superpowers/specs/2026-11-18-past-questions-deep-design.md.
  *
- * Nothing here runs while `DEEP_PAST` is off.
+ * Nothing here runs while `PAST_MODE` is off.
  */
 
 /** A past turn's budget: records return in about a second, and a search costs about ten. */
-export const DEEP_PAST_BUDGET = { ms: 60_000, calls: 8, searches: 2, rounds: 5 };
+export const PAST_BUDGET = { ms: 60_000, calls: 8, searches: 2, rounds: 5 };
 /** Figures a commitment may name. */
 export const MAX_COMMITTED_FIGURES = 4;
 /** `commit_verdict` calls a turn may make. */
@@ -243,7 +243,7 @@ export function createCommitTool(deps: CommitToolDeps) {
       state.settledKey = settled?.key ?? null;
 
       // Each pair the judgment put against the cards is evidence for card review, whatever the reply then argues.
-      const fresh = disagreementsFromSwaps(check.swaps, 'deep').filter((p) => !reported.has(`${p.higher}>${p.lower}`));
+      const fresh = disagreementsFromSwaps(check.swaps, 'commit').filter((p) => !reported.has(`${p.higher}>${p.lower}`));
       fresh.forEach((p) => reported.add(`${p.higher}>${p.lower}`));
       if (fresh.length) report(fresh);
 
@@ -503,7 +503,7 @@ export const pastFigureBudget = (state: PastCommitState | null): { max: number; 
 
 /**
  * The system instruction's note for a question about the past: what to work out and which records
- * to read first. Added after the deep rules under either instruction set; it restates no chat
+ * to read first. Added after the research rules under either instruction set; it restates no chat
  * principle. Descriptive only: no players, ratings or sample phrases.
  */
 export const PAST_RESEARCH_NOTE = `## A question about the past
@@ -528,7 +528,7 @@ export const PAST_LOOP_FACT_RULES =
 
 /** A past turn's `<instructions>`: its data line under the principle set, else the writing and fact rules. */
 export function pastInstructions(args: { principles: boolean; notes: string }): string {
-  if (args.principles) return principleInstructions([PRINCIPLE_SOURCES.deepPast, args.notes]);
+  if (args.principles) return principleInstructions([PRINCIPLE_SOURCES.pastMode, args.notes]);
   return `<instructions>
 1. ${PAST_LOOP_RULES}${args.notes}
 2. ${PAST_LOOP_FACT_RULES}

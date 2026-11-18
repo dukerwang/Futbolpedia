@@ -566,7 +566,7 @@ ${list(s.coherence.positions.map((p) => `${p.position}: ${p.cards} cards, mean $
 }
 
 const describeVia = (via: Partial<Record<DisagreementPath, number>>): string =>
-  [via.debate ? `${via.debate} from debate answers` : '', via.ranking ? `${via.ranking} from drawn rankings` : '', via.deep ? `${via.deep} from deep answers` : '']
+  [via.debate ? `${via.debate} from debate answers` : '', via.ranking ? `${via.ranking} from drawn rankings` : '', via.commit ? `${via.commit} from committed verdicts` : '']
     .filter(Boolean)
     .join(', ') || 'no path recorded';
 

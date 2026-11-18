@@ -74,7 +74,7 @@ const answerRun = (answer: string, over: Partial<RunResult> = {}, tools = ['get_
   firstTokenMs: 20_000,
   totalMs: 25_000,
   perf: ['[Perf] lookup get_club_recent_team "Real Madrid": 900ms (found)', '[Perf] lookup web_search "real madrid lineup": 9000ms (found)'],
-  research: { path: 'deep', lookups: 2, searches: 1, rounds: 2, toolCalls: tools, stop: 'answered', views: {} },
+  research: { path: 'chat', lookups: 2, searches: 1, rounds: 2, toolCalls: tools, stop: 'answered', views: {} },
   ...over,
 });
 
@@ -158,7 +158,7 @@ await test("each run records its path, lookups, searches and rounds, and the com
     cardMentions: false,
     log: () => {},
   });
-  assert.equal(result.runs[0].run.research!.path, 'deep');
+  assert.equal(result.runs[0].run.research!.path, 'chat');
   assert.deepEqual([result.runs[0].run.research!.lookups, result.runs[0].run.research!.searches, result.runs[0].run.research!.rounds], [2, 1, 2]);
   assert.equal(prompts.length, 1, 'one comparison per question, and no card-mention calls when switched off');
   assert.match(prompts[0], /Question: Question 4/);
@@ -209,7 +209,7 @@ await test('a spending cap or rate limit stops the run at once and keeps what fi
   assert.deepEqual(result.runs.map((r) => `${r.q.n}.${r.attempt}`), ['4.1', '4.2'], 'the capped turn is not recorded as a run');
   assert.equal(result.consistency.length, 1, 'the finished question was compared');
   assert.match(result.stoppedEarly!, /Q11, run 1: .*429/);
-  const report = repeatReport(result, { today: '2026-11-17', label: 't', model: 'fake', repeat: 2, path: 'the deep mode loop', cardMentions: true, sharedCards: false });
+  const report = repeatReport(result, { today: '2026-11-17', label: 't', model: 'fake', repeat: 2, path: 'the chat loop', cardMentions: true, sharedCards: false });
   assert.match(report, /\*\*Run stopped early:\*\* Q11, run 1/);
   // A grader hitting the cap stops the run too, with the answer it was grading kept.
   const graderCapped = await runRepeats({
@@ -338,7 +338,7 @@ await test('runs that looked up different things are counted, down to tools, cou
 
   const differentTools = lookupVariance(2, [
     repeatRun(2, 1, grade(), answerRun('a')),
-    repeatRun(2, 2, grade(), answerRun('b', { research: { path: 'deep', lookups: 4, searches: 0, rounds: 3, toolCalls: ['get_club_recent_team', 'get_player_season'], views: {} } })),
+    repeatRun(2, 2, grade(), answerRun('b', { research: { path: 'chat', lookups: 4, searches: 0, rounds: 3, toolCalls: ['get_club_recent_team', 'get_player_season'], views: {} } })),
   ])!;
   assert.equal(differentTools.sameToolSet, false);
   assert.ok(Math.abs(differentTools.toolOverlap - 1 / 3) < 1e-9, 'one tool of three in common');
@@ -361,7 +361,7 @@ await test('runs that looked up different things are counted, down to tools, cou
     repeatRun(5, 2, grade(), answerRun('b', { research: { path: 'stage', fallback: 'empty', lookups: 5, searches: 3, rounds: 1, views: {} } })),
   ])!;
   assert.equal(fellBack.pathChanges, 1);
-  assert.match(fellBack.perRun[1].path, /deep, then stage \(empty\)/);
+  assert.match(fellBack.perRun[1].path, /chat, then stage \(empty\)/);
   assert.equal(lookupVariance(6, [repeatRun(6, 1, grade())]), null, 'one run has nothing to vary against');
 });
 
@@ -473,7 +473,7 @@ await test('the report has a section for each measure, and headings that name th
         : consistencyJson({ agreement: 'different', compared: 2, contradictions: [{ kind: 'verdict', about: 'who starts', claims: [{ run: 1, claim: 'Valverde' }, { run: 2, claim: 'Mendy' }] }], summary: 'Different starters.' }),
     log: () => {},
   });
-  const md = repeatReport(result, { today: '2026-11-17', label: 'drift', model: 'fake-model', repeat: 2, path: 'the deep mode loop (`--deep`)', cardMentions: true, sharedCards: true });
+  const md = repeatReport(result, { today: '2026-11-17', label: 'drift', model: 'fake-model', repeat: 2, path: 'the chat loop', cardMentions: true, sharedCards: true });
   for (const heading of ['## Summary', '## Spread', '## Consistency', '### Contradictions', '## Lookups', '## Card Mentions', '### Figures Quoted', '## Answers']) {
     assert.ok(md.includes(`\n${heading}\n`), `missing ${heading}`);
   }
@@ -493,41 +493,41 @@ await test('the report has a section for each measure, and headings that name th
 
 // --- Estimate ----------------------------------------------------------------------------------
 
-const sizes = { deepFixedTokens: 12_000 };
+const sizes = { chatFixedTokens: 12_000 };
 
 await test('the estimate scales with questions and runs, and the ceiling is the budget\'s worst case', () => {
   const one = estimateRun({ questions: [4], repeat: 1, consistency: false, cardMentions: false, sizes });
   const six = estimateRun({ questions: [4, 11, 1], repeat: 2, consistency: true, cardMentions: true, sizes });
   assert.equal(one.turns, 1);
   assert.equal(six.turns, 6);
-  const deepOf = (e: typeof one) => e.expected.components.find((c) => c.name.startsWith('Deep turns'))!;
-  assert.equal(deepOf(six).inputTokens, deepOf(one).inputTokens * 6, 'deep turns are linear in turns');
+  const loopOf = (e: typeof one) => e.expected.components.find((c) => c.name.startsWith('Chat turns'))!;
+  assert.equal(loopOf(six).inputTokens, loopOf(one).inputTokens * 6, 'chat turns are linear in turns');
   assert.ok(six.ceiling.total.inputTokens > six.expected.total.inputTokens * 3, 'a full budget costs several times an ordinary turn');
   assert.ok(six.ceiling.total.usd > six.expected.total.usd);
   // A turn re-sends the fixed prompt every round, so a longer prompt costs rounds × tokens more.
-  const bigger = estimateRun({ questions: [4], repeat: 1, consistency: false, cardMentions: false, sizes: { deepFixedTokens: 22_000 } });
-  assert.equal(deepOf(bigger).inputTokens - deepOf(one).inputTokens, 10_000 * (EXPECTED_TURN.rounds + 1));
+  const bigger = estimateRun({ questions: [4], repeat: 1, consistency: false, cardMentions: false, sizes: { chatFixedTokens: 22_000 } });
+  assert.equal(loopOf(bigger).inputTokens - loopOf(one).inputTokens, 10_000 * (EXPECTED_TURN.rounds + 1));
   assert.ok(CEILING_TURN.rounds > EXPECTED_TURN.rounds);
 });
 
 await test('comparisons, card scoring and the rubric are in the estimate only when they run', () => {
   const names = (e: ReturnType<typeof estimateRun>) => e.expected.components.map((c) => c.name.split(',')[0]);
   const full = estimateRun({ questions: [4, 11], repeat: 2, consistency: true, cardMentions: true, sizes });
-  assert.deepEqual(names(full), ['Deep turns', 'Rubric grade', 'Consistency comparison', 'Card-mention scoring']);
+  assert.deepEqual(names(full), ['Chat turns', 'Rubric grade', 'Consistency comparison', 'Card-mention scoring']);
   const single = estimateRun({ questions: [4, 11], repeat: 1, consistency: true, cardMentions: false, sizes });
-  assert.deepEqual(names(single), ['Deep turns', 'Rubric grade'], 'one run has nothing to compare');
+  assert.deepEqual(names(single), ['Chat turns', 'Rubric grade'], 'one run has nothing to compare');
   const bare = estimateRun({ questions: [4], repeat: 2, consistency: false, cardMentions: false, rubric: false, sizes });
-  assert.deepEqual(names(bare), ['Deep turns']);
+  assert.deepEqual(names(bare), ['Chat turns']);
   // The comparison reads every run's answer, so it grows with the repeat count.
   const cmp = (repeat: number) => estimateRun({ questions: [4], repeat, consistency: true, cardMentions: false, sizes }).expected.components.find((c) => c.name.startsWith('Consistency'))!.inputTokens;
   assert.ok(cmp(3) > cmp(2));
 });
 
-await test('the historical controls take the stage pipeline and are priced as controls, not deep turns', () => {
+await test('the historical controls take the stage pipeline and are priced as controls, not chat turns', () => {
   const e = estimateRun({ questions: [4, 13, 14], repeat: 2, consistency: false, cardMentions: false, sizes });
   assert.equal(e.controlTurns, 4);
-  assert.deepEqual(e.expected.components.map((c) => c.name.split(',')[0]), ['Deep turns', 'Stage-path controls', 'Rubric grade']);
-  assert.match(e.expected.components[0].name, /Deep turns, 2/);
+  assert.deepEqual(e.expected.components.map((c) => c.name.split(',')[0]), ['Chat turns', 'Stage-path controls', 'Rubric grade']);
+  assert.match(e.expected.components[0].name, /Chat turns, 2/);
 });
 
 await test('the dollar figure follows the prices given and counts grounded searches', () => {
@@ -545,10 +545,10 @@ await test('the dollar figure follows the prices given and counts grounded searc
 
 await test('the dry run prints calls, tokens and cost, and says the prices are placeholders', () => {
   const e = estimateRun({ questions: [4, 11, 1], repeat: 2, consistency: true, cardMentions: true, sizes });
-  const text = formatEstimate(e, { questions: [4, 11, 1], repeat: 2, path: 'deep mode' });
-  assert.match(text, /^Dry run: 3 questions \(4, 11, 1\) × 2 runs = 6 turns through deep mode\. No call is made\./);
+  const text = formatEstimate(e, { questions: [4, 11, 1], repeat: 2, path: 'the chat loop' });
+  assert.match(text, /^Dry run: 3 questions \(4, 11, 1\) × 2 runs = 6 turns through the chat loop\. No call is made\./);
   assert.match(text, /Expected: \d+ calls, [\d.]+M input tokens, [\d.]+M output tokens, \d+ grounded searches, \$[\d.]+/);
-  assert.match(text, /Ceiling \(every deep turn spends its whole budget\): /);
+  assert.match(text, /Ceiling \(every chat turn spends its whole budget\): /);
   assert.match(text, /placeholders, so confirm them or pass --price-in, --price-out and --price-search/);
 });
 
@@ -556,18 +556,18 @@ await test('--dry-run exits before any key check or call, so it runs with no key
   const env = { ...process.env };
   delete env.GEMINI_API_KEY;
   delete env.API_KEY;
-  const out = spawnSync('npx', ['tsx', 'scripts/eval-live-questions.ts', '--deep', '--repeat', '2', '--only', '4,11', '--max-questions', '1', '--price-in', '1', '--price-out', '4', '--dry-run'], {
+  const out = spawnSync('npx', ['tsx', 'scripts/eval-live-questions.ts', '--repeat', '2', '--only', '4,11', '--max-questions', '1', '--price-in', '1', '--price-out', '4', '--dry-run'], {
     cwd: root,
     env: { ...env, HTTPS_PROXY: 'http://127.0.0.1:1', HTTP_PROXY: 'http://127.0.0.1:1' },
     encoding: 'utf8',
     timeout: 60_000,
   });
   assert.equal(out.status, 0, out.stderr);
-  assert.match(out.stdout, /Dry run: 1 question \(4\) × 2 runs = 2 turns through deep mode\. No call is made\./);
+  assert.match(out.stdout, /Dry run: 1 question \(4\) × 2 runs = 2 turns through the chat loop\. No call is made\./);
   assert.match(out.stdout, /\$1\.000\/M input|\$1\.00\/M input/);
   const refused = spawnSync('npx', ['tsx', 'scripts/eval-live-questions.ts', '--stage', '--dry-run'], { cwd: root, env, encoding: 'utf8', timeout: 60_000 });
   assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /--dry-run estimates the live set on the deep path/);
+  assert.match(refused.stderr, /--dry-run estimates the live set on the chat loop/);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

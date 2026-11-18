@@ -55,7 +55,7 @@ import type { AvailabilityFetcher } from './gaffaAvailability';
 import { buildGaffaTurn, finishGaffaReply, type GaffaTurn } from './gaffaTurn';
 import { correctReply, formatGateFeedback, gateFeedbackEnabled, GATE_FEEDBACK_STAGE_LABEL, type CorrectionModel, type GateFeedbackStats } from './gateFeedback';
 import { createViewTools, gateSegments, joinSegments, makeCardLookup, MAX_REPLY_VIEWS, ReplyComposer, splitSegments, viewToolDeclarations } from './replyBlocks';
-import { DEEP_PAST, type VerdictDb } from './debateVerdicts';
+import { PAST_MODE, type VerdictDb } from './debateVerdicts';
 import type { CardDisagreement } from './cardDisagreements';
 import { liveEraSnapshots, normalizePeriod, type EraSnapshotSource } from './eraSnapshots';
 import { matchStanding } from './debateConsistency';
@@ -66,7 +66,7 @@ import {
   COMMIT_VERDICT_DECLARATION,
   comparesVersions,
   createCommitTool,
-  DEEP_PAST_BUDGET,
+  PAST_BUDGET,
   eraEvidence,
   finishPastTurn,
   formatCardsInPlay,
@@ -104,9 +104,9 @@ import { extractThreadClubs, type TurnRoute } from './turnRouter';
 import type { VerifiedClubManager } from '../packages/engine/src/gates/managerMentions.ts';
 
 /**
- * Deep mode: the chat path where one model loop decides every lookup, the default for present-day
- * questions (`DEEP_BY_DEFAULT`), with the stage pipeline as its fallback. Instead of the brief,
- * reflect and situation calls the default path runs in an order code sets, the chat model gets the
+ * The chat turn: one model loop decides every lookup, for every present-day question, with the
+ * stage pipeline as its fallback. Instead of the brief, reflect and situation calls the stage
+ * pipeline runs in an order code sets, the chat model gets the
  * conversation, the cards in play, each spotted club's stored snapshot and today's date, plus every
  * tool the writer and research have, and is told its budget. It calls what it wants, in the order
  * it wants; calls in one round run in parallel; each result ends with what's left of the budget.
@@ -119,122 +119,104 @@ import type { VerifiedClubManager } from '../packages/engine/src/gates/managerMe
  */
 
 /** Research time for the whole turn, from its start; the answer is written after it. */
-export const DEEP_BUDGET_MS = 120_000;
+export const CHAT_BUDGET_MS = 120_000;
 /** Lookups per turn (live feeds, history routes, web searches, cards). The local grep and the show tools are free. */
-export const DEEP_MAX_CALLS = 12;
-/** Web searches per turn, counted inside `DEEP_MAX_CALLS`. */
-export const DEEP_MAX_SEARCHES = 4;
+export const CHAT_MAX_CALLS = 12;
+/** Web searches per turn, counted inside `CHAT_MAX_CALLS`. */
+export const CHAT_MAX_SEARCHES = 4;
 /** Rounds of tool calls per turn. */
-export const DEEP_MAX_ROUNDS = 10;
+export const CHAT_MAX_ROUNDS = 10;
 /** How long the turn waits for stored snapshots and today's coaches before the first round. */
-export const DEEP_CONTEXT_WAIT_MS = 1_500;
+export const CHAT_CONTEXT_WAIT_MS = 1_500;
 /** A round's text this long, with no tool call yet, starts streaming as the answer. */
 const STREAM_HOLD_CHARS = 200;
 /** Clubs whose stored snapshot comes free with the first round. */
 const MAX_CONTEXT_CLUBS = 3;
 
-export interface DeepBudget {
+export interface ResearchBudget {
   ms: number;
   calls: number;
   searches: number;
   rounds: number;
 }
 
-export const DEFAULT_DEEP_BUDGET: DeepBudget = {
-  ms: DEEP_BUDGET_MS,
-  calls: DEEP_MAX_CALLS,
-  searches: DEEP_MAX_SEARCHES,
-  rounds: DEEP_MAX_ROUNDS,
+export const DEFAULT_RESEARCH_BUDGET: ResearchBudget = {
+  ms: CHAT_BUDGET_MS,
+  calls: CHAT_MAX_CALLS,
+  searches: CHAT_MAX_SEARCHES,
+  rounds: CHAT_MAX_ROUNDS,
 };
 
 // ---------------------------------------------------------------------------------------------
 // Entry
 
 /**
- * Whether deep mode is the default for a turn that carries no flag. On, every turn `takesDeepPath`
- * accepts runs the loop. It is the kill switch: set to false, every chat turn takes the stage
- * pipeline, since nothing in the app asks for deep. The `deep` and `fast` flags still force either
- * path whatever this says, which is how the eval and the tests run both.
+ * Whether a turn takes the chat loop. Questions about the past keep the debate brief (until
+ * `PAST_MODE`), ratings and challenges keep their pipelines, and Gaffa's own panel (`noRating`, on a
+ * daily turn budget) and a Gaffa trade (whose scorecard is shown above a capped reply) keep the stage
+ * pipeline. Images and archive questions stay on the stage pipeline too. Every other turn takes the
+ * loop, a club attached in the app included. `stage` sends a turn the loop would take to the stage
+ * pipeline instead: only the eval's `--stage` and the tests send it.
  */
-export const DEEP_BY_DEFAULT = true;
-
-/**
- * Whether a turn asked for the deep loop: `fast` always says no, `deep` says yes, and a turn with
- * neither follows the default. `fast` wins when both arrive, since it is the cheaper path.
- */
-export function wantsDeep(turn: { deep?: boolean; fast?: boolean }, byDefault: boolean = DEEP_BY_DEFAULT): boolean {
-  if (turn.fast) return false;
-  return Boolean(turn.deep) || byDefault;
-}
-
-/**
- * Whether a turn takes the deep path. It must have asked for it (`wantsDeep`), and questions about
- * the past keep the debate brief, ratings and challenges keep their pipelines, and Gaffa's own panel
- * (`noRating`, on a daily turn budget) and a Gaffa trade (whose scorecard is shown above a capped
- * reply) keep the stage pipeline. Images and archive questions stay on the stage pipeline too. Every
- * other turn that asked takes the loop, a club attached in the app included.
- */
-export function takesDeepPath(turn: {
-  deep?: boolean;
-  fast?: boolean;
-  /** Overrides `DEEP_BY_DEFAULT`, for tests and the eval. */
-  byDefault?: boolean;
+export function takesChatLoop(turn: {
+  /** Forces the stage pipeline, for the eval's `--stage` and the tests. */
+  stage?: boolean;
   route: Pick<TurnRoute, 'intent'>;
   historical: boolean;
   noRating?: boolean;
   /** A Gaffa club is attached and the turn is a trade (`isGaffaTrade`). */
   gaffaTrade?: boolean;
   image?: boolean;
-  /** Overrides `DEEP_PAST`: whether a question about the past takes the loop. */
-  pastDeep?: boolean;
+  /** Overrides `PAST_MODE`: whether a question about the past takes the loop. */
+  pastMode?: boolean;
 }): boolean {
-  const pastOff = turn.historical && !(turn.pastDeep ?? DEEP_PAST);
-  if (!wantsDeep(turn, turn.byDefault) || pastOff || turn.noRating || turn.gaffaTrade || turn.image) return false;
+  const pastOff = turn.historical && !(turn.pastMode ?? PAST_MODE);
+  if (turn.stage || pastOff || turn.noRating || turn.gaffaTrade || turn.image) return false;
   return !['single_dossier', 'challenge_or_revise', 'archive_inventory'].includes(turn.route.intent);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Fallback
 
-/** Why a deep turn fell back: the loop threw, ended with no text, or spent its budget with no answer. */
-export type DeepFallbackReason = 'error' | 'empty' | 'budget';
+/** Why a chat turn fell back: the loop threw, ended with no text, or spent its budget with no answer. */
+export type FallbackReason = 'error' | 'empty' | 'budget';
 
 /** The loop gave up with nothing to show. Slowness alone is never one: a late answer is an answer. */
-export class DeepFailure extends Error {
+export class ChatTurnFailure extends Error {
   constructor(
-    readonly reason: Exclude<DeepFallbackReason, 'error'>,
+    readonly reason: Exclude<FallbackReason, 'error'>,
     message: string,
   ) {
     super(message);
-    this.name = 'DeepFailure';
+    this.name = 'ChatTurnFailure';
   }
 }
 
-/** The progress line for a turn that gave up on deep mode. */
+/** The progress line for a turn whose loop gave up. */
 export const FALLBACK_STAGE_LABEL = 'Taking the standard route...';
 
 export interface PathInfo {
-  path: 'deep' | 'stage';
-  /** Set on the stage run that followed a deep turn's failure. */
-  fallback?: DeepFallbackReason;
+  path: 'chat' | 'stage';
+  /** Set on the stage run that followed a chat turn's failure. */
+  fallback?: FallbackReason;
 }
 
 /**
- * Runs a deep turn and, if the loop gives up, the stage pipeline once in its place. It falls back
+ * Runs a chat turn and, if the loop gives up, the stage pipeline once in its place. It falls back
  * only after the loop has thrown or ended with no answer, never on slowness, so a turn doesn't
  * pay twice for research that succeeded; the stage run starts after the loop has stopped.
  */
-export async function runDeepWithFallback(
-  deep: () => Promise<string>,
+export async function runChatWithFallback(
+  loop: () => Promise<string>,
   stage: () => Promise<string>,
   hooks: { onStageChange?: (label: string) => void; onPath?: (info: PathInfo) => void } = {},
 ): Promise<string> {
-  hooks.onPath?.({ path: 'deep' });
+  hooks.onPath?.({ path: 'chat' });
   try {
-    return await deep();
+    return await loop();
   } catch (e: any) {
-    const reason: DeepFallbackReason = e instanceof DeepFailure ? e.reason : 'error';
-    console.warn(`[deep] fallback (${reason}): ${String(e?.message ?? e).slice(0, 160)}`);
+    const reason: FallbackReason = e instanceof ChatTurnFailure ? e.reason : 'error';
+    console.warn(`[chat] fallback (${reason}): ${String(e?.message ?? e).slice(0, 160)}`);
     hooks.onStageChange?.(FALLBACK_STAGE_LABEL);
     hooks.onPath?.({ path: 'stage', fallback: reason });
     return stage();
@@ -244,39 +226,39 @@ export async function runDeepWithFallback(
 // ---------------------------------------------------------------------------------------------
 // The model, behind an interface so tests can fake it
 
-export interface DeepFunctionCall {
+export interface ChatFunctionCall {
   name: string;
   args: Record<string, unknown>;
 }
 
-export interface DeepReply {
+export interface ChatRoundReply {
   /**
    * The round's text, with or without calls. In a round of lookups it is a preamble and is dropped;
    * in a round that only draws views it is the answer so far, and each view sits after it.
    */
   text: string;
-  calls: DeepFunctionCall[];
+  calls: ChatFunctionCall[];
   finishReason?: string;
 }
 
-export interface DeepToolResponse {
+export interface ChatToolResponse {
   name: string;
   response: Record<string, unknown>;
 }
 
-export interface DeepConversation {
+export interface ChatConversation {
   /** Sends the next user turn (the prompt, or a round's tool results). `tools: false` sends it with function calling off. */
-  send(message: string | DeepToolResponse[], options: { tools: boolean; onText?: (roundText: string) => void }): Promise<DeepReply>;
+  send(message: string | ChatToolResponse[], options: { tools: boolean; onText?: (roundText: string) => void }): Promise<ChatRoundReply>;
 }
 
-export interface DeepModel {
-  open(args: { systemInstruction: string; history: Content[]; declarations: FunctionDeclaration[]; thinkingLevel?: ThinkingTier }): DeepConversation;
+export interface ChatModel {
+  open(args: { systemInstruction: string; history: Content[]; declarations: FunctionDeclaration[]; thinkingLevel?: ThinkingTier }): ChatConversation;
 }
 
 /** The chat model through `@google/genai`, streaming each round. */
-export const liveDeepModel: DeepModel = {
+export const liveChatModel: ChatModel = {
   open({ systemInstruction, history, declarations, thinkingLevel }) {
-    const resolved = resolveTaskModelConfig('deep', { thinkingLevel });
+    const resolved = resolveTaskModelConfig('chatTurn', { thinkingLevel });
     const config = {
       systemInstruction,
       tools: [{ functionDeclarations: declarations }],
@@ -297,7 +279,7 @@ export const liveDeepModel: DeepModel = {
         });
         let text = '';
         let finishReason: string | undefined;
-        const calls: DeepFunctionCall[] = [];
+        const calls: ChatFunctionCall[] = [];
         for await (const chunk of stream) {
           // Calls from earlier chunks end the text; text ahead of a call in this chunk is kept.
           const callsBefore = calls.length > 0;
@@ -325,7 +307,7 @@ const guideText = (tool: string): string => {
   return line.slice(line.indexOf('): ') + 3).trim();
 };
 
-const DEEP_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
+const CHAT_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: 'web_search',
     description: `${guideText('web_search')} Costs one of your web searches.`,
@@ -367,13 +349,13 @@ const DEEP_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
   ...viewToolDeclarations(),
 ];
 
-/** Every tool the deep loop offers, the writer's and research's together. A Gaffa turn adds `grep_gaffa_market`. */
-export const DEEP_DECLARATIONS: FunctionDeclaration[] = [
+/** Every tool the chat loop offers, the writer's and research's together. A Gaffa turn adds `grep_gaffa_market`. */
+export const CHAT_DECLARATIONS: FunctionDeclaration[] = [
   GREP_SAVED_DOSSIERS_DECLARATION,
   LOOK_UP_DOSSIER_DECLARATION,
   SHOW_DOSSIER_DECLARATION,
   ...NETWORK_FUNCTION_DECLARATIONS,
-  ...DEEP_FUNCTION_DECLARATIONS,
+  ...CHAT_FUNCTION_DECLARATIONS,
 ] as FunctionDeclaration[];
 
 /** The research call behind each function that reads a source, so its result lands in the ledger. */
@@ -390,8 +372,8 @@ const RESEARCH_FUNCTIONS: Record<string, (args: Record<string, unknown>) => Rese
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 /** The tools a turn offers: a club attached adds the market filter, and a turn the cards anchor adds `commit_verdict`. */
-export const deepDeclarations = (gaffa: boolean, commit = false): FunctionDeclaration[] => {
-  const base = gaffa ? [...DEEP_DECLARATIONS, GREP_GAFFA_MARKET_DECLARATION as FunctionDeclaration] : DEEP_DECLARATIONS;
+export const chatDeclarations = (gaffa: boolean, commit = false): FunctionDeclaration[] => {
+  const base = gaffa ? [...CHAT_DECLARATIONS, GREP_GAFFA_MARKET_DECLARATION as FunctionDeclaration] : CHAT_DECLARATIONS;
   return commit ? [...base, COMMIT_VERDICT_DECLARATION] : base;
 };
 
@@ -401,7 +383,7 @@ export const deepDeclarations = (gaffa: boolean, commit = false): FunctionDeclar
  * `commit_verdict`. Defined beside the settled-verdict store (`debateVerdicts.ts`), whose public
  * route it also gates.
  */
-export { DEEP_PAST };
+export { PAST_MODE };
 
 /** Tools that draw something in the reply. They are free, and a round that only calls them keeps its text. */
 const PRESENTATION = new Set(['show_pitch', 'show_table', 'show_comparison', 'show_ranking', 'show_dossier']);
@@ -410,7 +392,7 @@ const PRESENTATION = new Set(['show_pitch', 'show_table', 'show_comparison', 'sh
 const COUNTED = new Set([...Object.keys(RESEARCH_FUNCTIONS), 'look_up_dossier']);
 
 /** The progress line for one tool call. */
-export function stageLabel(call: DeepFunctionCall): string {
+export function stageLabel(call: ChatFunctionCall): string {
   const a = call.args ?? {};
   switch (call.name) {
     case 'get_club_recent_team':
@@ -451,8 +433,8 @@ export function stageLabel(call: DeepFunctionCall): string {
 // ---------------------------------------------------------------------------------------------
 // Prompts
 
-/** Deep mode's part of the system instruction: the budget and how to spend it. Descriptive only. */
-export const deepModeRules = (budget: DeepBudget): string => `## Deep mode
+/** The loop's part of the system instruction: the budget and how to spend it. Descriptive only. */
+export const researchRules = (budget: ResearchBudget): string => `## Research
 
 In this conversation you decide your own research. Your tools read live club data, Premier League player seasons, league tables, past club seasons, player careers, the web, the stored dossier cards and the user's saved dossiers; the show tools draw views in your reply.
 
@@ -472,22 +454,22 @@ How to research:
 
 ${RESEARCH_COVERAGE_NOTE}`;
 
-/** How deep mode builds a team: from the lineups its own lookups returned. */
-const DEEP_TEAM_RULES =
+/** How the loop builds a team: from the lineups its own lookups returned. */
+const CHAT_TEAM_RULES =
   'Build the team from the recent starting XIs and the injury list your club lookups returned, or from <stored_snapshots>, never from the registered squad or memory. Name one player for each role and commit to him; mention another only where the recent XIs show an even split, as the alternative, never as a joint holder of the role or a pair of names in a heading. A player listed as out is unavailable and must not be described as playing; a registered player missing from recent XIs is at most a rotation option, however prominent he once was. Recent signings and positional changes override what you remember of the club. If no lookup gave recent lineups, say which parts of the shape you could not verify rather than filling them from memory.';
 
-const DEEP_FACT_SOURCES =
+const CHAT_FACT_SOURCES =
   'your tool results this turn, <stored_snapshots>, the numbered entries in <factual_foundation>, or existing dossiers';
 
 /** The turn's rule when a Gaffa club is attached: where its facts are and which tools read the rest. */
-export const DEEP_GAFFA_RULE = GAFFA_CLUB_SOURCES;
+export const CHAT_GAFFA_RULE = GAFFA_CLUB_SOURCES;
 
 /**
  * The loop's `<instructions>`. Off (`principles` false), exactly the block built before the principle
- * set: the router's answer template with deep's team rules, the fact, manager and continuity rules,
+ * set: the router's answer template with the loop's team rules, the fact, manager and continuity rules,
  * and the Gaffa line. On, only the turn's data. Pinned in `scripts/test-chat-prompt.ts`.
  */
-export function deepInstructions(args: {
+export function chatInstructions(args: {
   principles: boolean;
   route: TurnRoute;
   analyticalMode: string;
@@ -496,12 +478,12 @@ export function deepInstructions(args: {
   gaffa: boolean;
 }): string {
   const { principles, route, analyticalMode, currentSeason, notes, gaffa } = args;
-  if (principles) return principleInstructions([PRINCIPLE_SOURCES.deep, notes, gaffa ? GAFFA_CLUB_SOURCES : '']);
+  if (principles) return principleInstructions([PRINCIPLE_SOURCES.chat, notes, gaffa ? GAFFA_CLUB_SOURCES : '']);
   return `<instructions>
-1. ${proseModeGuidance(route, analyticalMode, currentSeason, null, DEEP_TEAM_RULES)}${notes}
-2. ${presentFactRules(currentSeason, DEEP_FACT_SOURCES)}
+1. ${proseModeGuidance(route, analyticalMode, currentSeason, null, CHAT_TEAM_RULES)}${notes}
+2. ${presentFactRules(currentSeason, CHAT_FACT_SOURCES)}
 3. ${MANAGER_FIDELITY_RULE} A <verified_managers> block in a tool result counts too.
-4. ${CONTINUITY_REMINDER}${gaffa ? `\n5. ${DEEP_GAFFA_RULE}` : ''}
+4. ${CONTINUITY_REMINDER}${gaffa ? `\n5. ${CHAT_GAFFA_RULE}` : ''}
 </instructions>`;
 }
 
@@ -512,10 +494,10 @@ const RESEARCH_OVER =
 const RESEARCH_OVER_PRINCIPLES = 'Research is over: the budget is spent. Write the whole answer now from what you have.';
 
 /**
- * Deep mode's part of the system instruction under the chat principle set: the budget and how to
+ * The loop's part of the system instruction under the chat principle set: the budget and how to
  * spend it, and nothing the principles already say about the need, pushback or views. Descriptive only.
  */
-export const deepResearchRules = (budget: DeepBudget): string => `## Deep mode
+export const principleResearchRules = (budget: ResearchBudget): string => `## Research
 
 In this conversation you decide your own research. Your tools read live club data, Premier League player seasons, league tables, past club seasons, player careers, the web, the stored dossier cards and the user's saved dossiers; the show tools draw views in your reply.
 
@@ -533,10 +515,10 @@ How to research:
 
 ${RESEARCH_COVERAGE_NOTE}`;
 
-const formatBudget = (left: DeepBudget): string =>
+const formatBudget = (left: ResearchBudget): string =>
   `Budget left: ${Math.max(0, Math.round(left.ms / 1000))} s, ${Math.max(0, left.calls)} lookups, ${Math.max(0, left.searches)} web searches, ${Math.max(0, left.rounds)} rounds.`;
 
-/** A stored club snapshot as deep mode's first round reads it. */
+/** A stored club snapshot as the loop's first round reads it. */
 const formatStoredSnapshots = (snapshots: ClubSnapshot[]): string =>
   snapshots.length
     ? `<stored_snapshots>
@@ -601,7 +583,7 @@ export const formatUnchecked = (items: string[]): string =>
 // ---------------------------------------------------------------------------------------------
 // The loop
 
-export interface DeepTurnParams {
+export interface ChatTurnParams {
   message: string;
   route: TurnRoute;
   history: ChatMessage[];
@@ -623,20 +605,20 @@ export interface DeepTurnParams {
   principles?: boolean;
   /** The thread is about the past (`threadIsHistorical`). Read only when past mode is on. */
   historical?: boolean;
-  /** Overrides `DEEP_PAST` for this turn, for tests and the eval. */
-  deepPast?: boolean;
+  /** Overrides `PAST_MODE` for this turn, for tests and the eval. */
+  pastMode?: boolean;
 }
 
-export interface DeepTurnDeps {
-  model?: DeepModel;
+export interface ChatTurnDeps {
+  model?: ChatModel;
   tools?: ResearchToolset;
   snapshots?: SnapshotSource | null;
   managers?: (clubs: string[]) => Promise<VerifiedClubManager[]>;
-  budget?: Partial<DeepBudget>;
+  budget?: Partial<ResearchBudget>;
   thinkingLevel?: ThinkingTier;
   now?: () => number;
   /** Called once with what the loop did, for tests and the eval. */
-  onStats?: (stats: DeepStats) => void;
+  onStats?: (stats: TurnStats) => void;
   /** The gate feedback round's model, for tests. */
   gateFeedback?: CorrectionModel;
   /** Reads a Gaffa squad's FPL availability, for tests. */
@@ -650,7 +632,7 @@ export interface DeepTurnDeps {
   reportDisagreements?: (pairs: CardDisagreement[]) => void;
 }
 
-export interface DeepStats {
+export interface TurnStats {
   rounds: number;
   /** Lookups that ran (counted against the budget). */
   calls: number;
@@ -698,17 +680,17 @@ const within = <T>(p: Promise<T>, ms: number): Promise<T | null> => {
 
 const noLive: Promise<ToolOutcome> = Promise.resolve({ status: 'empty', result: null, missing: [] });
 
-export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {}): Promise<string> {
+export async function runChatTurn(params: ChatTurnParams, deps: ChatTurnDeps = {}): Promise<string> {
   const { message, route, history, perf } = params;
   const principles = params.principles ?? PRINCIPLES_PROMPT;
   const researchOver = principles ? RESEARCH_OVER_PRINCIPLES : RESEARCH_OVER;
   const composer = params.composer ?? new ReplyComposer();
-  const model = deps.model ?? liveDeepModel;
+  const model = deps.model ?? liveChatModel;
   const now = deps.now ?? Date.now;
-  // Past mode (`DEEP_PAST`): a question about the past, read with its cards, era snapshots and settled verdicts.
-  const deepPast = params.deepPast ?? DEEP_PAST;
-  const past = deepPast && Boolean(params.historical);
-  const budget: DeepBudget = { ...DEFAULT_DEEP_BUDGET, ...(past ? DEEP_PAST_BUDGET : {}), ...deps.budget };
+  // Past mode (`PAST_MODE`): a question about the past, read with its cards, era snapshots and settled verdicts.
+  const pastMode = params.pastMode ?? PAST_MODE;
+  const past = pastMode && Boolean(params.historical);
+  const budget: ResearchBudget = { ...DEFAULT_RESEARCH_BUDGET, ...(past ? PAST_BUDGET : {}), ...deps.budget };
   const snapshots = deps.snapshots === undefined ? liveClubSnapshots : deps.snapshots;
   const lookUpManagers = deps.managers ?? getVerifiedClubManagers;
   const start = now();
@@ -721,7 +703,7 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
   const tools = deps.tools ?? liveToolset([...lockedCards, ...allCalibrated]);
   const gaps = editionGaps(lockedCards, past, message, matchedCards);
   // The cards anchor a judgment on a past turn, and on a present one comparing two or more carded versions.
-  const anchored = deepPast && (past || comparesVersions(lockedCards));
+  const anchored = pastMode && (past || comparesVersions(lockedCards));
 
   // A Gaffa club attached in the app: its blocks, as the focus decides, before the first round. A
   // trade never reaches the loop, and no scorecard call is made here whatever the focus says.
@@ -762,17 +744,17 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
         tools,
         eras,
         verdicts: deps.verdicts,
-        waitMs: DEEP_CONTEXT_WAIT_MS,
+        waitMs: CHAT_CONTEXT_WAIT_MS,
       }).catch(() => null)
     : Promise.resolve(null);
   const [storedRaw, managersAtStart, pastContext] = await Promise.all([
-    Promise.all(storedJobs.map((j) => within(j, DEEP_CONTEXT_WAIT_MS))),
-    within(firstManagers, DEEP_CONTEXT_WAIT_MS),
+    Promise.all(storedJobs.map((j) => within(j, CHAT_CONTEXT_WAIT_MS))),
+    within(firstManagers, CHAT_CONTEXT_WAIT_MS),
     pastJob,
   ]);
   const stored = storedRaw.filter((s): s is ClubSnapshot => Boolean(s));
   const storedBlock = formatStoredSnapshots(stored);
-  perf?.(`deep context (${stored.length} stored snapshots, ${managersAtStart?.length ?? 0} coaches)`);
+  perf?.(`chat context (${stored.length} stored snapshots, ${managersAtStart?.length ?? 0} coaches)`);
 
   // A follow-up in the same thread starts from what the last turn found.
   const thread = threadStateFor(params.conversationId ?? 'local');
@@ -813,17 +795,17 @@ ${params.savedDossiersBlock}${anchoredBlocks ? `\n${anchoredBlocks}` : ''}
 ${
   past
     ? pastInstructions({ principles, notes: `${shownNote}${missingNote}${gapNote}` })
-    : deepInstructions({ principles, route, analyticalMode, currentSeason, notes: `${shownNote}${missingNote}${gapNote}`, gaffa: Boolean(gaffaBag) })
+    : chatInstructions({ principles, route, analyticalMode, currentSeason, notes: `${shownNote}${missingNote}${gapNote}`, gaffa: Boolean(gaffaBag) })
 }
 <task>${message}</task>`;
 
   const pastNotes = `${past ? `\n\n${PAST_RESEARCH_NOTE}` : ''}${anchored ? `\n\n${CARD_ANCHOR_NOTE}` : ''}`;
   const conversation = model.open({
     systemInstruction: principles
-      ? `${buildConversationalScoutInstruction(params.isEAFCRequest, true)}\n\n${deepResearchRules(budget)}${pastNotes}`
-      : `${buildConversationalScoutInstruction(params.isEAFCRequest, false)}\n\n${deepModeRules(budget)}${pastNotes}`,
+      ? `${buildConversationalScoutInstruction(params.isEAFCRequest, true)}\n\n${principleResearchRules(budget)}${pastNotes}`
+      : `${buildConversationalScoutInstruction(params.isEAFCRequest, false)}\n\n${researchRules(budget)}${pastNotes}`,
     history: buildHistoryContents(history, params.conversationDossiers),
-    declarations: deepDeclarations(Boolean(gaffaBag), anchored),
+    declarations: chatDeclarations(Boolean(gaffaBag), anchored),
     thinkingLevel: deps.thinkingLevel,
   });
 
@@ -831,13 +813,13 @@ ${
   let calls = 0;
   let searches = 0;
   let rounds = 0;
-  const left = (): DeepBudget => ({
+  const left = (): ResearchBudget => ({
     ms: start + budget.ms - now(),
     calls: budget.calls - calls,
     searches: budget.searches - searches,
     rounds: budget.rounds - rounds,
   });
-  const spentOn = (): DeepStats['stop'] | null => {
+  const spentOn = (): TurnStats['stop'] | null => {
     const l = left();
     return l.ms <= 0 ? 'time' : l.calls <= 0 ? 'calls' : l.searches <= 0 ? 'searches' : l.rounds <= 0 ? 'rounds' : null;
   };
@@ -912,7 +894,7 @@ ${
   const finishGaffa = (text: string, log = false) => finishGaffaReply(text, gaffaBag, gaffaTurn, log);
   composer.setGate((segments) => gateSegments(segments, clean).map((t) => finishGaffa(t)));
 
-  // Deep mode's text always streams from the model, so views and cards sit inside the reply.
+  // The loop's text always streams from the model, so views and cards sit inside the reply.
   const dossierTools = createDossierTools({ cardsInPlay, localCards: allCalibrated, historical: past, composer, inline: true });
   const dossiersPool = [...params.savedDossiers, ...params.conversationDossiers];
   const viewTools = createViewTools({
@@ -943,7 +925,7 @@ ${
   });
 
   /** Runs one round: refuses what the budget can't cover, runs the rest in parallel, files the results. */
-  const runRound = async (round: DeepFunctionCall[]): Promise<DeepToolResponse[]> => {
+  const runRound = async (round: ChatFunctionCall[]): Promise<ChatToolResponse[]> => {
     const jobs = round.map(async (call): Promise<{ response: Record<string, unknown>; filed?: { call: ResearchCall; outcome: ToolOutcome } }> => {
       const args = call.args ?? {};
       const research = RESEARCH_FUNCTIONS[call.name];
@@ -1035,7 +1017,7 @@ ${
   };
 
   const toolCalls: string[] = [];
-  let stop: DeepStats['stop'] = 'answered';
+  let stop: TurnStats['stop'] = 'answered';
   let viewRounds = 0;
   let commitRounds = 0;
   params.onStageChange?.('Planning the research...');
@@ -1056,7 +1038,7 @@ ${
       params.onStreamChunk(composer.displayText());
     }
     toolCalls.push(...reply.calls.map((c) => c.name));
-    perf?.(`deep round ${rounds}: ${reply.calls.map((c) => c.name).join(', ')}`);
+    perf?.(`chat round ${rounds}: ${reply.calls.map((c) => c.name).join(', ')}`);
     const responses = await runRound(reply.calls);
     const over = spentOn();
     const budgetLine = formatBudget(left());
@@ -1084,7 +1066,7 @@ ${
   }
   if (!reply.text.trim() && !kept.trim()) {
     const why = blockedOrEmptyResponseError(reply.finishReason).message;
-    throw new DeepFailure(stop === 'answered' ? 'empty' : 'budget', stop === 'answered' ? why : `the ${stop} budget was spent and no answer followed: ${why}`);
+    throw new ChatTurnFailure(stop === 'answered' ? 'empty' : 'budget', stop === 'answered' ? why : `the ${stop} budget was spent and no answer followed: ${why}`);
   }
   const answer = answerSoFar(reply.text);
 
@@ -1099,7 +1081,7 @@ ${
   const finalFigures: FigureCheck = {
     ...figureCheck,
     onRemoved: (removed: FigureClaim[]) => {
-      if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures from a deep reply: ${removed.map((r) => r.text).join('; ')}`);
+      if (removed.length) console.info(`[FigureGate] Removed ${removed.length} figures from a chat reply: ${removed.map((r) => r.text).join('; ')}`);
     },
   };
   const segments = composer.rawProse();
@@ -1128,7 +1110,7 @@ ${
   composer.settle(parts);
   const finalText = parts.filter((p) => p.trim()).join('\n\n');
 
-  const stats: DeepStats = { rounds, calls, searches, toolCalls, stop, gateFeedback: feedback };
+  const stats: TurnStats = { rounds, calls, searches, toolCalls, stop, gateFeedback: feedback };
   if (commitTool) {
     const c = commitTool.state;
     const priors = pastContext?.settled ?? [];
@@ -1153,7 +1135,7 @@ ${
     finishPastTurn(c, standingsOf([...lockedCards, ...cardsInPlay]), ledger, message, deps.pastNetwork ?? liveTurnNetwork);
   }
   deps.onStats?.(stats);
-  perf?.(`deep turn: ${rounds} rounds, ${calls} lookups (${searches} searches), stop ${stop}, tools ${toolCalls.join(', ') || 'none'}, gate feedback ${feedback ? formatGateFeedback(feedback) : 'none'}`);
+  perf?.(`chat turn: ${rounds} rounds, ${calls} lookups (${searches} searches), stop ${stop}, tools ${toolCalls.join(', ') || 'none'}, gate feedback ${feedback ? formatGateFeedback(feedback) : 'none'}`);
 
   // A normal follow-up reads this turn's research the way it reads research's.
   const thisTurn = formatLedger({ ...ledger, entries: ledger.entries.filter((e) => e.kind !== 'prior_turn') }, past ? {} : { seasonStart: seasonStartDate(seasonStartYear) });
