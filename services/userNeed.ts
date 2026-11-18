@@ -56,14 +56,20 @@ export function readNeed(raw: unknown): NeedRead | null {
 /** Whether the need records a disputed fact that must be checked this turn. */
 export const hasCheckableObjection = (need: NeedRead | null | undefined): boolean => Boolean(need?.objectionFact);
 
-/** The need as the writer reads it, ahead of the other blocks. Empty when there is none. */
-export function formatNeedForWriter(need: NeedRead | null | undefined): string {
+/**
+ * The need as the writer reads it, ahead of the other blocks. Empty when there is none.
+ * `principles`: under the chat principle set, which says how to check a disputed fact, the block
+ * states the fact and nothing more.
+ */
+export function formatNeedForWriter(need: NeedRead | null | undefined, options: { principles?: boolean } = {}): string {
   if (!need) return '';
   const lines: string[] = [];
   if (need.goal) lines.push(`What the user is trying to do: ${need.goal}`);
   if (need.settle.length) lines.push(`What a useful answer has to settle:\n${need.settle.map((s) => `- ${s}`).join('\n')}`);
   if (need.objection) lines.push(`What they object to in the last reply: ${need.objection}`);
-  if (need.objectionFact) {
+  if (need.objectionFact && options.principles) {
+    lines.push(`The fact the objection turns on, to check this turn: ${need.objectionFact}`);
+  } else if (need.objectionFact) {
     lines.push(
       `The fact the objection turns on: ${need.objectionFact}\nSettle it from the evidence this turn, or with a tool if the evidence doesn't answer it, and answer with what you found, partial evidence included. Don't accept or reject it on the user's word, and if your last reply was wrong, correct it in one sentence.`,
     );

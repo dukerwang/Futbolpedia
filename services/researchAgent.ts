@@ -638,11 +638,22 @@ export async function runResearch(
 }
 
 /** The need the brief read, as the writer's first block (`<user_need>`). */
-export const formatBriefNeedForWriter = (brief: ResearchBrief | null | undefined): string => formatNeedForWriter(brief?.need);
+export const formatBriefNeedForWriter = (brief: ResearchBrief | null | undefined, options: { principles?: boolean } = {}): string =>
+  formatNeedForWriter(brief?.need, options);
 
-/** The brief as the writer reads it. Its need goes ahead of every block, through `formatBriefNeedForWriter`. */
-export const formatBriefForWriter = (brief: ResearchBrief): string =>
-  `<research_brief>
+/**
+ * The brief as the writer reads it. Its need goes ahead of every block, through
+ * `formatBriefNeedForWriter`. `principles`: the lines the chat principle set reads, which state what
+ * research found and leave how to answer to the principles.
+ */
+export const formatBriefForWriter = (brief: ResearchBrief, options: { principles?: boolean } = {}): string =>
+  options.principles
+    ? `<research_brief>
+What the user is asking: ${brief.understanding}
+${brief.focus ? `What's distinctive this season: ${brief.focus}\n` : ''}${
+        brief.outline.length ? `Points research expected the answer to need:\n${brief.outline.map((p) => `- ${p}`).join('\n')}\n` : ''
+      }${brief.unresolved.length ? `Research didn't establish: ${brief.unresolved.join('; ')}\n` : ''}</research_brief>`
+    : `<research_brief>
 What the user is asking: ${brief.understanding}
 ${brief.focus ? `What's distinctive this season, for the answer to lead with: ${brief.focus}\n` : ''}${
     brief.outline.length ? `Planned outline (adapt it to what the evidence shows):\n${brief.outline.map((p) => `- ${p}`).join('\n')}\n` : ''

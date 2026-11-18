@@ -1,6 +1,6 @@
 import type { ChatMessage, GaffaContextBag, GaffaTradeScorecard, PlayerProfile, RatingRequest, ReplyBlock } from '../types';
 import { ThinkingTier } from '../constants/modelProfiles';
-import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
+import { buildConversationalScoutInstruction, PRINCIPLES_PROMPT } from '../prompts/chatPrompt';
 import {
   FLASH_MODEL,
   generateProseTurn,
@@ -217,6 +217,12 @@ export interface SendMessageOptions {
   fast?: boolean;
   /** Overrides `DEEP_BY_DEFAULT` for one turn, for tests and the eval. */
   deepByDefault?: boolean;
+  /**
+   * Overrides `PRINCIPLES_PROMPT` (`prompts/chatPrompt.ts`) for one turn: true has the chat writer
+   * read the principle set, false the instructions from before it. Tests and the eval's
+   * `--principles` set it.
+   */
+  principles?: boolean;
   /** Called as each path starts: once for the path chosen, and again on the stage run that follows a deep turn's failure. */
   onPath?: (info: PathInfo) => void;
   /** Fakes and overrides for deep mode's model, tools and budget, for tests and the eval. */
@@ -268,6 +274,7 @@ const buildTurnContext = (
   route: TurnRoute,
   conversationDossiers: PlayerProfile[],
   savedDossiers: PlayerProfile[],
+  principles = false,
 ): TurnContext => {
   const savedResult = resolveSavedDossiersForRequest(
     message,
@@ -278,6 +285,7 @@ const buildTurnContext = (
   const savedDossiersBlock = buildSavedDossiersBlock(
     savedResult.dossiers,
     savedResult.inventoryOnly,
+    principles,
   );
 
   const referencedDossiers = findReferencedDossiers(
@@ -302,6 +310,7 @@ const buildTurnContext = (
       ],
       route.isHistorical,
     ),
+    principles,
   );
   const peerLedgerOptions = { targetPlayers: route.targetPlayers, message };
   const peerLedger = selectPositionalPeerLedger(savedDossiers, conversationDossiers, peerLedgerOptions);
@@ -907,7 +916,9 @@ export const sendMessageToAI = async (
   }
 
   // 4. Resolve conversation-locked and saved-archive dossiers
-  const context = buildTurnContext(message, route, conversationDossiers, turnDossiers);
+  // Which instruction set the chat writer reads this turn (`PRINCIPLES_PROMPT`, or the caller's override).
+  const principles = options?.principles ?? PRINCIPLES_PROMPT;
+  const context = buildTurnContext(message, route, conversationDossiers, turnDossiers, principles);
   const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock } = context;
 
   // 5. Deep mode: one model loop decides the research, for a question about the present (by default,
@@ -952,6 +963,7 @@ export const sendMessageToAI = async (
       initiative,
       // Gaffa's panel draws its replies as text, so it is offered no views.
       views: !options?.noRating,
+      principles,
       perf,
     });
   let fellBack = false;
@@ -977,6 +989,7 @@ export const sendMessageToAI = async (
             onStreamChunk,
             onStageChange: options?.onStageChange,
             conversationId: options?.conversationId,
+            principles,
             perf,
           },
           options?.deepDeps,

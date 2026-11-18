@@ -145,6 +145,20 @@ await test('the same question asked again keeps its settled verdict without a ne
   assert.ok(writer.includes('The verdict, settled before writing (keep it): Zinedine Zidane'));
 });
 
+await test('with the principle set on, a past debate reads the principles and no past-specific writing rules', async () => {
+  await quietly(() => sendMessageToAI('Prime Zidane or prime Kaká?', [], undefined, [], [ZIDANE, KAKA], { principles: true }));
+  const writerCall = calls.filter((c) => !c.structured && c.prompt.includes('<task>')).at(-1);
+  const writer = writerCall?.prompt ?? '';
+  assert.equal(writer.split('VIII. CHAT PRINCIPLES').length - 1, 1, 'the principles, once');
+  assert.ok(writer.includes('<debate_brief>') && writer.includes('The verdict, settled before writing (keep it): Zinedine Zidane'));
+  const instructions = writer.slice(writer.indexOf('<instructions>'), writer.indexOf('</instructions>'));
+  assert.ok(instructions.includes('1. This question is about the past.'), instructions);
+  for (const retired of ["First decide what the user's latest message actually asks", 'Quote a precise figure (goals, appearances', 'THREAD CONTINUITY', 'labelled sections']) {
+    assert.ok(!instructions.includes(retired), retired);
+  }
+  assert.ok(writer.includes('How cards work'), 'the writer is told how cards work');
+});
+
 await test('an answer quotes the figures its brief chose: a mislabelled total is cut, decoration over budget trimmed', async () => {
   BRIEF = {
     ...BRIEF,
