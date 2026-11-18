@@ -19,6 +19,20 @@
  *   npm run eval:live -- --deep --only 1,3 --label deep   # the live set through deep mode (services/deepTurn.ts)
  *   npm run eval:live -- --stage --label stage   # the same set through the stage pipeline, whatever DEEP_BY_DEFAULT says
  *   npm run eval:live -- --conversations --only C1,C2   # the multi-turn cases, graded for conduct (scripts/eval-conversations.ts)
+ *   npm run eval:live -- --deep --repeat 2 --only 4,11,1 --dry-run   # price a repeat run: calls, tokens and cost, with no call made
+ *   npm run eval:live -- --deep --repeat 2 --only 4,11,1 --shared-cards --label drift   # how far deep-mode answers vary between runs
+ *
+ * `--repeat N` (2 or more) on the live set asks each question N times, one run after another, and
+ * measures drift (scripts/eval-consistency.ts): each run on the live rubric and the range between
+ * runs, one comparison per question of the judgments the runs commit to (the verdict, who starts,
+ * what changed) with the contradictions listed, whether the runs looked up different things, and
+ * card figures quoted (a rating, a tier or an attribute score: whether it helped the answer, and
+ * whether it belonged to another version than the one discussed). `--only` keeps the order given,
+ * `--max-questions K` keeps the first K, `--no-card-mentions` skips the card scoring,
+ * `--shared-cards` reads the shared cards from Supabase (read-only) so cards can come into play,
+ * and `--dry-run` prints the estimate (`--price-in`, `--price-out` and `--price-search` replace the
+ * placeholder prices) and exits before any call or key check. A spending cap or rate limit stops the
+ * run at once. The report goes to docs/superpowers/evals/reports/ with a `consistency-` prefix.
  *
  * `--conversations` runs the Conversations section of the live set: each tested turn with the turns
  * before it as history (their recorded replies, or this run's answers where none was recorded), and
@@ -55,19 +69,12 @@ for (const file of ['.env.local', '.env']) {
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
   }
 }
-const key = process.env.GEMINI_API_KEY || process.env.API_KEY;
-if (!key) {
-  console.error('No Gemini key. Add GEMINI_API_KEY=... to .env.local (or export it), then run `npm run eval:live` again.');
-  process.exit(1);
-}
-process.env.API_KEY = key;
-
 const args = process.argv.slice(2);
 const argValue = (flag: string) => {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
 };
-const only = argValue('--only')?.split(',').map((n) => Number(n.trim()));
+const only = argValue('--only')?.split(',').map((n) => Number(n.trim())).filter((n) => Number.isFinite(n));
 const warm = args.includes('--warm');
 /** `--deep`: send every question with `deep: true`, so questions about the present go through deep mode whatever DEEP_BY_DEFAULT says. */
 const deep = args.includes('--deep');
@@ -79,9 +86,47 @@ if (deep && stage) {
 }
 const set = argValue('--set') === 'historical' ? 'historical' : 'live';
 const repeat = Math.max(1, Number(argValue('--repeat') ?? (set === 'historical' ? 2 : 1)) || 1);
+/** The live set's repeat flow: two or more runs of each question, or card scoring asked for on its own. */
+const repeatFlow = set === 'live' && !args.includes('--conversations') && (repeat > 1 || args.includes('--card-mentions'));
+const maxQuestions = Number(argValue('--max-questions')) || undefined;
+/** `--dry-run`: print the estimate for the flags given and exit, before the key is read or anything is called. */
+const dryRun = args.includes('--dry-run');
+/** `--shared-cards`: read the shared cards (and stored club snapshots) from Supabase through a read-only client. */
+const sharedCards = args.includes('--shared-cards');
 const label = (argValue('--label') ?? (deep ? 'deep' : stage ? 'stage' : warm ? 'warm' : 'run')).replace(/[^a-z0-9-]+/gi, '-');
+
+if (dryRun) {
+  const { estimateRun, formatEstimate, readLiveQuestionsFile, selectQuestions, ASSUMED_PRICES } = await import('./eval-consistency');
+  if (set === 'historical' || args.includes('--conversations') || stage) {
+    console.error('--dry-run estimates the live set on the deep path (the default, or --deep). The historical set, --conversations and --stage aren\'t modelled.');
+    process.exit(1);
+  }
+  const { deepModeRules, DEFAULT_DEEP_BUDGET, DEEP_DECLARATIONS } = await import('../services/deepTurn');
+  const { buildConversationalScoutInstruction } = await import('../prompts/chatPrompt');
+  const chars = buildConversationalScoutInstruction(false).length + deepModeRules(DEFAULT_DEEP_BUDGET).length + JSON.stringify(DEEP_DECLARATIONS).length;
+  const picked = selectQuestions(readLiveQuestionsFile(join(root, 'docs/superpowers/evals/live-questions.md')), { only, max: maxQuestions });
+  const price = (flag: string, fallback: number) => (Number.isFinite(Number(argValue(flag))) && argValue(flag) !== undefined ? Number(argValue(flag)) : fallback);
+  const estimate = estimateRun({
+    questions: picked.map((q) => q.n),
+    repeat,
+    consistency: repeat > 1,
+    cardMentions: repeatFlow && !args.includes('--no-card-mentions'),
+    prices: { inputPerMillion: price('--price-in', ASSUMED_PRICES.inputPerMillion), outputPerMillion: price('--price-out', ASSUMED_PRICES.outputPerMillion), perGroundedSearch: price('--price-search', ASSUMED_PRICES.perGroundedSearch) },
+    sizes: { deepFixedTokens: Math.round(chars / 4) },
+  });
+  console.log(formatEstimate(estimate, { questions: picked.map((q) => q.n), repeat, path: 'deep mode' }));
+  process.exit(0);
+}
+
+const key = process.env.GEMINI_API_KEY || process.env.API_KEY;
+if (!key) {
+  console.error('No Gemini key. Add GEMINI_API_KEY=... to .env.local (or export it), then run `npm run eval:live` again.');
+  process.exit(1);
+}
+process.env.API_KEY = key;
+
 const history = await import('./eval-history');
-if (set === 'historical') history.installReadOnlySupabase();
+if (set === 'historical' || sharedCards) history.installReadOnlySupabase();
 
 interface Question {
   n: number;
@@ -89,15 +134,8 @@ interface Question {
   tests: string;
 }
 
-/** The questions table from the set's Markdown. Question 15 needs a card mention, so it's skipped. */
-function readQuestions(): Question[] {
-  const full = readFileSync(join(root, 'docs/superpowers/evals/live-questions.md'), 'utf8');
-  // Only the questions table: the results tables further down have numbered rows too.
-  const md = full.slice(full.indexOf('## Questions'), full.indexOf('## Scoring'));
-  return [...md.matchAll(/^\|\s*(\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*$/gm)]
-    .map((m) => ({ n: Number(m[1]), text: m[2], tests: m[3] }))
-    .filter((q) => !q.text.startsWith('@'));
-}
+const consistency = await import('./eval-consistency');
+const readQuestions = (): Question[] => consistency.readLiveQuestionsFile(join(root, 'docs/superpowers/evals/live-questions.md'));
 
 // The app's live routes, served in-process so the pipeline's relative fetches work in Node.
 const { createLiveFootball } = await import('../services/liveFootball');
@@ -279,15 +317,7 @@ async function ask(
 
 // --- Grading ----------------------------------------------------------------------------------
 
-interface Grade {
-  staleFacts: { claim: string; why: string }[];
-  inventedFacts: { claim: string; why: string }[];
-  saysWhatChanged: 'yes' | 'no' | 'not_needed';
-  decisiveness: number;
-  hedgedRoles: number;
-  gapsAdmitted: 'yes' | 'no' | 'not_needed';
-  notes: string;
-}
+type Grade = import('./eval-consistency').RubricGrade;
 
 /** The clubs and players the answer treats as current, so the grader can read their live data. */
 async function subjectsOf(question: string, answer: string): Promise<{ clubs: string[]; players: string[] }> {
@@ -460,7 +490,32 @@ if (set === 'historical') {
   process.exit(0);
 }
 
-const questions = readQuestions().filter((q) => !only || only.includes(q.n));
+const questions = consistency.selectQuestions(readQuestions(), { only, max: maxQuestions });
+
+if (repeatFlow) {
+  // Each question `repeat` times, one run after another; the report is rewritten after every run.
+  const stampRepeat = stampOf('consistency-');
+  const cardMentions = !args.includes('--no-card-mentions');
+  const path = deep ? 'the deep mode loop (`--deep`)' : stage ? 'the stage pipeline (`--stage`)' : 'the chat pipeline';
+  const write = (r: import('./eval-consistency').RepeatResult) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${stampRepeat}.md`), consistency.repeatReport(r, { today, label, model: FLASH_MODEL, repeat, path, cardMentions, sharedCards }));
+    writeFileSync(join(dir, `${stampRepeat}.json`), JSON.stringify({ ...r, totals: consistency.totalsOf(r) }, null, 2));
+  };
+  const outcome = await consistency.runRepeats({
+    questions,
+    repeat,
+    ask: (text) => ask(text),
+    gradeRubric: async (text, answer) => (await grade(text, answer, today)).grade,
+    grade: (prompt) => graderCall(prompt, false),
+    cardMentions,
+    onUpdate: write,
+  });
+  write(outcome);
+  console.log(`\nReport: docs/superpowers/evals/reports/${stampRepeat}.md`);
+  process.exit(0);
+}
+
 const results: { q: Question; run: RunResult; grade: Grade | null; graderRaw: string }[] = [];
 
 if (warm) {

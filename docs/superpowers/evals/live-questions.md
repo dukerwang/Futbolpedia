@@ -17,7 +17,12 @@ gaps admitted. It writes a Markdown report and its JSON to `docs/superpowers/eva
 needs the network and `GEMINI_API_KEY` in `.env.local` or the environment. Use `--only 1,3,8` for
 a subset and `--label <name>` to name the run. Club snapshots are built fresh in memory each run,
 since Supabase isn't loaded outside the browser. `--conversations` runs the multi-turn cases under
-Conversations instead, graded for conduct.
+Conversations instead, graded for conduct. `--repeat 2` (or more) asks each question that many
+times, one run at a time, and measures how far the answers vary: the spread of each rubric measure,
+contradictions between the runs' verdicts, starters and claims about what changed, whether the runs
+looked up different things, and card figures quoted. `--dry-run` prices a run without a call. See
+[README.md](README.md) for the flags, the estimate and the smallest run that answers whether
+deep-mode answers drift.
 
 ### By hand
 
