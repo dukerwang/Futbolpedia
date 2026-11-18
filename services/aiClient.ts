@@ -121,6 +121,24 @@ const SEARCH_ANALYSIS_ADDENDUM =
 
 export type SearchDigest = 'brief' | 'evidence';
 
+/**
+ * A place the eval runner keeps grounded search results between runs (`scripts/eval-search-cache.ts`).
+ * Nothing in the app ever installs one, so `searchCache` stays null and `runGroundedSearch` behaves
+ * exactly as it did: the app neither reads nor writes any cache. The kind says which digest the
+ * result is (`brief`, `evidence` or `analysis`, an evidence digest read against live facts).
+ */
+export interface SearchCache {
+  get(query: string, kind: string): Promise<GroundedSearchResult | null>;
+  set(query: string, kind: string, result: GroundedSearchResult): Promise<void>;
+}
+
+let searchCache: SearchCache | null = null;
+
+/** Installs (or, with null, removes) the eval runner's search cache. Only the eval scripts call this. */
+export const setSearchCache = (cache: SearchCache | null): void => {
+  searchCache = cache;
+};
+
 export async function runGroundedSearch(
   query: string,
   options?: { datePrefix?: string; attempt?: number; digest?: SearchDigest; context?: string },
@@ -130,6 +148,11 @@ export async function runGroundedSearch(
   const fullQuery = options?.context
     ? `${searchQuery}\n\nCurrent facts from live match data, to read the sources against:\n${options.context}`
     : searchQuery;
+  const cacheKind = options?.digest === 'evidence' ? (options.context ? 'analysis' : 'evidence') : 'brief';
+  if (searchCache && attempt === 0) {
+    const hit = await searchCache.get(searchQuery, cacheKind).catch(() => null);
+    if (hit) return hit;
+  }
   try {
     const res = await getAi().models.generateContent({
       model: FLASH_MODEL,
@@ -162,18 +185,21 @@ export async function runGroundedSearch(
       sources.length > 0 ? `\n[SOURCES: ${sources.join(' | ')}]` : ''
     }`;
 
-    return {
+    const result = {
       query,
       text,
       sources,
       formattedBlock,
     };
+    if (searchCache && text) await searchCache.set(searchQuery, cacheKind, result).catch(() => {});
+    return result;
   } catch (e: any) {
     const is429 =
       e?.status === 429 ||
       String(e?.message).includes('429') ||
       String(e?.message).includes('RESOURCE_EXHAUSTED');
-    if (is429 && attempt < 2) {
+    // `evalStopped` is set only by the eval runner's guard (scripts/eval-guard.ts) on a refusal that ends a run: never retried.
+    if (is429 && attempt < 2 && !e?.evalStopped) {
       await new Promise((r) => setTimeout(r, (attempt + 1) * 2500));
       return runGroundedSearch(query, { ...options, attempt: attempt + 1 });
     }

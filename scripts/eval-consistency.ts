@@ -21,6 +21,9 @@
  */
 import { readFileSync } from 'node:fs';
 import { ATTRIBUTE_LABELS, RATING_TIERS } from '../constants/ratingTiers';
+import { isSpendLimit, usageLine, type Usage } from './eval-guard';
+
+export { isSpendLimit };
 
 // --- Questions --------------------------------------------------------------------------------
 
@@ -86,6 +89,8 @@ export interface RunResult {
   totalMs: number;
   perf: string[];
   research?: RunResearch;
+  /** What the turn cost, counted from the model's usage metadata (`scripts/eval-guard.ts`). */
+  usage?: Usage;
 }
 
 export interface RepeatRun {
@@ -440,10 +445,6 @@ export async function scoreCardMentions(
 
 // --- The run ----------------------------------------------------------------------------------
 
-/** A spending cap or a rate limit ends the run at once: nothing further is retried. */
-export const isSpendLimit = (message: string | undefined): boolean =>
-  !!message && /\b429\b|spending cap|rate-limited|RESOURCE_EXHAUSTED|quota/i.test(message);
-
 export interface QuestionConsistency {
   n: number;
   /** Null when fewer than two runs had an answer, or the grader's reply couldn't be read. */
@@ -463,11 +464,13 @@ export interface RepeatDeps {
   repeat: number;
   /** One turn through the pipeline, in a new conversation. Called one at a time, never in parallel. */
   ask: (question: string) => Promise<RunResult>;
-  /** The live rubric's grade of one answer. */
-  gradeRubric: (question: string, answer: string) => Promise<RubricGrade | null>;
-  /** One grader call without search: the prompt in, the model's text out. */
-  grade: (prompt: string) => Promise<string>;
-  /** Score card mentions (default on). */
+  /** The live rubric's grade of one answer. Left out, nothing is graded: no rubric, no comparison, no card scoring. */
+  gradeRubric?: (question: string, answer: string) => Promise<RubricGrade | null>;
+  /** One grader call without search: the prompt in, the model's text out. Left out, no comparison and no card scoring. */
+  grade?: (prompt: string) => Promise<string>;
+  /** Why the run has to stop, once a 429 or spending-cap error has come back (the guard's state); null while it can go on. */
+  stopReason?: () => string | null;
+  /** Score card mentions (default on, and only with a grader). */
   cardMentions?: boolean;
   /** Called after every run and every comparison, so a caller can write the report as the run goes. */
   onUpdate?: (result: RepeatResult) => void;
@@ -486,15 +489,23 @@ export async function runRepeats(deps: RepeatDeps): Promise<RepeatResult> {
   const update = () => deps.onUpdate?.(result);
   outer: for (const q of deps.questions) {
     for (let attempt = 1; attempt <= deps.repeat; attempt++) {
+      if (deps.stopReason?.()) {
+        result.stoppedEarly = `Q${q.n}, run ${attempt}: ${deps.stopReason()}`;
+        log(`Q${q.n} (run ${attempt}): stopped, ${deps.stopReason()}`);
+        break outer;
+      }
       const run = await deps.ask(q.text);
-      if (isSpendLimit(run.error)) {
-        result.stoppedEarly = `Q${q.n}, run ${attempt}: ${run.error}`;
-        log(`Q${q.n} (run ${attempt}): stopped, ${run.error}`);
+      if (isSpendLimit(run.error) || deps.stopReason?.()) {
+        // The turn that hit the limit may still hold an answer (a fallback ran on nothing): keep it.
+        if (run.answer) result.runs.push({ q, attempt, run, grade: null, mentions: null });
+        result.stoppedEarly = `Q${q.n}, run ${attempt}: ${run.error ?? deps.stopReason?.()}`;
+        log(`Q${q.n} (run ${attempt}): stopped, ${run.error ?? deps.stopReason?.()}`);
+        update();
         break outer;
       }
       let grade: RubricGrade | null = null;
       let mentions: CardMentionScore | null = null;
-      if (run.answer) {
+      if (run.answer && deps.gradeRubric) {
         try {
           grade = await deps.gradeRubric(q.text, run.answer);
         } catch (e: any) {
@@ -505,7 +516,19 @@ export async function runRepeats(deps: RepeatDeps): Promise<RepeatResult> {
             break outer;
           }
         }
-        if (deps.cardMentions !== false) mentions = await scoreCardMentions(q.text, run.answer, deps.grade).catch(() => null);
+        if (deps.stopReason?.()) {
+          result.runs.push({ q, attempt, run, grade, mentions: null });
+          result.stoppedEarly = `Q${q.n}, run ${attempt}: grader ${deps.stopReason()}`;
+          update();
+          break outer;
+        }
+      }
+      if (run.answer && deps.grade && deps.cardMentions !== false) mentions = await scoreCardMentions(q.text, run.answer, deps.grade).catch(() => null);
+      if (deps.stopReason?.()) {
+        result.runs.push({ q, attempt, run, grade, mentions });
+        result.stoppedEarly = `Q${q.n}, run ${attempt}: ${deps.stopReason()}`;
+        update();
+        break outer;
       }
       result.runs.push({ q, attempt, run, grade, mentions });
       const x = run.research;
@@ -514,14 +537,17 @@ export async function runRepeats(deps: RepeatDeps): Promise<RepeatResult> {
           run.error
             ? `failed: ${run.error}`
             : `${((run.totalMs) / 1000).toFixed(1)}s${x ? `, ${x.lookups} lookups, ${x.searches} searches, ${x.rounds} rounds` : ''}${
-                grade ? `; stale ${grade.staleFacts.length}, invented ${grade.inventedFacts.length}, decisive ${grade.decisiveness}/5` : '; grading failed'
+                grade ? `; stale ${grade.staleFacts.length}, invented ${grade.inventedFacts.length}, decisive ${grade.decisiveness}/5` : deps.gradeRubric ? '; grading failed' : '; not graded'
               }${mentions ? `; card figures ${mentions.mentions.length}` : ''}`
         }`,
       );
       update();
     }
     const answered = result.runs.filter((r) => r.q.n === q.n && r.run.answer);
-    if (answered.length >= 2) {
+    if (!deps.grade) {
+      // No grader, so no comparison: the report still shows each answer and what each run looked up.
+      result.consistency.push({ n: q.n, check: null, note: 'not graded (pass --grade)' });
+    } else if (answered.length >= 2) {
       const raw = await deps
         .grade(consistencyPrompt(q.text, answered.map((r, i) => ({ run: i + 1, answer: r.run.answer }))))
         .catch((e) => `grader failed: ${e?.message ?? e}`);
@@ -613,55 +639,72 @@ export function totalsOf(result: RepeatResult): RepeatTotals {
 }
 
 /** The report's Markdown for a repeat run, written after every run so a run cut short keeps what it finished. */
-export function repeatReport(result: RepeatResult, meta: { today: string; label: string; model: string; repeat: number; path: string; cardMentions: boolean; sharedCards: boolean }): string {
+export function repeatReport(
+  result: RepeatResult,
+  meta: { today: string; label: string; model: string; repeat: number; path: string; cardMentions: boolean; sharedCards: boolean; graded?: boolean; usage?: string },
+): string {
   const t = totalsOf(result);
   const numbers = [...new Set(result.runs.map((r) => r.q.n))];
   const byQ = (n: number) => result.runs.filter((r) => r.q.n === n);
   const q = (n: number) => byQ(n)[0].q;
   const f1 = (x: number) => x.toFixed(1);
+  const graded = meta.graded !== false;
   const lines: string[] = [
     `# Consistency eval: ${meta.today}, ${meta.label}`,
     '',
-    `Asked ${t.questions} question${t.questions === 1 ? '' : 's'} up to ${meta.repeat} times each through ${meta.path}, one run at a time, each in a new chat${meta.sharedCards ? ', with the shared cards read from Supabase' : ', with no shared cards (the live set reads none unless `--shared-cards` is passed)'}. Each answer was graded on the live rubric by ${meta.model} with Google Search and the live feeds; the runs of each question were then compared by one call without search${meta.cardMentions ? ', and each answer was scored for card figures' : ''}.`,
+    `Asked ${t.questions} question${t.questions === 1 ? '' : 's'} up to ${meta.repeat} times each through ${meta.path}, one run at a time, each in a new chat${meta.sharedCards ? ', with the shared cards read from Supabase' : ', with no shared cards (the live set reads none unless `--shared-cards` is passed)'}. ${
+      graded
+        ? `Each answer was graded on the live rubric by ${meta.model} with Google Search and the live feeds; the runs of each question were then compared by one call without search${meta.cardMentions ? ', and each answer was scored for card figures' : ''}.`
+        : 'Nothing was graded (no `--grade`): the answers are saved below for a person to read, and the Lookups section, which comes from the turns\' own logs, still compares what each run looked up. Pass `--grade` for the rubric spread, the verdict comparison and card figures.'
+    }`,
     '',
-    'The grader is the same model that writes the answers, so it can share their blind spots. Compare runs with each other rather than reading any score as absolute. A repeat shows how far the model varies when nothing else changes: the process keeps its live-feed caches between runs, so the feeds hold still.',
+    graded
+      ? 'The grader is the same model that writes the answers, so it can share their blind spots. Compare runs with each other rather than reading any score as absolute. A repeat shows how far the model varies when nothing else changes: the process keeps its live-feed caches between runs, so the feeds hold still.'
+      : 'A repeat shows how far the model varies when nothing else changes: the process keeps its live-feed caches between runs, so the feeds hold still.',
     '',
   ];
   if (result.stoppedEarly) lines.push(`**Run stopped early:** ${cell(result.stoppedEarly)}. Nothing was retried; the sections below cover what finished.`, '');
-  lines.push(
-    '## Summary',
-    '',
-    `- Same judgments across runs: ${t.same} same, ${t.partly} partly, ${t.different} different, of ${t.compared} questions compared`,
-    `- Contradictions: ${t.contradictions} in ${t.judgments} judgments compared`,
-    `- Different lookup tools between runs: ${t.toolSetsDiffer} of ${t.withLookups} questions (different call counts: ${t.toolCountsDiffer}; different subjects: ${t.subjectsDiffer})`,
-    `- Mean range between runs: stale facts ${f1(t.meanStaleRange)}, invented facts ${f1(t.meanInventedRange)}, decisiveness ${f1(t.meanDecisiveRange)} (largest ${t.maxDecisiveRange})`,
-    `- Runs that disagree on whether the answer says what changed: ${t.whatChangedDiffers} questions`,
-  );
-  if (meta.cardMentions) {
+  lines.push('## Summary', '');
+  if (graded) {
+    lines.push(
+      `- Same judgments across runs: ${t.same} same, ${t.partly} partly, ${t.different} different, of ${t.compared} questions compared`,
+      `- Contradictions: ${t.contradictions} in ${t.judgments} judgments compared`,
+    );
+  }
+  lines.push(`- Different lookup tools between runs: ${t.toolSetsDiffer} of ${t.withLookups} questions (different call counts: ${t.toolCountsDiffer}; different subjects: ${t.subjectsDiffer})`);
+  if (graded) {
+    lines.push(
+      `- Mean range between runs: stale facts ${f1(t.meanStaleRange)}, invented facts ${f1(t.meanInventedRange)}, decisiveness ${f1(t.meanDecisiveRange)} (largest ${t.maxDecisiveRange})`,
+      `- Runs that disagree on whether the answer says what changed: ${t.whatChangedDiffers} questions`,
+    );
+  }
+  if (graded && meta.cardMentions) {
     lines.push(
       `- Card figures: ${t.cardFigures} in ${t.runsWithCardFigures} of ${t.runsScored} answers; ${t.helped} helped the answer, ${t.decoration} decorated it, ${t.wrongVersion} quoted a version other than the one discussed`,
       `- Questions where one run quoted a card and another didn't: ${t.mentionBehaviourDiffers}`,
     );
   }
-  lines.push('', '## Spread', '', 'Each run graded on the live rubric; a cell shows the lowest and highest value across the runs, with the range in brackets.', '', '| # | Runs graded | Stale | Invented | Decisive | Hedged roles | What changed |', '| --- | --- | --- | --- | --- | --- | --- |');
-  for (const n of numbers) {
-    const s = questionSpread(n, byQ(n));
-    lines.push(
-      s
-        ? `| ${n} | ${s.graded} | ${spanOf(s.stale)} (${s.stale.range}) | ${spanOf(s.invented)} (${s.invented.range}) | ${spanOf(s.decisiveness)} (${s.decisiveness.range}) | ${spanOf(s.hedgedRoles)} (${s.hedgedRoles.range}) | ${s.saysWhatChanged.join(' / ')} |`
-        : `| ${n} | ${byQ(n).filter((r) => r.grade).length} | – | – | – | – | – |`,
-    );
-  }
-  lines.push('', '## Consistency', '', '| # | Agreement | Judgments compared | Contradictions | Summary |', '| --- | --- | --- | --- | --- |');
-  for (const c of result.consistency) {
-    lines.push(c.check ? `| ${c.n} | ${c.check.agreement} | ${c.check.compared} | ${c.check.contradictions.length} | ${cell(c.check.summary)} |` : `| ${c.n} | – | – | – | ${c.note ?? 'not compared'} |`);
-  }
-  const listed = result.consistency.filter((c) => c.check?.contradictions.length);
-  if (listed.length) {
-    lines.push('', '### Contradictions', '');
-    for (const c of listed) {
-      for (const x of c.check!.contradictions) {
-        lines.push(`- Q${c.n}, ${x.kind}, ${cell(x.about)}: ${x.claims.map((k) => `run ${k.run} said ${cell(k.claim)}`).join('; ')}`);
+  if (graded) {
+    lines.push('', '## Spread', '', 'Each run graded on the live rubric; a cell shows the lowest and highest value across the runs, with the range in brackets.', '', '| # | Runs graded | Stale | Invented | Decisive | Hedged roles | What changed |', '| --- | --- | --- | --- | --- | --- | --- |');
+    for (const n of numbers) {
+      const s = questionSpread(n, byQ(n));
+      lines.push(
+        s
+          ? `| ${n} | ${s.graded} | ${spanOf(s.stale)} (${s.stale.range}) | ${spanOf(s.invented)} (${s.invented.range}) | ${spanOf(s.decisiveness)} (${s.decisiveness.range}) | ${spanOf(s.hedgedRoles)} (${s.hedgedRoles.range}) | ${s.saysWhatChanged.join(' / ')} |`
+          : `| ${n} | ${byQ(n).filter((r) => r.grade).length} | – | – | – | – | – |`,
+      );
+    }
+    lines.push('', '## Consistency', '', '| # | Agreement | Judgments compared | Contradictions | Summary |', '| --- | --- | --- | --- | --- |');
+    for (const c of result.consistency) {
+      lines.push(c.check ? `| ${c.n} | ${c.check.agreement} | ${c.check.compared} | ${c.check.contradictions.length} | ${cell(c.check.summary)} |` : `| ${c.n} | – | – | – | ${c.note ?? 'not compared'} |`);
+    }
+    const listed = result.consistency.filter((c) => c.check?.contradictions.length);
+    if (listed.length) {
+      lines.push('', '### Contradictions', '');
+      for (const c of listed) {
+        for (const x of c.check!.contradictions) {
+          lines.push(`- Q${c.n}, ${x.kind}, ${cell(x.about)}: ${x.claims.map((k) => `run ${k.run} said ${cell(k.claim)}`).join('; ')}`);
+        }
       }
     }
   }
@@ -675,7 +718,7 @@ export function repeatReport(result: RepeatResult, meta: { today: string; label:
       for (const r of byQ(n)) lines.push(`| ${n} | ${r.attempt} | ${r.run.research?.path ?? '–'} | ${r.run.research?.lookups ?? '–'} | ${r.run.research?.searches ?? '–'} | ${r.run.research?.rounds ?? '–'} | – | – |`);
     }
   }
-  if (meta.cardMentions) {
+  if (graded && meta.cardMentions) {
     lines.push('', '## Card Mentions', '', 'A card figure is a rating, a tier or an attribute score from Futbolpedia\'s own cards. Helped means the figure carried part of the argument; wrong version means it belonged to another version of the player than the one under discussion.', '', '| # | Run | Figures | Ratings | Tiers | Attributes | Helped | Decoration | Wrong version | Views |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
     for (const r of result.runs) {
       const m = r.mentions;
@@ -698,7 +741,13 @@ export function repeatReport(result: RepeatResult, meta: { today: string; label:
       lines.push(
         `#### Run ${r.attempt}${r.run.research?.toolCalls ? `, tools: ${r.run.research.toolCalls.join(', ') || 'none'}` : ''}`,
         '',
-        r.grade ? `Stale ${r.grade.staleFacts.length}, invented ${r.grade.inventedFacts.length}, decisive ${r.grade.decisiveness}/5, hedged roles ${r.grade.hedgedRoles}, what changed ${r.grade.saysWhatChanged}, first token ${secs(r.run.firstTokenMs)} s, total ${secs(r.run.totalMs)} s. ${cell(r.grade.notes)}` : `${r.run.error ? `Pipeline failed: ${cell(r.run.error)}` : 'Grading failed'}`,
+        r.grade
+          ? `Stale ${r.grade.staleFacts.length}, invented ${r.grade.inventedFacts.length}, decisive ${r.grade.decisiveness}/5, hedged roles ${r.grade.hedgedRoles}, what changed ${r.grade.saysWhatChanged}, first token ${secs(r.run.firstTokenMs)} s, total ${secs(r.run.totalMs)} s. ${cell(r.grade.notes)}`
+          : r.run.error
+            ? `Pipeline failed: ${cell(r.run.error)}`
+            : graded
+              ? 'Grading failed'
+              : `Not graded. First token ${secs(r.run.firstTokenMs)} s, total ${secs(r.run.totalMs)} s${r.run.usage ? `; ${usageLine(r.run.usage)}` : ''}.`,
         '',
         '<details><summary>Answer</summary>',
         '',
@@ -709,6 +758,7 @@ export function repeatReport(result: RepeatResult, meta: { today: string; label:
       );
     }
   }
+  if (meta.usage) lines.push(meta.usage, '');
   return lines.join('\n');
 }
 
@@ -778,7 +828,7 @@ export const EXPECTED_TURN: TurnShape = { rounds: 2, lookups: 2.4, searches: 1.1
 /** `CHAT_MAX_ROUNDS`, `CHAT_MAX_CALLS`, `CHAT_MAX_SEARCHES` and one correction round. */
 export const CEILING_TURN: TurnShape = { rounds: 10, lookups: 12, searches: 4, gateRounds: 1 };
 
-const TOKENS = {
+export const TOKENS = {
   /** First user message of a chat turn: the conversation, cards in play, stored snapshots, coaches, the date. */
   firstMessage: 3_000,
   /** The route call for a turn the fast paths don't settle. */
@@ -828,7 +878,7 @@ export function chatTurnComponent(shape: TurnShape, sizes: PromptSizes): Estimat
   };
 }
 
-const scale = (c: EstimateComponent, by: number, name: string): EstimateComponent => ({
+export const scale = (c: EstimateComponent, by: number, name: string): EstimateComponent => ({
   name,
   calls: c.calls * by,
   inputTokens: Math.round(c.inputTokens * by),
@@ -843,8 +893,14 @@ export interface EstimateInput {
   /** Compare the runs of each question (needs repeat of 2 or more). */
   consistency: boolean;
   cardMentions: boolean;
-  /** Score the rubric (the live set's grader; always on in a run, off to price the pipeline alone). */
+  /** Score the rubric (the live set's grader; on unless `false`: a run without `--grade` prices the pipeline alone). */
   rubric?: boolean;
+  /** Every question takes the stage pipeline (`--stage`), priced as a control. */
+  stage?: boolean;
+  /** The shape of an average chat turn; the 2026-11-16 run's by default, or the one the saved reports give (`eval-estimate.ts`). */
+  expectedTurn?: TurnShape;
+  /** One chat turn as the saved reports measured it (`usage` on their answers): replaces the modelled expected turn. */
+  measuredTurn?: EstimateComponent;
   prices?: Prices;
   sizes: PromptSizes;
 }
@@ -852,7 +908,7 @@ export interface EstimateInput {
 /** Live-set questions that take the stage pipeline whatever the path flag says: the historical controls. */
 export const CONTROL_QUESTIONS = new Set([13, 14]);
 
-const totalOf = (components: EstimateComponent[], prices: Prices): EstimateTotals => {
+export const totalOf = (components: EstimateComponent[], prices: Prices): EstimateTotals => {
   const t = components.reduce((a, c) => ({ calls: a.calls + c.calls, inputTokens: a.inputTokens + c.inputTokens, outputTokens: a.outputTokens + c.outputTokens, grounded: a.grounded + c.grounded }), { calls: 0, inputTokens: 0, outputTokens: 0, grounded: 0 });
   return { ...t, usd: (t.inputTokens * prices.inputPerMillion + t.outputTokens * prices.outputPerMillion) / 1e6 + t.grounded * prices.perGroundedSearch };
 };
@@ -860,13 +916,14 @@ const totalOf = (components: EstimateComponent[], prices: Prices): EstimateTotal
 /** The calls, tokens and cost a run would spend, without making any. */
 export function estimateRun(input: EstimateInput): Estimate {
   const prices = input.prices ?? ASSUMED_PRICES;
-  const controls = input.questions.filter((n) => CONTROL_QUESTIONS.has(n)).length;
+  const controls = input.stage ? input.questions.length : input.questions.filter((n) => CONTROL_QUESTIONS.has(n)).length;
   const chatTurns = input.questions.length - controls;
   const turnsOf = (n: number) => n * input.repeat;
   const build = (shape: TurnShape): EstimateComponent[] => {
     const answers = input.questions.length * input.repeat;
     const out: EstimateComponent[] = [];
-    if (chatTurns) out.push(scale(chatTurnComponent(shape, input.sizes), turnsOf(chatTurns), `Chat turns, ${turnsOf(chatTurns)}`));
+    const perTurn = shape === CEILING_TURN || !input.measuredTurn ? chatTurnComponent(shape, input.sizes) : input.measuredTurn;
+    if (chatTurns) out.push(scale(perTurn, turnsOf(chatTurns), `Chat turns, ${turnsOf(chatTurns)}${perTurn === input.measuredTurn ? ' (as measured in saved reports)' : ''}`));
     if (controls) out.push({ name: `Stage-path controls, ${turnsOf(controls)}`, calls: TOKENS.control.calls * turnsOf(controls), inputTokens: TOKENS.control.input * turnsOf(controls), outputTokens: TOKENS.control.output * turnsOf(controls), grounded: TOKENS.control.grounded * turnsOf(controls) });
     if (input.rubric !== false) {
       out.push({ name: `Rubric grade, ${answers} (a subject call and a grounded call each)`, calls: 2 * answers, inputTokens: (TOKENS.rubric.input + TOKENS.subjects.input) * answers, outputTokens: (TOKENS.rubric.output + TOKENS.subjects.output) * answers, grounded: answers });
@@ -881,7 +938,7 @@ export function estimateRun(input: EstimateInput): Estimate {
     }
     return out;
   };
-  const expected = build(EXPECTED_TURN);
+  const expected = build(input.expectedTurn ?? EXPECTED_TURN);
   const ceiling = build(CEILING_TURN);
   return {
     expected: { components: expected, total: totalOf(expected, prices) },
@@ -896,11 +953,11 @@ const k = (n: number) => `${(n / 1000).toFixed(0)}k`;
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
 /** The dry run's output. */
-export function formatEstimate(e: Estimate, meta: { questions: number[]; repeat: number; path: string }): string {
+export function formatEstimate(e: Estimate, meta: { questions: number[]; repeat: number; path: string; header?: string; notes?: string[] }): string {
   const rows = (cs: EstimateComponent[]) => cs.map((c) => `  ${c.name}: ${c.calls.toFixed(0)} calls, ${k(c.inputTokens)} in, ${k(c.outputTokens)} out${c.grounded ? `, ${c.grounded.toFixed(0)} grounded` : ''}`);
   const line = (label: string, t: EstimateTotals) => `${label}: ${t.calls.toFixed(0)} calls, ${(t.inputTokens / 1e6).toFixed(2)}M input tokens, ${(t.outputTokens / 1e6).toFixed(2)}M output tokens, ${t.grounded.toFixed(0)} grounded searches, ${usd(t.usd)}`;
   return [
-    `Dry run: ${meta.questions.length} question${meta.questions.length === 1 ? '' : 's'} (${meta.questions.join(', ')}) × ${meta.repeat} run${meta.repeat === 1 ? '' : 's'} = ${e.turns} turns through ${meta.path}. No call is made.`,
+    meta.header ?? `Dry run: ${meta.questions.length} question${meta.questions.length === 1 ? '' : 's'} (${meta.questions.join(', ')}) × ${meta.repeat} run${meta.repeat === 1 ? '' : 's'} = ${e.turns} turns through ${meta.path}. No call is made.`,
     '',
     ...rows(e.expected.components),
     '',
@@ -908,6 +965,7 @@ export function formatEstimate(e: Estimate, meta: { questions: number[]; repeat:
     line('Ceiling (every chat turn spends its whole budget)', e.ceiling.total),
     '',
     `Prices used: ${usd(e.prices.inputPerMillion)}/M input, ${usd(e.prices.outputPerMillion)}/M output, $${e.prices.perGroundedSearch.toFixed(3)} per grounded search. The model profiles carry no prices; these are placeholders, so confirm them or pass --price-in, --price-out and --price-search. Implicit caching of the repeated prompt prefix is ignored, which makes the figure higher than a billed one.`,
-    'Token counts are modelled from the 2026-11-16 chat loop run (2.4 lookups, 1.1 searches and 2 research rounds a turn) and the real prompt sizes. Thinking tokens count as output.',
+    'Token counts are modelled from the lookups, searches and rounds the saved reports record (and from their measured usage, where a report has any) and the real prompt sizes. Thinking tokens count as output.',
+    ...(meta.notes ?? []),
   ].join('\n');
 }

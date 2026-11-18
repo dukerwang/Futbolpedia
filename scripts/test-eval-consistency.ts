@@ -565,9 +565,10 @@ await test('--dry-run exits before any key check or call, so it runs with no key
   assert.equal(out.status, 0, out.stderr);
   assert.match(out.stdout, /Dry run: 1 question \(4\) × 2 runs = 2 turns through the chat loop\. No call is made\./);
   assert.match(out.stdout, /\$1\.000\/M input|\$1\.00\/M input/);
-  const refused = spawnSync('npx', ['tsx', 'scripts/eval-live-questions.ts', '--stage', '--dry-run'], { cwd: root, env, encoding: 'utf8', timeout: 60_000 });
-  assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /--dry-run estimates the live set on the chat loop/);
+  // `--stage` is priced too now (every question as a stage pipeline turn); scripts/test-eval-costs.ts covers the other sets.
+  const stage = spawnSync('npx', ['tsx', 'scripts/eval-live-questions.ts', '--stage', '--only', '4', '--dry-run'], { cwd: root, env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(stage.status, 0, stage.stderr);
+  assert.match(stage.stdout, /Dry run: 1 question \(4\) × 1 run = 1 turns through the stage pipeline\. No call is made\./);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

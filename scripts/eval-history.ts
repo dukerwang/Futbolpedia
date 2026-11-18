@@ -6,6 +6,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
+import { isSpendLimit, usageLine, type Usage } from './eval-guard';
 
 export interface EvalQuestion {
   n: number;
@@ -161,6 +162,8 @@ interface AskResult {
   totalMs: number;
   perf: string[];
   research?: HistoryResearch;
+  /** What the turn cost, counted from the model's usage metadata. */
+  usage?: Usage;
 }
 
 /** Two runs' committed verdicts compared in code: the same winner or order, or not; null when either didn't commit. */
@@ -178,8 +181,19 @@ export interface HistoricalRunDeps {
   pairs: [number, number][];
   repeat: number;
   ask: (question: string) => Promise<AskResult>;
-  /** A grader call with Google Search; returns the model's text. */
-  grade: (prompt: string, withSearch: boolean) => Promise<string>;
+  /**
+   * A grader call, with Google Search or without; returns the model's text. Left out (no `--grade`),
+   * nothing is graded or checked: the answers are saved for a person to read.
+   */
+  grade?: (prompt: string, withSearch: boolean) => Promise<string>;
+  /** The figure check (a list call, then a verification with search) on each answer; needs `grade`. */
+  figureCheck?: boolean;
+  /** Why the run has to stop once a 429 or spending-cap error has come back; null while it can go on. */
+  stopReason?: () => string | null;
+  /** Called after every run with the report so far, so a run cut short keeps what it finished. */
+  onUpdate?: (report: { markdown: string; json: unknown }) => void;
+  /** The usage section of the report, rebuilt for each write from the runs so far (`usageSection` in `eval-guard.ts`). */
+  usage?: (runs: { q: { n: number }; attempt: number; run: { usage?: Usage } }[]) => string;
   today: string;
   label: string;
   model: string;
@@ -189,49 +203,84 @@ export interface HistoricalRunDeps {
  * Runs each question `repeat` times, grades every answer, compares repeated answers and
  * paraphrase pairs for the same verdict, and returns the report's Markdown and JSON.
  */
-export async function runHistoricalSet(deps: HistoricalRunDeps): Promise<{ markdown: string; json: unknown }> {
+export async function runHistoricalSet(deps: HistoricalRunDeps): Promise<{ markdown: string; json: unknown; stoppedEarly?: string }> {
   const runs: HistoricalRun[] = [];
-  for (const q of deps.questions) {
+  const repeats: Compared[] = [];
+  const paraphrases: PairCompared[] = [];
+  let stoppedEarly: string | undefined;
+  const snapshot = () => buildHistoricalReport(runs, repeats, paraphrases, { ...deps, stoppedEarly });
+  const stopped = (run?: AskResult): string | null => (run && isSpendLimit(run.error) ? run.error! : null) ?? deps.stopReason?.() ?? null;
+
+  outer: for (const q of deps.questions) {
     for (let attempt = 1; attempt <= deps.repeat; attempt++) {
+      const before = stopped();
+      if (before) {
+        stoppedEarly = `Q${q.n}, run ${attempt}: ${before}`;
+        break outer;
+      }
       process.stdout.write(`Q${q.n}${deps.repeat > 1 ? ` (run ${attempt})` : ''}: ${q.text} ... `);
       const run = await deps.ask(q.text);
-      const raw = run.answer
-        ? await deps
-            .grade(`${HISTORY_GRADE_INSTRUCTIONS}\n\nToday is ${deps.today}.\n\nQuestion: ${q.text}\n\nAnswer:\n${run.answer}`, true)
-            .catch(() => '')
-        : '';
+      const hit = stopped(run);
+      if (hit) {
+        // The turn that hit the limit may still hold an answer (a fallback ran on nothing): keep it, ungraded.
+        if (run.answer) runs.push({ q, attempt, run, grade: null, figures: null });
+        stoppedEarly = `Q${q.n}, run ${attempt}: ${hit}`;
+        console.log(`stopped: ${hit}`);
+        break outer;
+      }
+      const raw =
+        run.answer && deps.grade
+          ? await deps
+              .grade(`${HISTORY_GRADE_INSTRUCTIONS}\n\nToday is ${deps.today}.\n\nQuestion: ${q.text}\n\nAnswer:\n${run.answer}`, true)
+              .catch(() => '')
+          : '';
       const grade = parseHistoryGrade(raw);
-      const figures = run.answer ? await checkFigures(run.answer, deps.grade) : null;
+      const figures = run.answer && deps.grade && deps.figureCheck && !deps.stopReason?.() ? await checkFigures(run.answer, deps.grade) : null;
       runs.push({ q, attempt, run, grade, figures });
       console.log(
         run.error
           ? `failed: ${run.error}`
           : `${((run.firstTokenMs ?? run.totalMs) / 1000).toFixed(1)}s first token, ${(run.totalMs / 1000).toFixed(1)}s total${
-              grade ? `; figures ${figures ? `${figures.wrong.length} wrong of ${figures.stated}` : 'unchecked'}, blended ${grade.blendedSeasons.length}, criteria ${grade.criteria}/5` : '; grading failed'
+              !deps.grade
+                ? '; not graded'
+                : grade
+                  ? `; figures ${figures ? `${figures.wrong.length} wrong of ${figures.stated}` : 'unchecked'}, blended ${grade.blendedSeasons.length}, criteria ${grade.criteria}/5`
+                  : '; grading failed'
             }`,
       );
+      deps.onUpdate?.(snapshot());
+      const after = deps.stopReason?.();
+      if (after) {
+        stoppedEarly = `Q${q.n}, run ${attempt}: ${after}`;
+        break outer;
+      }
     }
   }
 
-  const agree = async (question: string, a: string, b: string) =>
-    parseAgreement(await deps.grade(`${AGREEMENT_INSTRUCTIONS}\n\nQuestion: ${question}\n\nAnswer A:\n${a}\n\nAnswer B:\n${b}`, false).catch(() => ''));
-  const repeats: Compared[] = [];
-  for (const q of deps.questions) {
-    const [a, b] = runs.filter((r) => r.q.n === q.n && r.run.answer);
-    if (!a || !b) continue;
-    const r = await agree(q.text, a.run.answer, b.run.answer);
-    repeats.push({ n: q.n, agreement: r?.agreement ?? null, why: r?.why ?? 'comparison failed', committed: sameCommitment(a.run.research, b.run.research) });
-  }
-  const paraphrases: PairCompared[] = [];
-  for (const pair of deps.pairs) {
-    const a = runs.find((r) => r.q.n === pair[0] && r.run.answer);
-    const b = runs.find((r) => r.q.n === pair[1] && r.run.answer);
-    if (!a || !b) continue;
-    const r = await agree(`${a.q.text} / ${b.q.text}`, a.run.answer, b.run.answer);
-    paraphrases.push({ pair, agreement: r?.agreement ?? null, why: r?.why ?? 'comparison failed', committed: sameCommitment(a.run.research, b.run.research) });
+  // Comparisons. A question's two runs are compared only when it has two answers, so a single run per
+  // question compares nothing; the committed verdicts are compared in code and cost no call.
+  if (!stoppedEarly) {
+    const agree = async (question: string, a: string, b: string) =>
+      deps.grade && !deps.stopReason?.()
+        ? parseAgreement(await deps.grade(`${AGREEMENT_INSTRUCTIONS}\n\nQuestion: ${question}\n\nAnswer A:\n${a}\n\nAnswer B:\n${b}`, false).catch(() => ''))
+        : null;
+    for (const q of deps.questions) {
+      const [a, b] = runs.filter((r) => r.q.n === q.n && r.run.answer);
+      if (!a || !b) continue;
+      const r = await agree(q.text, a.run.answer, b.run.answer);
+      repeats.push({ n: q.n, agreement: r?.agreement ?? null, why: r?.why ?? (deps.grade ? 'comparison failed' : 'not graded'), committed: sameCommitment(a.run.research, b.run.research) });
+    }
+    for (const pair of deps.pairs) {
+      const a = runs.find((r) => r.q.n === pair[0] && r.run.answer);
+      const b = runs.find((r) => r.q.n === pair[1] && r.run.answer);
+      if (!a || !b) continue;
+      const r = await agree(`${a.q.text} / ${b.q.text}`, a.run.answer, b.run.answer);
+      paraphrases.push({ pair, agreement: r?.agreement ?? null, why: r?.why ?? (deps.grade ? 'comparison failed' : 'not graded'), committed: sameCommitment(a.run.research, b.run.research) });
+    }
+    if (deps.stopReason?.()) stoppedEarly = `while comparing answers: ${deps.stopReason()}`;
   }
 
-  return buildHistoricalReport(runs, repeats, paraphrases, deps);
+  return { ...snapshot(), ...(stoppedEarly ? { stoppedEarly } : {}) };
 }
 
 export interface HistoricalRun {
@@ -247,22 +296,30 @@ type PairCompared = { pair: [number, number]; agreement: Agreement | null; why: 
 /** Runs a saved report's answers through the figure check again, keeping its grades and comparisons. */
 export async function regradeFigures(
   saved: { runs: HistoricalRun[]; repeats: Compared[]; paraphrases: PairCompared[] },
-  deps: Pick<HistoricalRunDeps, 'grade' | 'today' | 'label' | 'model' | 'repeat' | 'questions'>,
-): Promise<{ markdown: string; json: unknown }> {
+  deps: Pick<HistoricalRunDeps, 'today' | 'label' | 'model' | 'repeat' | 'questions' | 'stopReason' | 'usage'> & { grade: NonNullable<HistoricalRunDeps['grade']> },
+): Promise<{ markdown: string; json: unknown; stoppedEarly?: string }> {
+  let stoppedEarly: string | undefined;
   for (const r of saved.runs) {
+    const stop = deps.stopReason?.();
+    if (stop) {
+      stoppedEarly = `Q${r.q.n} (run ${r.attempt}): ${stop}`;
+      break;
+    }
     process.stdout.write(`Q${r.q.n} (run ${r.attempt}) ... `);
     r.figures = r.run.answer ? await checkFigures(r.run.answer, deps.grade) : null;
     console.log(r.figures ? `${r.figures.wrong.length} wrong, ${r.figures.unconfirmed.length} unconfirmed of ${r.figures.stated}` : 'unchecked');
   }
-  return buildHistoricalReport(saved.runs, saved.repeats, saved.paraphrases, deps);
+  return { ...buildHistoricalReport(saved.runs, saved.repeats, saved.paraphrases, { ...deps, stoppedEarly }), ...(stoppedEarly ? { stoppedEarly } : {}) };
 }
 
 function buildHistoricalReport(
   runs: HistoricalRun[],
   repeats: Compared[],
   paraphrases: PairCompared[],
-  deps: Pick<HistoricalRunDeps, 'today' | 'label' | 'model' | 'repeat' | 'questions'>,
+  deps: Pick<HistoricalRunDeps, 'today' | 'label' | 'model' | 'repeat' | 'questions' | 'usage'> & { grade?: HistoricalRunDeps['grade']; stoppedEarly?: string },
 ): { markdown: string; json: unknown } {
+  /** A run with a grader (`--grade`); without one the answers are saved for a person to read. */
+  const wasGraded = !!deps.grade || runs.some((r) => r.grade || r.figures);
   const graded = runs.filter((r) => r.grade);
   const checked = runs.filter((r) => r.figures);
   const figureSum = (f: (c: FigureCheck) => number) => checked.reduce((n, r) => n + f(r.figures!), 0);
@@ -275,9 +332,15 @@ function buildHistoricalReport(
 
   const markdown = `# Historical question eval: ${deps.today}, ${deps.label}
 
-Ran ${deps.questions.length} questions ${deps.repeat} time${deps.repeat === 1 ? '' : 's'} each through the chat pipeline, each run in a new chat, with the shared cards read from Supabase; ${graded.length} of ${runs.length} answers were graded. Graded by ${deps.model} with Google Search.
-
-The grader is the same model that writes the answers, so it can share their blind spots. Compare runs with each other rather than reading any score as absolute.
+Ran ${deps.questions.length} questions ${deps.repeat} time${deps.repeat === 1 ? '' : 's'} each through the chat pipeline, each run in a new chat, with the shared cards read from Supabase. ${
+    wasGraded
+      ? `${graded.length} of ${runs.length} answers were graded by ${deps.model} with Google Search${checked.length ? ', and the precise figures of each were checked' : ' (no figure check: pass `--figure-check`)'}.`
+      : 'Nothing was graded (no `--grade`): the answers are saved below for a person to read. Pass `--grade` for the rubric and `--figure-check` for the figures.'
+  }
+${deps.stoppedEarly ? `\n**Run stopped early:** ${cell(deps.stoppedEarly)}. Nothing was retried; the sections below cover what finished.\n` : ''}
+${
+  wasGraded
+    ? `The grader is the same model that writes the answers, so it can share their blind spots. Compare runs with each other rather than reading any score as absolute.
 
 - Precise figures stated: ${figureSum((c) => c.stated)} in ${checked.length} checked answers; wrong: ${figureSum((c) => c.wrong.length)}; unconfirmed: ${figureSum((c) => c.unconfirmed.length)} (listed, then each checked with search)
 - Wrong figures in the one-pass grade: ${sum((g) => g.wrongFigures.length)} in total
@@ -288,8 +351,11 @@ The grader is the same model that writes the answers, so it can share their blin
 - Mean decisiveness: ${mean((g) => g.decisiveness)} / 5
 - Same verdict when asked twice: ${count(repeats, 'same')} same, ${count(repeats, 'partly')} partly, ${count(repeats, 'different')} different, of ${repeats.length}
 - Same verdict across paraphrases: ${count(paraphrases, 'same')} same, ${count(paraphrases, 'partly')} partly, ${count(paraphrases, 'different')} different, of ${paraphrases.length}
-- Median first token: ${secs(median(runs.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s; median total: ${secs(median(runs.map((r) => r.run.totalMs)))} s
 - Ratings quoted out of place: ${graded.filter((r) => r.grade!.ratingsOutOfPlace === 'yes').length} of ${graded.filter((r) => r.grade!.ratingsOutOfPlace !== 'not_applicable').length} answers where the question doesn't turn on how good the players were
+`
+    : `- Committed verdicts, compared in code: ${repeats.filter((r) => r.committed).length + paraphrases.filter((r) => r.committed).length} comparisons (a question with a single run has none)
+`
+}- Median first token: ${secs(median(runs.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s; median total: ${secs(median(runs.map((r) => r.run.totalMs)))} s
 ${researchSummary(runs)}
 
 | # | Run | Figures | Wrong | Unconfirmed | Blended | Myths | Criteria | Counter-case | Decisive | First token (s) | Total (s) | Verdict |
@@ -298,7 +364,7 @@ ${runs
   .map((r) =>
     r.grade
       ? `| ${r.q.n} | ${r.attempt} | ${r.figures?.stated ?? '–'} | ${r.figures?.wrong.length ?? '–'} | ${r.figures?.unconfirmed.length ?? '–'} | ${r.grade.blendedSeasons.length} | ${r.grade.myths.length} | ${r.grade.criteria} | ${r.grade.counterCase} | ${r.grade.decisiveness} | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${cell(r.grade.verdict)} |`
-      : `| ${r.q.n} | ${r.attempt} | – | – | – | – | – | – | – | – | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${cell(r.run.error)}` : 'Grading failed'} |`,
+      : `| ${r.q.n} | ${r.attempt} | – | – | – | – | – | – | – | – | ${secs(r.run.firstTokenMs)} | ${secs(r.run.totalMs)} | ${r.run.error ? `Pipeline failed: ${cell(r.run.error)}` : wasGraded ? 'Grading failed' : 'Not graded'} |`,
   )
   .join('\n')}
 
@@ -317,7 +383,7 @@ ${runs
 
 ${r.q.tests}
 
-${r.figures?.wrong.length ? `Wrong figures:\n${r.figures.wrong.map((f) => `- ${f.claim}: ${f.note}`).join('\n')}\n\n` : ''}${
+${r.run.usage ? `Usage: ${usageLine(r.run.usage)}.\n\n` : ''}${r.figures?.wrong.length ? `Wrong figures:\n${r.figures.wrong.map((f) => `- ${f.claim}: ${f.note}`).join('\n')}\n\n` : ''}${
       r.figures?.unconfirmed.length ? `Unconfirmed figures:\n${r.figures.unconfirmed.map((f) => `- ${f.claim}: ${f.note}`).join('\n')}\n\n` : ''
     }${r.grade?.wrongFigures.length ? `Wrong figures (one-pass grade):\n${r.grade.wrongFigures.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''}${
       r.grade?.blendedSeasons.length ? `Blended seasons:\n${r.grade.blendedSeasons.map((f) => `- ${f.claim}: ${f.why}`).join('\n')}\n\n` : ''
@@ -334,8 +400,8 @@ ${r.run.perf.map((l) => `    ${l}`).join('\n') || '    (no perf lines)'}
 </details>
 `,
   )
-  .join('\n')}`;
-  return { markdown, json: { runs, repeats, paraphrases } };
+  .join('\n')}${deps.usage ? `\n${deps.usage(runs)}\n` : ''}`;
+  return { markdown, json: { runs, repeats, paraphrases, ...(deps.stoppedEarly ? { stoppedEarly: deps.stoppedEarly } : {}) } };
 }
 
 // --- Research and commitments ----------------------------------------------------------------

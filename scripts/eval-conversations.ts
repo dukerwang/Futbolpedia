@@ -10,6 +10,7 @@
  * turns have no recorded reply is chained from this run's live answers instead.
  */
 import type { ChatMessage } from '../types';
+import { isSpendLimit, usageLine, type Usage } from './eval-guard';
 
 export interface ConversationTurn {
   user: string;
@@ -109,6 +110,8 @@ export interface TurnRun {
   error?: string;
   totalMs: number;
   perf: string[];
+  /** What the turn cost, counted from the model's usage metadata. */
+  usage?: Usage;
 }
 
 export interface ConductCheck {
@@ -125,22 +128,28 @@ export interface TurnResult {
   skipped?: string;
   checks: ConductCheck[] | null;
   graderRaw: string;
+  /** The checks the answer is to be read against, kept when it wasn't graded. */
+  checkList?: string[];
 }
 
 export interface ConversationResult {
   id: string;
   title: string;
   skipped?: string;
+  /** Why the case stopped before its last tested turn: a 429 or spending-cap error came back. */
+  stoppedEarly?: string;
   turns: TurnResult[];
 }
 
 export interface RunDeps {
   /** One live turn through the pipeline. `conversationId` is new for each tested turn. */
   ask: (message: string, history: ChatMessage[], options: { conversationId: string }) => Promise<TurnRun>;
-  /** One grader call (no search): the prompt in, its raw text out. */
-  grade: (prompt: string) => Promise<string>;
+  /** One grader call (no search): the prompt in, its raw text out. Left out (no `--grade`), the turns run and their answers are saved, ungraded. */
+  grade?: (prompt: string) => Promise<string>;
   /** The live feed data for the case's subjects, for the grader. */
   facts?: (subjects: ConversationCase['subjects']) => Promise<string>;
+  /** Why the run has to stop once a 429 or spending-cap error has come back; null while it can go on. */
+  stopReason?: () => string | null;
   /** Run only these turns (0-based); every tested turn by default. */
   only?: number[];
 }
@@ -155,9 +164,15 @@ export async function runConversation(c: ConversationCase, deps: RunDeps): Promi
   const tested = testedTurns(c).filter((i) => !deps.only || deps.only.includes(i));
   const last = Math.max(-1, ...tested);
   const live = new Map<number, string>();
-  const facts = deps.facts ? await deps.facts(c.subjects).catch(() => '') : '';
+  const facts = deps.facts && deps.grade ? await deps.facts(c.subjects).catch(() => '') : '';
   const turns: TurnResult[] = [];
+  let stoppedEarly: string | undefined;
   for (let i = 0; i <= last; i++) {
+    const before = deps.stopReason?.();
+    if (before) {
+      stoppedEarly = before;
+      break;
+    }
     const isTested = tested.includes(i);
     const needed = !c.turns[i].recorded && i < last;
     if (!isTested && !needed) continue;
@@ -168,15 +183,38 @@ export async function runConversation(c: ConversationCase, deps: RunDeps): Promi
     }
     const run = await deps.ask(c.turns[i].user, history, { conversationId: `eval-${c.id}-t${i}` });
     if (run.answer) live.set(i, run.answer);
+    const hit = isSpendLimit(run.error) ? run.error : deps.stopReason?.();
+    if (hit) {
+      stoppedEarly = hit;
+      if (isTested && run.answer) turns.push({ turn: i, user: c.turns[i].user, run, checks: null, graderRaw: '', checkList: checksFor(c.turns[i]) });
+      break;
+    }
     if (!isTested) continue;
-    if (!run.answer) {
-      turns.push({ turn: i, user: c.turns[i].user, run, checks: null, graderRaw: '' });
+    if (!run.answer || !deps.grade) {
+      turns.push({ turn: i, user: c.turns[i].user, run, checks: null, graderRaw: '', ...(deps.grade ? {} : { checkList: checksFor(c.turns[i]) }) });
       continue;
     }
     const raw = await deps.grade(conductPrompt(c, i, history, run.answer, facts)).catch((e) => `grader failed: ${e?.message ?? e}`);
     turns.push({ turn: i, user: c.turns[i].user, run, checks: parseConductGrade(raw, checksFor(c.turns[i])), graderRaw: raw });
   }
-  return { id: c.id, title: c.title, turns };
+  return { id: c.id, title: c.title, ...(stoppedEarly ? { stoppedEarly } : {}), turns };
+}
+
+/**
+ * How many turns a run of these cases makes live (the tested ones, and the untested ones before the
+ * last tested turn that have no recorded reply), how many are tested, and how many cases need a Gaffa
+ * club. What `--dry-run` prices; it mirrors `runConversation`'s choice of turns.
+ */
+export function conversationTurnCounts(cases: ConversationCase[]): { live: number; tested: number; needGaffa: number } {
+  let live = 0;
+  let tested = 0;
+  for (const c of cases) {
+    const t = testedTurns(c);
+    const last = Math.max(-1, ...t);
+    for (let i = 0; i <= last; i++) if (t.includes(i) || (!c.turns[i].recorded && i < last)) live++;
+    tested += t.length;
+  }
+  return { live, tested, needGaffa: cases.filter((c) => c.gaffaClub).length };
 }
 
 /** The checks a tested turn is graded on: its own, then the universal ones. */
@@ -223,17 +261,22 @@ export function parseConductGrade(raw: string, expected: string[]): ConductCheck
 }
 
 /** The report section for the conversations. */
-export function conversationReport(results: ConversationResult[], meta: { today: string; label: string; model: string }): string {
+export function conversationReport(results: ConversationResult[], meta: { today: string; label: string; model: string; graded?: boolean; usage?: string }): string {
   const graded = results.flatMap((r) => r.turns.filter((t) => t.checks));
   const all = graded.flatMap((t) => t.checks!);
+  const wasGraded = meta.graded !== false;
+  const stopped = results.filter((r) => r.stoppedEarly);
   const lines = [
     `# Conversation eval: ${meta.today}, ${meta.label}`,
     '',
-    `Ran ${results.length} conversations, ${graded.length} turns graded by ${meta.model} for conduct (no search; the live feed data for each case's subjects). Turns before a tested one are replayed from their recorded replies, or chained from this run's answers where none was recorded.`,
+    wasGraded
+      ? `Ran ${results.length} conversations, ${graded.length} turns graded by ${meta.model} for conduct (no search; the live feed data for each case's subjects). Turns before a tested one are replayed from their recorded replies, or chained from this run's answers where none was recorded.`
+      : `Ran ${results.length} conversations. Nothing was graded (no \`--grade\`): each tested turn's answer is saved below for a person to read against its checks. Turns before a tested one are replayed from their recorded replies, or chained from this run's answers where none was recorded.`,
     '',
-    `- Checks met: ${all.filter((k) => k.met).length} of ${all.length}`,
-    `- Turns meeting every check: ${graded.filter((t) => t.checks!.every((k) => k.met)).length} of ${graded.length}`,
-    '',
+    ...(stopped.length ? [`**Run stopped early:** ${stopped.map((r) => `${r.id}: ${r.stoppedEarly}`).join('; ').replace(/\|/g, '/')}. Nothing was retried; the sections below cover what finished.`, ''] : []),
+    ...(wasGraded
+      ? [`- Checks met: ${all.filter((k) => k.met).length} of ${all.length}`, `- Turns meeting every check: ${graded.filter((t) => t.checks!.every((k) => k.met)).length} of ${graded.length}`, '']
+      : []),
     '| Case | Turn | Checks met | Total (s) | Failed checks |',
     '| --- | --- | --- | --- | --- |',
     ...results.flatMap((r) =>
@@ -242,7 +285,7 @@ export function conversationReport(results: ConversationResult[], meta: { today:
         : r.turns.map((t) =>
             t.checks
               ? `| ${r.id} | ${t.turn + 1} | ${t.checks.filter((k) => k.met).length} / ${t.checks.length} | ${((t.run?.totalMs ?? 0) / 1000).toFixed(1)} | ${t.checks.filter((k) => !k.met).map((k) => k.check.replace(/\|/g, '/')).join('; ') || '–'} |`
-              : `| ${r.id} | ${t.turn + 1} | – | – | ${t.skipped ?? (t.run?.error ? `Pipeline failed: ${t.run.error}` : 'Grading failed')} |`,
+              : `| ${r.id} | ${t.turn + 1} | – | ${((t.run?.totalMs ?? 0) / 1000).toFixed(1)} | ${t.skipped ?? (t.run?.error ? `Pipeline failed: ${t.run.error}` : wasGraded ? 'Grading failed' : 'Not graded')} |`,
           ),
     ),
     '',
@@ -253,6 +296,8 @@ export function conversationReport(results: ConversationResult[], meta: { today:
         `### Turn ${t.turn + 1}: ${t.user}`,
         '',
         ...(t.checks ?? []).map((k) => `- ${k.met ? 'Met' : 'Not met'}: ${k.check} ${k.why}`),
+        ...(!t.checks && t.checkList ? ['Checks to read it against:', '', ...t.checkList.map((k) => `- ${k}`)] : []),
+        ...(t.run?.usage ? ['', `Usage: ${usageLine(t.run.usage)}.`] : []),
         '',
         '<details><summary>Answer</summary>',
         '',
@@ -262,6 +307,7 @@ export function conversationReport(results: ConversationResult[], meta: { today:
         '',
       ]),
     ]),
+    ...(meta.usage ? [meta.usage, ''] : []),
   ];
   return lines.join('\n');
 }

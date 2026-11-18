@@ -6,20 +6,30 @@
  * streaming chat turn with the full tool set. Every request is sent to the model named on the
  * command line; sampling is sent only if that model honors it, as in production.
  *
- * About 6 to 8 calls and 4 to 6 grounded searches per run (well under $0.20 on either model). It
- * spends the project's Gemini budget, which the live app shares, so it isn't part of `npm test`.
+ * About 6 to 8 calls and 4 to 6 grounded searches per run (well under $0.20 on either model). Like
+ * every eval, it spends the eval project's budget, never the live app's: it reads
+ * EVAL_GEMINI_API_KEY and refuses to start without it (`--use-app-key` is the explicit, warned way
+ * to spend the app's), sends one `maxOutputTokens: 1` request first to see whether the cap is
+ * reached, stops at the first 429, and prints the real tokens and searches it used
+ * (scripts/eval-guard.ts). It bypasses the eval search cache, since the point is to time the model.
+ * It isn't part of `npm test`.
  *
  * Usage:
- *   GEMINI_API_KEY=... npx tsx scripts/smoke-model.ts gemini-4-hydrogen [--out report.json]
+ *   EVAL_GEMINI_API_KEY=... npx tsx scripts/smoke-model.ts gemini-4-hydrogen [--out report.json]
  */
 import { writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { finishRun, loadEnvFiles, parseEvalFlags, startEvalSessionOrExit } from './eval-guard';
 
 const model = process.argv[2];
-if (!model) throw new Error('Usage: npx tsx scripts/smoke-model.ts <model-id> [--out file.json]');
+if (!model || model.startsWith('--')) throw new Error('Usage: npx tsx scripts/smoke-model.ts <model-id> [--out file.json] [--use-app-key]');
 const outIndex = process.argv.indexOf('--out');
 const outFile = outIndex > 0 ? process.argv[outIndex + 1] : null;
-process.env.API_KEY ??= process.env.GEMINI_API_KEY;
-if (!process.env.API_KEY) throw new Error('Set GEMINI_API_KEY');
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+// Reads EVAL_GEMINI_API_KEY from .env.local or the environment, like the eval runner.
+loadEnvFiles(root);
+const session = await startEvalSessionOrExit({ ...parseEvalFlags(process.argv.slice(2)), freshSearch: true }, root, { model });
 
 // The app's live and history routes, answered in-process so the chat tools' relative fetches work.
 const realFetch = globalThis.fetch;
@@ -198,6 +208,7 @@ await run('chat_stream', 0.55, async () => {
   return { tools, chunks, text };
 });
 
-const report = { model, at: new Date().toISOString(), calls, outputs };
+const report = { model, at: new Date().toISOString(), calls, outputs, usage: { total: session.tally.total(), byPhase: session.tally.byPhase() } };
 console.table(calls);
 if (outFile) writeFileSync(outFile, JSON.stringify(report, null, 2));
+finishRun(session);
