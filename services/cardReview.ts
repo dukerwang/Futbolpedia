@@ -337,7 +337,7 @@ export interface DisagreementPair {
   days: number;
   firstDay: string;
   lastDay: string;
-  via: Record<DisagreementPath, number>;
+  via: DisagreementHit['via'];
   /** Current cards in the pair, which can be re-rated only once their window ends. */
   waiting: { player: string; windowEnds: string }[];
 }
@@ -565,8 +565,10 @@ Each position's Overall distribution against the whole pool (a reported figure, 
 ${list(s.coherence.positions.map((p) => `${p.position}: ${p.cards} cards, mean ${p.mean}, median ${p.median} (pool mean ${p.poolMean}, median ${p.poolMedian})`))}`;
 }
 
-const describeVia = (via: Record<DisagreementPath, number>): string =>
-  [via.debate ? `${via.debate} from debate answers` : '', via.ranking ? `${via.ranking} from drawn rankings` : ''].filter(Boolean).join(', ') || 'no path recorded';
+const describeVia = (via: Partial<Record<DisagreementPath, number>>): string =>
+  [via.debate ? `${via.debate} from debate answers` : '', via.ranking ? `${via.ranking} from drawn rankings` : '', via.deep ? `${via.deep} from deep answers` : '']
+    .filter(Boolean)
+    .join(', ') || 'no path recorded';
 
 // ---------------------------------------------------------------------------------------------
 // What the planner may name

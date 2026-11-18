@@ -87,6 +87,14 @@ const stage = args.includes('--stage');
  * `--deep`, `--stage` and `--set historical`.
  */
 const principlesFlag = args.includes('--principles');
+/**
+ * `--no-prior`: on `--set historical --deep`, every question starts with an empty settled-verdict
+ * store, to measure the loop's own consistency. Without it, run 2 and each paraphrase read what an
+ * earlier answer settled, as a later user would.
+ */
+const noPrior = args.includes('--no-prior');
+/** `--set historical --deep` sends questions about the past through the loop (`DEEP_PAST`, overridden per turn). */
+const pastDeep = deep && argValue('--set') === 'historical';
 if (deep && stage) {
   console.error('Pass --deep or --stage, not both.');
   process.exit(1);
@@ -168,6 +176,38 @@ const pastSeasons = createHistoryFootball({
 // Snapshot builds, which the app runs on its server; here they stay in memory for the run.
 const { createSnapshotServer, inProcessGet } = await import('../services/snapshotServer');
 const snapshots = createSnapshotServer({ get: inProcessGet({ live, history: pastSeasons }), db: null });
+// The run's settled verdicts: an in-memory store with the server's settler in front of it, so a
+// `--set historical --deep` run proposes and reads verdicts as the app will, and writes nothing shared.
+// The settle call is a real model call (about one for each new question a run settles).
+const { createVerdictSettler, memoryVerdictDb, nameFromSubject } = await import('../services/debateVerdicts');
+const evalVerdicts = memoryVerdictDb();
+let settlerJob: Promise<import('../services/debateVerdicts').VerdictSettler> | null = null;
+const evalSettler = () =>
+  (settlerJob ??= (async () => {
+    const { supabase } = await import('../services/dossierCache');
+    const { readCardRows, servedPool } = await import('../services/cardReview');
+    const { getCardKey } = await import('../services/dossierCards');
+    const { liveToolset } = await import('../services/researchTools');
+    const { subjectFromTitle } = await import('../services/eraSnapshots');
+    const tools = liveToolset([], inProcessGet({ live, history: pastSeasons }));
+    const pool = supabase ? await readCardRows(supabase).then((rows) => servedPool(rows, Date.now())).catch(() => []) : [];
+    const cards = new Map(pool.map((c) => [getCardKey(c), c] as [string, import('../types').PlayerProfile]));
+    return createVerdictSettler({
+      db: evalVerdicts,
+      enabled: true,
+      cards: async () => cards,
+      async record(subject, card) {
+        const outcome = subject.kind === 'club_season' ? await tools.clubSeason(nameFromSubject(subject), subject.period ?? '') : await tools.playerCareer(card?.basicInfo?.name ?? nameFromSubject(subject));
+        return outcome.result ? { label: subjectFromTitle(outcome.result.label, subject.kind === 'club_season' ? 'club_season' : 'player_window'), text: outcome.result.content } : null;
+      },
+      async eraBuiltAt(keys) {
+        if (!supabase || !keys.length) return new Map();
+        const { data } = await supabase.from('era_snapshots').select('snapshot_key, built_at').in('snapshot_key', keys);
+        return new Map((data ?? []).map((r: any) => [r.snapshot_key, r.built_at] as [string, string]));
+      },
+      log: () => {},
+    });
+  })());
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input);
@@ -189,6 +229,16 @@ globalThis.fetch = (async (input: any, init?: any) => {
     if (u.pathname === '/api/snapshots/club/research') return json({ research: await snapshots.clubResearch(q('club')) });
     if (u.pathname === '/api/snapshots/club') return json({ snapshot: await snapshots.club(q('club')) });
     if (u.pathname === '/api/snapshots/era') return json({ snapshot: await snapshots.era(q('kind') as 'club_season' | 'player_window', q('subject'), q('period')) });
+  }
+  // Settled verdicts, served in-process against the run's own in-memory store (never Supabase).
+  if (url === '/api/debates/settle' || url === '/api/debates/departure') {
+    const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+    if (url === '/api/debates/settle') {
+      const outcome = await (await evalSettler()).settle(body, 'eval');
+      return json({ status: outcome.status });
+    }
+    await (await evalSettler()).depart(body, 'eval');
+    return new Response(null, { status: 204 });
   }
   // API-Football's free plan can't read the current season; the app treats a refusal as no data.
   if (url.startsWith('/api/')) return json({ error: 'not available in the eval runner' }, 404);
@@ -234,6 +284,8 @@ interface Research {
   views: Record<string, number>;
   /** The gate feedback round's counts (`services/gateFeedback.ts`); absent when no round finished. */
   gateFeedback?: { flagged: number; fixed: number; dropped: number; removed: number };
+  /** Past mode only: the turn's commitment and what it met (`DeepStats.past`). */
+  past?: import('../services/deepTurn').PastStats;
 }
 
 /** The correction round's counts from the turn's perf lines (`gate feedback: flagged 3, fixed 2, dropped 1, removed 0`). */
@@ -274,7 +326,16 @@ function researchOf(
     ...(feedback ? { gateFeedback: feedback } : {}),
   };
   if (stats && path?.path !== 'stage') {
-    return { path: 'deep', lookups: lookupLines.length, searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length, rounds: stats.rounds, toolCalls: stats.toolCalls, stop: stats.stop, ...shown };
+    return {
+      path: 'deep',
+      lookups: lookupLines.length,
+      searches: lookupLines.filter((l) => l.startsWith('[Perf] lookup web_search')).length,
+      rounds: stats.rounds,
+      toolCalls: stats.toolCalls,
+      stop: stats.stop,
+      ...shown,
+      ...(stats.past ? { past: stats.past } : {}),
+    };
   }
   const researched = perf.some((l) => l.includes(' brief ('));
   const rounds = (researched ? 1 : 0) + perf.filter((l) => l.includes('research round 2')).length + perf.filter((l) => l.includes('writer tool calls')).length;
@@ -312,7 +373,8 @@ async function ask(
       },
       ...(deep ? { deep: true } : stage ? { fast: true } : {}),
       ...(principlesFlag ? { principles: true } : {}),
-      deepDeps: { onStats: (s) => (stats = s) },
+      ...(pastDeep ? { deepPast: true } : {}),
+      deepDeps: { onStats: (s) => (stats = s), ...(pastDeep ? { verdicts: noPrior ? memoryVerdictDb() : evalVerdicts } : {}) },
     });
     const answer = typeof reply === 'string' ? reply : `[Rated a card instead of answering: ${reply.basicInfo.name}]`;
     return { answer, firstTokenMs, totalMs: Date.now() - start, perf, research: researchOf(perf, stats, attached, path) };

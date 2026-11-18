@@ -44,6 +44,7 @@ import { buildLockedDossiersBlock, buildSavedDossiersBlock } from '../services/d
 import { challengeInstructions, initiativeRules, stageInstructions } from '../services/conversationalScout';
 import { DEEP_DECLARATIONS, DEFAULT_DEEP_BUDGET, deepInstructions, deepModeRules, deepResearchRules } from '../services/deepTurn';
 import { readDebateBrief } from '../services/debateBrief';
+import { CARD_ANCHOR_NOTE, COMMIT_VERDICT_DECLARATION, PAST_RESEARCH_NOTE } from '../services/pastTurn';
 import { formatSituation } from '../services/situationSnapshot';
 import { formatBriefForWriter, type ResearchBrief } from '../services/researchAgent';
 import { formatNeedForWriter } from '../services/userNeed';
@@ -295,6 +296,9 @@ const principleParts = (): Record<string, string> => ({
   prepare: PREPARE_CLUB_DECLARATION_PRINCIPLES.description,
   offer: OFFER_RATING_DECLARATION_PRINCIPLES.description,
   lookUp: LOOK_UP_DOSSIER_DECLARATION.description,
+  pastResearchNote: PAST_RESEARCH_NOTE,
+  cardAnchorNote: CARD_ANCHOR_NOTE,
+  commitVerdict: String(COMMIT_VERDICT_DECLARATION.description),
   showDossier: SHOW_DOSSIER_DECLARATION.description,
   ...Object.fromEntries(
     Object.values(REPLY_BLOCKS)

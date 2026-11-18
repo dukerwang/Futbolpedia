@@ -74,6 +74,8 @@ export interface HistoryGrade {
   /** The verdict in a few words, or the order for a ranking. */
   verdict: string;
   notes: string;
+  /** Whether the answer quotes a card's rating where the question doesn't turn on how good the players were. */
+  ratingsOutOfPlace: 'yes' | 'no' | 'not_applicable';
 }
 
 export const HISTORY_GRADE_INSTRUCTIONS = `You are grading a football analyst's answer about the past: past seasons, players' primes, eras, and all-time comparisons. Use Google Search to check every precise figure and dated fact against reliable sources (Wikipedia, club and competition records, contemporary reports).
@@ -86,6 +88,7 @@ export const HISTORY_GRADE_INSTRUCTIONS = `You are grading a football analyst's 
 - decisiveness: 1 to 5, where 5 commits to a clear verdict (or a clear order) and 1 sits on the fence.
 - verdict: the answer's verdict in a few words, or its order for a ranking, names only.
 - notes: one or two sentences on the answer's biggest strength and weakness.
+- ratingsOutOfPlace: Futbolpedia rates versions of players on cards (an Overall, a tier, attribute scores). "yes" when the answer quotes such a rating although the question turns on something else (output, influence, the biggest matches, a season's facts or how a side played), "no" when it quotes none there, "not_applicable" when the question is how good the players were.
 
 Reply with one JSON object with exactly these keys and nothing else.`;
 
@@ -103,6 +106,7 @@ export function parseHistoryGrade(raw: string): HistoryGrade | null {
       decisiveness: Number(g.decisiveness) || 0,
       verdict: String(g.verdict ?? ''),
       notes: String(g.notes ?? ''),
+      ratingsOutOfPlace: g.ratingsOutOfPlace === 'yes' || g.ratingsOutOfPlace === 'not_applicable' ? g.ratingsOutOfPlace : 'no',
     };
   } catch {
     return null;
@@ -125,12 +129,45 @@ export function parseAgreement(raw: string): { agreement: Agreement; why: string
 
 // --- The historical run -----------------------------------------------------------------------
 
+/** What a run looked up and committed to, when the runner reports it (`--deep` runs carry `past`). */
+export interface HistoryResearch {
+  path: 'stage' | 'deep';
+  fallback?: string;
+  lookups: number;
+  searches: number;
+  rounds: number;
+  views: Record<string, number>;
+  gateFeedback?: { flagged: number; fixed: number; dropped: number; removed: number };
+  past?: {
+    committed: boolean;
+    kind: string | null;
+    criterion: string | null;
+    verdict: string[];
+    cards: string | null;
+    settled: string;
+    departed: boolean;
+    departedSilently: boolean;
+    priors: { current: number; stale: number; contested: number };
+    rankingPriorFound: boolean | null;
+  };
+}
+
 interface AskResult {
   answer: string;
   error?: string;
   firstTokenMs: number | null;
   totalMs: number;
   perf: string[];
+  research?: HistoryResearch;
+}
+
+/** Two runs' committed verdicts compared in code: the same winner or order, or not; null when either didn't commit. */
+export function sameCommitment(a: HistoryResearch | undefined, b: HistoryResearch | undefined): 'same' | 'different' | null {
+  const x = a?.past;
+  const y = b?.past;
+  if (!x?.committed || !y?.committed || !x.verdict.length || !y.verdict.length) return null;
+  const norm = (v: string[]) => v.map((n) => n.toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z ]/g, '').trim().split(/\s+/).pop()).join('|');
+  return norm(x.verdict) === norm(y.verdict) ? 'same' : 'different';
 }
 
 export interface HistoricalRunDeps {
@@ -176,20 +213,20 @@ export async function runHistoricalSet(deps: HistoricalRunDeps): Promise<{ markd
 
   const agree = async (question: string, a: string, b: string) =>
     parseAgreement(await deps.grade(`${AGREEMENT_INSTRUCTIONS}\n\nQuestion: ${question}\n\nAnswer A:\n${a}\n\nAnswer B:\n${b}`, false).catch(() => ''));
-  const repeats: { n: number; agreement: Agreement | null; why: string }[] = [];
+  const repeats: Compared[] = [];
   for (const q of deps.questions) {
     const [a, b] = runs.filter((r) => r.q.n === q.n && r.run.answer);
     if (!a || !b) continue;
     const r = await agree(q.text, a.run.answer, b.run.answer);
-    repeats.push({ n: q.n, agreement: r?.agreement ?? null, why: r?.why ?? 'comparison failed' });
+    repeats.push({ n: q.n, agreement: r?.agreement ?? null, why: r?.why ?? 'comparison failed', committed: sameCommitment(a.run.research, b.run.research) });
   }
-  const paraphrases: { pair: [number, number]; agreement: Agreement | null; why: string }[] = [];
+  const paraphrases: PairCompared[] = [];
   for (const pair of deps.pairs) {
     const a = runs.find((r) => r.q.n === pair[0] && r.run.answer);
     const b = runs.find((r) => r.q.n === pair[1] && r.run.answer);
     if (!a || !b) continue;
     const r = await agree(`${a.q.text} / ${b.q.text}`, a.run.answer, b.run.answer);
-    paraphrases.push({ pair, agreement: r?.agreement ?? null, why: r?.why ?? 'comparison failed' });
+    paraphrases.push({ pair, agreement: r?.agreement ?? null, why: r?.why ?? 'comparison failed', committed: sameCommitment(a.run.research, b.run.research) });
   }
 
   return buildHistoricalReport(runs, repeats, paraphrases, deps);
@@ -202,8 +239,8 @@ export interface HistoricalRun {
   grade: HistoryGrade | null;
   figures?: FigureCheck | null;
 }
-type Compared = { n: number; agreement: Agreement | null; why: string };
-type PairCompared = { pair: [number, number]; agreement: Agreement | null; why: string };
+type Compared = { n: number; agreement: Agreement | null; why: string; committed?: 'same' | 'different' | null };
+type PairCompared = { pair: [number, number]; agreement: Agreement | null; why: string; committed?: 'same' | 'different' | null };
 
 /** Runs a saved report's answers through the figure check again, keeping its grades and comparisons. */
 export async function regradeFigures(
@@ -250,6 +287,8 @@ The grader is the same model that writes the answers, so it can share their blin
 - Same verdict when asked twice: ${count(repeats, 'same')} same, ${count(repeats, 'partly')} partly, ${count(repeats, 'different')} different, of ${repeats.length}
 - Same verdict across paraphrases: ${count(paraphrases, 'same')} same, ${count(paraphrases, 'partly')} partly, ${count(paraphrases, 'different')} different, of ${paraphrases.length}
 - Median first token: ${secs(median(runs.map((r) => r.run.firstTokenMs).filter((x): x is number => x !== null)))} s; median total: ${secs(median(runs.map((r) => r.run.totalMs)))} s
+- Ratings quoted out of place: ${graded.filter((r) => r.grade!.ratingsOutOfPlace === 'yes').length} of ${graded.filter((r) => r.grade!.ratingsOutOfPlace !== 'not_applicable').length} answers where the question doesn't turn on how good the players were
+${researchSummary(runs)}
 
 | # | Run | Figures | Wrong | Unconfirmed | Blended | Myths | Criteria | Counter-case | Decisive | First token (s) | Total (s) | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -261,13 +300,13 @@ ${runs
   )
   .join('\n')}
 
-## Consistency
+${researchTable(runs)}## Consistency
 
-| Compared | Agreement | Why |
-| --- | --- | --- |
+| Compared | Agreement | Committed verdicts | Why |
+| --- | --- | --- | --- |
 ${[
-  ...repeats.map((r) => `| Q${r.n}, run 1 and run 2 | ${r.agreement ?? '–'} | ${cell(r.why)} |`),
-  ...paraphrases.map((p) => `| Q${p.pair[0]} and Q${p.pair[1]} | ${p.agreement ?? '–'} | ${cell(p.why)} |`),
+  ...repeats.map((r) => `| Q${r.n}, run 1 and run 2 | ${r.agreement ?? '–'} | ${r.committed ?? '–'} | ${cell(r.why)} |`),
+  ...paraphrases.map((p) => `| Q${p.pair[0]} and Q${p.pair[1]} | ${p.agreement ?? '–'} | ${p.committed ?? '–'} | ${cell(p.why)} |`),
 ].join('\n')}
 
 ${runs
@@ -295,6 +334,52 @@ ${r.run.perf.map((l) => `    ${l}`).join('\n') || '    (no perf lines)'}
   )
   .join('\n')}`;
   return { markdown, json: { runs, repeats, paraphrases } };
+}
+
+// --- Research and commitments ----------------------------------------------------------------
+
+/** Summary lines for runs that report their research; empty when none do (the stage runner before `--deep`). */
+export function researchSummary(runs: HistoricalRun[]): string {
+  const withResearch = runs.filter((r) => r.run.research);
+  if (!withResearch.length) return '';
+  const deep = withResearch.filter((r) => r.run.research!.path === 'deep');
+  const past = deep.filter((r) => r.run.research!.past);
+  const judged = past.filter((r) => r.run.research!.past!.committed);
+  const cards = (v: string) => judged.filter((r) => r.run.research!.past!.cards === v).length;
+  const rankings = past.filter((r) => r.run.research!.past!.rankingPriorFound !== null);
+  return [
+    `- Path: ${deep.length} of ${withResearch.length} answers through the deep loop; ${withResearch.filter((r) => r.run.research!.fallback).length} fell back to the stage pipeline`,
+    past.length
+      ? `- Committed a verdict: ${judged.length} of ${past.length} deep answers; against the cards ${cards('against')} (departed with a reason ${judged.filter((r) => r.run.research!.past!.departed && !r.run.research!.past!.departedSilently).length}, silently ${judged.filter((r) => r.run.research!.past!.departedSilently).length}), agreed ${cards('agree')}, level ${cards('level')}, not card-settled ${cards('unsettled')}`
+      : '',
+    past.length ? `- Read a settled verdict: ${past.filter((r) => r.run.research!.past!.priors.current + r.run.research!.past!.priors.stale + r.run.research!.past!.priors.contested > 0).length} of ${past.length}` : '',
+    rankings.length ? `- Found a stored ranking for the question's field: ${rankings.filter((r) => r.run.research!.past!.rankingPriorFound).length} of ${rankings.length} ranking answers` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** A table of each run's research and commitment; empty when no run reports them. */
+export function researchTable(runs: HistoricalRun[]): string {
+  if (!runs.some((r) => r.run.research)) return '';
+  const row = (r: HistoricalRun) => {
+    const x = r.run.research;
+    if (!x) return `| ${r.q.n} | ${r.attempt} | – | – | – | – | – | – | – | – | – | – |`;
+    const p = x.past;
+    const views = Object.entries(x.views ?? {}).map(([k, n]) => `${n} ${k}`).join(', ') || '–';
+    const gate = x.gateFeedback ? `${x.gateFeedback.fixed}/${x.gateFeedback.dropped}/${x.gateFeedback.removed}` : '0/0/0';
+    const commit = p ? (p.committed ? `${p.kind}, ${p.criterion}: ${p.verdict.join(' > ')}` : 'no') : '–';
+    const cards = p ? `${p.cards ?? '–'}${p.departed ? (p.departedSilently ? ', departed silently' : ', departed') : ''}` : '–';
+    const prior = p ? `${p.settled}${p.priors.current + p.priors.stale + p.priors.contested ? ` (${p.priors.current} current, ${p.priors.stale} stale)` : ''}` : '–';
+    return `| ${r.q.n} | ${r.attempt} | ${x.fallback ? `deep, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${views} | ${gate} | ${commit.replace(/\|/g, '/')} | ${cards} | ${prior} | ${p?.rankingPriorFound === null || !p ? '–' : p.rankingPriorFound ? 'yes' : 'no'} |`;
+  };
+  return `## Research and commitments
+
+| # | Run | Path | Lookups | Searches | Rounds | Views | Gate fixed/dropped/removed | Committed | Cards | Settled verdict | Stored ranking found |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+${runs.map(row).join('\n')}
+
+`;
 }
 
 // --- Figure check -----------------------------------------------------------------------------

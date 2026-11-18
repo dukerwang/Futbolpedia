@@ -20,6 +20,31 @@ the figure check again without re-asking the questions. Reports go to
 The runner reads the shared dossier cards from Supabase, as the app does, and never writes to it,
 so answers see the same cards a user would.
 
+### Through the deep loop
+
+`--deep` with `--set historical` sends each question through the deep loop in past mode, whatever
+`DEEP_PAST` says. The run keeps its own in-memory settled-verdict store, with the server's settle
+call in front of it (a real model call for each new question a run settles), so run 2 and each
+paraphrase read what run 1 settled, as a later user would; `--no-prior` empties the store for every
+question to measure the loop's own consistency. The report adds a research table (path, lookups,
+searches, rounds, views, the correction round's counts, the committed verdict, how it stood against
+the cards and the settled verdict, and whether a ranking found its stored field), compares
+committed verdicts in code beside the grader's comparison, and counts answers that quoted a card's
+rating on a question that doesn't turn on how good the players were.
+
+The run that decides whether `DEEP_PAST` turns on, not yet run:
+
+```bash
+npm run eval:live -- --set historical --deep --only 1,3,5,6,13,14 --no-builds --label past-deep
+```
+
+Estimate: 12 answers at about three loop calls each (two rounds and the correction round, about
+55k input tokens together), at most one search each (about 5k) and four grader calls each (about
+15k), plus about three settle calls (about 25k) and eight comparison calls (about 30k): about 1.0M
+input tokens and 110 calls, and 50k output tokens plus up to about 0.2M of Hydrogen's thinking. A
+same-day stage control on the same six, `--stage --repeat 1`, adds about 0.4M input tokens and 40
+calls. The thresholds are in `docs/superpowers/specs/2026-11-18-past-questions-deep-design.md`.
+
 ## Questions
 
 Questions 13 and 14 are paraphrases of questions 1 and 5. A consistent pipeline gives each pair
