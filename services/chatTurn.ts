@@ -130,6 +130,13 @@ export const CHAT_MAX_ROUNDS = 10;
 export const CHAT_CONTEXT_WAIT_MS = 1_500;
 /** A round's text this long, with no tool call yet, starts streaming as the answer. */
 const STREAM_HOLD_CHARS = 200;
+/**
+ * Card reads (`look_up_dossier`) a turn may make. They read your dossiers and the shared cards, no
+ * model or search, so they cost no lookup; this ceiling only stops a loop that reads cards forever.
+ * A ranking reads one card per player, and before this a ten-name ranking spent a past turn's whole
+ * lookup budget on cards and never committed its order.
+ */
+export const MAX_CARD_READS = 15;
 /** Clubs whose stored snapshot comes free with the first round. */
 const MAX_CONTEXT_CLUBS = 3;
 
@@ -248,7 +255,18 @@ export interface ChatToolResponse {
 
 export interface ChatConversation {
   /** Sends the next user turn (the prompt, or a round's tool results). `tools: false` sends it with function calling off. */
-  send(message: string | ChatToolResponse[], options: { tools: boolean; onText?: (roundText: string) => void }): Promise<ChatRoundReply>;
+  send(
+    message: string | ChatToolResponse[],
+    options: {
+      tools: boolean;
+      /**
+       * With `tools`, the only functions the model may call this round; it may still write instead.
+       * Off, any declared function.
+       */
+      only?: string[];
+      onText?: (roundText: string) => void;
+    },
+  ): Promise<ChatRoundReply>;
 }
 
 export interface ChatModel {
@@ -267,7 +285,7 @@ export const liveChatModel: ChatModel = {
     };
     const chat = getAi().chats.create({ model: resolved.model, config, history });
     return {
-      async send(message, { tools, onText }) {
+      async send(message, { tools, only, onText }) {
         const parts =
           typeof message === 'string'
             ? [{ text: message }]
@@ -275,7 +293,12 @@ export const liveChatModel: ChatModel = {
         // Declarations stay so the history's calls still read; function calling is what turns off.
         const stream = await chat.sendMessageStream({
           message: parts,
-          ...(tools ? {} : { config: { ...config, toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.NONE } } } }),
+          ...(!tools
+            ? { config: { ...config, toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.NONE } } } }
+            : only?.length
+              ? // The model may call one of these, or write: never any other function.
+                { config: { ...config, toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.VALIDATED, allowedFunctionNames: only } } } }
+              : {}),
         });
         let text = '';
         let finishReason: string | undefined;
@@ -388,8 +411,11 @@ export { PAST_MODE };
 /** Tools that draw something in the reply. They are free, and a round that only calls them keeps its text. */
 const PRESENTATION = new Set(['show_pitch', 'show_table', 'show_comparison', 'show_ranking', 'show_dossier']);
 
-/** Tools that cost a lookup. The local greps (dossiers, the Gaffa market) and the presentation tools are free. */
-const COUNTED = new Set([...Object.keys(RESEARCH_FUNCTIONS), 'look_up_dossier']);
+/**
+ * Tools that cost a lookup: the ones that fetch a feed, a record or a search. The local greps
+ * (dossiers, the Gaffa market), card reads (up to `MAX_CARD_READS`) and the presentation tools are free.
+ */
+const COUNTED = new Set(Object.keys(RESEARCH_FUNCTIONS));
 
 /** The progress line for one tool call. */
 export function stageLabel(call: ChatFunctionCall): string {
@@ -492,6 +518,9 @@ const RESEARCH_OVER =
 
 /** The same note under the chat principle set, which already says when to name what couldn't be verified. */
 const RESEARCH_OVER_PRINCIPLES = 'Research is over: the budget is spent. Write the whole answer now from what you have.';
+
+/** The note on a past turn whose budget ran out before it committed: it may still commit, then writes. */
+const COMMIT_STILL_OPEN = 'If the answer is a judgment you have not yet recorded with commit_verdict, call it now, before you write; no other tool is available.';
 
 /**
  * The loop's part of the system instruction under the chat principle set: the budget and how to
@@ -944,6 +973,9 @@ ${
     const jobs = round.map(async (call): Promise<{ response: Record<string, unknown>; filed?: { call: ResearchCall; outcome: ToolOutcome } }> => {
       const args = call.args ?? {};
       const research = RESEARCH_FUNCTIONS[call.name];
+      if (call.name === 'look_up_dossier' && ++cardReads > MAX_CARD_READS) {
+        return { response: { status: 'not_run', reason: `The card-read ceiling (${MAX_CARD_READS} a turn) is reached.` } };
+      }
       if (COUNTED.has(call.name)) {
         if (calls >= budget.calls) return { response: { status: 'not_run', reason: 'The lookup budget is spent.' } };
         if (call.name === 'web_search' && searches >= budget.searches) return { response: { status: 'not_run', reason: 'The web search budget is spent.' } };
@@ -1032,7 +1064,24 @@ ${
     publish(answerSoFar(roundText));
   };
 
+  /**
+   * The round after a past turn's budget ran out, allowing only `commit_verdict`. A model that
+   * refuses that mode gets the round again with function calling off, as before, so the turn never
+   * fails over it.
+   */
+  const sendCommitOnly = async (results: ChatToolResponse[]): Promise<ChatRoundReply> => {
+    try {
+      // Its text may be a preamble to the commit, so it streams only once it is clearly the answer.
+      return await conversation.send(results, { tools: true, only: ['commit_verdict'], onText: (t) => onText(t, false) });
+    } catch (e: any) {
+      console.warn(`[chat] commit-only round refused, writing without it: ${String(e?.message ?? e).slice(0, 120)}`);
+      perf?.('commit-only round refused');
+      return conversation.send(results, { tools: false, onText: (t) => onText(t, true) });
+    }
+  };
+
   const toolCalls: string[] = [];
+  let cardReads = 0;
   let stop: TurnStats['stop'] = 'answered';
   let viewRounds = 0;
   let commitRounds = 0;
@@ -1063,13 +1112,33 @@ ${
         ? pastUncheckedFor({ cards: lockedCards, clubs: routeClubs, season: route.requestedSeason ?? null }, ledger)
         : uncheckedFor({ clubs: spottedClubs, players: route.targetPlayers }, ledger, stored),
     );
+    // A past turn whose budget ran out before it committed may still commit: that round allows
+    // `commit_verdict` and nothing else, and the model may write instead.
+    const commitOpen = Boolean(over && past && commitTool && !commitTool.state.commitment && commitTool.state.calls < MAX_COMMITS);
     const results = responses.map((r) => ({
       name: r.name,
-      response: { ...r.response, ...(over ? { researchOver: researchOver } : {}), unchecked: uncheckedLine, budget: budgetLine },
+      response: {
+        ...r.response,
+        ...(over ? { researchOver: commitOpen ? `${researchOver} ${COMMIT_STILL_OPEN}` : researchOver } : {}),
+        unchecked: uncheckedLine,
+        budget: budgetLine,
+      },
     }));
     for (const r of results) toolResults.push(JSON.stringify(r.response));
     params.onStageChange?.(over ? 'Writing scouting analysis...' : 'Weighing what came back...');
-    reply = await conversation.send(results, { tools: !over, onText: (t) => onText(t, Boolean(over)) });
+    if (commitOpen) {
+      reply = await sendCommitOnly(results);
+      const commits = reply.calls.filter((c) => c.name === 'commit_verdict');
+      if (commits.length) {
+        toolCalls.push(...commits.map((c) => c.name));
+        perf?.(`chat round ${rounds}: commit_verdict (after the budget)`);
+        const committed = (await runRound(commits)).map((r) => ({ name: r.name, response: { ...r.response, researchOver, budget: formatBudget(left()) } }));
+        for (const r of committed) toolResults.push(JSON.stringify(r.response));
+        reply = await conversation.send(committed, { tools: false, onText: (t) => onText(t, true) });
+      }
+    } else {
+      reply = await conversation.send(results, { tools: !over, onText: (t) => onText(t, Boolean(over)) });
+    }
     if (over) {
       stop = over;
       break;
