@@ -1,11 +1,27 @@
 # Chat principles
 
-Date: 2026-11-18. Status: design only. No production code, no live calls.
+Date: 2026-11-18. Status: approved, with the decisions below. No live calls.
 
 Builds on the card-mentions edits (branch `card-mentions-judgment`). When this spec was written
 those edits were still uncommitted in the main checkout (`/Users/dukewang/Futbolpedia`), so this
 design reads them from that diff and assumes they land on `main` first. The
 [Coordination](#coordination) section lists what to reconcile if they change before then.
+
+## Decisions
+
+Taken on 2026-11-18, after review. Where they differ from the design below, they win.
+
+- **A switch.** Steps 2 to 6 ship behind an exported constant, `PRINCIPLES_PROMPT` in
+  `prompts/chatPrompt.ts`, shipping `false`, as `DEEP_BY_DEFAULT` shipped. Off, every path builds
+  exactly today's instructions, and a test pins them byte for byte. On, the principle set is used.
+  After the live check passes, a later PR flips it and deletes the old builders. Until then the
+  duplication guard runs on the new set only and lists the old builders as exceptions.
+- **Chat never rates.** The new set drops the "rated fresh" lines from `<locked_dossiers>` and
+  `<saved_dossiers>` (Conflict 3).
+- **The router mode retires after the flip.** Step 7 waits for the PR that flips the switch, not for
+  step 2's release.
+- **One copy per tool.** Tool descriptions are the one copy of when to use a tool (step 5), on the
+  new path only while the switch exists.
 
 ## Problem
 
@@ -294,10 +310,11 @@ it, never how to write:
 `targetClubs` and `targetPlayers`, and the debate brief chooses its own `kind` after reading the
 question. So the choice is between a hint and nothing, and the design is nothing.
 
-1. Stop passing it to the writer (both paths). The writer chooses structure from the question.
-2. Keep it in the route for one release as a label: the turn's `[Perf]` summary and the eval report
-   print it, so the change can be read against it.
-3. Then remove it from the classifier schema, the regex fast paths and `geminiService.ts`'s
+1. With `PRINCIPLES_PROMPT` on, stop passing it to the writer (both paths). The writer chooses
+   structure from the question.
+2. Keep it in the route as a label while the switch exists: the turn's `[Perf]` summary and the
+   eval report print it, so the live check can be read against it.
+3. After the flip, remove it from the classifier schema, the regex fast paths and `geminiService.ts`'s
    reroutes, which saves the classifier's output tokens and one way for the router to be wrong.
    `ratingCommand.ts` sets `dossier` for ratings and loses the field with it.
 
@@ -365,8 +382,9 @@ the field, which deletes them from the fixtures.
 ## Migration
 
 Each step is one commit, runs `npm run typecheck` and `npm test` with the model faked, and makes no
-live call. Steps 2 to 6 change what the model reads, so they ship as one PR with one live check;
-step 1 and step 7 are PRs of their own.
+live call. Step 1 is a PR of its own. Steps 2 to 6 ship as one PR behind `PRINCIPLES_PROMPT`, off,
+so they change nothing live; the live check runs before the PR that flips it. Step 7 follows the
+flip.
 
 1. **Split the core.** Export Core I to V as section constants and recompose
    `SCOUT_CORE_INSTRUCTION` from them. Add the hash test for it and for
@@ -388,14 +406,14 @@ step 1 and step 7 are PRs of their own.
    `test-deep-turn.ts`.
 6. **Deep research rules.** Rename and trim `deepModeRules`; trim `RESEARCH_OVER`. The overlap check
    now runs with no exceptions.
-7. **Retire the router mode.** After a week of `[Perf]` labels from step 2's release, remove
+7. **Retire the router mode.** After the PR that flips `PRINCIPLES_PROMPT` merges, remove
    `analyticalMode` from the classifier schema, the fast paths and the fixtures.
 
 After a PR merges, the change reaches the live app only after the AI Studio pull and publish.
 
 ## Live check
 
-One run after steps 2 to 6, before that PR merges, on the five question types the change is most
+One run with `PRINCIPLES_PROMPT` on, before the PR that flips it, on the five question types the change is most
 likely to move. It reuses existing reports as the baseline instead of paying for a fresh "before"
 run: `docs/superpowers/evals/reports/2026-11-16-2010-deep-full.md` for the live questions and the
 2026-11-01 historical runs. Those baselines predate the card-mentions and conduct changes, so read
