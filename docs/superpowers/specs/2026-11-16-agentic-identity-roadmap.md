@@ -79,11 +79,44 @@ How an answer is shown becomes the model's call on the default path.
   sessions in the writer files at once. Touches `services/aiClient.ts`, new components. Suited to
   Sonnet.
 
+### 2. Card-order rule and disagreement channel
+
+Built. A ranking or verdict that claims who was better follows the cards' order, and the writer
+has one way to say where it disagrees with a card instead of arguing against it in prose.
+
+### 3. Consistency eval
+
+Built. Repeat runs of the same questions in deep mode measure how far answers drift from run to
+run, and paraphrase pairs measure whether the same question in other words gets the same verdict.
+It is the measure for items 4 and 5.
+
+### 4. Chat principles, behind a switch
+
+One principle set for the chat writer on every path, in a byte-stable system instruction, with
+per-turn data only in the turn's instructions; router-chosen answer templates end
+(`docs/superpowers/specs/2026-11-18-chat-principles-design.md`). Ships behind
+`PRINCIPLES_PROMPT`, off, with today's instructions pinned byte for byte while it is off. Step 1
+(the core split into section constants, no prompt change) ships first on its own.
+
+### 5. Past questions in the deep loop, behind a switch
+
+Questions about the past take the deep loop with the history tools, behind `DEEP_PAST`, off. Its
+prompt work is written in the principle style after item 4's PR merges, and adds no past-specific
+writing rules.
+
 ## Order
 
 1. Watch the live `[deep]` and `[deep] fallback` log lines after publish; a warm deep run
    (`--deep --warm`) when budget allows, to measure turns that reuse stored snapshots.
 2. Presentation as tools.
+3. Card-order rule and disagreement channel (built).
+4. Consistency eval (built).
+5. Chat principles behind `PRINCIPLES_PROMPT`, off.
+6. Past questions in the deep loop behind `DEEP_PAST`, off.
+7. One live check covering both switches, after the Gemini cap resets on December 1 or with the
+   user's yes on its token estimate. It gates both flips: `PRINCIPLES_PROMPT` and `DEEP_PAST` are
+   turned on only in PRs that follow a passing check. The `analyticalMode` retirement follows the
+   principles flip.
 
 After each piece: merge, then pull and publish in Google AI Studio for it to reach the live app.
 
