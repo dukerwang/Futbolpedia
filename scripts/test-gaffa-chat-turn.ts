@@ -221,7 +221,9 @@ await test('a club attached in the app no longer keeps a turn off the loop; a tr
   assert.equal(takesChatLoop({ route: r, historical: false }), true);
   assert.equal(takesChatLoop({ route: r, historical: false, gaffaTrade: true }), false);
   assert.equal(takesChatLoop({ route: r, historical: false, noRating: true }), false);
-  assert.equal(takesChatLoop({ route: r, historical: true }), false);
+  // A thread about the past takes the loop in past mode (without the club), and never with past mode off.
+  assert.equal(takesChatLoop({ route: r, historical: true }), true);
+  assert.equal(takesChatLoop({ route: r, historical: true, pastMode: false }), false);
 });
 
 await test('a trade is read from the message, or from a trade thread a short follow-up continues', () => {

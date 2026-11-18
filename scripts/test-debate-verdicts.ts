@@ -362,9 +362,10 @@ await test('off, or with no table, nothing is called or stored', async () => {
   assert.deepEqual(await readSettledVerdicts({ cards: [high, low] }, { db: noTable.db }), []);
 });
 
-await test('with PAST_MODE off, the public settle route makes no model call', async () => {
-  assert.equal(PAST_MODE, false, 'nothing proposes a verdict until migration step 3 turns past questions on');
-  const enabled = settleEnabled({ pastMode: PAST_MODE, setting: undefined, calls: DEBATE_SETTLE_DEFAULT_CALLS });
+await test('with past mode off, the public settle route makes no model call', async () => {
+  assert.equal(PAST_MODE, true, 'past mode is on in the app; this checks the off switch still spends nothing');
+  assert.equal(settleEnabled({ pastMode: PAST_MODE, setting: undefined, calls: DEBATE_SETTLE_DEFAULT_CALLS }), true);
+  const enabled = settleEnabled({ pastMode: false, setting: undefined, calls: DEBATE_SETTLE_DEFAULT_CALLS });
   assert.equal(enabled, false);
   const h = harness({ enabled });
   for (const body of [h2h('output', [HIGH, LOW], LOW), h2h('peak_level', [HIGH, LOW], HIGH), h2h('mixed', [LEVEL_A, LEVEL_B], LEVEL_A)]) {

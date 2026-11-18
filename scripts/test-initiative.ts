@@ -601,9 +601,9 @@ await test('a present-day turn runs the loop and never reaches the writer', asyn
   assert.equal(attachedIn(t.attached).goDeeper, undefined);
 });
 
-await test('a past thread takes the stage pipeline, with the three initiative tools', async () => {
+await test('with past mode off, a past thread takes the stage pipeline, with the three initiative tools', async () => {
   const loop = fakeLoop([says('The loop answer.')]);
-  const t = await loopTurn(loop, { stage: false }, { message: 'How good was prime Florian Wirtz?', route: pastRoute });
+  const t = await loopTurn(loop, { stage: false, pastMode: false }, { message: 'How good was prime Florian Wirtz?', route: pastRoute });
   assert.equal(loop.opened.length, 0);
   assert.equal(t.writer.length > 0, true);
   assert.ok(OTHER_THREE.every((n) => t.writer[0].tools.includes(n)));

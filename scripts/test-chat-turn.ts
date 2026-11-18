@@ -546,7 +546,9 @@ await test('every question about the present takes the chat loop, and the stage 
   assert.equal(takesChatLoop({ stage: true, route: r('tactical_chat'), historical: false }), false);
   assert.equal(takesChatLoop({ stage: false, route: r('tactical_chat'), historical: false }), true);
   // The turns the rule rejects.
-  assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: true }), false);
+  // A question about the past takes the loop while past mode is on (`PAST_MODE`), and never with it off.
+  assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: true }), true);
+  assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: true, pastMode: false }), false);
   assert.equal(takesChatLoop({ route: r('single_dossier'), historical: false }), false);
   assert.equal(takesChatLoop({ route: r('challenge_or_revise'), historical: false }), false);
   assert.equal(takesChatLoop({ route: r('archive_inventory'), historical: false }), false);
@@ -572,11 +574,9 @@ await test('a question about the present goes through the chat loop', async () =
   assert.equal(reply, 'An answer about the present.');
 });
 
-await test('a historical question and a rating take their own paths', async () => {
-  for (const message of ['Prime Zidane or prime Kaká?', 'rate Main Nine']) {
-    const { opened } = await sendLoop(message);
-    assert.equal(opened, false, message);
-  }
+await test('a rating takes its own path, and a historical question takes the loop in past mode', async () => {
+  assert.equal((await sendLoop('rate Main Nine')).opened, false);
+  assert.equal((await sendLoop('Prime Zidane or prime Kaká?')).opened, true);
 });
 
 await test('the composer has no speed toggle: the chat loop is the one path', async () => {
@@ -687,12 +687,12 @@ async function sendTurn(message: string, options: Record<string, unknown>, scrip
 const PRESENT = "Break down Southside's build-up shape this season";
 const LOOP_ANSWER = [answer('An answer about the present.')];
 
-await test('a present-day message runs the loop, and a past thread takes the stage pipeline', async () => {
+await test('a present-day message runs the loop, and with past mode off a past thread takes the stage pipeline', async () => {
   const present = await sendTurn(PRESENT, {}, LOOP_ANSWER);
   assert.ok(present.opened);
   assert.equal(present.reply, 'An answer about the present.');
   assert.deepEqual(present.paths, [{ path: 'chat' }]);
-  const past = await sendTurn('Prime Zidane or prime Kaká?', {}, LOOP_ANSWER);
+  const past = await sendTurn('Prime Zidane or prime Kaká?', { pastMode: false }, LOOP_ANSWER);
   assert.equal(past.opened, false);
   assert.deepEqual(past.paths, [{ path: 'stage' }]);
   // A rating takes the rating pipeline, which has no chat path to report.

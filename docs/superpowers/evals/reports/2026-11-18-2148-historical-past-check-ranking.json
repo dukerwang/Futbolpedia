@@ -1,0 +1,94 @@
+{
+  "runs": [
+    {
+      "q": {
+        "n": 14,
+        "text": "Who were the five best centre-backs of the 2000s, in order?",
+        "tests": "Paraphrase of 5"
+      },
+      "attempt": 1,
+      "run": {
+        "answer": "The 2000s was a golden decade for central defending, split into two distinct tiers at the very top: two Italian Generational Icons at **96**, followed by three World-Class Elite defenders level at **94**.\n\n### 1. Alessandro Nesta (Prime: 1999–02 | 96)\nNesta takes the top spot as the most complete centre-back of the decade. While he and Fabio Cannavaro sit level at 96, Nesta's edge is his composure and quality on the ball under pressure. Where Cannavaro was a pure front-foot destroyer who preferred simple, immediate layoffs, Nesta could step out of congested areas with calm posture, baiting pressing forwards before stroking crisp passes into midfield. Defensively, his timing in 1v1 isolations—hooking the ball cleanly away with surgical slide tackles without conceding fouls—was unmatched, underpinning Lazio's 1999–2000 Scudetto run (33 league goals conceded) before he carried that same authority into AC Milan's backline.\n\n### 2. Fabio Cannavaro (Prime: 2004–06 | 96)\nCannavaro's 2004–06 peak is as high as any defender in the decade reached, culminating in his 2006 World Cup captaincy and Ballon d'Or. He compensated for modest height with an explosive vertical leap and low-center balance, reading passing triggers early to jump into lanes before target men could pin him. His front-foot interceptions turned defense into instant transition—most famously in the 2006 semi-final against Germany. He sits just behind Nesta because he offered less vertical progression in possession and was slightly more uncomfortable when dragged into wide touchline footraces.\n\n### 3. John Terry (Prime: 2004–06 | 94)\nLeading the 94-rated trio, Terry was the ultimate penalty-box commander. He lacked the recovery pace of Ferdinand or the agility of Cannavaro, which meant Chelsea's structure had to protect him from isolated 50-meter footraces, but inside and around the 18-yard box he was virtually impenetrable. His vocal marshaling of the backline, fearless shot-blocking, and two-footed diagonal distribution anchored Chelsea's record-shattering 15-goal concession in the 2004–05 Premier League, while his timing on attacking set pieces made him a genuine match-winner.\n\n### 4. Rio Ferdinand (Prime: 2006–09 | 94)\nFerdinand's game was the exact inverse of a traditional English stopper. Rather than seeking physical wars of attrition, he relied on long-striding recovery speed and cerebral anticipation to sweep behind Manchester United's backline and nip across receivers upright, without going to ground. That calm, foul-free ball-winning—paired with his ability to step into midfield and break lines on the floor—formed the foundation of United's 2008 Champions League triumph and their extended clean-sheet streak in 2008–09.\n\n### 5. Carles Puyol (Prime: 2008–10 | 94)\nPuyol rounds out the top five as the fiercest 1v1 stopper of the group. Playing in an expansive Barcelona high line and Spain's possession-heavy setup, he constantly had to cover vast spaces vacated by attacking full-backs, using low-gravity leverage and ferocious timing to shut down counter-attacks. His distribution was intentionally conservative—circulating safely to his pivots rather than forcing vertical passes—but his aerial authority, leadership, and knack for big-game interventions anchored Barcelona's 2009 sextuple and a Spain defense that conceded just two goals at the 2010 World Cup.\n\n*(Note: Paolo Maldini remained an elite centre-back into the 2000s, though his 96-rated prime zenith came in the mid-1990s as a left-back and hybrid defender.)*",
+        "firstTokenMs": 13581,
+        "totalMs": 22271,
+        "perf": [
+          "[Perf] turn router (tactical_chat): +3ms (total 3ms)",
+          "[Perf] superseded primes: +0ms (total 3ms)",
+          "[Perf] chat context (0 stored snapshots, 0 coaches): +3ms (total 6ms)",
+          "[Perf] past context (0 records, 0 era snapshots, 0 settled verdicts): +0ms (total 6ms)",
+          "[Perf] chat round 1: look_up_dossier, look_up_dossier, look_up_dossier, look_up_dossier, look_up_dossier, look_up_dossier: +3590ms (total 3597ms)",
+          "[Perf] chat round 1: commit_verdict, show_ranking: +7328ms (total 10924ms)",
+          "[Perf] first answer token: +2642ms (total 13566ms)",
+          "[Perf] gate feedback: flagged 1, fixed 1, dropped 0, removed 0: +8702ms (total 22268ms)",
+          "[Perf] chat turn: 1 rounds, 1 lookups (0 searches), stop answered, tools look_up_dossier, look_up_dossier, look_up_dossier, look_up_dossier, look_up_dossier, look_up_dossier, commit_verdict, show_ranking, gate feedback flagged 1, fixed 1, dropped 0, removed 0: +3ms (total 22271ms)",
+          "[Perf] chat turn: +0ms (total 22271ms)"
+        ],
+        "research": {
+          "path": "chat",
+          "lookups": 0,
+          "searches": 0,
+          "rounds": 1,
+          "toolCalls": [
+            "look_up_dossier",
+            "look_up_dossier",
+            "look_up_dossier",
+            "look_up_dossier",
+            "look_up_dossier",
+            "look_up_dossier",
+            "commit_verdict",
+            "show_ranking"
+          ],
+          "stop": "answered",
+          "views": {
+            "ranking": 1
+          },
+          "gateFeedback": {
+            "flagged": 1,
+            "fixed": 1,
+            "dropped": 0,
+            "removed": 0
+          },
+          "past": {
+            "historical": true,
+            "committed": true,
+            "kind": "ranking",
+            "criterion": "peak_level",
+            "verdict": [
+              "Alessandro Nesta (1999-02)",
+              "Fabio Cannavaro (2004-06)",
+              "John Terry (2004-06)",
+              "Rio Ferdinand (2006-09)",
+              "Carles Puyol (2008-10)"
+            ],
+            "cards": "level",
+            "settled": "none",
+            "departed": false,
+            "departedSilently": false,
+            "priors": {
+              "current": 0,
+              "stale": 0,
+              "contested": 0
+            },
+            "rankingPriorFound": false
+          },
+          "settles": [
+            "stored"
+          ]
+        },
+        "usage": {
+          "calls": 5,
+          "inputTokens": 61750,
+          "outputTokens": 1721,
+          "thinkingTokens": 1999,
+          "cachedTokens": 31857,
+          "searches": 0,
+          "cacheHits": 0
+        }
+      },
+      "grade": null,
+      "figures": null
+    }
+  ],
+  "repeats": [],
+  "paraphrases": []
+}
