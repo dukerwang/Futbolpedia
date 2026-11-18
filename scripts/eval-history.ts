@@ -63,6 +63,16 @@ export function installReadOnlySupabase(): void {
   };
 }
 
+/**
+ * Whether the app's card store has a client: false when an app module that loads
+ * `services/dossierCache.ts` was imported before `installReadOnlySupabase`, which leaves the whole
+ * run without shared cards, era snapshots or settled verdicts.
+ */
+export async function sharedCardsLoaded(): Promise<boolean> {
+  const { supabase } = await import('../services/dossierCache');
+  return Boolean(supabase);
+}
+
 // --- Grading ----------------------------------------------------------------------------------
 
 export interface HistoryGrade {

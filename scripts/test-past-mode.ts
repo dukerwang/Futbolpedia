@@ -618,5 +618,63 @@ await test('the historical report compares committed verdicts in code and lists 
   assert.equal(parseHistoryGrade('{"criteria":4}')?.ratingsOutOfPlace, 'no');
 });
 
+// --- Cards in play, end to end ----------------------------------------------------------------
+
+await test('a past head-to-head has its cards in play, and a commitment naming their windows agrees with them', async () => {
+  const h = pastDeps({ eras: null });
+  const fake = fakeModel([
+    callsReply(call('commit_verdict', { kind: 'head_to_head', criterion: 'peak_level', sides: ['Aldo Stopper (prime, 2003-06)', 'Bruno Marker (prime, 2004-07)'], verdict: 'Aldo Stopper (prime, 2003-06)' })),
+    answer('Stopper, at his best.'),
+  ]);
+  await quietly(() => runChatTurn(params('Who was better at his best, Stopper or Marker?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: fake.model }));
+  assert.match(String(fake.sent[0].message), /<cards_in_play>[\s\S]*1\. Aldo Stopper's prime \(2003-06\) card, 93[\s\S]*2\. Bruno Marker's prime \(2004-07\) card, 90/);
+  const r = responsesOf(fake.sent[1])[0].response;
+  assert.equal(r.cards, 'agree');
+  assert.equal(h.stats().past?.cards, 'agree');
+  assert.deepEqual(h.net.settled, [{ kind: 'head_to_head', criterion: 'peak_level', subjects: [`card:${getCardKey(HIGH)}`, `card:${getCardKey(LOW)}`], verdict: [`card:${getCardKey(HIGH)}`] }], 'the commitment is proposed under its card keys');
+});
+
+await test('a ranking committed without looking anyone up is still held to the cards: the sides it names are read through the card lookup', async () => {
+  const h = pastDeps({ eras: null });
+  const commit = (order: string[]) => call('commit_verdict', { kind: 'ranking', criterion: 'mixed', sides: [], order, scope: { position: 'Centre-Back', period: '2000s' } });
+  const fake = fakeModel([callsReply(commit(['Bruno Marker (2000–2007)', 'Aldo Stopper (2001–2008)'])), answer('An order.')]);
+  // No player is named in the question and none was looked up: the cards are only in your dossiers.
+  await quietly(() =>
+    runChatTurn(params('Who were the best centre-backs of the 2000s, in order?', [], { route: route({ intent: 'tactical_chat', analyticalMode: 'ranking_or_tierlist', targetPlayers: [] }), savedDossiers: [HIGH, LOW], historical: true, pastMode: true }), {
+      ...h.deps,
+      model: fake.model,
+    }),
+  );
+  const r = responsesOf(fake.sent[1])[0].response;
+  assert.equal(r.cards, 'against', 'the decade windows the model wrote still resolve to the prime cards');
+  assert.deepEqual(h.pairs, [{ higher: getCardKey(HIGH), lower: getCardKey(LOW), via: 'commit' }]);
+  assert.equal(h.stats().calls, 0, 'reading the cards costs no lookup');
+});
+
+// --- The eval's setup ---------------------------------------------------------------------------
+
+await test('the eval installs the read-only Supabase client before any app module loads, and a late install is caught', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { spawnSync } = await import('node:child_process');
+  const { dirname, join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const source = readFileSync(join(root, 'scripts/eval-live-questions.ts'), 'utf8');
+  const install = source.indexOf('history.installReadOnlySupabase()');
+  assert.ok(install > 0 && install < source.indexOf('startEvalSessionOrExit(flags'), 'installed before the session, which loads the model client');
+  // Only the dry run, which exits before anything is asked, imports a service module earlier.
+  const dryRunBlock = [source.indexOf('if (flags.dryRun) {'), source.indexOf('process.exit(0);', source.indexOf('if (flags.dryRun) {'))];
+  const early = [...source.matchAll(/await import\('\.\.\/services\//g)].map((m) => m.index!).filter((i) => i < install);
+  assert.ok(dryRunBlock[0] > 0 && early.every((i) => i > dryRunBlock[0] && i < dryRunBlock[1]), 'and before any service module outside the dry run');
+  // The card store reads the client once, when it loads: installed after the model client, it has none.
+  const loaded = (late: boolean) => {
+    const code = `(async () => { const h = await import(${JSON.stringify(join(root, 'scripts/eval-history.ts'))}); ${late ? `await import(${JSON.stringify(join(root, 'services/aiClient.ts'))});` : ''} h.installReadOnlySupabase(); process.stdout.write(String(await h.sharedCardsLoaded())); })();`;
+    const out = spawnSync('npx', ['tsx', '-e', code], { cwd: root, encoding: 'utf8', timeout: 90_000 });
+    return out.stdout.trim().split('\n').pop();
+  };
+  assert.equal(loaded(false), 'true');
+  assert.equal(loaded(true), 'false');
+});
+
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

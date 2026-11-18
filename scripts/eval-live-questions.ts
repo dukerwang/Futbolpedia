@@ -162,11 +162,21 @@ if (flags.dryRun) {
   process.exit(0);
 }
 
+// The read-only Supabase client goes in before any app module loads: `services/dossierCache.ts` reads
+// it once, when it is first imported, and the session below imports the app's model client, which
+// loads it. Installed after, the run had no shared cards, era snapshots or settled verdicts.
+const history = await import('./eval-history');
+if (set === 'historical' || sharedCards) {
+  history.installReadOnlySupabase();
+  // Loads the card store now, with the client in place; it fails if an app module got there first.
+  if (!(await history.sharedCardsLoaded())) {
+    console.error('The shared cards did not load: an app module was imported before the read-only Supabase client was installed. Nothing was asked.');
+    process.exit(1);
+  }
+}
+
 // Everything below makes model calls: the key, the cap check and the usage count come first (scripts/eval-guard.ts).
 const session: EvalSession = await startEvalSessionOrExit(flags, root);
-
-const history = await import('./eval-history');
-if (set === 'historical' || sharedCards) history.installReadOnlySupabase();
 
 interface Question {
   n: number;
