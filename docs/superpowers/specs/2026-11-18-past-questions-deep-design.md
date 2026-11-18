@@ -38,14 +38,14 @@ This design moves those turns into the deep loop. The brief's thinking becomes g
 reads, the cards' order becomes context it reads before it commits, disagreement becomes visible
 instead of silently corrected, and verdicts the cards don't settle get a server-written store.
 
-## Decisions
+## Summary
 
 | Area | Decision |
 | --- | --- |
-| Entry | Every prose turn about the past takes the loop, behind its own switch, `DEEP_PAST`. The stage pipeline stays as the fallback and the kill switch. |
+| Entry | Every prose turn about the past takes the loop, behind its own switch, `DEEP_PAST`. The stage pipeline stays as the fallback and the kill switch. A present-day deep turn comparing two or more carded versions (current form against a prime) gets the cards' order and `commit_verdict` too. |
 | First message | Cards in play with their order and peer placements, edition gaps, stored era snapshots for the cards' windows and the named season, and settled verdicts for the same versions. No brief. |
 | Model decides | Which records to read, the criteria, the counter-case, the verdict, and which figures matter. |
-| Card consistency | A free `commit_verdict` tool checks the verdict against the cards and the settled verdict before the model writes. The model may depart only by saying why in the reply; the departure is filed for card review through the channel the card-order session designs. |
+| Card consistency | A free `commit_verdict` tool checks the verdict against the cards and the settled verdict before the model writes. The model may depart only by saying why in the reply; a pair it put against the cards is reported for card review through `reportCardDisagreements` with path `deep`. |
 | Cross-session | A server-written `debate_verdicts` table keyed by the versions compared and the criterion, never by the user's words. The server checks a proposed verdict before storing it. |
 | Figures | The figures named in `commit_verdict` replace the brief's slots in the figure budget; the scoped gate and the correction round stay. |
 | Budget | A past budget inside the deep loop: 60 s, 8 lookups, 2 searches, 5 rounds. |
@@ -83,6 +83,13 @@ requested without waiting (`prewarmCareers`, the same calls `prefetchCareers` ma
 Gemini call (Wikipedia, cached on the server for a week), aren't put in the prompt, and make the
 model's own `player_career` calls return in milliseconds instead of about a second.
 
+A present-day turn that compares versions also gets the card anchor. When a deep turn that isn't
+about the past has two or more carded versions in play (current form set against a prime, say),
+its first message carries the `<cards_in_play>` block below and its tools include `commit_verdict`.
+The card rule is about versions, not about the thread's era, so both cards order the comparison the
+same way they would in a past thread. The rest of that turn stays a present-day turn: coaches, the
+present unchecked line and the present budget.
+
 ## The first message
 
 A past turn's first message is built by the same `runDeepTurn` with a `past` flag. What changes:
@@ -107,7 +114,7 @@ A past turn's first message is built by the same `runDeepTurn` with a `past` fla
   play, read within `SETTLED_PEEK_MS`, each with its kind, criterion, verdict or order, the
   criteria it was argued on, the counter-case, its date, and whether it's still current (the cards
   it was settled under are unchanged) or stale (a card was re-rated since, named with its old and
-  new Overall). For a ranking, the row for the scope the message names (position and period).
+  new Overall, or an era snapshot of one of its subjects was built after it was settled). For a ranking, the row for the scope the message names (position and period).
 - **No coaches.** Today's coaches aren't looked up for the first message: a past turn names past
   coaches only from its evidence. This also saves the grounded coach searches the present loop
   starts for every spotted club.
@@ -141,7 +148,8 @@ guidance, in descriptive prose with no player names, rating anchors or sample ph
 - On any other criterion, the cards are background: argue from the records.
 - A settled verdict is the scout's earlier answer to this question on these versions. Keep it
   unless the user's question or this turn's evidence gives a reason not to, and say the reason
-  when you depart.
+  when you depart. Don't say that an answer follows a settled verdict unless the user asks why, or
+  it matters to the answer; that follows the card-mention rule against narrating internals.
 - The past fact rules: `PAST_FACT_RULES`, with "as `<debate_brief>` lists it" replaced by "as you
   named it in `commit_verdict`".
 - `PAST_DEBATE_RULES`' writing rules: plain conversational prose, the answer early, no labelled
@@ -186,7 +194,8 @@ commit_verdict({
 ```
 
 `big_games` joins the criteria because users ask it and it is neither output nor influence. It's
-added to `DEBATE_CRITERIA` and to the ranking view's `RANKING_CRITERIA` in the same change.
+added to `DEBATE_CRITERIA` and to the ranking view's `RANKING_CRITERIA` in migration step 3. It
+isn't card-settled: a card rates level across a window, not the biggest matches in it.
 
 Code answers with what it found, in the tool result, and changes nothing:
 
@@ -201,25 +210,24 @@ Code answers with what it found, in the tool result, and changes nothing:
   call that still departs with no reason is recorded as a departure with no reason, and the
   turn's stats say so. Code never rewrites the reply.
 
-`commit_verdict` is offered on past turns only, at most twice a turn. It never ends the turn and
+`commit_verdict` is offered on past turns and on present-day deep turns with two or more carded
+versions in play, at most twice a turn. It never ends the turn and
 never counts against lookups or rounds, so committing in the same round as the last lookups costs
 nothing. Its arguments become the turn's structured verdict: the figure budget reads them, the
 settled-verdict store is proposed them, and the eval compares them across runs without a grader
 call.
 
-Whether to require the call is left open (see Open questions). The design measures it first:
-`DeepStats` gains `committed` and `departures`, and the eval reports how often a judgment was
-written without a commitment. Code doesn't force a round for it.
+The call is measured, not required (see Decisions): `DeepStats` gains `committed` and
+`departures`, and the eval reports how often a judgment was written without a commitment. Code
+doesn't force a round for it; code enforces facts and budgets, not judgment.
 
 ### Card-settled criteria
 
-Today the two places that hold an order to the cards disagree. `cardsSettle` in
-`debateConsistency.ts` says `peak_level` and `mixed`; `CARD_ORDERED_CRITERIA` in
-`services/replyBlocks/ranking.ts` adds `sustained_level`. A card rates the level a version held
-across a window of at most `MAX_PRIME_WINDOW_SEASONS` (3) seasons, which says nothing about how
-long a player stayed at a high level, so this design takes `peak_level` and `mixed` and has
-`ranking.ts` import `cardsSettle` instead of its own list. The card-order session owns those files,
-so the change lands there or after it.
+The card-order build (`docs/superpowers/specs/2026-11-18-card-order-disagreement-design.md`)
+settled this: `CARD_SETTLED_CRITERIA` in `debateConsistency.ts` is `peak_level` and `mixed`, and
+`cardsSettle` serves both the debate check and `show_ranking`. A card rates the level a version
+held across a window of at most three seasons, which says nothing about longevity, so
+`sustained_level` isn't card-settled. `commit_verdict`'s check uses `cardsSettle` too.
 
 ### Disagreement
 
@@ -230,11 +238,17 @@ When the model departs from the cards, three things happen, all visible:
 2. `show_ranking` still draws the cards' order for a card-settled criterion, since the drawn list
    is the shared record, and its tool result says what moved, as now. The prose can disagree with
    the drawn list only by saying so.
-3. The departure is filed as an event for card review: the card keys, the criterion, the model's
-   order and the cards', the reason, and the labels of the evidence entries it rests on. The
-   card-order session is designing the channel that carries that event to `cardReview.ts` and
-   decides what it does there. This design only defines the event and raises it; it doesn't
-   redesign the channel.
+3. Each pair of cards the commitment put the other way is reported through the card-order
+   build's channel: `reportCardDisagreements` with `via: 'deep'`, which posts to
+   `/api/cards/disagreements` from a browser and records into the scout tally on the server.
+   `DisagreementPath` and `readDisagreementReport` gain `'deep'`; nothing else in that channel
+   changes. The pairs come from `checkOrderAgainstCards`' swaps and `checkVerdictAgainstCards`'
+   pair, as on the debate check, whether the model then argues the cards' order or departs. As in
+   that channel, only card keys cross: the `departs` reason stays in the reply and the turn's
+   stats, never on the server.
+
+There is no second channel for card disagreements. `POST /api/debates/departure` (below) is only
+for contests of a stored settled verdict.
 
 A stored verdict never carries a departure from the cards: the server settles a card-settled
 criterion on the cards' order (below). So across sessions the cards win until card review changes
@@ -308,8 +322,12 @@ stored one is the first asker's, once checked.
   For a card-settled criterion a stale row is dropped (the cards are the prior). For any other
   criterion it is shown as stale, naming what changed, so the loop reconsiders; the next accepted
   proposal replaces it. Nothing scans the table when a card changes.
-- **Departures.** `POST /api/debates/departure` records that a turn departed from a row (key only,
-  no reason text). When `VERDICT_REOPEN_DEPARTURES` (3) distinct clients have departed, the row
+- **New era snapshots.** An era snapshot of one of a row's subjects (a player window or a club
+  season) built after the row was settled marks it stale, the same way a re-rated card does. The
+  check compares the snapshots' `built_at` with the row's `settled_at` when both are read; the row
+  stores nothing extra. The server's settle check treats such a row as replaceable.
+- **Departures.** `POST /api/debates/departure` records that a turn departed from a stored settled
+  verdict (key only, no reason text). It isn't used for disagreements with a card. When `VERDICT_REOPEN_DEPARTURES` (3) distinct clients have departed, the row
   turns `contested`: it's shown as contested, and the next accepted proposal replaces it. This
   mirrors `REVISION_CONSENSUS_USERS`.
 - **Version.** `DEBATE_VERDICT_VERSION` bumps reopen every row when the settle call or the key
@@ -333,9 +351,10 @@ gets. Here:
 - Spend is capped: `DEBATE_SETTLE_CALLS` a day (default 20), five settles an hour per client
   address, one build in flight per key, and `DEBATE_SETTLE=off`. Without the secret key, verdicts
   are kept in the server's memory only, as club snapshots are.
-- Departure counts use a salted hash of the client address per day. Without accounts this is the
-  weakest part: three addresses can reopen a row. Reopening never changes a verdict by itself, so
-  the worst case is one more settle call.
+- Departure counts use a salted hash of the client address per day, as the card-order channel's
+  sources do. Without accounts this is the weakest part: three addresses can reopen a row. That's
+  accepted for now (see Decisions): reopening never changes a verdict by itself and only opens a
+  checked, budgeted settle call. Accounts can replace it later.
 
 `liveDebateRecords` and the settled-brief path stay for the stage pipeline until the last
 migration step, which points the stage pipeline at the new store and retires them.
@@ -405,7 +424,8 @@ what a search costs and decides. The eval measures whether that's the right call
 - The historical report gains the live report's research columns (path, fallback, lookups,
   searches, rounds, views, gate fixed, dropped and removed) and four of its own: committed (yes or
   no), card agreement (agree, level, departed with reason, departed silently), prior used
-  (current, stale, none), and ratings out of place.
+  (current, stale, none), ratings out of place, and, for a ranking, whether the stored ranking
+  was found (code's scope parse against the scope the model committed).
 - Ratings out of place is a new grader field: whether the answer quotes a card's Overall or
   attribute on a question that doesn't turn on how good the players were. It measures the problem
   users reported.
@@ -462,22 +482,24 @@ The switch flips (`DEEP_PAST` to `true`) when the deep run shows:
 Each step lands as its own change, testable with the model, tools, stores and clock faked, and
 none spends a Gemini call.
 
-1. **One list of card-settled criteria, and `big_games`.** `ranking.ts` uses `cardsSettle`;
-   `big_games` joins `DEBATE_CRITERIA` and `RANKING_CRITERIA`. Tests: `test-reply-blocks.ts` (a
-   sustained-level ranking keeps the model's order), the existing debate consistency checks. Owned
-   by the card-order session's files, so it waits for or joins that work.
+1. **One list of card-settled criteria.** Done in the card-order build (`CARD_SETTLED_CRITERIA`,
+   `scripts/test-card-order.ts`). `big_games` moves to step 3.
 2. **`commit_verdict` and its check.** A pure `checkCommitment` in `debateConsistency.ts` (cards,
    settled verdict, departure) and the tool's handler. New `scripts/test-commit-verdict.ts`: agree,
    level, against with and without a reason, a card found mid-turn, the second-call rule.
 3. **Past mode in the loop, behind `DEEP_PAST = false`.** `takesDeepPath` with `pastDeep`; the
    past first message (cards' order, edition gaps, stored era snapshots, no coaches);
    `pastModeRules`; `DEEP_PAST_BUDGET`; the past `uncheckedFor`; `prewarmCareers`; no early
-   debate brief when the loop may take the turn; `past: true` and the scoped figure options; the
-   departure event raised (to a stub until the card-order channel exists). New
+   debate brief when the loop may take the turn; `past: true` and the scoped figure options;
+   `big_games` in `DEBATE_CRITERIA` and `RANKING_CRITERIA` (not card-settled); the cards' order
+   and `commit_verdict` on present-day deep turns with two or more carded versions; pairs reported
+   through `reportCardDisagreements` with `via: 'deep'`. New
    `scripts/test-deep-past.ts`: which turns take the loop with the switch on and off, the first
    message's blocks, the budget line, the figure slots from a commitment and the ceiling without
    one, a past coach left alone, a fallback to the debate path, a Gaffa-club conversation whose
-   user names the past. `test-deep-turn.ts` keeps passing with the switch off.
+   user names the past, a current-against-prime turn getting the cards' order, a pair reported
+   with path `deep`. `test-deep-turn.ts` keeps passing with the switch off, and
+   `test-card-order.ts` accepts the new path.
 4. **Settled verdicts.** The migration (`debate_verdicts`, public read, `keep_debate_verdicts`),
    `services/debateVerdicts.ts` (keys, fingerprints, staleness, the browser read), and on the
    server `POST /api/debates/settle` and `POST /api/debates/departure` with the settle call,
@@ -495,29 +517,27 @@ none spends a Gemini call.
    `DebateStore` go. `runDebateResearch`, `cardBrief` and `checkBriefAgainstCards` stay as the
    fallback.
 
-## Open questions
+## Decisions
 
-1. **Requiring the commitment.** If the eval shows judgments written without `commit_verdict`,
-   should code send one more message asking for it (a round, and a delay after the stream has
-   started), or is a lower commit rate acceptable since the cards' order is in context either way?
-2. **Mixed present and past comparisons.** A question setting a current player against another's
-   prime isn't `threadIsHistorical`, so it runs the present loop without the cards' order or
-   `commit_verdict`. Offering both on any deep turn with two or more carded versions would extend
-   the card anchor there.
-3. **Showing the prior.** Should a reply that follows a settled verdict say so ("the scout's view
-   since <date>")? It's honest about why answers match, but it may read as boilerplate.
-4. **Client identity for departures.** A hashed address is weak. If accounts arrive, departures
-   should count accounts.
-5. **New evidence without a re-rate.** An era snapshot built after a verdict was settled may bear
-   on it. The design reopens a row only for a card change, a departure count or a version bump;
-   reopening on new snapshots for the row's subjects would need the snapshot keys stored on the row.
-6. **Ranking scope parsing.** Code parses position and period from the message to find a ranking's
-   row before the loop runs. A parse that misses leaves the ranking with no prior; how often that
-   happens is unknown until the eval.
+Answers to the questions this design left open, decided on 2026-11-18.
+
+1. **Requiring the commitment.** Measure, don't force. Code enforces facts and budgets, not
+   judgment. The eval reports judgments written without `commit_verdict`, and that report decides
+   whether anything more is needed.
+2. **Current form against a prime.** These turns get the cards' order and `commit_verdict`. Both
+   versions have cards, and the card rule is about versions, not about the thread's era.
+3. **Following a settled verdict.** The reply doesn't announce it, unless the user asks why or it
+   matters to the answer, matching the card-mention rule against narrating internals.
+4. **Hashed client addresses.** Accepted for now. The departure counts only open a checked,
+   budgeted settle call. Accounts can replace them later.
+5. **A new era snapshot.** It marks verdicts settled before it existed as stale, as a re-rated card
+   does.
+6. **Stored ranking lookups that miss.** Measured in the eval.
 
 ## Not in scope
 
-- The card-to-card-review channel (the card-order session).
+- The card-to-card-review channel, beyond adding the `deep` path
+  (`docs/superpowers/specs/2026-11-18-card-order-disagreement-design.md`).
 - The wording of how a reply mentions a card (the card-mentions work in `prompts/chatPrompt.ts`).
 - Prompt consolidation across paths (the chat-principles session).
 - Changes to the era snapshot builds or the history routes.
