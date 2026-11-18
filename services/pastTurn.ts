@@ -28,7 +28,7 @@ import { getCardKey, isPrimeCard, parseRequestedSeason, toBasePlayerSlug } from 
 import { supabase } from './dossierCache';
 import { eraEntry, liveEraSnapshots, normalizePeriod, subjectFromTitle, type EraSnapshot, type EraSnapshotSource } from './eraSnapshots';
 import type { EvidenceLedger } from './evidenceLedger';
-import { executeCall, type ResearchToolset, type ToolOutcome } from './researchTools';
+import { executeCall, type ResearchCall, type ResearchToolset, type ToolOutcome } from './researchTools';
 import { PRINCIPLE_SOURCES, principleInstructions } from '../prompts/chatPrompt';
 import { CONTINUITY_REMINDER } from './chatContinuity';
 
@@ -47,8 +47,6 @@ import { CONTINUITY_REMINDER } from './chatContinuity';
 
 /** A past turn's budget: records return in about a second, and a search costs about ten. */
 export const DEEP_PAST_BUDGET = { ms: 60_000, calls: 8, searches: 2, rounds: 5 };
-/** Figures a past answer with no committed figures may quote; beyond it, sentences with figures go from the end. */
-export const PAST_FIGURE_MAX = 6;
 /** Figures a commitment may name. */
 export const MAX_COMMITTED_FIGURES = 4;
 /** `commit_verdict` calls a turn may make. */
@@ -57,6 +55,8 @@ export const MAX_COMMITS = 2;
 export const PAST_CONTEXT_WAIT_MS = 1_500;
 /** Era snapshots the first message reads: the cards' windows and one named season per club. */
 const MAX_ERA_READS = 4;
+/** Records the first message carries: the cards' players, other named players and a named season. */
+export const MAX_FIRST_RECORDS = 4;
 
 // ---------------------------------------------------------------------------------------------
 // The tool
@@ -341,6 +341,11 @@ export const comparesVersions = (cards: PlayerProfile[]): boolean => new Set(sta
 // Era snapshots and career records, before the first round
 
 export interface PastContext {
+  /**
+   * The career and season records fetched before the first round, found ones only. They cost no
+   * model call, and the first eval showed answers argued from style when the model skipped them.
+   */
+  records: { call: ResearchCall; outcome: ToolOutcome }[];
   snapshots: EraSnapshot[];
   /** When each era snapshot read was built, by key: for settled verdicts' staleness. */
   eraBuiltAt: Map<string, string>;
@@ -349,13 +354,14 @@ export interface PastContext {
 
 /**
  * Reads, without building, the era snapshots of the cards' windows and a named club season, and
- * the settled verdicts on the versions in play, waiting at most `waitMs`. Resolving a snapshot's
- * key runs the career or season record it covers, so the records the model is likely to ask for
- * are already on the server's cache (`prewarm`): they cost no model call and none is put in the
- * prompt.
+ * the settled verdicts on the versions in play, and fetches the career and season records those
+ * cover (and those of named players with no card), waiting at most `waitMs`. The records cost no
+ * model call; those back in time go into the first message as evidence.
  */
 export async function loadPastContext(args: {
   cards: PlayerProfile[];
+  /** Players the turn names who have no card in play: their career records are fetched too. */
+  players?: string[];
   clubs: string[];
   season: string | null;
   message: string;
@@ -371,19 +377,32 @@ export async function loadPastContext(args: {
     let timer: ReturnType<typeof setTimeout> | undefined;
     return Promise.race([p.catch(() => fallback), new Promise<T>((r) => (timer = setTimeout(() => r(fallback), wait)))]).finally(() => clearTimeout(timer));
   };
+  const fetched: { call: ResearchCall; outcome: Promise<ToolOutcome> }[] = [];
+  const fetch = (call: ResearchCall): Promise<ToolOutcome> => {
+    const outcome = executeCall(call, args.tools);
+    if (fetched.length < MAX_FIRST_RECORDS) fetched.push({ call, outcome });
+    return outcome;
+  };
   const requests: { kind: 'club_season' | 'player_window'; subject: string; period: string; facts: Promise<ToolOutcome> }[] = [];
   for (const c of args.cards.filter(isPrimeCard)) {
     const window = normalizePeriod(c.version?.seasonOrEra ?? '');
-    if (window) requests.push({ kind: 'player_window', subject: c.basicInfo.name, period: window, facts: executeCall({ tool: 'player_career', subject: c.basicInfo.name, stage: 'facts' }, args.tools) });
+    if (window) requests.push({ kind: 'player_window', subject: c.basicInfo.name, period: window, facts: fetch({ tool: 'player_career', subject: c.basicInfo.name, stage: 'facts' }) });
   }
   const season = args.season && /-\d{2}$/.test(args.season) ? args.season : null;
   if (season) {
     for (const club of args.clubs.slice(0, 2)) {
-      requests.push({ kind: 'club_season', subject: club, period: season, facts: executeCall({ tool: 'club_season', subject: club, season, stage: 'facts' }, args.tools) });
+      requests.push({ kind: 'club_season', subject: club, period: season, facts: fetch({ tool: 'club_season', subject: club, season, stage: 'facts' }) });
     }
   }
+  const carded = new Set(args.cards.map((c) => toBasePlayerSlug(c.basicInfo.name)));
+  for (const name of (args.players ?? []).filter((p) => !carded.has(toBasePlayerSlug(p)))) fetch({ tool: 'player_career', subject: name, stage: 'facts' });
   const reads = eras ? requests.slice(0, MAX_ERA_READS).map((r) => eras.stored(r).catch(() => null)) : [];
-  const snapshots = (await within(Promise.all(reads), [] as (EraSnapshot | null)[])).filter((s): s is EraSnapshot => Boolean(s));
+  const [snapshotsRead, outcomes] = await Promise.all([
+    within(Promise.all(reads), [] as (EraSnapshot | null)[]),
+    Promise.all(fetched.map((f) => within(f.outcome, null as ToolOutcome | null))),
+  ]);
+  const snapshots = snapshotsRead.filter((s): s is EraSnapshot => Boolean(s));
+  const records = fetched.flatMap((f, i) => (outcomes[i]?.result ? [{ call: f.call, outcome: outcomes[i]! }] : []));
   const eraBuiltAt = new Map(snapshots.map((s) => [s.key, s.builtAt] as [string, string]));
   const db = args.verdicts === undefined ? defaultVerdictDb() : args.verdicts;
   const settled = db
@@ -395,7 +414,7 @@ export async function loadPastContext(args: {
         [] as SettledVerdict[],
       )
     : [];
-  return { snapshots, eraBuiltAt, settled };
+  return { records, snapshots, eraBuiltAt, settled };
 }
 
 /** The browser's read of the settled-verdict table; nothing without a Supabase client. */
@@ -467,10 +486,16 @@ export function finishPastTurn(state: PastCommitState, standings: CardStanding[]
   if (state.settled === 'against' && state.settledKey) net.depart(state.settledKey);
 }
 
-/** The figure budget a past answer is held to: its committed figures, with room for each one's counterpart. */
-export const pastFigureBudget = (state: PastCommitState | null): { max: number; slots: string[] } => {
+/**
+ * The figure budget a past answer is held to: the figures its commitment named, with room for each
+ * one's counterpart. An answer that named none (a question asking for a season's numbers, or a
+ * judgment argued in words) has no budget: each figure is still held to the evidence by the scoped
+ * gate, but none is cut for being one too many. The first eval capped those answers at six and cut
+ * a season's numbers the question asked for.
+ */
+export const pastFigureBudget = (state: PastCommitState | null): { max: number; slots: string[] } | undefined => {
   const slots = state?.commitment?.figures ?? [];
-  return slots.length ? { max: Math.max(2, slots.length * 2 + 1), slots } : { max: PAST_FIGURE_MAX, slots: [] };
+  return slots.length ? { max: Math.max(2, slots.length * 2 + 1), slots } : undefined;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -491,7 +516,7 @@ This turn is about the past: past seasons, primes, eras or an all-time compariso
  */
 export const CARD_ANCHOR_NOTE = `## Judgments the cards speak to
 
-Before writing a judgment of who was better, an order, or how good a version or side was, call commit_verdict with it. Where the judgment is how good the versions were (their level at their best, or a mix of everything), the cards in <cards_in_play> have already rated them: their order is where you start, and holding a different one needs a reason from this turn's evidence, given in the answer. On any other measure the cards are background to the records. <settled_verdicts>, when present, holds the scout's earlier answers on these versions: keep one unless this turn's evidence or the question gives a reason not to, give the reason when you depart, and mention it only when the user asks why or it bears on the answer.`;
+Before writing a judgment of who was better, an order, or how good a version or side was, call commit_verdict with it. Where the judgment is how good the versions were (their level at their best, or a mix of everything), the cards in <cards_in_play> have already rated them: their order is where you start, and holding a different one needs a reason from this turn's evidence, given in the answer. Cards that are level don't decide between those versions; the criteria do. A ranking still puts each version ahead of the next on those criteria, and a head-to-head still names the side they favour, saying the cards have them level where that helps the reader. Leave two versions tied only when the criteria can't separate them either. On any other measure the cards are background to the records. <settled_verdicts>, when present, holds the scout's earlier answers on these versions: keep one unless this turn's evidence or the question gives a reason not to, give the reason when you depart, and mention it only when the user asks why or it bears on the answer.`;
 
 /** How a past answer is written, under the instructions from before the principle set. */
 export const PAST_LOOP_RULES =

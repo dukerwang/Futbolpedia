@@ -303,7 +303,7 @@ await test('a refused, malformed or failed call stores nothing', async () => {
 
 await test('every subject must resolve on the server: an unknown card, or a version no record knows', async () => {
   const unknownCard = 'card:nobody-here:prime:2006-06-30';
-  assert.equal((await harness().settler.settle(h2h('output', [HIGH, unknownCard], HIGH), 'a')).status, 'invalid');
+  assert.deepEqual(await harness().settler.settle(h2h('output', [HIGH, unknownCard], HIGH), 'a'), { status: 'invalid', calls: 0, unresolved: unknownCard }, 'the subject it could not resolve, for the server log and the eval');
   const noRecords = harness({ records: false });
   assert.equal((await noRecords.settler.settle(h2h('influence', [SEASON_A, SEASON_B], SEASON_A), 'a')).status, 'invalid');
   assert.equal(noRecords.prompts.length, 0);

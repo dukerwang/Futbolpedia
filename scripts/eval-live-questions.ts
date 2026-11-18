@@ -181,6 +181,11 @@ const snapshots = createSnapshotServer({ get: inProcessGet({ live, history: past
 // The settle call is a real model call (about one for each new question a run settles).
 const { createVerdictSettler, memoryVerdictDb, nameFromSubject } = await import('../services/debateVerdicts');
 const evalVerdicts = memoryVerdictDb();
+/** What the settle route answered, in order, and the settles still running: each question reports its own. */
+const settleLog: string[] = [];
+const pendingSettles: Promise<void>[] = [];
+/** How long a question waits for its settles before the next one starts: one check call. */
+const SETTLE_WAIT_MS = 30_000;
 let settlerJob: Promise<import('../services/debateVerdicts').VerdictSettler> | null = null;
 const evalSettler = () =>
   (settlerJob ??= (async () => {
@@ -234,7 +239,9 @@ globalThis.fetch = (async (input: any, init?: any) => {
   if (url === '/api/debates/settle' || url === '/api/debates/departure') {
     const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
     if (url === '/api/debates/settle') {
-      const outcome = await (await evalSettler()).settle(body, 'eval');
+      const job = evalSettler().then((s) => s.settle(body, 'eval'));
+      pendingSettles.push(job.then((o) => void settleLog.push(o.unresolved ? `${o.status} (${o.unresolved})` : o.status), () => void settleLog.push('failed')));
+      const outcome = await job;
       return json({ status: outcome.status });
     }
     await (await evalSettler()).depart(body, 'eval');
@@ -286,6 +293,8 @@ interface Research {
   gateFeedback?: { flagged: number; fixed: number; dropped: number; removed: number };
   /** Past mode only: the turn's commitment and what it met (`DeepStats.past`). */
   past?: import('../services/deepTurn').PastStats;
+  /** Past mode only: what the settle route answered for each proposal the turn made. */
+  settles?: string[];
 }
 
 /** The correction round's counts from the turn's perf lines (`gate feedback: flagged 3, fixed 2, dropped 1, removed 0`). */
@@ -377,7 +386,16 @@ async function ask(
       deepDeps: { onStats: (s) => (stats = s), ...(pastDeep ? { verdicts: noPrior ? memoryVerdictDb() : evalVerdicts } : {}) },
     });
     const answer = typeof reply === 'string' ? reply : `[Rated a card instead of answering: ${reply.basicInfo.name}]`;
-    return { answer, firstTokenMs, totalMs: Date.now() - start, perf, research: researchOf(perf, stats, attached, path) };
+    const totalMs = Date.now() - start;
+    const research = researchOf(perf, stats, attached, path);
+    // A proposal is sent after the answer; wait for the store's answer (outside the timing) so the
+    // next question reads what this one settled, and the report says what happened to it.
+    if (pastDeep) {
+      const from = settleLog.length;
+      await Promise.race([Promise.all(pendingSettles.splice(0)), new Promise((r) => setTimeout(r, SETTLE_WAIT_MS))]);
+      research.settles = settleLog.slice(from);
+    }
+    return { answer, firstTokenMs, totalMs, perf, research };
   } catch (e: any) {
     return { answer: '', error: String(e?.message ?? e), firstTokenMs, totalMs: Date.now() - start, perf, research: researchOf(perf, stats, attached, path) };
   } finally {

@@ -78,10 +78,13 @@ fallback answer and a loop answer start from the same prior.
 
 A turn that may take the loop starts no early debate brief. `startDebateBrief` runs before routing
 today and is a wasted call when the loop answers, the same reason a deep present-day turn starts no
-question search. In its place, once the turn is routed, the spotted players' career records are
-requested without waiting (`prewarmCareers`, the same calls `prefetchCareers` makes). They cost no
-Gemini call (Wikipedia, cached on the server for a week), aren't put in the prompt, and make the
-model's own `player_career` calls return in milliseconds instead of about a second.
+question search. In its place, once the turn is routed, the career records of the cards' players
+and of named players with no card, and a named club season's record, are fetched with the era
+snapshot reads (`loadPastContext`, at most four). They cost no Gemini call (Wikipedia, cached on the
+server for a week), and the ones back within the context wait go into the first message as
+evidence. The first design only warmed the cache and left them out of the prompt; in the first
+live run (2026-11-18) the model then often answered from style without reading them, and use of
+criteria fell to 3.7 of 5.
 
 A present-day turn that compares versions also gets the card anchor. When a deep turn that isn't
 about the past has two or more carded versions in play (current form set against a prime, say),
@@ -369,10 +372,10 @@ loop the model reads the records first, then chooses.
   budget's slots: `{ max: max(2, 2 × slots + 1), slots }`, as `figureBudget` computes today.
   `matchesSlot` is unchanged, so a figure counts as chosen only when its noun, competition and
   season fit a named one.
-- **No commitment.** A turn that wrote without committing (a fact question, a follow-up) gets
-  `PAST_FIGURE_MAX` (6) figures with no slots: beyond it, sentences with figures go from the end.
-  Six covers one season's tally and its context, which is what a fact question like the set's
-  question 6 needs.
+- **No named figures.** A turn whose commitment named no figures, or that didn't commit (a fact
+  question, a follow-up), has no budget: each figure is still held to the evidence by the scoped
+  gate. The first live run (2026-11-18) used a ceiling of six here, which cut a season's goals from
+  question 6, the question asking for them, so the ceiling was dropped.
 - **Scope checks stay.** `runDeepTurn` passes `{ scoped: true, budget }` to the figure gate on a
   past turn, so qualifier, season and career checks, honour counts and numbers written as words all
   apply as on the debate path.

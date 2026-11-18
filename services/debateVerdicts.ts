@@ -637,6 +637,8 @@ export interface SettleOutcome {
   status: SettleStatus;
   /** Model calls this request made. */
   calls: number;
+  /** For an `invalid` request whose subjects were well formed: the subject the server couldn't resolve. Never sent to a browser. */
+  unresolved?: string;
 }
 
 export interface VerdictSettlerDeps {
@@ -708,15 +710,15 @@ export function createVerdictSettler(deps: VerdictSettlerDeps): VerdictSettler {
     return true;
   };
 
-  const resolve = async (req: SettleRequest, cards: ReadonlyMap<string, PlayerProfile>): Promise<ResolvedSubject[] | null> => {
+  const resolve = async (req: SettleRequest, cards: ReadonlyMap<string, PlayerProfile>): Promise<ResolvedSubject[] | { unresolved: string }> => {
     const out: ResolvedSubject[] = [];
     for (const key of req.subjects) {
       const subject = parseSubjectKey(key)!;
       const card = subject.cardKey ? cards.get(subject.cardKey) ?? null : null;
-      if (subject.kind === 'card' && !card) return null;
+      if (subject.kind === 'card' && !card) return { unresolved: key };
       const record = await deps.record(subject, card).catch(() => null);
       // A version with no card must be one the records know.
-      if (!card && !record) return null;
+      if (!card && !record) return { unresolved: key };
       out.push({
         subject,
         card,
@@ -742,8 +744,12 @@ export function createVerdictSettler(deps: VerdictSettlerDeps): VerdictSettler {
       inFlight.add(key);
       try {
         const cards = await deps.cards();
-        const resolved = await resolve(req, cards);
-        if (!resolved) return { status: 'invalid', calls: 0 };
+        const resolution = await resolve(req, cards);
+        if (!Array.isArray(resolution)) {
+          log(`[verdicts] unresolved subject ${resolution.unresolved}: ${key}`);
+          return { status: 'invalid', calls: 0, unresolved: resolution.unresolved };
+        }
+        const resolved = resolution;
         const eraKeys = resolved.map((r) => eraKeyForSubject(r.subject, r.card)).filter((k): k is string => k !== null);
         const built = await deps.eraBuiltAt(eraKeys).catch(() => new Map<string, string>());
         const fingerprint = fingerprintOf(req.subjects, cards);

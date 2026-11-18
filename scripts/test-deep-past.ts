@@ -45,7 +45,6 @@ const { DEEP_PAST, runDeepTurn, takesDeepPath, DEFAULT_DEEP_BUDGET } = await imp
 const {
   CARD_ANCHOR_NOTE,
   COMMIT_VERDICT_DECLARATION,
-  PAST_FIGURE_MAX,
   PAST_LOOP_RULES,
   PAST_RESEARCH_NOTE,
   createCommitTool,
@@ -313,6 +312,7 @@ await test('a past turn reads the cards in order, their era snapshots and the se
   assert.match(prompt, /<cards_in_play>[\s\S]*1\. Aldo Stopper's prime \(2003-06\) card, 93[\s\S]*2\. Bruno Marker's prime \(2004-07\) card, 90[\s\S]*judged better than Carlo Sweeper[\s\S]*<\/cards_in_play>/);
   assert.match(prompt, /<settled_verdicts>\n- output: Bruno Marker \(prime, 2004-07\) over Aldo Stopper \(prime, 2003-06\) \(settled 2026-11-15, current\)\. Argued on: Goals from set pieces\. Against it: The other won more\.\n<\/settled_verdicts>/);
   assert.match(prompt, /<factual_foundation>[\s\S]*The best defender of his league in those seasons[\s\S]*<\/factual_foundation>/, 'the era snapshot is evidence');
+  assert.match(prompt, /<factual_foundation>[\s\S]*Aldo Stopper played 120 league matches[\s\S]*Bruno Marker played 120 league matches[\s\S]*<\/factual_foundation>/, 'the records fetched before the first round are in it');
   assert.ok(prompt.includes(PAST_LOOP_RULES), 'the past writing rules, under the old instruction set');
   assert.doesNotMatch(prompt, /<verified_managers>/);
   assert.deepEqual(h.managersAsked, [], 'no coach is looked up for the first message');
@@ -462,11 +462,32 @@ await test('a proposal keys club seasons through the records read this turn, and
   assert.ok(!('error' in single) && proposalFor(single, [], ledger, '') === null, 'a single verdict is not stored');
 });
 
-await test('the figure budget comes from the commitment, else the ceiling', () => {
-  assert.deepEqual(pastFigureBudget(null), { max: PAST_FIGURE_MAX, slots: [] });
+await test('the figure budget comes from the figures a commitment named, and there is none otherwise', () => {
+  assert.equal(pastFigureBudget(null), undefined);
+  const bare = createCommitTool({ standings: () => [], ledger: () => null, settled: [], message: '', report: () => {} });
+  bare.handle({ kind: 'head_to_head', criterion: 'output', sides: ['a', 'b'], verdict: 'a' });
+  assert.equal(pastFigureBudget(bare.state), undefined, 'a judgment that named no figures has no budget');
   const tool = createCommitTool({ standings: () => [], ledger: () => null, settled: [], message: '', report: () => {} });
   tool.handle({ kind: 'head_to_head', criterion: 'output', sides: ['a', 'b'], verdict: 'a', figures: ['league goals in the 2004-05 season', 'assists in all competitions across the window'] });
   assert.deepEqual(pastFigureBudget(tool.state), { max: 5, slots: ['league goals in the 2004-05 season', 'assists in all competitions across the window'] });
+});
+
+await test('a past answer to a question asking for numbers keeps every figure its records give, however many', async () => {
+  // Eight figures, all in the record: the ceiling of six the first eval used would cut the last two sentences.
+  const season = 'In 2004-05 Aldo Stopper scored 30 league goals, 5 Champions League goals, 3 FA Cup goals and 1 Community Shield goal. By type: 18 goals with his right foot, 9 goals with his left foot, 3 headed goals and 11 goals from outside the box; 9 league assists.';
+  const tools: ResearchToolset = { ...fakeTools(), playerCareer: async (name) => found('career_record', `${name} (footballer)`, season) };
+  const h = pastDeps({ eras: null, tools });
+  const reply = 'Aldo Stopper scored 30 league goals in 2004-05. He added 5 Champions League goals and 3 FA Cup goals. He scored 1 Community Shield goal. He scored 18 goals with his right foot and 9 goals with his left foot. He scored 3 headed goals. He scored 11 goals from outside the box. He made 9 league assists.';
+  const fake = fakeModel([answer(reply)]);
+  const out = await quietly(() =>
+    runDeepTurn(params('How many goals did Aldo Stopper score in 2004-05?', [HIGH], { route: route({ intent: 'tactical_chat', analyticalMode: 'player_qa', targetPlayers: ['Aldo Stopper'], requestedSeason: '2004-05' }), historical: true, deepPast: true }), {
+      ...h.deps,
+      model: fake.model,
+    }),
+  );
+  for (const figure of ['30 league goals', '5 Champions League goals', '3 FA Cup goals', '18 goals with his right foot', '3 headed goals', '11 goals from outside the box', '9 league assists']) {
+    assert.ok(out.includes(figure), figure);
+  }
 });
 
 await test('a past reply is held to its committed figures, by the scoped gate', async () => {
@@ -550,6 +571,15 @@ await test('with past mode off, the loop builds exactly what it built before, pa
 
 // --- Prompts ------------------------------------------------------------------------------------
 
+await test('the card note tells the loop that level cards leave the order to the criteria, not to a tie', () => {
+  assert.match(CARD_ANCHOR_NOTE, /Cards that are level don't decide between those versions; the criteria do/);
+  assert.match(CARD_ANCHOR_NOTE, /Leave two versions tied only when the criteria can't separate them either/);
+  const level = card('Elio Libero', 93, '1998-01');
+  const check = checkCommitment({ kind: 'ranking', criterion: 'mixed', sides: [], order: ['Aldo Stopper', 'Elio Libero'] }, [HIGH, level].map(toStanding));
+  assert.equal(check.cards, 'level');
+  assert.match(String(check.note), /commit to one/);
+});
+
 await test('the past notes and the tool description are descriptive: no players, clubs or quoted phrases', () => {
   for (const text of [PAST_RESEARCH_NOTE, CARD_ANCHOR_NOTE, PAST_LOOP_RULES, String(COMMIT_VERDICT_DECLARATION.description), PRINCIPLE_SOURCES.deepPast]) {
     assert.doesNotMatch(text, /["“”]/);
@@ -578,7 +608,10 @@ await test('the historical report compares committed verdicts in code and lists 
     { q, attempt: 2, run: { answer: 'b', firstTokenMs: 1, totalMs: 2, perf: [], research: past(['Bruno Marker'], { cards: 'against', departed: true }) }, grade: null },
   ] as any;
   const table = researchTable(runs);
-  assert.match(table, /\| 1 \| 1 \| deep \| 2 \| 0 \| 1 \| 1 ranking \| 0\/0\/0 \| head_to_head, peak_level: Aldo Stopper \| agree \| none \(1 current, 0 stale\) \| – \|/);
+  assert.match(table, /\| 1 \| 1 \| deep \| 2 \| 0 \| 1 \| 1 ranking \| 0\/0\/0 \| head_to_head, peak_level: Aldo Stopper \| agree \| none \(1 current, 0 stale\) \| – \| – \|/);
+  const stored = researchTable([{ q, attempt: 1, run: { answer: 'a', firstTokenMs: 1, totalMs: 2, perf: [], research: { ...past(['Aldo Stopper']), settles: ['invalid (club_season:x-fc:2003-04)'] } }, grade: null }] as any);
+  assert.match(stored, /\| invalid \(club_season:x-fc:2003-04\) \|$/m, 'what the store answered, with the subject it could not resolve');
+  assert.match(researchSummary([{ q, attempt: 1, run: { answer: 'a', firstTokenMs: 1, totalMs: 2, perf: [], research: { ...past(['A']), settles: ['stored', 'refused', 'stored'] } }, grade: null }] as any), /Settled-verdict store: 3 proposals; 2 stored, 1 refused/);
   assert.match(table, /against, departed/);
   assert.match(researchSummary(runs), /Committed a verdict: 2 of 2 deep answers; against the cards 1 \(departed with a reason 1, silently 0\)/);
   assert.equal(researchTable([{ q, attempt: 1, run: { answer: 'a', firstTokenMs: 1, totalMs: 2, perf: [] }, grade: null }] as any), '', 'a stage run reports no research table');
