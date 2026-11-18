@@ -307,7 +307,7 @@ export const GREP_GAFFA_MARKET_DECLARATION = {
 export const LOOK_UP_DOSSIER_DECLARATION = {
   name: 'look_up_dossier',
   description:
-    'Reads the published Futbolpedia dossier card for one player from the user’s dossiers and every shared card: Overall, Potential, all attributes, archetype, strengths and weaknesses. Call it before judging, ranking or describing a player who is not already in <locked_dossiers>, and answer from the card’s numbers. Returns found: false when nobody has rated him yet; then answer from grounding without inventing card numbers, and Futbolpedia offers the user a rating.',
+    'Reads the published Futbolpedia dossier card for one player from the user’s dossiers and every shared card: Overall, Potential, all attributes, archetype, strengths and weaknesses. Call it before judging, ranking or describing a player who is not already in <locked_dossiers>, and judge from everything on it, consistent with its numbers; quote numbers only where they help the reader, for the version under discussion. Returns found: false when nobody has rated him yet; then answer from grounding without inventing card numbers, and Futbolpedia offers the user a rating.',
   parameters: {
     type: Type.OBJECT,
     properties: {

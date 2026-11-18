@@ -589,6 +589,16 @@ await test('a brief is read defensively and its verdict held to the cards', () =
   assert.ok(text.includes('The best point for the other side'));
 });
 
+await test("the writer reads the cards' order only when the cards settle the question", () => {
+  const brief = readDebateBrief(rawBrief, { message: 'q' });
+  const settled = formatDebateBriefForWriter({ ...brief, criterion: 'mixed' }, [zidane, kaka]);
+  assert.ok(settled.includes("The stored cards' order"));
+  for (const criterion of ['influence', 'output', 'sustained_level', 'versatility'] as const) {
+    const text = formatDebateBriefForWriter({ ...brief, criterion }, [zidane, kaka]);
+    assert.ok(text.includes("The stored cards' order"), criterion);
+  }
+});
+
 const careerFacts: ToolOutcome = {
   status: 'found',
   result: { kind: 'career_record', label: 'Kaká', content: 'Milan 2006–07 Serie A 31 apps 8 goals', sources: ['w'] },
