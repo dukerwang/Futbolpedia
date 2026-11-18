@@ -41,7 +41,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
 const { CALIBRATION_EPOCH_MS } = await import('../services/dossierCache');
 const { getCardKey } = await import('../services/dossierCards');
 const { ReplyComposer } = await import('../services/replyBlocks');
-const { PAST_MODE, runChatTurn, takesChatLoop, DEFAULT_RESEARCH_BUDGET } = await import('../services/chatTurn');
+const { PAST_MODE, runChatTurn, takesChatLoop, DEFAULT_RESEARCH_BUDGET, MAX_CARD_READS } = await import('../services/chatTurn');
 const {
   CARD_ANCHOR_NOTE,
   COMMIT_VERDICT_DECLARATION,
@@ -108,6 +108,7 @@ function fakeTools(log: string[] = []): ResearchToolset {
 interface Sent {
   message: string | ChatToolResponse[];
   tools: boolean;
+  only?: string[];
 }
 
 function fakeModel(script: (ChatRoundReply | ((sent: Sent[]) => ChatRoundReply))[]) {
@@ -117,8 +118,8 @@ function fakeModel(script: (ChatRoundReply | ((sent: Sent[]) => ChatRoundReply))
     open(args) {
       opened = { systemInstruction: args.systemInstruction, declarations: args.declarations.map((d) => String(d.name)) };
       return {
-        async send(message, { tools, onText }) {
-          sent.push({ message, tools });
+        async send(message, { tools, only, onText }) {
+          sent.push({ message, tools, ...(only ? { only } : {}) });
           const next = script[Math.min(sent.length - 1, script.length - 1)];
           const reply = typeof next === 'function' ? next(sent) : next;
           if (reply.text) onText?.(reply.text);
@@ -674,6 +675,113 @@ await test('the eval installs the read-only Supabase client before any app modul
   };
   assert.equal(loaded(false), 'true');
   assert.equal(loaded(true), 'false');
+});
+
+// --- Card reads and the budget -----------------------------------------------------------------
+
+/** Ten centre-backs' prime cards, best first by Overall, for a ranking. */
+const BACKS = Array.from({ length: 10 }, (_, i) => card(`Back Number${String.fromCharCode(65 + i)}`, 95 - i, `${2000 + i}-${String(3 + i).padStart(2, '0')}`));
+const rankingParams = (cards: PlayerProfile[], over: Record<string, unknown> = {}) =>
+  params('Who were the ten best centre-backs of the 2000s, in order?', [], {
+    route: route({ intent: 'tactical_chat', analyticalMode: 'ranking_or_tierlist', targetPlayers: [] }),
+    savedDossiers: cards,
+    historical: true,
+    pastMode: true,
+    ...over,
+  });
+
+await test('a ranking whose card reads would have spent the old lookup budget still commits, and is held to the cards', async () => {
+  const h = pastDeps({ eras: null });
+  const names = BACKS.map((c) => c.basicInfo.name);
+  const fake = fakeModel([
+    callsReply(...names.map((name) => call('look_up_dossier', { name }))),
+    // The model swaps the first two: the cards put them the other way.
+    callsReply(call('commit_verdict', { kind: 'ranking', criterion: 'peak_level', sides: [], order: [names[1], names[0], ...names.slice(2)], scope: { position: 'Centre-Back', period: '2000s' } })),
+    answer('An order.'),
+  ]);
+  await quietly(() => runChatTurn(rankingParams(BACKS), { ...h.deps, model: fake.model }));
+  const reads = responsesOf(fake.sent[1]);
+  assert.equal(reads.length, 10);
+  assert.ok(reads.every((r) => r.response.status !== 'not_run'), 'every card was read');
+  assert.equal(h.stats().calls, 0, 'ten card reads cost no lookup (the past budget is 8)');
+  assert.equal(h.stats().rounds, 1, 'the round still counts');
+  assert.equal(h.stats().past?.committed, true);
+  assert.equal(h.stats().past?.cards, 'against');
+  assert.deepEqual(h.pairs, [{ higher: getCardKey(BACKS[0]), lower: getCardKey(BACKS[1]), via: 'commit' }]);
+});
+
+await test(`card reads stop at ${MAX_CARD_READS} a turn`, async () => {
+  const h = pastDeps({ eras: null });
+  const fake = fakeModel([callsReply(...Array.from({ length: MAX_CARD_READS + 2 }, (_, i) => call('look_up_dossier', { name: BACKS[i % BACKS.length].basicInfo.name }))), answer('An order.')]);
+  await quietly(() => runChatTurn(rankingParams(BACKS), { ...h.deps, model: fake.model }));
+  const reads = responsesOf(fake.sent[1]);
+  assert.equal(reads.filter((r) => r.response.status === 'not_run').length, 2);
+  assert.match(String(reads[reads.length - 1].response.reason), new RegExp(`card-read ceiling \\(${MAX_CARD_READS} a turn\\)`));
+  assert.equal(h.stats().calls, 0);
+});
+
+await test('a past turn at its budget may still call commit_verdict, and only it, before writing', async () => {
+  const h = pastDeps({ eras: null, budget: { calls: 1 } });
+  const fake = fakeModel([
+    callsReply(call('player_career', { name: 'Aldo Stopper' })),
+    callsReply(call('commit_verdict', { kind: 'head_to_head', criterion: 'peak_level', sides: ['Aldo Stopper', 'Bruno Marker'], verdict: 'Aldo Stopper' })),
+    answer('Stopper.'),
+  ]);
+  const reply = await quietly(() => runChatTurn(params('Stopper or Marker at their best?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: fake.model }));
+  assert.equal(reply, 'Stopper.');
+  assert.equal(fake.sent[1].tools, true);
+  assert.deepEqual(fake.sent[1].only, ['commit_verdict'], 'the round after the budget allows only commit_verdict');
+  assert.match(String(responsesOf(fake.sent[1])[0].response.researchOver), /call it now, before you write; no other tool is available/);
+  assert.equal(fake.sent[2].tools, false, 'then calling is off and the model writes');
+  assert.equal(responsesOf(fake.sent[2])[0].response.cards, 'agree');
+  assert.equal(h.stats().stop, 'calls');
+  assert.equal(h.stats().past?.committed, true);
+  assert.deepEqual(h.net.settled.length, 1, 'the commitment is proposed');
+});
+
+await test('at the budget, a past turn that already committed, or writes instead, and a present turn are unchanged', async () => {
+  // Already committed: calling goes off as before.
+  const done = pastDeps({ eras: null, budget: { calls: 1 } });
+  const commit = call('commit_verdict', { kind: 'head_to_head', criterion: 'peak_level', sides: ['Aldo Stopper', 'Bruno Marker'], verdict: 'Aldo Stopper' });
+  const fake = fakeModel([callsReply(commit, call('player_career', { name: 'Aldo Stopper' })), answer('Stopper.')]);
+  await quietly(() => runChatTurn(params('Stopper or Marker at their best?', [HIGH, LOW], { historical: true, pastMode: true }), { ...done.deps, model: fake.model }));
+  assert.equal(fake.sent[1].tools, false);
+  assert.equal(fake.sent[1].only, undefined);
+  // Offered the commit and wrote instead: the text is the answer.
+  const wrote = pastDeps({ eras: null, budget: { calls: 1 } });
+  const fake2 = fakeModel([callsReply(call('player_career', { name: 'Aldo Stopper' })), answer('Stopper, on the record.')]);
+  const reply = await quietly(() => runChatTurn(params('Stopper or Marker at their best?', [HIGH, LOW], { historical: true, pastMode: true }), { ...wrote.deps, model: fake2.model }));
+  assert.equal(reply, 'Stopper, on the record.');
+  assert.equal(fake2.sent.length, 2);
+  // A present turn comparing carded versions keeps calling off at its budget.
+  const present = pastDeps({ eras: null, budget: { calls: 1 } });
+  const fake3 = fakeModel([callsReply(call('get_player_season', { name: 'Dario Current' })), answer('An answer.')]);
+  await quietly(() =>
+    runChatTurn(params('Is Dario Current already better than prime Aldo Stopper?', [HIGH, NOW], { route: route({ isHistorical: false, targetPlayers: ['Dario Current', 'Aldo Stopper'] }), historical: false, pastMode: true }), {
+      ...present.deps,
+      model: fake3.model,
+    }),
+  );
+  assert.equal(fake3.sent[1].tools, false);
+  assert.equal(fake3.sent[1].only, undefined);
+});
+
+await test('a model that refuses the commit-only round gets it again with calling off, and the turn still answers', async () => {
+  const h = pastDeps({ eras: null, budget: { calls: 1 } });
+  const sent: { tools: boolean; only?: string[] }[] = [];
+  const model = {
+    open: () => ({
+      async send(_message: unknown, { tools, only }: { tools: boolean; only?: string[] }) {
+        sent.push({ tools, ...(only ? { only } : {}) });
+        if (sent.length === 1) return callsReply(call('player_career', { name: 'Aldo Stopper' }));
+        if (only) throw new Error('HTTP 400: mode VALIDATED is not supported');
+        return answer('Stopper.');
+      },
+    }),
+  };
+  const reply = await quietly(() => runChatTurn(params('Stopper or Marker at their best?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: model as any }));
+  assert.equal(reply, 'Stopper.');
+  assert.deepEqual(sent.slice(1), [{ tools: true, only: ['commit_verdict'] }, { tools: false }]);
 });
 
 console.log(`${passes} passed, ${failures} failed`);
