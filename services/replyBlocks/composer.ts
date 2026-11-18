@@ -292,7 +292,7 @@ export class ReplyComposer {
 
   // -- Settling ---------------------------------------------------------------------------------
 
-  /** A copy of the composer's state, for a turn that may start over (a deep turn that falls back). */
+  /** A copy of the composer's state, for a turn that may start over (a chat turn that falls back). */
   snapshot(): ComposerSnapshot {
     return {
       text: this.text,

@@ -34,7 +34,7 @@ import { addGap, emptyLedger, formatLedger } from '../services/evidenceLedger';
 import { fileOutcomes, type ResearchToolset, type ToolOutcome } from '../services/researchTools';
 import { CONVERSATIONAL_SCOUT_MANDATE } from '../prompts/chatPrompt';
 import { presentFactRules, proseModeGuidance, writerNeedsNetwork } from '../services/conversationalScout';
-import { DEFAULT_DEEP_BUDGET, deepModeRules } from '../services/deepTurn';
+import { DEFAULT_RESEARCH_BUDGET, researchRules } from '../services/chatTurn';
 import {
   checksFor,
   conductPrompt,
@@ -236,15 +236,15 @@ await test('the per-turn fact rules and the past-debate rules say the same', () 
   assert.match(proseModeGuidance(route, 'debate_or_verdict', '2026-27'), /check it against <factual_foundation> or with a tool before agreeing or holding firm/);
 });
 
-await test("deep mode's rules read the need and check a disputed fact this turn", () => {
-  const rules = deepModeRules(DEFAULT_DEEP_BUDGET);
+await test("the chat loop's rules read the need and check a disputed fact this turn", () => {
+  const rules = researchRules(DEFAULT_RESEARCH_BUDGET);
   assert.match(rules, /First work out what the user is trying to decide or do, read from the whole conversation, and what a useful answer has to settle for that/);
   assert.match(rules, /pushes back on your last reply over a fact that can be checked, or asks why you didn't know something, look that fact up this turn and answer with it/);
   assert.match(rules, /The user's word neither settles it nor is dismissed/);
 });
 
 await test('the new guidance is descriptive: no players, clubs or sample replies', () => {
-  const text = [CONVERSATIONAL_SCOUT_MANDATE, deepModeRules(DEFAULT_DEEP_BUDGET), formatNeedForWriter(need), buildBriefPrompt({ message: '', thread: '', cardsInPlay: [], hints: { clubs: [], players: [] } })].join('\n');
+  const text = [CONVERSATIONAL_SCOUT_MANDATE, researchRules(DEFAULT_RESEARCH_BUDGET), formatNeedForWriter(need), buildBriefPrompt({ message: '', thread: '', cardsInPlay: [], hints: { clubs: [], players: [] } })].join('\n');
   for (const word of ['Martínez', 'Martinez', 'Kinský', 'Gaffa', 'goalkeeper', "You're right", 'timed out']) {
     assert.ok(!text.includes(word), `the guidance mentions ${word}`);
   }

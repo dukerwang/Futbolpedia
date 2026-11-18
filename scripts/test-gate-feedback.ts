@@ -4,7 +4,7 @@
  * its sanitized text, the one correction round (a flagged figure rewritten and kept, rewritten and
  * still unsupported, dropped without a fragment, every unflagged sentence byte-identical, attribute
  * and coach findings in the prompt and applied, a failed, slow or malformed call leaving the gated
- * reply), the log line's counts, and where the round runs (deep mode counts it against its call
+ * reply), the log line's counts, and where the round runs (the chat loop counts it against its call
  * budget; the stage path skips it past its cutoff). The model, the tools and the clock are faked:
  * no network, Supabase or API keys, and no model call is made.
  *
@@ -47,10 +47,10 @@ const { sanitizeScoutProse, sanitizeScoutProseDetailed, stripScoutMarkup } = awa
 const feedback = await import('../services/gateFeedback');
 const { correctReply, flaggedSentences, parseReplacements, applyReplacements, buildFeedbackPrompt, stageFeedbackAllowed, GATE_FEEDBACK_CUTOFF_MS, GATE_FEEDBACK_TIMEOUT_MS } = feedback;
 const { REFLECT_CUTOFF_MS } = await import('../services/researchAgent');
-const { runDeepTurn } = await import('../services/deepTurn');
+const { runChatTurn } = await import('../services/chatTurn');
 type CorrectionModel = import('../services/gateFeedback').CorrectionModel;
-type DeepModel = import('../services/deepTurn').DeepModel;
-type DeepReply = import('../services/deepTurn').DeepReply;
+type ChatModel = import('../services/chatTurn').ChatModel;
+type ChatRoundReply = import('../services/chatTurn').ChatRoundReply;
 
 /** Console output of `fn`, so the log line can be read and the run stays quiet. */
 async function captured<T>(fn: () => Promise<T>): Promise<{ result: T; lines: string[] }> {
@@ -377,13 +377,13 @@ const tools = (clock: { t: number }, delayMs = 0): ResearchToolset => {
     playerCareer: () => run({ status: 'empty', result: null, missing: [] }),
   };
 };
-const script = (...replies: DeepReply[]): DeepModel => {
+const script = (...replies: ChatRoundReply[]): ChatModel => {
   let n = 0;
   return { open: () => ({ send: async () => replies[Math.min(n++, replies.length - 1)] }) };
 };
-const search = (query: string): DeepReply => ({ text: '', calls: [{ name: 'web_search', args: { query } }] });
-const written = (text: string): DeepReply => ({ text, calls: [] });
-const deepParams = (extra: object = {}) => ({
+const search = (query: string): ChatRoundReply => ({ text: '', calls: [{ name: 'web_search', args: { query } }] });
+const written = (text: string): ChatRoundReply => ({ text, calls: [] });
+const loopParams = (extra: object = {}) => ({
   message: 'How is Main Nine doing?',
   route: { intent: 'tactical_chat', analyticalMode: 'player_qa', targetPlayers: [], targetClubs: ['Southside'], searchQueries: [], isHistorical: false, wantsRegeneration: false, needsSearch: true } as import('../services/turnRouter').TurnRoute,
   history: [],
@@ -396,16 +396,16 @@ const deepParams = (extra: object = {}) => ({
   conversationId: `gate-feedback-${Math.random()}`,
   ...extra,
 });
-const DEEP_REPLY = 'Main Nine has scored 14 league goals this season. Southside play a 4-3-3.';
-const deepDeps = (extra: object = {}) => ({ snapshots: null, managers: async () => [], tools: tools({ t: 0 }), ...extra });
+const LOOP_REPLY = 'Main Nine has scored 14 league goals this season. Southside play a 4-3-3.';
+const chatDeps = (extra: object = {}) => ({ snapshots: null, managers: async () => [], tools: tools({ t: 0 }), ...extra });
 
-await test('deep mode runs the round when the budget allows, counts it as a lookup, and puts the counts in its perf summary', async () => {
+await test('the chat loop runs the round when the budget allows, counts it as a lookup, and puts the counts in its perf summary', async () => {
   const fake = fakeCorrection(([sentence]) => [{ original: sentence, replacement: 'Main Nine has scored 9 league goals this season.' }]);
-  let stats: import('../services/deepTurn').DeepStats | null = null;
+  let stats: import('../services/chatTurn').TurnStats | null = null;
   const perf: string[] = [];
   const stages: string[] = [];
   const { result } = await captured(() =>
-    runDeepTurn(deepParams({ perf: (l: string) => perf.push(l), onStageChange: (s: string) => stages.push(s) }), deepDeps({ model: script(search('Main Nine goals'), written(DEEP_REPLY)), gateFeedback: fake.correct, onStats: (s: import('../services/deepTurn').DeepStats) => (stats = s) })),
+    runChatTurn(loopParams({ perf: (l: string) => perf.push(l), onStageChange: (s: string) => stages.push(s) }), chatDeps({ model: script(search('Main Nine goals'), written(LOOP_REPLY)), gateFeedback: fake.correct, onStats: (s: import('../services/chatTurn').TurnStats) => (stats = s) })),
   );
   assert.equal(result, 'Main Nine has scored 9 league goals this season. Southside play a 4-3-3.');
   assert.equal(fake.prompts.length, 1);
@@ -413,14 +413,14 @@ await test('deep mode runs the round when the budget allows, counts it as a look
   assert.equal(stats!.gateFeedback?.fixed, 1);
   assert.ok(stages.includes('Checking the figures...'));
   assert.ok(perf.some((l) => l.startsWith('gate feedback: flagged 1, fixed 1, dropped 0, removed 0')), perf.join('\n'));
-  assert.ok(perf.some((l) => l.startsWith('deep turn:') && l.includes('gate feedback flagged 1, fixed 1, dropped 0, removed 0')), perf.join('\n'));
+  assert.ok(perf.some((l) => l.startsWith('chat turn:') && l.includes('gate feedback flagged 1, fixed 1, dropped 0, removed 0')), perf.join('\n'));
 });
 
-await test('deep mode skips the round when its lookup budget is spent, and the gated reply stands', async () => {
+await test('the chat loop skips the round when its lookup budget is spent, and the gated reply stands', async () => {
   const fake = fakeCorrection(([sentence]) => [{ original: sentence, replacement: 'Main Nine has scored 9 league goals this season.' }]);
-  let stats: import('../services/deepTurn').DeepStats | null = null;
+  let stats: import('../services/chatTurn').TurnStats | null = null;
   const { result } = await captured(() =>
-    runDeepTurn(deepParams(), deepDeps({ model: script(search('Main Nine goals'), written(DEEP_REPLY)), gateFeedback: fake.correct, budget: { calls: 1 }, onStats: (s: import('../services/deepTurn').DeepStats) => (stats = s) })),
+    runChatTurn(loopParams(), chatDeps({ model: script(search('Main Nine goals'), written(LOOP_REPLY)), gateFeedback: fake.correct, budget: { calls: 1 }, onStats: (s: import('../services/chatTurn').TurnStats) => (stats = s) })),
   );
   assert.equal(result, 'Southside play a 4-3-3.');
   assert.equal(fake.prompts.length, 0);
@@ -428,14 +428,14 @@ await test('deep mode skips the round when its lookup budget is spent, and the g
   assert.equal(stats!.gateFeedback, null);
 });
 
-await test('deep mode skips the round when its time budget is spent, and when the off switch is set', async () => {
+await test('the chat loop skips the round when its time budget is spent, and when the off switch is set', async () => {
   const clock = { t: 0 };
   const fake = fakeCorrection(() => []);
-  const timed = await captured(() => runDeepTurn(deepParams(), deepDeps({ model: script(search('Main Nine goals'), written(DEEP_REPLY)), tools: tools(clock, 130_000), now: () => clock.t, gateFeedback: fake.correct })));
+  const timed = await captured(() => runChatTurn(loopParams(), chatDeps({ model: script(search('Main Nine goals'), written(LOOP_REPLY)), tools: tools(clock, 130_000), now: () => clock.t, gateFeedback: fake.correct })));
   assert.equal(timed.result, 'Southside play a 4-3-3.');
   process.env.GATE_FEEDBACK = 'off';
   try {
-    const off = await captured(() => runDeepTurn(deepParams(), deepDeps({ model: script(search('Main Nine goals'), written(DEEP_REPLY)), gateFeedback: fake.correct })));
+    const off = await captured(() => runChatTurn(loopParams(), chatDeps({ model: script(search('Main Nine goals'), written(LOOP_REPLY)), gateFeedback: fake.correct })));
     assert.equal(off.result, 'Southside play a 4-3-3.');
   } finally {
     delete process.env.GATE_FEEDBACK;
@@ -443,21 +443,21 @@ await test('deep mode skips the round when its time budget is spent, and when th
   assert.equal(fake.prompts.length, 0);
 });
 
-await test('deep mode makes no call when nothing is flagged, and its stream shows only the gated text', async () => {
+await test('the chat loop makes no call when nothing is flagged, and its stream shows only the gated text', async () => {
   const fake = fakeCorrection(() => []);
   const streamed: string[] = [];
-  let stats: import('../services/deepTurn').DeepStats | null = null;
+  let stats: import('../services/chatTurn').TurnStats | null = null;
   const reply = `Southside play a 4-3-3 and Keeper is calm in goal, with the back line sitting deep and the shape staying compact through the whole of the second half. ${'The press is aggressive. '.repeat(3)}`.trim();
   const { result } = await captured(() =>
-    runDeepTurn(deepParams({ onStreamChunk: (t: string) => streamed.push(t) }), deepDeps({ model: script(written(reply)), gateFeedback: fake.correct, onStats: (s: import('../services/deepTurn').DeepStats) => (stats = s) })),
+    runChatTurn(loopParams({ onStreamChunk: (t: string) => streamed.push(t) }), chatDeps({ model: script(written(reply)), gateFeedback: fake.correct, onStats: (s: import('../services/chatTurn').TurnStats) => (stats = s) })),
   );
   assert.equal(result, reply);
   assert.equal(fake.prompts.length, 0);
   assert.equal(stats!.calls, 0);
-  const flaggedReply = `${DEEP_REPLY} ${'The press is aggressive. '.repeat(8)}`.trim();
+  const flaggedReply = `${LOOP_REPLY} ${'The press is aggressive. '.repeat(8)}`.trim();
   const fake2 = fakeCorrection(([s]) => [{ original: s, replacement: 'Main Nine has scored 9 league goals this season.' }]);
   const streamed2: string[] = [];
-  await captured(() => runDeepTurn(deepParams({ onStreamChunk: (t: string) => streamed2.push(t) }), deepDeps({ model: script(search('Main Nine goals'), written(flaggedReply)), gateFeedback: fake2.correct })));
+  await captured(() => runChatTurn(loopParams({ onStreamChunk: (t: string) => streamed2.push(t) }), chatDeps({ model: script(search('Main Nine goals'), written(flaggedReply)), gateFeedback: fake2.correct })));
   assert.ok(streamed2.length > 0);
   assert.ok(streamed2.every((t) => !t.includes('14 league goals')), 'the stream shows the gated text, never the unsupported figure');
 });

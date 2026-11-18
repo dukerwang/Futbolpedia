@@ -1,13 +1,13 @@
 #!/usr/bin/env npx tsx
 /**
- * Offline checks for deep mode (`services/deepTurn.ts`): the loop runs with the model, the tools
+ * Offline checks for the chat loop (`services/chatTurn.ts`): the loop runs with the model, the tools
  * and the clock faked. It checks the budget line on every tool result, each hard stop and the
  * tool-less round after it, parallel calls in a round, the ledger and the figure gate on the
  * reply, show_pitch's lineups, the thread state a follow-up reads, and which turns take the path
  * (through sendMessageToAI, with Gemini refused at fetch). No network, Supabase or API keys.
  *
  * Usage:
- *   npx tsx scripts/test-deep-turn.ts
+ *   npx tsx scripts/test-chat-turn.ts
  */
 import assert from 'node:assert/strict';
 import { formatClubReport, type ClubMatch, type LiveClubReport } from '../services/liveFootball';
@@ -37,24 +37,22 @@ globalThis.fetch = (async (input: any) => {
 }) as typeof fetch;
 
 const {
-  runDeepTurn,
-  takesDeepPath,
+  runChatTurn,
+  takesChatLoop,
   stageLabel,
-  DEEP_DECLARATIONS,
-  deepModeRules,
-  deepResearchRules,
-  DEFAULT_DEEP_BUDGET,
+  CHAT_DECLARATIONS,
+  researchRules,
+  principleResearchRules,
+  DEFAULT_RESEARCH_BUDGET,
   uncheckedFor,
-  DEEP_BY_DEFAULT,
-  wantsDeep,
-  runDeepWithFallback,
-  DeepFailure,
+  runChatWithFallback,
+  ChatTurnFailure,
   FALLBACK_STAGE_LABEL,
-} = await import('../services/deepTurn');
-type PathInfo = import('../services/deepTurn').PathInfo;
-type DeepModel = import('../services/deepTurn').DeepModel;
-type DeepReply = import('../services/deepTurn').DeepReply;
-type DeepToolResponse = import('../services/deepTurn').DeepToolResponse;
+} = await import('../services/chatTurn');
+type PathInfo = import('../services/chatTurn').PathInfo;
+type ChatModel = import('../services/chatTurn').ChatModel;
+type ChatRoundReply = import('../services/chatTurn').ChatRoundReply;
+type ChatToolResponse = import('../services/chatTurn').ChatToolResponse;
 const { threadStateFor } = await import('../services/conversationalScout');
 
 // --- Fakes ------------------------------------------------------------------------------------
@@ -121,15 +119,15 @@ function fakeTools(clock: { t: number }, delayMs = 0) {
 }
 
 interface Sent {
-  message: string | DeepToolResponse[];
+  message: string | ChatToolResponse[];
   tools: boolean;
 }
 
 /** A model that plays back `script`: each entry is the reply to the next send, or a function of what was sent. */
-function fakeModel(script: (DeepReply | ((sent: Sent[]) => DeepReply))[]) {
+function fakeModel(script: (ChatRoundReply | ((sent: Sent[]) => ChatRoundReply))[]) {
   const sent: Sent[] = [];
   let opened: { systemInstruction: string; declarations: string[] } | null = null;
-  const model: DeepModel = {
+  const model: ChatModel = {
     open(args) {
       opened = { systemInstruction: args.systemInstruction, declarations: args.declarations.map((d) => String(d.name)) };
       return {
@@ -147,8 +145,8 @@ function fakeModel(script: (DeepReply | ((sent: Sent[]) => DeepReply))[]) {
 }
 
 const call = (name: string, args: Record<string, unknown>) => ({ name, args });
-const callsReply = (...calls: { name: string; args: Record<string, unknown> }[]): DeepReply => ({ text: '', calls });
-const answer = (text: string): DeepReply => ({ text, calls: [] });
+const callsReply = (...calls: { name: string; args: Record<string, unknown> }[]): ChatRoundReply => ({ text: '', calls });
+const answer = (text: string): ChatRoundReply => ({ text, calls: [] });
 
 const route = (): import('../services/turnRouter').TurnRoute => ({
   intent: 'tactical_chat',
@@ -184,7 +182,7 @@ const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
   }
 };
 
-const responsesOf = (s: Sent): DeepToolResponse[] => (Array.isArray(s.message) ? s.message : []);
+const responsesOf = (s: Sent): ChatToolResponse[] => (Array.isArray(s.message) ? s.message : []);
 
 // --- The loop ---------------------------------------------------------------------------------
 
@@ -196,7 +194,7 @@ await test('every tool result ends with the budget line, and the prompt states t
     callsReply(call('get_league_table', { league: 'LaLiga' })),
     answer('Southside play a 4-3-3 with Main Nine up front.'),
   ]);
-  await quietly(() => runDeepTurn(baseParams("How do Southside line up?"), { model: fake.model, tools, snapshots: null, managers: async () => [], now: () => clock.t }));
+  await quietly(() => runChatTurn(baseParams("How do Southside line up?"), { model: fake.model, tools, snapshots: null, managers: async () => [], now: () => clock.t }));
   const results = fake.sent.flatMap(responsesOf);
   assert.equal(results.length, 3);
   for (const r of results) {
@@ -212,8 +210,8 @@ await test('every tool result ends with the budget line, and the prompt states t
   assert.match(system, /Stop researching as soon as you have what the answer needs/);
 });
 
-await test('the deep loop offers the writer\'s tools, the history routes, web search and the four view tools', () => {
-  const names = DEEP_DECLARATIONS.map((d) => d.name);
+await test('the chat loop offers the writer\'s tools, the history routes, web search and the four view tools', () => {
+  const names = CHAT_DECLARATIONS.map((d) => d.name);
   for (const n of ['get_club_recent_team', 'get_player_season', 'get_league_table', 'look_up_dossier', 'show_dossier', 'grep_saved_dossiers', 'club_season', 'player_career', 'web_search', 'show_pitch', 'show_table', 'show_comparison', 'show_ranking']) {
     assert.ok(names.includes(n), n);
   }
@@ -234,9 +232,9 @@ for (const [cap, budget, script, expectedRounds] of [
       ...script,
       (sent) => (sent.at(-1)!.tools ? callsReply(call('get_league_table', { league: 'Z' })) : answer('Southside lead the league.')),
     ]);
-    let stats: import('../services/deepTurn').DeepStats | null = null;
+    let stats: import('../services/chatTurn').TurnStats | null = null;
     const reply = await quietly(() =>
-      runDeepTurn(baseParams('Where are Southside?'), { model: fake.model, tools, snapshots: null, managers: async () => [], now: () => clock.t, budget, onStats: (s) => (stats = s) }),
+      runChatTurn(baseParams('Where are Southside?'), { model: fake.model, tools, snapshots: null, managers: async () => [], now: () => clock.t, budget, onStats: (s) => (stats = s) }),
     );
     assert.equal(reply, 'Southside lead the league.');
     assert.equal(stats!.stop, cap);
@@ -254,7 +252,7 @@ await test('a reply with no text after research is over gets one plain request t
     callsReply(call('get_league_table', { league: 'B' })),
     answer('Written at last.'),
   ]);
-  const reply = await quietly(() => runDeepTurn(baseParams('Q'), { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], budget: { rounds: 1 } }));
+  const reply = await quietly(() => runChatTurn(baseParams('Q'), { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], budget: { rounds: 1 } }));
   assert.equal(reply, 'Written at last.');
   assert.deepEqual(fake.sent.map((s) => s.tools), [true, false, false]);
   assert.match(String(fake.sent[2].message), /Research is over/);
@@ -267,7 +265,7 @@ await test('a call past the lookup budget in the same round is refused, not run'
     callsReply(call('web_search', { query: 'one' }), call('web_search', { query: 'two' }), call('get_league_table', { league: 'A' })),
     answer('Done.'),
   ]);
-  await quietly(() => runDeepTurn(baseParams('Q'), { model: fake.model, tools, snapshots: null, managers: async () => [], budget: { searches: 1 } }));
+  await quietly(() => runChatTurn(baseParams('Q'), { model: fake.model, tools, snapshots: null, managers: async () => [], budget: { searches: 1 } }));
   const results = responsesOf(fake.sent[1]);
   assert.equal(results[0].response.status, 'found');
   assert.equal(results[1].response.status, 'not_run');
@@ -282,13 +280,13 @@ await test('parallel calls in one round run together', async () => {
     callsReply(call('get_club_recent_team', { team: 'Southside' }), call('get_league_table', { league: 'LaLiga' }), call('get_player_season', { name: 'Main Nine' })),
     answer('Answer.'),
   ]);
-  await quietly(() => runDeepTurn(baseParams('Q'), { model: fake.model, tools, snapshots: null, managers: async () => [], now: () => clock.t }));
+  await quietly(() => runChatTurn(baseParams('Q'), { model: fake.model, tools, snapshots: null, managers: async () => [], now: () => clock.t }));
   // All three started before any finished.
   assert.deepEqual(events.slice(0, 3).map((e) => e.split(' ')[0]), ['start', 'start', 'start']);
   assert.equal(fake.sent.length, 2, 'one round of three calls, then the answer');
 });
 
-await test('tool results land in the ledger, and the figure gate removes an unsupported figure from the deep reply', async () => {
+await test('tool results land in the ledger, and the figure gate removes an unsupported figure from the loop reply', async () => {
   const clock = { t: 0 };
   const { tools } = fakeTools(clock);
   const fake = fakeModel([
@@ -296,9 +294,9 @@ await test('tool results land in the ledger, and the figure gate removes an unsu
     answer('Main Nine has scored 9 league goals this season. Southside allow a PPDA of 8.4 when they press. New Fullback starts at left-back.'),
   ]);
   const streamed: string[] = [];
-  const conversationId = 'deep-ledger';
+  const conversationId = 'loop-ledger';
   const reply = await quietly(() =>
-    runDeepTurn({ ...baseParams("How are Southside doing?"), conversationId, onStreamChunk: (t) => streamed.push(t) }, { model: fake.model, tools, snapshots: null, managers: async () => [], gateFeedback: async () => ({ replacements: [] }) }),
+    runChatTurn({ ...baseParams("How are Southside doing?"), conversationId, onStreamChunk: (t) => streamed.push(t) }, { model: fake.model, tools, snapshots: null, managers: async () => [], gateFeedback: async () => ({ replacements: [] }) }),
   );
   assert.equal(reply, 'Main Nine has scored 9 league goals this season. New Fullback starts at left-back.');
   assert.ok(!streamed.some((t) => t.includes('8.4')), 'the stream never shows the removed figure');
@@ -311,7 +309,7 @@ await test('tool results land in the ledger, and the figure gate removes an unsu
 });
 
 await test('a follow-up in the same thread starts from the last turn\'s research', async () => {
-  const conversationId = 'deep-follow-up';
+  const conversationId = 'loop-follow-up';
   const thread = threadStateFor(conversationId);
   thread.signature = 'How are Southside doing?';
   thread.grounding = '[E1] Web search — earlier\nMain Nine scored twice last weekend.';
@@ -319,7 +317,7 @@ await test('a follow-up in the same thread starts from the last turn\'s research
   const fake = fakeModel([(sent) => ((prompt = String(sent[0].message)), answer('Main Nine scored twice last weekend.'))]);
   const history = [{ id: '1', sender: 'user' as const, content: 'How are Southside doing?', timestamp: 1 }, { id: '2', sender: 'ai' as const, content: 'Well.', timestamp: 2 }];
   const reply = await quietly(() =>
-    runDeepTurn({ ...baseParams('And their striker?'), history, conversationId }, { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] }),
+    runChatTurn({ ...baseParams('And their striker?'), history, conversationId }, { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] }),
   );
   assert.match(prompt, /Research from the previous turn[\s\S]*scored twice last weekend/);
   assert.equal(reply, 'Main Nine scored twice last weekend.');
@@ -329,9 +327,9 @@ await test('show_pitch attaches the club\'s XI, reading its live data when the t
   const attachments = new ReplyComposer();
   const fake = fakeModel([callsReply(call('show_pitch', { club: 'Southside' })), answer('Here is how Southside line up.')]);
   const stages: string[] = [];
-  let stats: import('../services/deepTurn').DeepStats | null = null;
+  let stats: import('../services/chatTurn').TurnStats | null = null;
   await quietly(() =>
-    runDeepTurn({ ...baseParams('Southside XI?', attachments), onStageChange: (s) => stages.push(s) }, {
+    runChatTurn({ ...baseParams('Southside XI?', attachments), onStageChange: (s) => stages.push(s) }, {
       model: fake.model,
       tools: fakeTools({ t: 0 }).tools,
       snapshots: null,
@@ -367,7 +365,7 @@ const toolsWithTable = (clock: { t: number }): ResearchToolset => ({
 });
 const kindsOf = (c: ReplyComposer) => c.blocks().map((b) => b.kind);
 const run = (fake: ReturnType<typeof fakeModel>, composer: ReplyComposer, extra: Record<string, unknown> = {}, tools = fakeTools({ t: 0 }).tools) =>
-  quietly(() => runDeepTurn(baseParams('Q', composer), { model: fake.model, tools, snapshots: null, managers: async () => [], ...extra }));
+  quietly(() => runChatTurn(baseParams('Q', composer), { model: fake.model, tools, snapshots: null, managers: async () => [], ...extra }));
 
 await test('a round that only draws keeps its text, and the view sits after it, for free', async () => {
   const composer = new ReplyComposer();
@@ -375,8 +373,8 @@ await test('a round that only draws keeps its text, and the view sits after it, 
     { text: 'Southside sit top of the table.', calls: [call('show_table', { league: 'LaLiga', highlight: ['Southside'] })] },
     answer('That lead is built on the defence.'),
   ]);
-  let stats: import('../services/deepTurn').DeepStats | null = null;
-  const reply = await run(fake, composer, { onStats: (s: import('../services/deepTurn').DeepStats) => (stats = s) }, toolsWithTable({ t: 0 }));
+  let stats: import('../services/chatTurn').TurnStats | null = null;
+  const reply = await run(fake, composer, { onStats: (s: import('../services/chatTurn').TurnStats) => (stats = s) }, toolsWithTable({ t: 0 }));
   assert.deepEqual(kindsOf(composer), ['prose', 'table', 'prose']);
   assert.equal(reply, 'Southside sit top of the table.\n\nThat lead is built on the defence.');
   assert.equal(stats!.rounds, 0, 'a round that only draws is not a round');
@@ -389,8 +387,8 @@ await test('a round of lookups drops its text, and its views go after the prose 
     { text: 'Let me check the table and the lineups first.', calls: [call('get_club_recent_team', { team: 'Southside' }), call('show_table', { league: 'LaLiga' })] },
     answer('Southside lead the league and play a 4-3-3.'),
   ]);
-  let stats: import('../services/deepTurn').DeepStats | null = null;
-  const reply = await run(fake, composer, { onStats: (s: import('../services/deepTurn').DeepStats) => (stats = s) }, toolsWithTable({ t: 0 }));
+  let stats: import('../services/chatTurn').TurnStats | null = null;
+  const reply = await run(fake, composer, { onStats: (s: import('../services/chatTurn').TurnStats) => (stats = s) }, toolsWithTable({ t: 0 }));
   assert.equal(reply, 'Southside lead the league and play a 4-3-3.', 'the preamble is gone');
   assert.deepEqual(kindsOf(composer), ['table', 'prose'], 'no prose was kept, so the view comes first');
   assert.equal(stats!.rounds, 1);
@@ -436,12 +434,12 @@ await test('the gates cut a sentence from one segment and no view moves', async 
 
 await test('the limit on views is the only one: twelve view rounds spend no round budget, and a view past the ceiling is refused and counts as a round', async () => {
   const composer = new ReplyComposer();
-  const script: DeepReply[] = [];
+  const script: ChatRoundReply[] = [];
   for (let i = 0; i < 13; i++) script.push({ text: `Point ${i + 1}.`, calls: [call('show_table', { league: 'LaLiga' })] });
   script.push(answer('Done.'));
   const fake = fakeModel(script);
-  let stats: import('../services/deepTurn').DeepStats | null = null;
-  await run(fake, composer, { onStats: (s: import('../services/deepTurn').DeepStats) => (stats = s) }, toolsWithTable({ t: 0 }));
+  let stats: import('../services/chatTurn').TurnStats | null = null;
+  await run(fake, composer, { onStats: (s: import('../services/chatTurn').TurnStats) => (stats = s) }, toolsWithTable({ t: 0 }));
   assert.equal(composer.blocks().filter((b) => b.kind === 'table').length, 12);
   assert.equal(stats!.rounds, 1, 'only the round that drew past the ceiling was counted');
   const refused = responsesOf(fake.sent[13])[0].response;
@@ -449,7 +447,7 @@ await test('the limit on views is the only one: twelve view rounds spend no roun
 });
 
 await test('the rules give one descriptive line for each view tool, and say where a view lands', () => {
-  const rules = deepModeRules(DEFAULT_DEEP_BUDGET);
+  const rules = researchRules(DEFAULT_RESEARCH_BUDGET);
   for (const tool of ['show_pitch', 'show_table', 'show_comparison', 'show_ranking', 'show_dossier']) assert.ok(rules.includes(`\`${tool}\``), tool);
   assert.match(rules, /A view lands where you call it/);
   assert.match(rules, /drawing views costs no lookup, search or round/);
@@ -472,7 +470,7 @@ await test('a club lookup brings the club\'s verified coach, and the scrub knows
   const fake = fakeModel([callsReply(call('get_club_recent_team', { team: 'Southside' })), answer('Southside press high.')]);
   const asked: string[][] = [];
   await quietly(() =>
-    runDeepTurn(baseParams('How do Southside press?'), {
+    runChatTurn(baseParams('How do Southside press?'), {
       model: fake.model,
       tools: fakeTools({ t: 0 }).tools,
       snapshots: null,
@@ -483,7 +481,7 @@ await test('a club lookup brings the club\'s verified coach, and the scrub knows
 });
 
 await test('the budget rules are descriptive: no player, club or rating examples', () => {
-  const rules = deepModeRules(DEFAULT_DEEP_BUDGET);
+  const rules = researchRules(DEFAULT_RESEARCH_BUDGET);
   assert.doesNotMatch(rules, /\b(Arsenal|Chelsea|Madrid|Messi|Saka|\d{2} Overall)\b/);
 });
 
@@ -497,7 +495,7 @@ await test('each result lists what is still unchecked for the spotted club and p
     answer('Southside changed shape this summer.'),
   ]);
   const params = { ...baseParams('How is Main Nine doing at Southside?'), route: { ...route(), targetPlayers: ['Main Nine'] } };
-  await quietly(() => runDeepTurn(params, { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] }));
+  await quietly(() => runChatTurn(params, { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] }));
   const lines = fake.sent.slice(1).map((s) => String(responsesOf(s)[0].response.unchecked));
   assert.equal(
     lines[0],
@@ -513,9 +511,9 @@ await test('each result lists what is still unchecked for the spotted club and p
 
 await test('the unchecked list never forces a round: the model may answer with items left', async () => {
   const fake = fakeModel([callsReply(call('get_club_recent_team', { team: 'Southside' })), answer('Southside line up in a 4-3-3.')]);
-  let stats: import('../services/deepTurn').DeepStats | null = null;
+  let stats: import('../services/chatTurn').TurnStats | null = null;
   const reply = await quietly(() =>
-    runDeepTurn(baseParams('Southside shape?'), { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], onStats: (s) => (stats = s) }),
+    runChatTurn(baseParams('Southside shape?'), { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], onStats: (s) => (stats = s) }),
   );
   assert.equal(reply, 'Southside line up in a 4-3-3.');
   assert.equal(stats!.rounds, 1);
@@ -534,95 +532,54 @@ await test('a club not yet read lists its lineups; a fresh stored snapshot alrea
 });
 
 await test('the budget rules ask for what changed and for team news on absences', () => {
-  const rules = deepModeRules(DEFAULT_DEEP_BUDGET);
+  const rules = researchRules(DEFAULT_RESEARCH_BUDGET);
   assert.match(rules, /says what is different this season for the club or player/);
   assert.match(rules, /reads team news as well as the injury list/);
 });
 
 // --- The entry rule ---------------------------------------------------------------------------
 
-await test('only a deep question about the present takes the deep path', () => {
+await test('every question about the present takes the chat loop, and the stage flag sends it to the stage pipeline', () => {
   const r = (intent: string) => ({ intent }) as any;
-  assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false }), true);
-  assert.equal(takesDeepPath({ deep: true, route: r('compare'), historical: false }), true);
-  // With the constant on, a present-day turn with no flag takes the loop; `fast` sends it to the stage pipeline.
-  assert.equal(takesDeepPath({ deep: false, route: r('tactical_chat'), historical: false }), true);
-  assert.equal(takesDeepPath({ fast: true, route: r('tactical_chat'), historical: false }), false);
-  assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: true }), false);
-  assert.equal(takesDeepPath({ deep: true, route: r('single_dossier'), historical: false }), false);
-  assert.equal(takesDeepPath({ deep: true, route: r('challenge_or_revise'), historical: false }), false);
-  assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false, noRating: true }), false);
-  assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false, gaffaTrade: true }), false);
-  assert.equal(takesDeepPath({ deep: true, route: r('tactical_chat'), historical: false, image: true }), false);
+  assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: false }), true);
+  assert.equal(takesChatLoop({ route: r('compare'), historical: false }), true);
+  assert.equal(takesChatLoop({ stage: true, route: r('tactical_chat'), historical: false }), false);
+  assert.equal(takesChatLoop({ stage: false, route: r('tactical_chat'), historical: false }), true);
+  // The turns the rule rejects.
+  assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: true }), false);
+  assert.equal(takesChatLoop({ route: r('single_dossier'), historical: false }), false);
+  assert.equal(takesChatLoop({ route: r('challenge_or_revise'), historical: false }), false);
+  assert.equal(takesChatLoop({ route: r('archive_inventory'), historical: false }), false);
+  assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: false, noRating: true }), false);
+  assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: false, gaffaTrade: true }), false);
+  assert.equal(takesChatLoop({ route: r('tactical_chat'), historical: false, image: true }), false);
 });
 
 const { sendMessageToAI } = await import('../services/geminiService');
-const sendDeep = async (message: string) => {
-  const fake = fakeModel([answer('A deep answer about the present.')]);
+const sendLoop = async (message: string) => {
+  const fake = fakeModel([answer('An answer about the present.')]);
   const reply = await quietly(() =>
     sendMessageToAI(message, [], undefined, [], [], {
-      deep: true,
-      deepDeps: { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] },
+      chatDeps: { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] },
     }).catch((e) => `failed: ${e?.message ?? e}`),
   );
   return { opened: fake.opened() !== null, reply };
 };
 
-await test('with the deep flag, a question about the present goes through the deep loop', async () => {
-  const { opened, reply } = await sendDeep("Break down Southside's build-up shape this season");
-  assert.ok(opened, 'the deep model was opened');
-  assert.equal(reply, 'A deep answer about the present.');
+await test('a question about the present goes through the chat loop', async () => {
+  const { opened, reply } = await sendLoop("Break down Southside's build-up shape this season");
+  assert.ok(opened, 'the loop model was opened');
+  assert.equal(reply, 'An answer about the present.');
 });
 
-await test('with the deep flag, a historical question and a rating take the normal path', async () => {
+await test('a historical question and a rating take their own paths', async () => {
   for (const message of ['Prime Zidane or prime Kaká?', 'rate Main Nine']) {
-    const { opened } = await sendDeep(message);
+    const { opened } = await sendLoop(message);
     assert.equal(opened, false, message);
   }
 });
 
-
-// --- Deep by default --------------------------------------------------------------------------
-
-await test('the constant is on: deep mode is the default path', () => {
-  assert.equal(DEEP_BY_DEFAULT, true);
-});
-
-await test('a turn asks for deep through its flag or the default, and fast always says no', () => {
-  for (const byDefault of [false, true]) {
-    assert.equal(wantsDeep({ deep: true }, byDefault), true);
-    assert.equal(wantsDeep({ fast: true }, byDefault), false);
-    assert.equal(wantsDeep({ deep: true, fast: true }, byDefault), false, 'fast wins when both arrive');
-  }
-  assert.equal(wantsDeep({}, false), false);
-  assert.equal(wantsDeep({}, true), true);
-  assert.equal(wantsDeep({}), DEEP_BY_DEFAULT, 'the default is the constant');
-});
-
-await test('with the default on, every turn the entry rule accepts takes the loop without a flag, and the fast flag does not', () => {
-  const r = (intent: string) => ({ intent }) as any;
-  const on = { byDefault: true };
-  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false }), true);
-  assert.equal(takesDeepPath({ ...on, route: r('compare'), historical: false }), true);
-  assert.equal(takesDeepPath({ ...on, fast: true, route: r('tactical_chat'), historical: false }), false);
-  // The turns the rule rejects are unchanged.
-  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: true }), false);
-  assert.equal(takesDeepPath({ ...on, route: r('single_dossier'), historical: false }), false);
-  assert.equal(takesDeepPath({ ...on, route: r('challenge_or_revise'), historical: false }), false);
-  assert.equal(takesDeepPath({ ...on, route: r('archive_inventory'), historical: false }), false);
-  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, noRating: true }), false);
-  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, gaffaTrade: true }), false);
-  assert.equal(takesDeepPath({ ...on, route: r('tactical_chat'), historical: false, image: true }), false);
-});
-
-await test('with the default off, an unflagged turn never takes the loop and the Deep flag still does', () => {
-  const r = (intent: string) => ({ intent }) as any;
-  assert.equal(takesDeepPath({ byDefault: false, route: r('tactical_chat'), historical: false }), false);
-  assert.equal(takesDeepPath({ route: r('tactical_chat'), historical: false }), DEEP_BY_DEFAULT, 'an unflagged turn follows the constant');
-  assert.equal(takesDeepPath({ byDefault: false, deep: true, route: r('tactical_chat'), historical: false }), true);
-});
-
-await test('the composer has no speed toggle: deep is the one path', async () => {
+await test('the composer has no speed toggle: the chat loop is the one path', async () => {
   const React = (await import('react')).default;
   const { renderToStaticMarkup } = await import('react-dom/server');
   const { ChatInput } = await import('../components/ChatInput');
@@ -651,14 +608,14 @@ await test('the loop reports why it gave up: no text at all, or its budget spent
   const params = baseParams('Q');
   const empty = fakeModel([callsReply(call('get_league_table', { league: 'A' })), { text: '', calls: [], finishReason: 'STOP' }]);
   await assert.rejects(
-    quietly(() => runDeepTurn(params, { model: empty.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] })),
-    (e: any) => e instanceof DeepFailure && e.reason === 'empty' && /failed to return a valid text response/.test(e.message),
+    quietly(() => runChatTurn(params, { model: empty.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] })),
+    (e: any) => e instanceof ChatTurnFailure && e.reason === 'empty' && /failed to return a valid text response/.test(e.message),
   );
   // Rounds spent, then nothing but another tool call and an empty reply to the plain request.
   const spent = fakeModel([callsReply(call('get_league_table', { league: 'A' })), callsReply(call('get_league_table', { league: 'B' })), { text: '', calls: [] }]);
   await assert.rejects(
-    quietly(() => runDeepTurn(params, { model: spent.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], budget: { rounds: 1 } })),
-    (e: any) => e instanceof DeepFailure && e.reason === 'budget' && /rounds budget was spent/.test(e.message),
+    quietly(() => runChatTurn(params, { model: spent.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], budget: { rounds: 1 } })),
+    (e: any) => e instanceof ChatTurnFailure && e.reason === 'budget' && /rounds budget was spent/.test(e.message),
   );
 });
 
@@ -671,25 +628,25 @@ await test('a loop that fails runs the stage pipeline once, with its label and a
 
   for (const [reason, failure] of [
     ['error', new Error('network down')],
-    ['empty', new DeepFailure('empty', 'no text')],
-    ['budget', new DeepFailure('budget', 'spent')],
+    ['empty', new ChatTurnFailure('empty', 'no text')],
+    ['budget', new ChatTurnFailure('budget', 'spent')],
   ] as const) {
     labels.length = paths.length = stageRuns = 0;
-    const { value, warnings } = await warned(() => runDeepWithFallback(async () => Promise.reject(failure), stage, hooks));
+    const { value, warnings } = await warned(() => runChatWithFallback(async () => Promise.reject(failure), stage, hooks));
     assert.equal(value, 'the stage answer', reason);
     assert.equal(stageRuns, 1, `${reason}: the stage pipeline ran once`);
     assert.deepEqual(labels, [FALLBACK_STAGE_LABEL]);
-    assert.deepEqual(paths, [{ path: 'deep' }, { path: 'stage', fallback: reason }]);
+    assert.deepEqual(paths, [{ path: 'chat' }, { path: 'stage', fallback: reason }]);
     assert.equal(warnings.length, 1);
-    assert.match(warnings[0], new RegExp(`^\\[deep\\] fallback \\(${reason}\\): `));
+    assert.match(warnings[0], new RegExp(`^\\[chat\\] fallback \\(${reason}\\): `));
   }
 
   labels.length = paths.length = stageRuns = 0;
-  const { value, warnings } = await warned(() => runDeepWithFallback(async () => 'the deep answer', stage, hooks));
-  assert.equal(value, 'the deep answer');
+  const { value, warnings } = await warned(() => runChatWithFallback(async () => 'the loop answer', stage, hooks));
+  assert.equal(value, 'the loop answer');
   assert.equal(stageRuns, 0);
   assert.deepEqual(labels, []);
-  assert.deepEqual(paths, [{ path: 'deep' }]);
+  assert.deepEqual(paths, [{ path: 'chat' }]);
   assert.deepEqual(warnings, []);
   assert.match(FALLBACK_STAGE_LABEL, /standard route/);
 });
@@ -697,23 +654,23 @@ await test('a loop that fails runs the stage pipeline once, with its label and a
 await test('the stage run starts only after the loop has stopped', async () => {
   const events: string[] = [];
   await warned(() =>
-    runDeepWithFallback(
+    runChatWithFallback(
       async () => {
-        events.push('deep start');
+        events.push('loop start');
         await new Promise((r) => setTimeout(r, 10));
-        events.push('deep end');
+        events.push('loop end');
         throw new Error('boom');
       },
       async () => (events.push('stage'), 'ok'),
     ),
   );
-  assert.deepEqual(events, ['deep start', 'deep end', 'stage']);
+  assert.deepEqual(events, ['loop start', 'loop end', 'stage']);
 });
 
 // --- Both paths through sendMessageToAI -------------------------------------------------------
 
-/** One turn through sendMessageToAI with the deep model faked; the stage pipeline reaches only the refusing fetch. */
-async function sendTurn(message: string, options: Record<string, unknown>, script: (DeepReply | ((sent: Sent[]) => DeepReply))[], deepDeps: Record<string, unknown> = {}) {
+/** One turn through sendMessageToAI with the loop's model faked; the stage pipeline reaches only the refusing fetch. */
+async function sendTurn(message: string, options: Record<string, unknown>, script: (ChatRoundReply | ((sent: Sent[]) => ChatRoundReply))[], chatDeps: Record<string, unknown> = {}) {
   const fake = fakeModel(script);
   const paths: PathInfo[] = [];
   const stages: string[] = [];
@@ -722,76 +679,62 @@ async function sendTurn(message: string, options: Record<string, unknown>, scrip
       onPath: (p) => paths.push(p),
       onStageChange: (l) => stages.push(l),
       ...options,
-      deepDeps: { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], ...deepDeps },
+      chatDeps: { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [], ...chatDeps },
     }).catch((e) => `failed: ${e?.message ?? e}`),
   );
   return { reply: value as string, opened: fake.opened() !== null, sent: fake.sent, paths, stages, warnings };
 }
 const PRESENT = "Break down Southside's build-up shape this season";
-const DEEP_ANSWER = [answer('A deep answer about the present.')];
+const LOOP_ANSWER = [answer('An answer about the present.')];
 
-await test('with the default on, a present-day message runs the loop without a flag, and a past thread takes the stage pipeline', async () => {
-  const present = await sendTurn(PRESENT, { deepByDefault: true }, DEEP_ANSWER);
+await test('a present-day message runs the loop, and a past thread takes the stage pipeline', async () => {
+  const present = await sendTurn(PRESENT, {}, LOOP_ANSWER);
   assert.ok(present.opened);
-  assert.equal(present.reply, 'A deep answer about the present.');
-  assert.deepEqual(present.paths, [{ path: 'deep' }]);
-  const past = await sendTurn('Prime Zidane or prime Kaká?', { deepByDefault: true }, DEEP_ANSWER);
+  assert.equal(present.reply, 'An answer about the present.');
+  assert.deepEqual(present.paths, [{ path: 'chat' }]);
+  const past = await sendTurn('Prime Zidane or prime Kaká?', {}, LOOP_ANSWER);
   assert.equal(past.opened, false);
   assert.deepEqual(past.paths, [{ path: 'stage' }]);
   // A rating takes the rating pipeline, which has no chat path to report.
-  const rating = await sendTurn('rate Main Nine', { deepByDefault: true }, DEEP_ANSWER);
+  const rating = await sendTurn('rate Main Nine', {}, LOOP_ANSWER);
   assert.equal(rating.opened, false);
   assert.deepEqual(rating.paths, []);
 });
 
-await test('with the default on, the fast flag sends a present-day message to the stage pipeline', async () => {
-  const fast = await sendTurn(PRESENT, { deepByDefault: true, fast: true }, DEEP_ANSWER);
-  assert.equal(fast.opened, false);
-  assert.deepEqual(fast.paths, [{ path: 'stage' }]);
+await test('the stage flag sends a present-day message to the stage pipeline', async () => {
+  const forced = await sendTurn(PRESENT, { stage: true }, LOOP_ANSWER);
+  assert.equal(forced.opened, false);
+  assert.deepEqual(forced.paths, [{ path: 'stage' }]);
   // A forced stage turn is not a fallback: nothing was warned and no label said the route changed.
-  assert.deepEqual(fast.warnings.filter((w) => w.includes('[deep]')), []);
-  assert.ok(!fast.stages.includes(FALLBACK_STAGE_LABEL));
-});
-
-await test('with the default off, an unflagged message takes the stage pipeline and Deep still takes the loop', async () => {
-  const plain = await sendTurn(PRESENT, { deepByDefault: false }, DEEP_ANSWER);
-  assert.equal(plain.opened, false);
-  assert.deepEqual(plain.paths, [{ path: 'stage' }]);
-  const unset = await sendTurn(PRESENT, {}, DEEP_ANSWER);
-  assert.equal(unset.opened, DEEP_BY_DEFAULT, 'an unflagged message follows the constant');
-  const deep = await sendTurn(PRESENT, { deepByDefault: false, deep: true }, DEEP_ANSWER);
-  assert.ok(deep.opened);
-  assert.deepEqual(deep.paths, [{ path: 'deep' }]);
-  // `deep` and `fast` force a path whatever the constant says.
-  const forcedStage = await sendTurn(PRESENT, { deepByDefault: true, fast: true, deep: true }, DEEP_ANSWER);
-  assert.equal(forcedStage.opened, false);
+  assert.deepEqual(forced.warnings.filter((w) => w.includes('[chat]')), []);
+  assert.ok(!forced.stages.includes(FALLBACK_STAGE_LABEL));
 });
 
 await test('a loop that throws falls back to the stage pipeline once, with the label and the log line', async () => {
-  const turn = await sendTurn(PRESENT, { deepByDefault: true }, [
+  const turn = await sendTurn(PRESENT, {}, [
     () => {
       throw new Error('model unavailable');
     },
   ]);
   assert.ok(turn.opened);
-  assert.deepEqual(turn.paths, [{ path: 'deep' }, { path: 'stage', fallback: 'error' }]);
+  assert.deepEqual(turn.paths, [{ path: 'chat' }, { path: 'stage', fallback: 'error' }]);
   assert.ok(turn.stages.includes(FALLBACK_STAGE_LABEL));
   assert.equal(turn.stages.filter((l) => l === FALLBACK_STAGE_LABEL).length, 1);
-  assert.equal(turn.warnings.filter((w) => w.startsWith('[deep] fallback (error)')).length, 1);
+  assert.equal(turn.warnings.filter((w) => w.startsWith('[chat] fallback (error)')).length, 1);
   assert.equal(turn.sent.length, 1, 'the loop made one attempt');
 });
 
 await test('an empty reply and a spent budget with no answer each fall back once', async () => {
-  const empty = await sendTurn(PRESENT, { deepByDefault: true }, [{ text: '', calls: [], finishReason: 'STOP' }]);
-  assert.deepEqual(empty.paths, [{ path: 'deep' }, { path: 'stage', fallback: 'empty' }]);
+  const empty = await sendTurn(PRESENT, {}, [{ text: '', calls: [], finishReason: 'STOP' }]);
+  assert.deepEqual(empty.paths, [{ path: 'chat' }, { path: 'stage', fallback: 'empty' }]);
   const spent = await sendTurn(
     PRESENT,
-    { deepByDefault: true },
+    {},
     [callsReply(call('get_league_table', { league: 'A' })), callsReply(call('get_league_table', { league: 'B' })), { text: '', calls: [] }],
     { budget: { rounds: 1 } },
   );
-  assert.deepEqual(spent.paths, [{ path: 'deep' }, { path: 'stage', fallback: 'budget' }]);
-  assert.equal(spent.warnings.filter((w) => w.startsWith('[deep] fallback (budget)')).length, 1);
+  assert.deepEqual(spent.paths, [{ path: 'chat' }, { path: 'stage', fallback: 'budget' }]);
+  assert.equal(spent.warnings.filter((w) => w.startsWith('[chat] fallback (budget)')).length, 1);
 });
 
 await test('a loop that is slow but answers never falls back', async () => {
@@ -799,32 +742,23 @@ await test('a loop that is slow but answers never falls back', async () => {
   let t = 0;
   const turn = await sendTurn(
     PRESENT,
-    { deepByDefault: true },
+    {},
     [callsReply(call('get_league_table', { league: 'A' })), answer('A late but complete answer.')],
     { now: () => (t += 60_000) },
   );
   assert.equal(turn.reply, 'A late but complete answer.');
-  assert.deepEqual(turn.paths, [{ path: 'deep' }]);
-  assert.deepEqual(turn.warnings.filter((w) => w.includes('[deep] fallback')), []);
+  assert.deepEqual(turn.paths, [{ path: 'chat' }]);
+  assert.deepEqual(turn.warnings.filter((w) => w.includes('[chat] fallback')), []);
   assert.ok(!turn.stages.includes(FALLBACK_STAGE_LABEL));
-});
-
-await test('with the default off, a failing Deep turn falls back the same way', async () => {
-  const turn = await sendTurn(PRESENT, { deepByDefault: false, deep: true }, [
-    () => {
-      throw new Error('model unavailable');
-    },
-  ]);
-  assert.deepEqual(turn.paths, [{ path: 'deep' }, { path: 'stage', fallback: 'error' }]);
 });
 
 await test('with the principle set on, the loop reads the principles and the research rules, and its instructions carry only the turn\'s data', async () => {
   let prompt = '';
   const fake = fakeModel([(sent) => ((prompt = String(sent[0].message)), answer('Southside play a 4-3-3.'))]);
-  await quietly(() => runDeepTurn({ ...baseParams('How do Southside line up?'), principles: true }, { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] }));
+  await quietly(() => runChatTurn({ ...baseParams('How do Southside line up?'), principles: true }, { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] }));
   const system = fake.opened()!.systemInstruction;
   assert.equal(system.split('VIII. CHAT PRINCIPLES').length - 1, 1, 'the principles, once');
-  assert.ok(system.endsWith(deepResearchRules(DEFAULT_DEEP_BUDGET)), 'the research rules close the system instruction');
+  assert.ok(system.endsWith(principleResearchRules(DEFAULT_RESEARCH_BUDGET)), 'the research rules close the system instruction');
   assert.doesNotMatch(system, /Reading the User|Views: you can draw a view/);
   const instructions = prompt.slice(prompt.indexOf('<instructions>'), prompt.indexOf('</instructions>'));
   assert.match(instructions, /^<instructions>\n1\. This turn's facts are in your tool results/);
@@ -833,9 +767,9 @@ await test('with the principle set on, the loop reads the principles and the res
   }
 });
 
-await test("deep mode's research rules leave the need, pushback and views to the principles", () => {
-  const rules = deepResearchRules(DEFAULT_DEEP_BUDGET);
-  assert.match(rules, /^## Deep mode/);
+await test("the loop's research rules leave the need, pushback and views to the principles", () => {
+  const rules = principleResearchRules(DEFAULT_RESEARCH_BUDGET);
+  assert.match(rules, /^## Research\n/);
   assert.match(rules, /Budget for this turn: 120 seconds of research, 12 lookups \(at most 4 of them web searches\) and 10 rounds of tool calls/);
   assert.match(rules, /Stop researching as soon as you have what the answer needs/);
   assert.match(rules, /read team news as well as the injury list/);

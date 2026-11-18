@@ -13,12 +13,12 @@ import type { CardSwap } from './debateConsistency';
  */
 
 /**
- * Where the cards turned the order round: the debate check, a drawn ranking, or a deep loop's
+ * Where the cards turned the order round: the debate check, a drawn ranking, or the chat loop's
  * commitment (`commit_verdict`) that put a pair the other way, whether it then argued the cards'
  * order or said why it departed.
  */
-export type DisagreementPath = 'debate' | 'ranking' | 'deep';
-export const DISAGREEMENT_PATHS: readonly DisagreementPath[] = ['debate', 'ranking', 'deep'];
+export type DisagreementPath = 'debate' | 'ranking' | 'commit';
+export const DISAGREEMENT_PATHS: readonly DisagreementPath[] = ['debate', 'ranking', 'commit'];
 
 /** One pair: the model put `lower` above `higher`; the cards put `higher` above `lower`. Card keys. */
 export interface CardDisagreement {
@@ -131,8 +131,8 @@ export interface DisagreementHit {
   days: number;
   firstDay: string;
   lastDay: string;
-  /** Reports by path; `deep` appears only once a deep answer has reported the pair. */
-  via: Record<Exclude<DisagreementPath, 'deep'>, number> & { deep?: number };
+  /** Reports by path; `commit` appears only once a committed verdict has reported the pair. */
+  via: Record<Exclude<DisagreementPath, 'commit'>, number> & { commit?: number };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

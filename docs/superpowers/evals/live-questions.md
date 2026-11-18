@@ -22,7 +22,7 @@ times, one run at a time, and measures how far the answers vary: the spread of e
 contradictions between the runs' verdicts, starters and claims about what changed, whether the runs
 looked up different things, and card figures quoted. `--dry-run` prices a run without a call. See
 [README.md](README.md) for the flags, the estimate and the smallest run that answers whether
-deep-mode answers drift.
+the chat loop's answers drift.
 
 ### By hand
 
@@ -210,14 +210,14 @@ One turn whose need (what to learn from) differs from its words (which player is
 }
 ```
 
-### C5. A Gaffa market question in deep mode
+### C5. A Gaffa market question in the chat loop
 
-One market question with a Gaffa club attached, which takes the deep loop since 2026-11-17. It needs the same club as C1 (`EVAL_GAFFA_CLUB` and `FUTBOLPEDIA_READ_SECRET`). The checks hold whatever the league's market holds today.
+One market question with a Gaffa club attached, which takes the chat loop since 2026-11-17. It needs the same club as C1 (`EVAL_GAFFA_CLUB` and `FUTBOLPEDIA_READ_SECRET`). The checks hold whatever the league's market holds today.
 
 ```json conversation
 {
   "id": "C5",
-  "title": "A Gaffa market question in deep mode",
+  "title": "A Gaffa market question in the chat loop",
   "gaffaClub": true,
   "subjects": {},
   "turns": [

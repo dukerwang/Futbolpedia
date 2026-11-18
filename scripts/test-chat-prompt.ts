@@ -42,7 +42,7 @@ import type { PlayerProfile } from '../types';
 import { CALIBRATION_EPOCH_MS } from '../services/dossierCache';
 import { buildLockedDossiersBlock, buildSavedDossiersBlock } from '../services/dossierContext';
 import { challengeInstructions, initiativeRules, stageInstructions } from '../services/conversationalScout';
-import { DEEP_DECLARATIONS, DEFAULT_DEEP_BUDGET, deepInstructions, deepModeRules, deepResearchRules } from '../services/deepTurn';
+import { CHAT_DECLARATIONS, DEFAULT_RESEARCH_BUDGET, chatInstructions, researchRules, principleResearchRules } from '../services/chatTurn';
 import { readDebateBrief } from '../services/debateBrief';
 import { CARD_ANCHOR_NOTE, COMMIT_VERDICT_DECLARATION, PAST_RESEARCH_NOTE } from '../services/pastTurn';
 import { formatSituation } from '../services/situationSnapshot';
@@ -167,10 +167,10 @@ const legacyOutputs = (): Record<string, string> => {
   const out: Record<string, string> = {};
   for (const mode of MODES) {
     out[`stage ${mode}`] = stageInstructions({ principles: false, route: route(mode), analyticalMode: mode, currentSeason: SEASON, debate: null, notes: NOTES, gaffa: false, extraRules });
-    out[`deep ${mode}`] = deepInstructions({ principles: false, route: route(mode), analyticalMode: mode, currentSeason: SEASON, notes: NOTES, gaffa: false });
+    out[`chat ${mode}`] = chatInstructions({ principles: false, route: route(mode), analyticalMode: mode, currentSeason: SEASON, notes: NOTES, gaffa: false });
   }
   out['stage compare'] = stageInstructions({ principles: false, route: route('debate_or_verdict', 'compare'), analyticalMode: 'debate_or_verdict', currentSeason: SEASON, debate: null, notes: '', gaffa: true, extraRules: [] });
-  out['deep gaffa'] = deepInstructions({ principles: false, route: route('squad_or_recruitment'), analyticalMode: 'squad_or_recruitment', currentSeason: SEASON, notes: '', gaffa: true });
+  out['chat gaffa'] = chatInstructions({ principles: false, route: route('squad_or_recruitment'), analyticalMode: 'squad_or_recruitment', currentSeason: SEASON, notes: '', gaffa: true });
   for (const kind of ['head_to_head', 'ranking', 'single', 'other'] as const) {
     out[`stage past ${kind}`] = stageInstructions({
       principles: false,
@@ -184,7 +184,7 @@ const legacyOutputs = (): Record<string, string> => {
     });
   }
   out.challenge = challengeInstructions(false);
-  out.deepModeRules = deepModeRules(DEFAULT_DEEP_BUDGET);
+  out.researchRules = researchRules(DEFAULT_RESEARCH_BUDGET);
   out.lockedDossiers = buildLockedDossiersBlock([card('Player One')]);
   out.savedDossiers = buildSavedDossiersBlock([card('Player One')], false);
   out.savedArchive = buildSavedDossiersBlock([card('Player One')], true);
@@ -193,41 +193,41 @@ const legacyOutputs = (): Record<string, string> => {
   out.need = formatNeedForWriter(need);
   out.gaffaReasoning = GAFFA_MANAGER_REASONING;
   out.initiativeTools = JSON.stringify([ASK_USER_DECLARATION, PREPARE_CLUB_DECLARATION, OFFER_RATING_DECLARATION]);
-  out.deepTools = JSON.stringify(DEEP_DECLARATIONS);
+  out.chatTools = JSON.stringify(CHAT_DECLARATIONS);
   return out;
 };
 
 /**
  * Their hashes, taken when the switch was added and checked against `main` before it: a full
- * `npm test` run captured every writer prompt (stage, deep and challenge) on `main` and on the
+ * `npm test` run captured every writer prompt (stage, chat loop and challenge) on `main` and on the
  * branch with the switch off, and the two were identical. A deliberate change to an old builder
  * updates its hash here; with the switch flipped, these go with the old builders.
  */
 const LEGACY_PINS: Record<string, string> = {
   "stage head_to_head": 'cc41eaedf609c94f0a785c8242a98d275da0bdda508eed08546e8c00f1a476b5',
-  "deep head_to_head": 'f26470877551af744a93df5edc98ed289f5119bec2c065685ba95d3ecdf2cbc0',
+  "chat head_to_head": 'f26470877551af744a93df5edc98ed289f5119bec2c065685ba95d3ecdf2cbc0',
   "stage archive": '6f725a70705cf9edbf6e5df25c977021b8d2f1d1744fa64471c06b50d332c35c',
-  "deep archive": 'd73b7880f0eacce29f9d1156716d30ddc02b8ec627a527770962ee7a6df6f5cd',
+  "chat archive": 'd73b7880f0eacce29f9d1156716d30ddc02b8ec627a527770962ee7a6df6f5cd',
   "stage player_qa": '576fa6b8254cd4fb21503757e33dcb17ec13ba2490f6c74f549d858b7911e704',
-  "deep player_qa": '32145f50eb5203c47b8feb8ff38e910a09e01fcdd1b8554802338bf300692852',
+  "chat player_qa": '32145f50eb5203c47b8feb8ff38e910a09e01fcdd1b8554802338bf300692852',
   "stage ranking_or_tierlist": 'ceb65d5961580b2074812bdc1eaa807049ebc77f6fb425b43696eee4e2065a8c',
-  "deep ranking_or_tierlist": '2050814cbaa7b3ff347729572334da256122829bd59ce059a80e42f2a797ab13',
+  "chat ranking_or_tierlist": '2050814cbaa7b3ff347729572334da256122829bd59ce059a80e42f2a797ab13',
   "stage tactical_or_system": 'ae98336b3b00b6514d2838148c9610337d5c146543b4adc43b2de4d867d8774c',
-  "deep tactical_or_system": 'dd828f986166b9b7677c46b63f15865923c7ee150a1d87662cf30fbb3558954f',
+  "chat tactical_or_system": 'dd828f986166b9b7677c46b63f15865923c7ee150a1d87662cf30fbb3558954f',
   "stage squad_or_recruitment": '9a17e31554d6d762122ef2e62849c6ece131124cdad1a16885e8eb1ff2dd6d73',
-  "deep squad_or_recruitment": '0e55f3211a44ec7e1c44b87ee3c459510a4dd4d9c091f04685942d8270efda11',
+  "chat squad_or_recruitment": '0e55f3211a44ec7e1c44b87ee3c459510a4dd4d9c091f04685942d8270efda11',
   "stage debate_or_verdict": '33ba56cc824d3f74e571d3b05f677d167f32689820e274f13fcb8113940efed3',
-  "deep debate_or_verdict": 'bfb7d737d756393656eb4bf1ac51291daa331588f85b6334d104c37b7f398371',
+  "chat debate_or_verdict": 'bfb7d737d756393656eb4bf1ac51291daa331588f85b6334d104c37b7f398371',
   "stage dossier": '01f3ec4f0ad592c7fde7ffd0a1df7cfcc7c3b217af00bf21afc714d536f57437',
-  "deep dossier": 'b793cf5f4dd78ce357ee255f680832bb6c9ee53935d09ab1b5dd0e9fc0448ff0',
+  "chat dossier": 'b793cf5f4dd78ce357ee255f680832bb6c9ee53935d09ab1b5dd0e9fc0448ff0',
   "stage compare": '4486d9877f68466da3a8a4fc6111f290458804ebe03f1addea9f67d5f2da24b9',
-  "deep gaffa": '02e3cbb3b085a37c522b1128596582d03e6843fe0864121fc726b69ebb47daac',
+  "chat gaffa": '02e3cbb3b085a37c522b1128596582d03e6843fe0864121fc726b69ebb47daac',
   "stage past head_to_head": 'a6d6afd823cd8b5ab7477dd3f43ea65a9bfb968b8fb9a84dc52be8b485bde74b',
   "stage past ranking": 'a6d6afd823cd8b5ab7477dd3f43ea65a9bfb968b8fb9a84dc52be8b485bde74b',
   "stage past single": 'a6d6afd823cd8b5ab7477dd3f43ea65a9bfb968b8fb9a84dc52be8b485bde74b',
   "stage past other": '89c071de1fdcec6cd7395db1ea77dbb2dc44e15e9e3a3133e864cd4abc3c0849',
   "challenge": '46453d235b9a38a3632ee2a4ff16dabf9383b78ab5b12fd01e3646bb780dcad5',
-  "deepModeRules": '6f3e58fcd9156037a75dacc87335532e9c7cab03e8026bc5e03dc49870a7a3bb',
+  "researchRules": '54d01293baafc0a3661c45a72e4a9f2dcdc5dae5f0786602c9c5b03a93719b28', // heading renamed from "## Deep mode" to "## Research" (2026-11-18-one-chat-path-design.md)
   "lockedDossiers": '3ffe99ef18557cdb462c8ba157a36603189bd3f41db0476f8a20db8cbe37992f',
   "savedDossiers": '97c351563c4a3e9f56e9f25df0be73f1876c69dab353401289bc837383d491ee',
   "savedArchive": '5a8a8e5a33893fd8c4ccd22894c0c1a2fd2d8e34abe71f7372c62445aabc2177',
@@ -236,7 +236,7 @@ const LEGACY_PINS: Record<string, string> = {
   "need": 'bfcc163544f552921dc2f6bc26d47395d640d53326a93625400fe469ec06a718',
   "gaffaReasoning": '328d7195266c84a6668fe3c348e8d46a7259b4021de9f17ed849d45c466db63f',
   "initiativeTools": '1773e9ace68a304ee5d48177ea35393c9d5b7acd446ea92b81b98a6817820612',
-  "deepTools": '59c3c2600cd96552a2c0a9e33503177f35f7118da0ac72c8378217a4a9fcf2ad',
+  "chatTools": '59c3c2600cd96552a2c0a9e33503177f35f7118da0ac72c8378217a4a9fcf2ad',
 };
 
 await test('with the switch off, every path builds the instructions it always did', () => {
@@ -284,7 +284,7 @@ const principleParts = (): Record<string, string> => ({
   ...Object.fromEntries(Object.entries(PRINCIPLE_SOURCES).map(([k, v]) => [`sources ${k}`, v])),
   gaffaSources: GAFFA_CLUB_SOURCES,
   ratingCode: RATING_CODE,
-  deepResearchRules: deepResearchRules(DEFAULT_DEEP_BUDGET),
+  principleResearchRules: principleResearchRules(DEFAULT_RESEARCH_BUDGET),
   challenge: challengeInstructions(true),
   lockedHeader: buildLockedDossiersBlock([card('Player One')], true).split('\n')[2],
   savedHeader: buildSavedDossiersBlock([card('Player One')], false, true).split('\n')[2],
@@ -373,10 +373,10 @@ await test('the principle set is descriptive: no players, clubs or quoted sample
 await test('under the principle set, the turn instructions carry data only: no answer template, whatever the router said', () => {
   for (const mode of MODES) {
     const stage = stageInstructions({ principles: true, route: route(mode), analyticalMode: mode, currentSeason: SEASON, debate: null, notes: NOTES, gaffa: false, extraRules });
-    const deep = deepInstructions({ principles: true, route: route(mode), analyticalMode: mode, currentSeason: SEASON, notes: NOTES, gaffa: false });
+    const loop = chatInstructions({ principles: true, route: route(mode), analyticalMode: mode, currentSeason: SEASON, notes: NOTES, gaffa: false });
     if (mode === 'archive') assert.equal(stage, `<instructions>\n1. ${PRINCIPLE_SOURCES.archive}\n2. ${NOTES.trim()}\n</instructions>`);
     else assert.equal(stage, `<instructions>\n1. ${PRINCIPLE_SOURCES.present}\n2. ${NOTES.trim()}\n</instructions>`, mode);
-    assert.equal(deep, `<instructions>\n1. ${PRINCIPLE_SOURCES.deep}\n2. ${NOTES.trim()}\n</instructions>`, mode);
+    assert.equal(loop, `<instructions>\n1. ${PRINCIPLE_SOURCES.chat}\n2. ${NOTES.trim()}\n</instructions>`, mode);
   }
   const other = stageInstructions({ principles: true, route: route('debate_or_verdict'), analyticalMode: 'debate_or_verdict', currentSeason: SEASON, debate: readDebateBrief({ kind: 'other' }, { message: 'm' }), notes: '', gaffa: true, extraRules });
   assert.equal(other, `<instructions>\n1. ${PRINCIPLE_SOURCES.past} ${PRINCIPLE_SOURCES.pastOther}\n2. ${GAFFA_CLUB_SOURCES}\n</instructions>`);

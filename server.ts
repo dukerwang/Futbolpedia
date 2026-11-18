@@ -32,7 +32,7 @@ import { eraEntry, rowToSnapshot } from "./services/eraSnapshots";
 import { getCardKey } from "./services/dossierCards";
 import {
   DEBATE_SETTLE_DEFAULT_CALLS,
-  DEEP_PAST,
+  PAST_MODE,
   createVerdictSettler,
   departureHandler,
   eraKeyForSubject,
@@ -938,7 +938,7 @@ async function startServer() {
   // when one check call over the stored records accepts it. Browsers read the table; only this
   // server writes it. DEBATE_SETTLE_CALLS (default 20) caps the calls a day, DEBATE_SETTLE=off stops
   // them, and without the `debate_verdicts` table nothing is stored or called. The route is public
-  // and nothing in the app proposes a verdict until DEEP_PAST is on, so until then it spends nothing
+  // and nothing in the app proposes a verdict until PAST_MODE is on, so until then it spends nothing
   // (DEBATE_SETTLE=on forces it on for a local run).
   const verdictSalt = randomBytes(16).toString("hex");
   const verdictSource = (req: express.Request): string => {
@@ -951,7 +951,7 @@ async function startServer() {
   const settleCalls = process.env.DEBATE_SETTLE_CALLS && Number.isFinite(Number(process.env.DEBATE_SETTLE_CALLS))
     ? Math.max(0, Math.floor(Number(process.env.DEBATE_SETTLE_CALLS)))
     : DEBATE_SETTLE_DEFAULT_CALLS;
-  const settleOn = settleEnabled({ deepPast: DEEP_PAST, setting: process.env.DEBATE_SETTLE, calls: settleCalls });
+  const settleOn = settleEnabled({ pastMode: PAST_MODE, setting: process.env.DEBATE_SETTLE, calls: settleCalls });
   // Without the secret key verdicts stay in memory, but only once the table exists.
   const publicVerdicts = supabaseVerdictDb(publicClient);
   const verdicts = createVerdictSettler({
@@ -986,7 +986,7 @@ async function startServer() {
     },
   });
   console.log(
-    `[startup] settled verdicts: ${settleOn ? `on, ${settleCalls} calls a day${secretClient ? "" : ", in memory"}` : "off"} (DEEP_PAST ${DEEP_PAST ? "on" : "off"}, DEBATE_SETTLE ${process.env.DEBATE_SETTLE || "unset"})`,
+    `[startup] settled verdicts: ${settleOn ? `on, ${settleCalls} calls a day${secretClient ? "" : ", in memory"}` : "off"} (PAST_MODE ${PAST_MODE ? "on" : "off"}, DEBATE_SETTLE ${process.env.DEBATE_SETTLE || "unset"})`,
   );
   app.post("/api/debates/settle", settleHandler(verdicts, verdictSource));
   app.post("/api/debates/departure", departureHandler(verdicts, verdictSource));

@@ -284,7 +284,7 @@ export async function buildGaffaTurn(params: {
   factualFoundation?: string;
   /** Reads the squad's FPL availability; tests swap it. A failed read leaves the club block as it was. */
   fetchAvailability?: AvailabilityFetcher;
-  /** False on deep mode, which never takes a trade: no scorecard call is made whatever the focus. */
+  /** False in the chat loop, which never takes a trade: no scorecard call is made whatever the focus. */
   scorecard?: boolean;
   /**
    * Under the chat principle set (`PRINCIPLES_PROMPT`), the manager's reasoning leaves out its last

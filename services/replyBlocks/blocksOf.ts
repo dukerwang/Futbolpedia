@@ -56,7 +56,7 @@ export function blocksOf(message: ChatMessage): ReplyBlock[] {
   return blocks;
 }
 
-/** Kinds a stored reply may still hold but nothing draws: Go deeper reran a turn in deep mode, which every eligible turn now takes. */
+/** Kinds a stored reply may still hold but nothing draws: Go deeper reran a turn in the chat loop, which every eligible turn now takes. */
 const RETIRED_KINDS = new Set<ReplyBlock['kind']>(['goDeeper']);
 
 /** The blocks a reply draws: `blocksOf` without the retired kinds. */

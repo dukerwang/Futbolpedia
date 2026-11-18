@@ -29,26 +29,26 @@ import { eraKey, isMissingTable, normalizePeriod } from './eraSnapshots';
  * replaces it. Without the table, nothing is read or stored and no call is made; without the
  * secret key the server keeps verdicts in memory.
  *
- * Nothing calls this yet: the deep loop reads and proposes verdicts once `DEEP_PAST` is on. Until
+ * Nothing calls this yet: the chat loop reads and proposes verdicts once `PAST_MODE` is on. Until
  * then the settle route spends nothing (`settleEnabled`), since it is public.
  */
 
 /**
- * Whether questions about the past take the deep loop. While it is off nothing in the app proposes
+ * Whether questions about the past take the chat loop. While it is off nothing in the app proposes
  * a verdict, so the public settle route makes no call and stores nothing. Migration step 3 moves
- * this switch to `services/deepTurn.ts` with the loop it turns on, and this module reads it there.
+ * this switch to `services/chatTurn.ts` with the loop it turns on, and this module reads it there.
  */
-export const DEEP_PAST = false;
+export const PAST_MODE = false;
 
 /**
- * Whether the settle route may spend calls: only while past questions are on (`deepPast`), or when
+ * Whether the settle route may spend calls: only while past questions are on (`pastMode`), or when
  * `DEBATE_SETTLE=on` forces it for a local run, never when `DEBATE_SETTLE=off`, and never with a
  * budget of zero.
  */
-export function settleEnabled(opts: { deepPast: boolean; setting?: string | null; calls: number }): boolean {
+export function settleEnabled(opts: { pastMode: boolean; setting?: string | null; calls: number }): boolean {
   const setting = (opts.setting ?? '').trim().toLowerCase();
   if (setting === 'off' || opts.calls <= 0) return false;
-  return setting === 'on' || opts.deepPast;
+  return setting === 'on' || opts.pastMode;
 }
 
 /** Bump when the key, the check or the stored shape changes, so every row is settled again. */

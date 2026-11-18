@@ -253,7 +253,7 @@ export interface ChatMessage {
   lineups?: LineupView[];
   /** A reply that asks which reading the user meant: its question is the prose, its options are chips. */
   ask?: AskPrompt;
-  /** A reply whose question deserved a longer look: a chip reruns the message in deep mode. */
+  /** A reply whose question deserved a longer look: a chip reran the message in the chat loop, back when it was opt-in. */
   goDeeper?: GoDeeper;
   /**
    * A new reply as an ordered list of blocks (`services/replyBlocks`). The legacy fields above

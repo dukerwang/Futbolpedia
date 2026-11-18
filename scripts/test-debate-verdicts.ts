@@ -16,7 +16,7 @@ import { getCardKey } from '../services/dossierCards';
 import {
   DEBATE_SETTLE_DEFAULT_CALLS,
   DEBATE_VERDICT_VERSION,
-  DEEP_PAST,
+  PAST_MODE,
   REFUSED_COOLDOWN_MS,
   SETTLES_PER_SOURCE_HOUR,
   VERDICT_REOPEN_DEPARTURES,
@@ -362,9 +362,9 @@ await test('off, or with no table, nothing is called or stored', async () => {
   assert.deepEqual(await readSettledVerdicts({ cards: [high, low] }, { db: noTable.db }), []);
 });
 
-await test('with DEEP_PAST off, the public settle route makes no model call', async () => {
-  assert.equal(DEEP_PAST, false, 'nothing proposes a verdict until migration step 3 turns past questions on');
-  const enabled = settleEnabled({ deepPast: DEEP_PAST, setting: undefined, calls: DEBATE_SETTLE_DEFAULT_CALLS });
+await test('with PAST_MODE off, the public settle route makes no model call', async () => {
+  assert.equal(PAST_MODE, false, 'nothing proposes a verdict until migration step 3 turns past questions on');
+  const enabled = settleEnabled({ pastMode: PAST_MODE, setting: undefined, calls: DEBATE_SETTLE_DEFAULT_CALLS });
   assert.equal(enabled, false);
   const h = harness({ enabled });
   for (const body of [h2h('output', [HIGH, LOW], LOW), h2h('peak_level', [HIGH, LOW], HIGH), h2h('mixed', [LEVEL_A, LEVEL_B], LEVEL_A)]) {
@@ -379,11 +379,11 @@ await test('with DEEP_PAST off, the public settle route makes no model call', as
 });
 
 await test('the switch: past questions or DEBATE_SETTLE=on turn it on; off, or no budget, always wins', () => {
-  assert.equal(settleEnabled({ deepPast: true, calls: 20 }), true);
-  assert.equal(settleEnabled({ deepPast: false, setting: 'on', calls: 20 }), true);
-  assert.equal(settleEnabled({ deepPast: true, setting: 'OFF', calls: 20 }), false);
-  assert.equal(settleEnabled({ deepPast: true, setting: 'on', calls: 0 }), false);
-  assert.equal(settleEnabled({ deepPast: false, setting: '', calls: 20 }), false);
+  assert.equal(settleEnabled({ pastMode: true, calls: 20 }), true);
+  assert.equal(settleEnabled({ pastMode: false, setting: 'on', calls: 20 }), true);
+  assert.equal(settleEnabled({ pastMode: true, setting: 'OFF', calls: 20 }), false);
+  assert.equal(settleEnabled({ pastMode: true, setting: 'on', calls: 0 }), false);
+  assert.equal(settleEnabled({ pastMode: false, setting: '', calls: 20 }), false);
 });
 
 await test('the in-memory store asks whether the real table exists before any call', async () => {

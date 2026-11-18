@@ -129,9 +129,9 @@ export function parseAgreement(raw: string): { agreement: Agreement; why: string
 
 // --- The historical run -----------------------------------------------------------------------
 
-/** What a run looked up and committed to, when the runner reports it (`--deep` runs carry `past`). */
+/** What a run looked up and committed to, when the runner reports it (`--past-mode` runs carry `past`). */
 export interface HistoryResearch {
-  path: 'stage' | 'deep';
+  path: 'stage' | 'chat';
   fallback?: string;
   lookups: number;
   searches: number;
@@ -340,19 +340,19 @@ ${r.run.perf.map((l) => `    ${l}`).join('\n') || '    (no perf lines)'}
 
 // --- Research and commitments ----------------------------------------------------------------
 
-/** Summary lines for runs that report their research; empty when none do (the stage runner before `--deep`). */
+/** Summary lines for runs that report their research; empty when none do (the stage runner before `--past-mode`). */
 export function researchSummary(runs: HistoricalRun[]): string {
   const withResearch = runs.filter((r) => r.run.research);
   if (!withResearch.length) return '';
-  const deep = withResearch.filter((r) => r.run.research!.path === 'deep');
-  const past = deep.filter((r) => r.run.research!.past);
+  const loop = withResearch.filter((r) => r.run.research!.path === 'chat');
+  const past = loop.filter((r) => r.run.research!.past);
   const judged = past.filter((r) => r.run.research!.past!.committed);
   const cards = (v: string) => judged.filter((r) => r.run.research!.past!.cards === v).length;
   const rankings = past.filter((r) => r.run.research!.past!.rankingPriorFound !== null);
   return [
-    `- Path: ${deep.length} of ${withResearch.length} answers through the deep loop; ${withResearch.filter((r) => r.run.research!.fallback).length} fell back to the stage pipeline`,
+    `- Path: ${loop.length} of ${withResearch.length} answers through the chat loop; ${withResearch.filter((r) => r.run.research!.fallback).length} fell back to the stage pipeline`,
     past.length
-      ? `- Committed a verdict: ${judged.length} of ${past.length} deep answers; against the cards ${cards('against')} (departed with a reason ${judged.filter((r) => r.run.research!.past!.departed && !r.run.research!.past!.departedSilently).length}, silently ${judged.filter((r) => r.run.research!.past!.departedSilently).length}), agreed ${cards('agree')}, level ${cards('level')}, not card-settled ${cards('unsettled')}`
+      ? `- Committed a verdict: ${judged.length} of ${past.length} chat loop answers; against the cards ${cards('against')} (departed with a reason ${judged.filter((r) => r.run.research!.past!.departed && !r.run.research!.past!.departedSilently).length}, silently ${judged.filter((r) => r.run.research!.past!.departedSilently).length}), agreed ${cards('agree')}, level ${cards('level')}, not card-settled ${cards('unsettled')}`
       : '',
     past.length ? `- Read a settled verdict: ${past.filter((r) => r.run.research!.past!.priors.current + r.run.research!.past!.priors.stale + r.run.research!.past!.priors.contested > 0).length} of ${past.length}` : '',
     rankings.length ? `- Found a stored ranking for the question's field: ${rankings.filter((r) => r.run.research!.past!.rankingPriorFound).length} of ${rankings.length} ranking answers` : '',
@@ -384,7 +384,7 @@ export function researchTable(runs: HistoricalRun[]): string {
     const cards = p ? `${p.cards ?? '–'}${p.departed ? (p.departedSilently ? ', departed silently' : ', departed') : ''}` : '–';
     const prior = p ? `${p.settled}${p.priors.current + p.priors.stale + p.priors.contested ? ` (${p.priors.current} current, ${p.priors.stale} stale)` : ''}` : '–';
     const store = x.settles ? x.settles.join(', ') || 'nothing proposed' : '–';
-    return `| ${r.q.n} | ${r.attempt} | ${x.fallback ? `deep, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${views} | ${gate} | ${commit.replace(/\|/g, '/')} | ${cards} | ${prior} | ${p?.rankingPriorFound === null || !p ? '–' : p.rankingPriorFound ? 'yes' : 'no'} | ${store} |`;
+    return `| ${r.q.n} | ${r.attempt} | ${x.fallback ? `chat, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${views} | ${gate} | ${commit.replace(/\|/g, '/')} | ${cards} | ${prior} | ${p?.rankingPriorFound === null || !p ? '–' : p.rankingPriorFound ? 'yes' : 'no'} | ${store} |`;
   };
   return `## Research and commitments
 
