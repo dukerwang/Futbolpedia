@@ -3,7 +3,8 @@ import type { ReadyBlock } from '../../types';
 import { RANKING_CRITERIA, type RankingCriterion, type RankingEntry, type RankingViewData, isCardedEntry } from '../../components/views/viewData';
 import { toBasePlayerSlug } from '../dossierCards';
 import { toChatDossierRef } from '../dossierRefs';
-import { checkOrderAgainstCards, toStanding } from '../debateConsistency';
+import { CARD_SETTLED_CRITERIA, cardsSettle, checkOrderAgainstCards, toStanding } from '../debateConsistency';
+import { disagreementsFromSwaps, reportCardDisagreements } from '../cardDisagreements';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const rankingBlock = (id: string, data: RankingViewData): ReadyBlock<'ranking'> => readyBlock('ranking', id, data);
@@ -12,11 +13,11 @@ export const rankingBlock = (id: string, data: RankingViewData): ReadyBlock<'ran
 export const MAX_RANKING_ENTRIES = 15;
 
 /**
- * The criteria where the ranking claims who was better, so the cards' ratings settle the order. For
- * any other criterion (output, influence, versatility) the cards inform the argument but the model's
- * order stands.
+ * The criteria where the cards' ratings settle the order, as the ranking view spells them: the one
+ * rule the debate check also reads (`CARD_SETTLED_CRITERIA`). For any other criterion the cards
+ * inform the argument but the model's order stands.
  */
-export const CARD_ORDERED_CRITERIA: readonly RankingCriterion[] = ['peak level', 'sustained level', 'mixed'];
+const SETTLED_NAMES = CARD_SETTLED_CRITERIA.map((c) => c.replace(/_/g, ' ')).join(' or ');
 
 /** A criterion as the model wrote it ("peak_level", "Peak level"), or null when it isn't one of the six. */
 export const criterionOf = (raw: unknown): RankingCriterion | null => {
@@ -34,7 +35,7 @@ export const rankingEntry: BlockEntry<'ranking'> = {
   kind: 'ranking',
   tool: {
     name: 'show_ranking',
-    description: `Draws a ranked list of players in the reply: each name is tied to its stored dossier card where one exists (position, version and Overall) and opens it; a player with no card shows by name with a way to scout him. Up to ${MAX_RANKING_ENTRIES} names. Where the ranking claims who was better (criterion peak level, sustained level or mixed), the cards' ratings settle the order of the carded players and the result tells you what moved, so your prose follows the order drawn; for other criteria your order stands. Use it when the answer is an order, and call it where the reader needs the order in your argument. Free: it doesn't count against your lookups.`,
+    description: `Draws a ranked list of players in the reply: each name is tied to its stored dossier card where one exists (position, version and Overall) and opens it; a player with no card shows by name with a way to scout him. Up to ${MAX_RANKING_ENTRIES} names. Where the ranking claims who was better (criterion ${SETTLED_NAMES}), the cards' ratings settle the order of the carded players and the result tells you what moved, so your prose follows the order drawn; for other criteria your order stands. Use it when the answer is an order, and call it where the reader needs the order in your argument. Free: it doesn't count against your lookups.`,
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -81,7 +82,7 @@ export const rankingEntry: BlockEntry<'ranking'> = {
     // Where the claim is who was better, the cards' ratings order the carded players.
     let moves: string[] = [];
     let ordered = entries;
-    if (CARD_ORDERED_CRITERIA.includes(kind)) {
+    if (cardsSettle(kind)) {
       const cards = looked.flatMap((f) => (f.status === 'found' ? [f.card] : []));
       if (cards.length >= 2) {
         const proposed = entries.map((e) => e.name);
@@ -89,6 +90,8 @@ export const rankingEntry: BlockEntry<'ranking'> = {
         const byName = new Map(entries.map((e) => [e.name, e] as const));
         ordered = check.order.map((n) => byName.get(n)!).filter(Boolean);
         moves = check.moves;
+        // Each pair the cards turned round is recorded for card review; the answer follows the cards.
+        reportCardDisagreements(disagreementsFromSwaps(check.swaps, 'ranking'));
       }
     }
     return { block: rankingBlock(ctx.newId(), { title: title.trim(), criterion: kind, entries: ordered, moves }) };

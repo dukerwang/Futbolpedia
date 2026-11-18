@@ -22,6 +22,7 @@ import type { LiveClubResult } from './liveFootball';
 import type { LiveGet, ResearchToolset } from './researchTools';
 import type { SnapshotServer } from './snapshotServer';
 import { scoutSubjectKey } from './scoutNotes';
+import { createDisagreementTally, type CardDisagreement, type DisagreementHit } from './cardDisagreements';
 import {
   CARD_ACTION_COST,
   CARD_REVIEW_DEFAULT_CALLS,
@@ -107,6 +108,7 @@ export function createScoutTally(now: () => number = Date.now) {
   const seasons = new Map<string, { club: string; season: string; days: Bucket }>();
   const gaps = new Map<string, { item: string; status: 'empty' | 'failed'; days: Bucket }>();
   const cardViews = new Map<string, { name: string; days: Bucket }>();
+  const disagreements = createDisagreementTally(now);
   const startedAt = now();
   let gaffaTurns: Bucket = new Map();
 
@@ -157,6 +159,16 @@ export function createScoutTally(now: () => number = Date.now) {
     cardView(name: string) {
       const n = text(name, 80);
       if (n) touch(cardViews, toPlayerSlug(n), () => ({ name: n, days: new Map() }));
+    },
+    /**
+     * A pair of cards an answer ordered the other way before the cards settled it (services/cardDisagreements.ts),
+     * from a source: the server's salted hash of the request's address, or "server" for its own turns.
+     */
+    cardDisagreement(pair: CardDisagreement, source: string): boolean {
+      return disagreements.record(pair, source);
+    },
+    disagreements(): DisagreementHit[] {
+      return disagreements.list();
     },
     demandCards(): DemandHit[] {
       return [...cardViews.values()].map((e) => ({ name: e.name, hits: total(e.days) })).filter((e) => e.hits > 0).sort((a, b) => b.hits - a.hits);
@@ -340,7 +352,7 @@ export async function gatherSignals(sources: ScoutSources, nowMs: number = Date.
 export const describeSignals = (s: ScoutSignals): string =>
   `demand ${s.demand.clubs.length} clubs, ${s.demand.players.length} players, ${s.demand.seasons.length} seasons; ${s.staleStories.length} stale stories; ${s.fixtures.length} fixtures (${s.fixtures.filter((f) => f.snapshotOlderThanDay).length} with a snapshot over a day old); cards ${s.cards.nearingRefresh.length} nearing refresh, ${s.cards.staleLatestUpdate.length} with an old Latest Update; ${s.gaps.length} gaps${
     s.cardReview
-      ? `; card review ${s.cardReview.expiredCurrent.length} past their window, ${s.cardReview.situationMoved.length} moved, ${s.cardReview.historicalGaps.length} with covered gaps, ${s.cardReview.coherence.pairs.length} two-way pairs, ${s.cardReview.coherence.cycles.length} circles`
+      ? `; card review ${s.cardReview.expiredCurrent.length} past their window, ${s.cardReview.situationMoved.length} moved, ${s.cardReview.historicalGaps.length} with covered gaps, ${s.cardReview.coherence.pairs.length} two-way pairs, ${s.cardReview.coherence.cycles.length} circles, ${s.cardReview.disagreements?.length ?? 0} disagreement pairs`
       : ''
   }${s.unread.length ? `; unread: ${s.unread.join(', ')}` : ''}`;
 
@@ -446,7 +458,7 @@ const cardActionsPrompt = (cardBudget: number): string => `
 Cards have a separate budget of ${cardBudget} model calls, spent only on these actions, so card work never takes calls from the actions above. A card rates one version of a player and anchors every card rated after it, so a rating is re-examined only for a reason the card signals give, never because a player is popular alone:
 - rerate_current(player): rates a current card whose rating window has closed through the full dossier pipeline, and publishes the new card as a visitor's request would. About ${CARD_ACTION_COST.rerate_current} calls. Only for a player in the list of current cards whose window has closed; queued ones and the most asked about come first.
 - fill_facts(cardKey): fills a historical card's data gaps from the stored record that now covers them, without touching its rating. About ${CARD_ACTION_COST.fill_facts} calls. Only for a card key in the list of historical cards with covered gaps.
-- review_prime(player): drafts a new rating of the player's prime with the new record or the contradiction in its evidence, then a separate reviewer decides whether it replaces the card: it may accept, ask for one revision (another ${CARD_ACTION_COST.review_prime} calls), or refuse. About ${CARD_ACTION_COST.review_prime} calls a round. Only for a player whose prime card appears in the covered-gaps list or in a placement contradiction, and only when that evidence could change the rating; a gap whose fact can't change how good he was is a fill_facts.
+- review_prime(player): drafts a new rating of the player's prime with the new record or the contradiction in its evidence, then a separate reviewer decides whether it replaces the card: it may accept, ask for one revision (another ${CARD_ACTION_COST.review_prime} calls), or refuse. About ${CARD_ACTION_COST.review_prime} calls a round. Only for a player whose prime card appears in the covered-gaps list, in a placement contradiction or in a pair answers ordered against the cards, and only when that evidence could change the rating; a gap whose fact can't change how good he was is a fill_facts. A disagreement pair is a count, not a record: either card may be the one out of place, and the more often and on more days it was reported, the more it is worth a review.
 A player in the list of moved current cards gets refresh_latest_update now, whatever his line's age; his re-rating waits for the day his window closes.
 `;
 

@@ -490,7 +490,7 @@ await test('comparison: a goalkeeper against an outfielder reads headline number
   assert.ok(!/Reflexes|Finishing/.test(`${result.a} ${result.b}`));
 });
 
-await test('ranking: peak level follows the cards and reports the moves; output keeps the model order', async () => {
+await test('ranking: peak level and mixed follow the cards and report the moves; sustained level and output keep the model order', async () => {
   pool.clear();
   withCard('Zinedine Zidane', 94);
   withCard('Ronaldinho', 92);
@@ -506,10 +506,11 @@ await test('ranking: peak level follows the cards and reports the moves; output 
   assert.match(String(result.note), /follows the cards/);
   assert.equal(REPLY_BLOCKS.ranking.toHistory(peak.block), '[shown: ranking "Best midfielders" by peak level: Zinedine Zidane, Ronaldinho, Xavi Hernandez]');
   assert.match(REPLY_BLOCKS.ranking.toCopy(peak.block), /^Best midfielders \(peak level\)\n1\. Zinedine Zidane \(94\)/);
-  for (const criterion of ['sustained_level', 'mixed']) {
-    const out = await REPLY_BLOCKS.ranking.build({ title: 'T', names, criterion }, ctxWithCards());
-    assert.ok('block' in out && out.block.data.entries[0].name === 'Zinedine Zidane', criterion);
-  }
+  const mixed = await REPLY_BLOCKS.ranking.build({ title: 'T', names, criterion: 'mixed' }, ctxWithCards());
+  assert.ok('block' in mixed && mixed.block.data.entries[0].name === 'Zinedine Zidane', 'mixed follows the cards');
+  // Sustained level is longevity, which a card doesn't rate: the model's order stands (cardsSettle).
+  const sustained = await REPLY_BLOCKS.ranking.build({ title: 'T', names, criterion: 'sustained_level' }, ctxWithCards());
+  assert.ok('block' in sustained && sustained.block.data.entries[0].name === 'Xavi Hernandez' && sustained.block.data.moves.length === 0, 'sustained level keeps the model order');
   const output = await REPLY_BLOCKS.ranking.build({ title: 'Most productive', names, criterion: 'output' }, ctxWithCards());
   assert.ok('block' in output);
   if ('block' in output) {

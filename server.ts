@@ -4,7 +4,7 @@ import cors from "cors";
 import path from "path";
 import { promises as fs, existsSync, readFileSync } from "fs";
 import util from "util";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import axios from "axios";
 import { pickCurrentCoach } from "./packages/engine/src/gates/managerMentions.ts";
 import { getRealWorldFootballSeason } from "./prompts/scoutCore";
@@ -26,6 +26,7 @@ import { SCOUT_DAY_DEFAULT_CALLS, createScoutDay, createScoutTally, liveScoutAct
 import { subjectFromTitle } from "./services/eraSnapshots";
 import { liveToolset } from "./services/researchTools";
 import { CARD_REVIEW_DEFAULT_CALLS, liveCardReview, memoryCardReviewStore, supabaseCardReviewStore } from "./services/cardReview";
+import { readDisagreementReport, setDisagreementSink } from "./services/cardDisagreements";
 
 /**
  * Local runs: Vite reads `.env.local` for the browser, but the server process didn't, so server
@@ -68,6 +69,17 @@ async function startServer() {
   // What the routes below resolved, counted for the scout's day (services/scoutDay.ts). Only names
   // the live data resolved are recorded, never what a user typed; a restart loses the counts.
   const scoutTally = createScoutTally();
+  // Card order disagreements (services/cardDisagreements.ts): pairs of cards an answer ordered the
+  // other way before the cards settled it, counted for card review. A source is a salted hash of the
+  // request's address, kept in memory only; it limits how much one visitor counts, but the planner
+  // only ever sees pairs whose card keys resolve to served cards, as counts. The chat turns this
+  // server runs itself (Gaffa's panel) count under one source.
+  const disagreementSalt = randomBytes(16).toString("hex");
+  const disagreementSource = (req: express.Request): string => {
+    const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "";
+    return createHash("sha256").update(`${disagreementSalt}|${forwarded}|${req.socket.remoteAddress ?? ""}`).digest("hex").slice(0, 16);
+  };
+  setDisagreementSink((pairs) => pairs.forEach((p) => scoutTally.cardDisagreement(p, "server")));
 
   // API Routes
   app.get("/api/health", (_req, res) => {
@@ -194,6 +206,18 @@ async function startServer() {
       console.error("[cards/lookup]", err?.message || err);
       return res.status(502).json({ error: "Card lookup failed" });
     }
+  });
+
+  // Card order disagreements from browsers: card keys and a path only, at most eight a report.
+  // Always 204, whatever was counted; nothing is read from the database here.
+  app.post("/api/cards/disagreements", (req, res) => {
+    const pairs = readDisagreementReport(req.body);
+    if (pairs.length) {
+      const source = disagreementSource(req);
+      const counted = pairs.filter((p) => scoutTally.cardDisagreement(p, source)).length;
+      if (counted) console.log(`[disagreements] ${counted} of ${pairs.length} pairs counted`);
+    }
+    res.status(204).end();
   });
 
   const API_KEY = process.env.API_FOOTBALL_KEY;
@@ -874,6 +898,7 @@ async function startServer() {
           },
         },
         reviews: secretClient ? supabaseCardReviewStore(secretClient) : memoryCardReviewStore(),
+        disagreements: () => scoutTally.disagreements(),
       })
     : null;
   console.log(`[startup] card review: ${cardReview ? `on, ${cardCalls} calls a day` : "off"}`);

@@ -23,6 +23,8 @@ import {
 import { eraEntry, normalizePeriod, rowToSnapshot as eraRowToSnapshot, type EraRow } from './eraSnapshots';
 import { samePlayerName } from './liveFootball';
 import { placementRange, resolvePlacement } from './ratingPlacement';
+import { cardAbove, toStanding } from './debateConsistency';
+import type { DisagreementHit, DisagreementPath } from './cardDisagreements';
 
 /**
  * Card review: the scout's day for players. Code finds the cards whose facts or rating no longer
@@ -65,6 +67,8 @@ export const SITUATION_CHECKS = 60;
 export const MAX_WINDOW_SEASONS = 3;
 /** A card rating him at least an everyday starter is contradicted by a first-choice XI without him. */
 export const STARTER_MIN_OVERALL = RATING_TIERS.find((t) => t.id === '80_83_QUALITY_STARTER')!.min;
+/** A disagreement pair enters the signals with at least this many counted reports (each source once a day). */
+export const DISAGREEMENT_MIN_REPORTS = 2;
 /** How long a re-rated current card is waited for: the pipeline publishes without awaiting the write. */
 const PUBLISH_CONFIRM_TRIES = 6;
 const PUBLISH_CONFIRM_MS = 500;
@@ -320,11 +324,31 @@ export interface GapCard {
   asked: number;
 }
 
+/**
+ * A pair of cards answers ordered the other way before the cards settled the order
+ * (services/cardDisagreements.ts), resolved against today's pool: the cards rank `higher` above
+ * `lower`, and answers put `lower` first.
+ */
+export interface DisagreementPair {
+  higher: CardRef;
+  lower: CardRef;
+  /** Counted reports: each source once a day. */
+  reports: number;
+  days: number;
+  firstDay: string;
+  lastDay: string;
+  via: Record<DisagreementPath, number>;
+  /** Current cards in the pair, which can be re-rated only once their window ends. */
+  waiting: { player: string; windowEnds: string }[];
+}
+
 export interface CardReviewSignals {
   expiredCurrent: ExpiredCard[];
   situationMoved: MovedCard[];
   historicalGaps: GapCard[];
   coherence: Coherence;
+  /** Absent on journal rows written before disagreements were counted. */
+  disagreements?: DisagreementPair[];
 }
 
 export interface CardReviewSources {
@@ -338,6 +362,8 @@ export interface CardReviewSources {
   coverage(): Promise<Coverage[]>;
   /** Players flagged as moved in the last month's journal rows, with why and when. */
   queued(): Promise<{ player: string; reason: string; day: string }[]>;
+  /** The server's tally of card order disagreements; absent where nothing counts them. */
+  disagreements?(): DisagreementHit[] | Promise<DisagreementHit[]>;
 }
 
 const SEASON_RE = /\b((?:19|20)\d{2})\s*[-/–]\s*((?:19|20)?\d{2})\b/g;
@@ -379,6 +405,42 @@ export function coverageFor(card: PlayerProfile, gap: string, coverage: Coverage
     }
   }
   return null;
+}
+
+const windowEndOf = (card: PlayerProfile): string | null => {
+  const evaluated = getDossierEvaluationDate(card);
+  return evaluated ? dayOf(Date.parse(`${evaluated}T00:00:00Z`) + CARD_REFRESH_DAYS * DAY_MS) : null;
+};
+
+/** The pair's two cards in a pool, when both are served and the cards still rank them that way. */
+export function resolveDisagreement(keys: { higher: string; lower: string }, pool: PlayerProfile[]): { higher: PlayerProfile; lower: PlayerProfile } | null {
+  const higher = pool.find((p) => getCardKey(p) === keys.higher);
+  const lower = pool.find((p) => getCardKey(p) === keys.lower);
+  if (!higher || !lower || higher === lower) return null;
+  return cardAbove(toStanding(higher), toStanding(lower)) ? { higher, lower } : null;
+}
+
+/**
+ * The tally's pairs as signals: only pairs with at least `min` counted reports whose card keys
+ * resolve to cards served today (so a re-rated card's old key, a personal revision or a key nobody
+ * holds drops out) and that the cards still rank that way. Most reported first, capped.
+ */
+export function findDisagreements(hits: DisagreementHit[], pool: PlayerProfile[], min: number = DISAGREEMENT_MIN_REPORTS, cap: number = CARD_LIST_CAP): DisagreementPair[] {
+  const byKey = new Map(pool.map((p) => [getCardKey(p), p] as const));
+  const out: DisagreementPair[] = [];
+  for (const h of hits) {
+    if (h.reports < min) continue;
+    const resolved = resolveDisagreement(h, [byKey.get(h.higher), byKey.get(h.lower)].filter((p): p is PlayerProfile => !!p));
+    if (!resolved) continue;
+    const waiting = [resolved.higher, resolved.lower]
+      .filter((c) => cardEdition(c) === 'current')
+      .flatMap((c) => {
+        const windowEnds = windowEndOf(c);
+        return windowEnds ? [{ player: c.basicInfo.name, windowEnds }] : [];
+      });
+    out.push({ higher: refOf(resolved.higher), lower: refOf(resolved.lower), reports: h.reports, days: h.days, firstDay: h.firstDay, lastDay: h.lastDay, via: { ...h.via }, waiting });
+  }
+  return out.sort((a, b) => b.reports - a.reports || b.days - a.days).slice(0, cap);
 }
 
 const daysSince = (date: string, nowMs: number) => Math.floor((nowMs - Date.parse(`${date}T00:00:00Z`)) / DAY_MS);
@@ -464,11 +526,14 @@ export async function gatherCardSignals(
   }
   historicalGaps.sort((a, b) => b.asked - a.asked);
 
+  const pool = servedPool(rows, nowMs);
+  const hits = sources.disagreements ? await Promise.resolve(sources.disagreements()).catch(() => [] as DisagreementHit[]) : [];
   return {
     expiredCurrent: expiredCurrent.slice(0, CARD_LIST_CAP),
     situationMoved: situationMoved.slice(0, CARD_LIST_CAP),
     historicalGaps: historicalGaps.slice(0, CARD_LIST_CAP),
-    coherence: findCoherence(servedPool(rows, nowMs)),
+    coherence: findCoherence(pool),
+    disagreements: findDisagreements(hits, pool),
   };
 }
 
@@ -493,9 +558,15 @@ ${list(s.coherence.pairs.map((p) => `${refText(p.a)} and ${refText(p.b)}: ${p.st
 Placements that go round in a circle across three cards:
 ${list(s.coherence.cycles.map((c) => `${c.cards.map(refText).join(' > ')} > back to the first: ${c.statements.join('; ')}`))}
 
+Pairs of cards that answers ordered the other way before the cards settled the order (counted reports, each source once a day; only the counts were kept; either card may be the one out of place; a current card here can be re-rated only once its window ends, and is queued for that day):
+${list((s.disagreements ?? []).map((d) => `answers put ${refText(d.lower)} above ${refText(d.higher)}: ${d.reports} reports on ${d.days} days, ${d.firstDay} to ${d.lastDay} (${describeVia(d.via)})${d.waiting.length ? `; waiting for its window: ${d.waiting.map((w) => `${w.player} until ${w.windowEnds}`).join(', ')}` : ''}`))}
+
 Each position's Overall distribution against the whole pool (a reported figure, not a reason to review a card):
 ${list(s.coherence.positions.map((p) => `${p.position}: ${p.cards} cards, mean ${p.mean}, median ${p.median} (pool mean ${p.poolMean}, median ${p.poolMedian})`))}`;
 }
+
+const describeVia = (via: Record<DisagreementPath, number>): string =>
+  [via.debate ? `${via.debate} from debate answers` : '', via.ranking ? `${via.ranking} from drawn rankings` : ''].filter(Boolean).join(', ') || 'no path recorded';
 
 // ---------------------------------------------------------------------------------------------
 // What the planner may name
@@ -511,6 +582,7 @@ export function cardTargets(s: CardReviewSignals | null | undefined) {
       ...(s?.historicalGaps ?? []).filter((c) => c.edition === 'prime').map((c) => toBasePlayerSlug(c.player)),
       ...primeFrom((s?.coherence.pairs ?? []).flatMap((p) => [p.a, p.b])),
       ...primeFrom((s?.coherence.cycles ?? []).flatMap((c) => c.cards)),
+      ...primeFrom((s?.disagreements ?? []).flatMap((d) => [d.higher, d.lower])),
     ]),
   };
 }
@@ -519,7 +591,7 @@ export function cardTargets(s: CardReviewSignals | null | undefined) {
 // Why a review was opened
 
 export interface Opened {
-  kind: 'new_record' | 'contradiction';
+  kind: 'new_record' | 'contradiction' | 'disagreement';
   /** One line naming the signal. */
   summary: string;
   /** The record's text, or the contradiction as it stands today; null when it could no longer be read. */
@@ -548,7 +620,10 @@ export async function openedFor(
   }
   const mine = (r: CardRef) => r.edition === 'prime' && toBasePlayerSlug(r.player) === base;
   const flagged = signals?.coherence.pairs.some((p) => mine(p.a) || mine(p.b)) || signals?.coherence.cycles.some((c) => c.cards.some(mine));
-  if (!flagged) return null;
+  if (!flagged) {
+    const d = (signals?.disagreements ?? []).find((x) => mine(x.higher) || mine(x.lower));
+    return d ? openedForDisagreement(d, mine(d.higher) ? d.lower : d.higher, await read.pool()) : null;
+  }
   const now = findCoherence(await read.pool(), Number.MAX_SAFE_INTEGER);
   const pair = now.pairs.find((p) => mine(p.a) || mine(p.b));
   const cycle = now.cycles.find((c) => c.cards.some(mine));
@@ -561,6 +636,23 @@ export async function openedFor(
     kind: 'contradiction',
     summary: pair ? 'His prime card and another card each place themselves above the other.' : 'His prime card is part of three placements that go round in a circle.',
     evidence,
+  };
+}
+
+/**
+ * A review opened on a disagreement pair, re-checked against today's pool: the evidence is the
+ * count and both cards as they stand, or null when the pair no longer holds (a card was re-rated,
+ * or the cards now agree with the answers).
+ */
+export function openedForDisagreement(d: DisagreementPair, other: CardRef, pool: PlayerProfile[]): Opened {
+  const holds = resolveDisagreement({ higher: d.higher.cardKey, lower: d.lower.cardKey }, pool);
+  const [higher, lower] = holds ? [refOf(holds.higher), refOf(holds.lower)] : [d.higher, d.lower];
+  return {
+    kind: 'disagreement',
+    summary: `Answers about how good the players were ordered his prime card and ${other.player}'s ${other.edition} card the other way from the cards, and code turned the order round to follow the cards.`,
+    evidence: holds
+      ? `Answers placed ${refText(lower)} above ${refText(higher)} ${d.reports} times on ${d.days} days (${d.firstDay} to ${d.lastDay}; ${describeVia(d.via)}) before code put them in card order. Today the cards still rank ${refText(higher)} above ${refText(lower)}. Only the count was kept, not the answers' reasons, so it settles nothing about either player's football on its own: either card may be the one out of place, and the rating moves only as far as the evidence the draft gathers shows.`
+      : null,
   };
 }
 
@@ -602,6 +694,10 @@ export function guardDraft(old: PlayerProfile, draft: PlayerProfile, opened: Ope
   const crossed = bandsCrossed(before, after);
   if (crossed > 1 && !opened.evidence) {
     return `the Overall moves from ${before} to ${after}, across ${crossed} tier bands, without a new record or a contradiction in its evidence`;
+  }
+  // A count of disagreements is not a record: on its own it never moves a card more than one band.
+  if (crossed > 1 && opened.kind === 'disagreement') {
+    return `the Overall moves from ${before} to ${after}, across ${crossed} tier bands, on a review opened by a count of disagreements rather than a new record or a contradiction`;
   }
   const resolved = resolvePlacement(draft.peerPlacement, pool.filter((p) => getCardKey(p) !== getCardKey(old)), draft);
   if (resolved.betterThan.length + resolved.levelWith.length + resolved.notAsGoodAs.length > 0) {
@@ -1017,7 +1113,7 @@ export function createCardActors(deps: CardActorDeps): CardActors {
       if (!old || cardEdition(old) !== 'prime' || old.revision) return { ok: false, calls: 0, detail: 'no shared prime card' };
       const opened = await openedFor(player, ctx.signals, { recordText: deps.recordText, pool: deps.pool });
       if (!opened) return { ok: false, calls: 0, detail: 'the signals give no reason to review this card', before: momentOf(old) };
-      if (!opened.evidence && opened.kind === 'contradiction') return { ok: false, calls: 0, detail: 'the contradiction no longer holds in today\'s pool', before: momentOf(old) };
+      if (!opened.evidence && opened.kind !== 'new_record') return { ok: false, calls: 0, detail: `the ${opened.kind} no longer holds in today's pool`, before: momentOf(old) };
       return reviewPrimeCard(old, opened, ctx, deps, { now, iso, day, record });
     },
   };
@@ -1234,6 +1330,8 @@ export interface LiveCardReviewDeps {
   /** The history cache's entries and their text. */
   history: { entries(): Promise<{ key: string; title: string; builtAt: string }[]>; text(key: string): Promise<string | null> };
   reviews: CardReviewStore;
+  /** The server's tally of card order disagreements (the scout tally's `disagreements`). */
+  disagreements?: () => DisagreementHit[];
   drafter?: Drafter;
   reviewer?: ReviewModel;
   filler?: FactFillModel;
@@ -1278,9 +1376,9 @@ export function liveCardReview(deps: LiveCardReviewDeps): { sources: CardReviewS
       return [...eras, ...history.map(coverageFromHistoryEntry).filter((c): c is Coverage => c !== null)];
     },
     async queued() {
-      const rows = await deps.recentJournal(CARD_REFRESH_DAYS + 1);
-      return rows.flatMap((r) => (r.signals?.cardReview?.situationMoved ?? []).map((m) => ({ player: m.player, reason: m.reason, day: r.day })));
+      return queuedFromJournal(await deps.recentJournal(CARD_REFRESH_DAYS + 1));
     },
+    ...(deps.disagreements ? { disagreements: deps.disagreements } : {}),
   };
   // The same write a visitor's rating makes: pointer and archive rows, through the server's secret-key writer.
   const publishCard = async (card: PlayerProfile, options: { supersede: boolean }) => (await import('./dossierCache')).upsertCachedDossier('', card, options);
@@ -1294,6 +1392,22 @@ export function liveCardReview(deps: LiveCardReviewDeps): { sources: CardReviewS
     recordText,
   });
   return { sources, actors };
+}
+
+/**
+ * The current cards the journal flagged inside their window, queued for the day it ends: moved
+ * cards, and current cards in a disagreement pair.
+ */
+export function queuedFromJournal(rows: { day: string; signals: { cardReview?: CardReviewSignals | null } }[]): { player: string; reason: string; day: string }[] {
+  return rows.flatMap((r) => [
+    ...(r.signals?.cardReview?.situationMoved ?? []).map((m) => ({ player: m.player, reason: m.reason, day: r.day })),
+    ...(r.signals?.cardReview?.disagreements ?? []).flatMap((d) =>
+      (d.waiting ?? []).map((w) => {
+        const other = toBasePlayerSlug(d.higher.player) === toBasePlayerSlug(w.player) ? d.lower : d.higher;
+        return { player: w.player, reason: `answers ordered his current card against ${other.player}'s ${other.edition} card the other way from the cards (${d.reports} reports on ${d.days} days)`, day: r.day };
+      }),
+    ),
+  ]);
 }
 
 /** A history cache entry ("2003–04 Arsenal F.C. season", a player's article) read from its title. */
