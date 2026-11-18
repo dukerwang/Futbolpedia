@@ -779,9 +779,13 @@ await test('a model that refuses the commit-only round gets it again with callin
       },
     }),
   };
-  const reply = await quietly(() => runChatTurn(params('Stopper or Marker at their best?', [HIGH, LOW], { historical: true, pastMode: true }), { ...h.deps, model: model as any }));
+  const perfLines: string[] = [];
+  const reply = await quietly(() =>
+    runChatTurn({ ...params('Stopper or Marker at their best?', [HIGH, LOW], { historical: true, pastMode: true }), perf: (l: string) => perfLines.push(l) }, { ...h.deps, model: model as any }),
+  );
   assert.equal(reply, 'Stopper.');
   assert.deepEqual(sent.slice(1), [{ tools: true, only: ['commit_verdict'] }, { tools: false }]);
+  assert.ok(perfLines.includes('commit-only round refused'), 'the eval sees the refusal in its perf lines');
 });
 
 console.log(`${passes} passed, ${failures} failed`);

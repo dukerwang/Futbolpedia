@@ -1075,6 +1075,7 @@ ${
       return await conversation.send(results, { tools: true, only: ['commit_verdict'], onText: (t) => onText(t, false) });
     } catch (e: any) {
       console.warn(`[chat] commit-only round refused, writing without it: ${String(e?.message ?? e).slice(0, 120)}`);
+      perf?.('commit-only round refused');
       return conversation.send(results, { tools: false, onText: (t) => onText(t, true) });
     }
   };
