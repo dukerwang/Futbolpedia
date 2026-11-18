@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { SNAPSHOT_VERSION, type SnapshotRow } from '../services/clubSnapshots';
 import { ERA_SNAPSHOT_VERSION, eraKey, type EraRow } from '../services/eraSnapshots';
 import { createSnapshotServer, inProcessGet, type SnapshotDb } from '../services/snapshotServer';
+import { createVerdictSettler, departureHandler, memoryVerdictDb, settleHandler } from '../services/debateVerdicts';
 
 let passes = 0;
 let failures = 0;
@@ -128,6 +129,82 @@ await test('an era snapshot isn\'t built when it can\'t be stored', async () => 
   assert.equal(noTable.log.eraWrites.length, 0);
   // Without the secret key there's no table access at all.
   assert.equal(await createSnapshotServer({ get: inProcessGet(routes), db: null }).era('player_window', 'A Forward', '2003-06'), null);
+});
+
+// --- Settled verdicts' routes ------------------------------------------------------------------
+
+const fakeRes = () => {
+  const out: { code: number; body: unknown; ended: boolean } = { code: 0, body: undefined, ended: false };
+  const res = {
+    status(code: number) {
+      out.code = code;
+      return res;
+    },
+    json(body: unknown) {
+      out.body = body;
+    },
+    end() {
+      out.ended = true;
+    },
+  };
+  return { res, out };
+};
+
+const verdictServer = (ready: boolean) => {
+  const db = memoryVerdictDb(ready);
+  const sources: string[] = [];
+  const settler = createVerdictSettler({
+    db,
+    cards: async () => new Map(),
+    record: async (subject) => ({ text: `The record of ${subject.slug}.` }),
+    eraBuiltAt: async () => new Map(),
+    model: async () => ({ accept: true, criteria: ['Results'], counterCase: 'The other side.' }),
+    log: () => {},
+  });
+  const sourceOf = (req: { ip?: string }) => (sources.push(req.ip ?? ''), req.ip ?? 'none');
+  return { db, settler, sourceOf, sources };
+};
+
+const seasons = {
+  kind: 'head_to_head',
+  criterion: 'influence',
+  subjects: ['club_season:northside-fc:2003-04', 'club_season:southside-fc:1998-99'],
+  verdict: ['club_season:northside-fc:2003-04'],
+};
+
+await test('POST /api/debates/settle answers with the status only, and 400 for a malformed body', async () => {
+  const { db, settler, sourceOf, sources } = verdictServer(true);
+  const ok = fakeRes();
+  await settleHandler(settler, sourceOf)({ body: seasons, ip: 'client-1' } as any, ok.res);
+  assert.equal(ok.out.code, 200);
+  assert.deepEqual(ok.out.body, { status: 'stored' });
+  assert.deepEqual(sources, ['client-1']);
+  assert.equal(db.rows.size, 1);
+  const bad = fakeRes();
+  await settleHandler(settler, sourceOf)({ body: { ...seasons, verdict: ['someone else'] } } as any, bad.res);
+  assert.equal(bad.out.code, 400);
+  assert.deepEqual(bad.out.body, { status: 'invalid' });
+});
+
+await test('POST /api/debates/settle without the table stores nothing and calls nothing', async () => {
+  const { db, settler, sourceOf } = verdictServer(false);
+  const r = fakeRes();
+  await settleHandler(settler, sourceOf)({ body: seasons, ip: 'client-1' } as any, r.res);
+  assert.deepEqual(r.out.body, { status: 'unavailable' });
+  assert.equal(db.rows.size, 0);
+});
+
+await test('POST /api/debates/departure always answers 204', async () => {
+  const { db, settler, sourceOf } = verdictServer(true);
+  await settleHandler(settler, sourceOf)({ body: seasons, ip: 'client-1' } as any, fakeRes().res);
+  const key = [...db.rows.keys()][0];
+  for (const body of [{ key }, { key: 'nonsense' }, null]) {
+    const r = fakeRes();
+    await departureHandler(settler, sourceOf)({ body, ip: 'client-2' } as any, r.res);
+    assert.equal(r.out.code, 204);
+    assert.equal(r.out.ended, true);
+  }
+  assert.equal(db.rows.get(key)!.departures, 1);
 });
 
 console.log(`${passes} passed, ${failures} failed`);

@@ -27,6 +27,21 @@ import { subjectFromTitle } from "./services/eraSnapshots";
 import { liveToolset } from "./services/researchTools";
 import { CARD_REVIEW_DEFAULT_CALLS, liveCardReview, memoryCardReviewStore, supabaseCardReviewStore } from "./services/cardReview";
 import { readDisagreementReport, setDisagreementSink } from "./services/cardDisagreements";
+import { readCardRows, servedPool } from "./services/cardReview";
+import { eraEntry, rowToSnapshot } from "./services/eraSnapshots";
+import { getCardKey } from "./services/dossierCards";
+import {
+  DEBATE_SETTLE_DEFAULT_CALLS,
+  DEEP_PAST,
+  createVerdictSettler,
+  departureHandler,
+  eraKeyForSubject,
+  memoryVerdictDb,
+  nameFromSubject,
+  settleEnabled,
+  settleHandler,
+  supabaseVerdictDb,
+} from "./services/debateVerdicts";
 
 /**
  * Local runs: Vite reads `.env.local` for the browser, but the server process didn't, so server
@@ -916,6 +931,65 @@ async function startServer() {
 
   // The journal of recent passes: what the scout looked at, why, and what it spent. Public and read-only.
   app.get("/api/scout/journal", scoutJournalHandler(scoutDay));
+
+  // Settled verdicts on questions about the past (services/debateVerdicts.ts). A browser proposes a
+  // choice among subjects it resolved (card keys, a player's window, a club season); the server
+  // resolves them itself, holds a card-settled criterion to the cards, and stores the verdict only
+  // when one check call over the stored records accepts it. Browsers read the table; only this
+  // server writes it. DEBATE_SETTLE_CALLS (default 20) caps the calls a day, DEBATE_SETTLE=off stops
+  // them, and without the `debate_verdicts` table nothing is stored or called. The route is public
+  // and nothing in the app proposes a verdict until DEEP_PAST is on, so until then it spends nothing
+  // (DEBATE_SETTLE=on forces it on for a local run).
+  const verdictSalt = randomBytes(16).toString("hex");
+  const verdictSource = (req: express.Request): string => {
+    const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "";
+    return createHash("sha256").update(`${verdictSalt}|${forwarded}|${req.socket.remoteAddress ?? ""}`).digest("hex").slice(0, 16);
+  };
+  const verdictTools = liveToolset([], liveGet);
+  const verdictEras = supabaseSnapshotDb(secretClient ?? publicClient);
+  let verdictPool: { at: number; cards: Promise<Map<string, any>> } | null = null;
+  const settleCalls = process.env.DEBATE_SETTLE_CALLS && Number.isFinite(Number(process.env.DEBATE_SETTLE_CALLS))
+    ? Math.max(0, Math.floor(Number(process.env.DEBATE_SETTLE_CALLS)))
+    : DEBATE_SETTLE_DEFAULT_CALLS;
+  const settleOn = settleEnabled({ deepPast: DEEP_PAST, setting: process.env.DEBATE_SETTLE, calls: settleCalls });
+  // Without the secret key verdicts stay in memory, but only once the table exists.
+  const publicVerdicts = supabaseVerdictDb(publicClient);
+  const verdicts = createVerdictSettler({
+    db: secretClient ? supabaseVerdictDb(secretClient) : memoryVerdictDb(() => publicVerdicts.ready()),
+    enabled: settleOn,
+    budget: settleCalls,
+    // The cards a request is served today, read at most every ten minutes.
+    cards() {
+      if (!verdictPool || Date.now() - verdictPool.at > 10 * 60_000) {
+        const cards = readCardRows(secretClient ?? publicClient)
+          .then((rows) => new Map(servedPool(rows, Date.now()).map((c) => [getCardKey(c), c] as [string, any])))
+          .catch(() => new Map<string, any>());
+        verdictPool = { at: Date.now(), cards };
+      }
+      return verdictPool.cards;
+    },
+    // A stored era snapshot's story first, else the history record (cached on this server).
+    async record(subject, card) {
+      const key = eraKeyForSubject(subject, card);
+      const snapshot = key ? rowToSnapshot(await verdictEras.readEra(key).catch(() => null)) : null;
+      if (snapshot) return { label: snapshot.subject, text: eraEntry(snapshot).content };
+      const outcome =
+        subject.kind === "club_season"
+          ? await verdictTools.clubSeason(nameFromSubject(subject), subject.period ?? "")
+          : await verdictTools.playerCareer(card?.basicInfo?.name ?? nameFromSubject(subject));
+      if (!outcome.result) return null;
+      return { label: subjectFromTitle(outcome.result.label, subject.kind === "club_season" ? "club_season" : "player_window"), text: outcome.result.content };
+    },
+    async eraBuiltAt(keys) {
+      const rows = await Promise.all(keys.map((k) => verdictEras.readEra(k).catch(() => null)));
+      return new Map(rows.flatMap((r) => (r ? [[r.snapshot_key, r.built_at] as [string, string]] : [])));
+    },
+  });
+  console.log(
+    `[startup] settled verdicts: ${settleOn ? `on, ${settleCalls} calls a day${secretClient ? "" : ", in memory"}` : "off"} (DEEP_PAST ${DEEP_PAST ? "on" : "off"}, DEBATE_SETTLE ${process.env.DEBATE_SETTLE || "unset"})`,
+  );
+  app.post("/api/debates/settle", settleHandler(verdicts, verdictSource));
+  app.post("/api/debates/departure", departureHandler(verdicts, verdictSource));
 
   // AI Studio's service worker intercepts browser requests to generativelanguage.googleapis.com
   // and redirects them here. This route forwards them back to Google using the server-side
