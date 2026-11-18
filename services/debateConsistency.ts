@@ -236,7 +236,7 @@ export function checkCommitment(c: Commitment, standings: CardStanding[]): Commi
     if (!check.swaps.length) {
       const sorted = cardOrder(check.carded.map((e) => e.standing));
       const level = sorted.some((s, i) => i > 0 && !cardAbove(sorted[i - 1], s));
-      return { cards: level ? 'level' : 'agree', note: level ? 'Some of these cards are level, so the criteria decide between them.' : null, swaps: [], cardOrder: check.order };
+      return { cards: level ? 'level' : 'agree', note: level ? 'Some of these cards are level: the criteria decide the order between them, so commit to one.' : null, swaps: [], cardOrder: check.order };
     }
     return { cards: 'against', note: `The cards order these the other way: ${check.moves.join('; ')}.`, swaps: check.swaps, cardOrder: check.order };
   }

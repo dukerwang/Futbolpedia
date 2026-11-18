@@ -150,6 +150,8 @@ export interface HistoryResearch {
     priors: { current: number; stale: number; contested: number };
     rankingPriorFound: boolean | null;
   };
+  /** What the settle route answered for each proposal (stored, kept, refused, invalid and the rest). */
+  settles?: string[];
 }
 
 interface AskResult {
@@ -354,9 +356,19 @@ export function researchSummary(runs: HistoricalRun[]): string {
       : '',
     past.length ? `- Read a settled verdict: ${past.filter((r) => r.run.research!.past!.priors.current + r.run.research!.past!.priors.stale + r.run.research!.past!.priors.contested > 0).length} of ${past.length}` : '',
     rankings.length ? `- Found a stored ranking for the question's field: ${rankings.filter((r) => r.run.research!.past!.rankingPriorFound).length} of ${rankings.length} ranking answers` : '',
+    settleSummary(withResearch),
   ]
     .filter(Boolean)
     .join('\n');
+}
+
+/** What the settle route answered across the run, by status. */
+function settleSummary(runs: HistoricalRun[]): string {
+  const all = runs.flatMap((r) => r.run.research?.settles ?? []);
+  if (!all.length) return '';
+  const counts = new Map<string, number>();
+  for (const s of all) counts.set(s, (counts.get(s) ?? 0) + 1);
+  return `- Settled-verdict store: ${all.length} proposals; ${[...counts].map(([s, n]) => `${n} ${s}`).join(', ')}`;
 }
 
 /** A table of each run's research and commitment; empty when no run reports them. */
@@ -364,19 +376,20 @@ export function researchTable(runs: HistoricalRun[]): string {
   if (!runs.some((r) => r.run.research)) return '';
   const row = (r: HistoricalRun) => {
     const x = r.run.research;
-    if (!x) return `| ${r.q.n} | ${r.attempt} | – | – | – | – | – | – | – | – | – | – |`;
+    if (!x) return `| ${r.q.n} | ${r.attempt} | – | – | – | – | – | – | – | – | – | – | – |`;
     const p = x.past;
     const views = Object.entries(x.views ?? {}).map(([k, n]) => `${n} ${k}`).join(', ') || '–';
     const gate = x.gateFeedback ? `${x.gateFeedback.fixed}/${x.gateFeedback.dropped}/${x.gateFeedback.removed}` : '0/0/0';
     const commit = p ? (p.committed ? `${p.kind}, ${p.criterion}: ${p.verdict.join(' > ')}` : 'no') : '–';
     const cards = p ? `${p.cards ?? '–'}${p.departed ? (p.departedSilently ? ', departed silently' : ', departed') : ''}` : '–';
     const prior = p ? `${p.settled}${p.priors.current + p.priors.stale + p.priors.contested ? ` (${p.priors.current} current, ${p.priors.stale} stale)` : ''}` : '–';
-    return `| ${r.q.n} | ${r.attempt} | ${x.fallback ? `deep, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${views} | ${gate} | ${commit.replace(/\|/g, '/')} | ${cards} | ${prior} | ${p?.rankingPriorFound === null || !p ? '–' : p.rankingPriorFound ? 'yes' : 'no'} |`;
+    const store = x.settles ? x.settles.join(', ') || 'nothing proposed' : '–';
+    return `| ${r.q.n} | ${r.attempt} | ${x.fallback ? `deep, then stage (${x.fallback})` : x.path} | ${x.lookups} | ${x.searches} | ${x.rounds} | ${views} | ${gate} | ${commit.replace(/\|/g, '/')} | ${cards} | ${prior} | ${p?.rankingPriorFound === null || !p ? '–' : p.rankingPriorFound ? 'yes' : 'no'} | ${store} |`;
   };
   return `## Research and commitments
 
-| # | Run | Path | Lookups | Searches | Rounds | Views | Gate fixed/dropped/removed | Committed | Cards | Settled verdict | Stored ranking found |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| # | Run | Path | Lookups | Searches | Rounds | Views | Gate fixed/dropped/removed | Committed | Cards | Settled verdict | Stored ranking found | Store answered |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${runs.map(row).join('\n')}
 
 `;

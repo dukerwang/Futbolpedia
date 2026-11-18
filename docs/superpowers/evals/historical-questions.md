@@ -27,7 +27,8 @@ so answers see the same cards a user would.
 call in front of it (a real model call for each new question a run settles), so run 2 and each
 paraphrase read what run 1 settled, as a later user would; `--no-prior` empties the store for every
 question to measure the loop's own consistency. The report adds a research table (path, lookups,
-searches, rounds, views, the correction round's counts, the committed verdict, how it stood against
+searches, rounds, views, the correction round's counts, what the settle route answered for each
+proposal, the committed verdict, how it stood against
 the cards and the settled verdict, and whether a ranking found its stored field), compares
 committed verdicts in code beside the grader's comparison, and counts answers that quoted a card's
 rating on a question that doesn't turn on how good the players were.
@@ -88,6 +89,32 @@ The grader scores each answer on:
 - **Speed:** seconds to the first answer token and in total.
 
 ## Results
+
+### Run: 2026-11-18, past mode in the deep loop
+
+Questions 1, 3, 5, 6, 13 and 14, twice each, `--deep --no-builds` on `gemini-4-hydrogen`, before the
+fixes below. Report: `reports/2026-11-18-0727-historical-past-deep.md`. No same-day stage control.
+
+| Measure | Bar | Result |
+| --- | --- | --- |
+| Through the loop, no fallback | all | 12 of 12 |
+| Same verdict when asked twice | 6 of 6 | 5 same, 1 partly (Q14 swapped two level cards) |
+| Same verdict across paraphrases | 2 of 2 | 1 same, 1 partly (Q5 and Q14) |
+| Against the cards | at most 1, with a reason | 0 |
+| Committed a verdict on a judgment | all | 9 of 10 |
+| Ratings quoted out of place | none | 0 of 4 |
+| Use of criteria | 4.5 | 3.7 |
+| Decisiveness | 4.5 | 4.4 |
+| Takes on the counter-case | all | 8 of 10 |
+| Median first token | about 15 s | 15.2 s (Q6's search alone took 15.6 s) |
+
+All 13 figures marked wrong were in Q6 and were right for 2003-04: the checker listed them without
+the season and judged them as career totals. The real Q6 problems came from the figure ceiling of
+six, which cut his FA Cup goals and the season total and left a fragment. Fixed after the run: no
+figure budget unless a commitment names figures; level cards leave the order to the criteria and an
+order still commits; the career and season records fetched before the first round go into its
+evidence; and the report says what the settle route answered for each proposal, since no verdict
+that needed the check call was stored and the run couldn't say why. Not rerun.
 
 ### Run: 2026-11-01, debate brief, history tools and era snapshots
 

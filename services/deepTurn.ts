@@ -754,6 +754,7 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
   const pastJob: Promise<PastContext | null> = anchored
     ? loadPastContext({
         cards: lockedCards,
+        players: past ? route.targetPlayers : [],
         clubs: routeClubs,
         season: route.requestedSeason ?? null,
         message,
@@ -781,9 +782,12 @@ export async function runDeepTurn(params: DeepTurnParams, deps: DeepTurnDeps = {
   if (signature === thread.signature && thread.grounding) {
     ledger = addEvidence(ledger, { kind: 'prior_turn', label: 'Research from the previous turn', content: thread.grounding.slice(0, 1400) });
   }
-  // Stored era snapshots are evidence like any record: the model reads them and the figure gate counts them.
+  // The records fetched before the first round, and the stored era snapshots, are evidence like any
+  // lookup: the model reads them and the figure gate counts them. A past turn's records only: on a
+  // present turn comparing versions the model reads what it needs.
+  if (past) for (const r of pastContext?.records ?? []) if (r.outcome.result) ledger = addEvidence(ledger, r.outcome.result);
   for (const s of pastContext?.snapshots ?? []) ledger = addEvidence(ledger, eraEvidence(s));
-  if (pastContext) perf?.(`past context (${pastContext.snapshots.length} era snapshots, ${pastContext.settled.length} settled verdicts)`);
+  if (pastContext) perf?.(`past context (${past ? pastContext.records.length : 0} records, ${pastContext.snapshots.length} era snapshots, ${pastContext.settled.length} settled verdicts)`);
   const priorFoundation = hasEvidence(ledger) ? `<factual_foundation>\n${formatLedger(ledger)}\n</factual_foundation>` : '';
 
   const analyticalMode = route.analyticalMode ?? (route.intent === 'compare' ? 'head_to_head' : route.targetPlayers.length === 1 ? 'player_qa' : 'debate_or_verdict');
@@ -890,7 +894,13 @@ ${
   };
   // A past answer's figures are held to their season, competition and span, and to the figures it committed to.
   if (past) {
-    Object.defineProperty(figureCheck, 'options', { enumerable: true, get: () => ({ scoped: true, budget: pastFigureBudget(commitTool?.state ?? null) }) });
+    Object.defineProperty(figureCheck, 'options', {
+      enumerable: true,
+      get: () => {
+        const budget = pastFigureBudget(commitTool?.state ?? null);
+        return budget ? { scoped: true, budget } : { scoped: true };
+      },
+    });
   }
   // A past answer names past coaches only from its evidence: today's coach scrub would rewrite them.
   const managerContext = () => ({ verifiedFacts: [formatLedger(ledger)].filter(Boolean), clubManagers: verified, ...(past ? { past: true } : {}) });
