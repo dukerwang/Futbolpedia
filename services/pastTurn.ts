@@ -29,7 +29,6 @@ import { supabase } from './dossierCache';
 import { eraEntry, liveEraSnapshots, normalizePeriod, subjectFromTitle, type EraSnapshot, type EraSnapshotSource } from './eraSnapshots';
 import type { EvidenceLedger } from './evidenceLedger';
 import { executeCall, type ResearchCall, type ResearchToolset, type ToolOutcome } from './researchTools';
-import { PRINCIPLE_SOURCES, principleInstructions } from '../prompts/chatPrompt';
 import { CONTINUITY_REMINDER } from './chatContinuity';
 
 /**
@@ -503,8 +502,8 @@ export const pastFigureBudget = (state: PastCommitState | null): { max: number; 
 
 /**
  * The system instruction's note for a question about the past: what to work out and which records
- * to read first. Added after the research rules under either instruction set; it restates no chat
- * principle. Descriptive only: no players, ratings or sample phrases.
+ * to read first. Added after the research rules. Descriptive only: no players, ratings or sample
+ * phrases.
  */
 export const PAST_RESEARCH_NOTE = `## A question about the past
 
@@ -518,17 +517,16 @@ export const CARD_ANCHOR_NOTE = `## Judgments the cards speak to
 
 Before writing a judgment of who was better, an order, or how good a version or side was, call commit_verdict with it. Where the judgment is how good the versions were (their level at their best, or a mix of everything), the cards in <cards_in_play> have already rated them: their order is where you start, and holding a different one needs a reason from this turn's evidence, given in the answer. Cards that are level don't decide between those versions; the criteria do. A ranking still puts each version ahead of the next on those criteria, and a head-to-head still names the side they favour, saying the cards have them level where that helps the reader. Leave two versions tied only when the criteria can't separate them either. On any other measure the cards are background to the records. <settled_verdicts>, when present, holds the scout's earlier answers on these versions: keep one unless this turn's evidence or the question gives a reason not to, give the reason when you depart, and mention it only when the user asks why or it bears on the answer.`;
 
-/** How a past answer is written, under the instructions from before the principle set. */
+/** How a past answer is written. */
 export const PAST_LOOP_RULES =
   "First decide what the user's latest message actually asks, in the light of the conversation, and answer that. Write the way a knowledgeable person talks football with a friend: plain, warm, direct prose, never a formal debate. Where the user asked who was better, for an order, or how good a season or player was, give your answer early and plainly, and explain it through the things that decide it, using your tool results, <factual_foundation> and the stored cards. Give the other side its due in a sentence or two where it matters. Don't write labelled sections for criteria, a counter-case or a verdict; use headings only for a long answer that covers several players or seasons. Judge from evidence, never from reputation alone. Where the message questions your last answer, the cards or versions it used, or a fact, answer that point directly: check a disputed fact with a tool before conceding or holding firm, admit a mistake in a sentence where you made one, and stop when it's answered. Stay consistent with the ratings in <locked_dossiers> and <calibrated_peer_ledger>. Never output a JSON dossier object.";
 
-/** What a past answer may state as fact, under the instructions from before the principle set. */
+/** What a past answer may state as fact. */
 export const PAST_LOOP_FACT_RULES =
   "Quote a precise figure (goals, appearances, points, trophies, records, dates, fees) only where it decides part of the judgment, as you named it in commit_verdict, and only as a tool result, <factual_foundation> or a stored card gives it; make every other point in words. A quoted figure keeps the competition and span its source gives: a league figure stays a league figure, a total across all competitions stays a total, and a count for named seasons is never a career total. Keep every fact to the season or spell it belongs to, and name the season when a fact from outside the compared window matters. Don't repeat a claim that an era snapshot lists as often misstated, or an anecdote no source here supports. Name a past season's coach only as the evidence gives him; otherwise describe the side's setup without naming its coach.";
 
-/** A past turn's `<instructions>`: its data line under the principle set, else the writing and fact rules. */
-export function pastInstructions(args: { principles: boolean; notes: string }): string {
-  if (args.principles) return principleInstructions([PRINCIPLE_SOURCES.pastMode, args.notes]);
+/** A past turn's `<instructions>`: the writing and fact rules. */
+export function pastInstructions(args: { notes: string }): string {
   return `<instructions>
 1. ${PAST_LOOP_RULES}${args.notes}
 2. ${PAST_LOOP_FACT_RULES}

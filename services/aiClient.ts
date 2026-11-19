@@ -437,24 +437,10 @@ export interface InitiativeToolHandlers {
   offer?: (args: { name?: unknown; edition?: unknown }) => Promise<unknown> | unknown;
 }
 
-/**
- * Under the chat principle set (`PRINCIPLES_PROMPT`) a tool's description is the one place that says
- * when to use it, so the two initiative tools whose turn rules said more carry those sentences here.
- * The ask tool's description already says everything its rule did.
- */
-export const PREPARE_CLUB_DECLARATION_PRINCIPLES = {
-  ...PREPARE_CLUB_DECLARATION,
-  description: `${PREPARE_CLUB_DECLARATION.description} Never use it for a club this answer already reads.`,
-};
-export const OFFER_RATING_DECLARATION_PRINCIPLES = {
-  ...OFFER_RATING_DECLARATION,
-  description: `${OFFER_RATING_DECLARATION.description} Skip a player you only mention in passing, and invent no card numbers for one you offer.`,
-};
-
-const initiativeDeclarations = (tools?: InitiativeToolHandlers, principles = false): any[] => [
+const initiativeDeclarations = (tools?: InitiativeToolHandlers): any[] => [
   ...(tools?.ask ? [ASK_USER_DECLARATION] : []),
-  ...(tools?.prepare ? [principles ? PREPARE_CLUB_DECLARATION_PRINCIPLES : PREPARE_CLUB_DECLARATION] : []),
-  ...(tools?.offer ? [principles ? OFFER_RATING_DECLARATION_PRINCIPLES : OFFER_RATING_DECLARATION] : []),
+  ...(tools?.prepare ? [PREPARE_CLUB_DECLARATION] : []),
+  ...(tools?.offer ? [OFFER_RATING_DECLARATION] : []),
 ];
 
 export const NETWORK_FUNCTION_DECLARATIONS = [
@@ -540,8 +526,6 @@ export interface GenerateProseTurnParams {
   dossierTools?: DossierToolHandlers;
   /** The writer's initiative tools (ask, prepare, offer); the default chat path only. */
   initiativeTools?: InitiativeToolHandlers;
-  /** The chat principle set is on: initiative tools carry their principle-set descriptions. */
-  principles?: boolean;
   /**
    * The view tools (pitch, table, comparison, ranking): each call draws a view in the reply where the
    * model called it. Offered on every prose turn that can draw them, including those answered from cards.
@@ -604,7 +588,7 @@ export async function generateProseTurn(params: GenerateProseTurnParams): Promis
     GREP_SAVED_DOSSIERS_DECLARATION,
     ...(params.gaffaBag?.connected ? [GREP_GAFFA_MARKET_DECLARATION] : []),
     ...(params.dossierTools ? [LOOK_UP_DOSSIER_DECLARATION, SHOW_DOSSIER_DECLARATION] : []),
-    ...initiativeDeclarations(params.initiativeTools, params.principles),
+    ...initiativeDeclarations(params.initiativeTools),
     ...(params.viewTools?.declarations ?? []),
   ];
 

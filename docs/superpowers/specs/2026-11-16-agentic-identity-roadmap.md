@@ -90,19 +90,18 @@ Built. Repeat runs of the same questions in deep mode measure how far answers dr
 run, and paraphrase pairs measure whether the same question in other words gets the same verdict.
 It is the measure for items 4 and 5.
 
-### 4. Chat principles, behind a switch
+### 4. Chat principles (dropped)
 
-One principle set for the chat writer on every path, in a byte-stable system instruction, with
-per-turn data only in the turn's instructions; router-chosen answer templates end
-(`docs/superpowers/specs/2026-11-18-chat-principles-design.md`). Ships behind
-`PRINCIPLES_PROMPT`, off, with today's instructions pinned byte for byte while it is off. Step 1
-(the core split into section constants, no prompt change) ships first on its own.
+One principle set for the chat writer in place of the per-mode templates
+(`docs/superpowers/specs/2026-11-18-chat-principles-design.md`). Built behind `PRINCIPLES_PROMPT`
+and dropped on 2026-11-19 after two eval-key checks: it didn't beat the current answers (hedged
+roles stayed, comparisons were no deeper, first tokens were slower). The switch and every path
+behind it were removed; the section constants and the hash pins of today's prompts stay.
 
 ### 5. Past questions in the deep loop, behind a switch
 
 Questions about the past take the deep loop with the history tools, behind `DEEP_PAST`, off. Its
-prompt work is written in the principle style after item 4's PR merges, and adds no past-specific
-writing rules.
+prompt work adds no past-specific writing rules.
 
 ## Order
 
@@ -111,12 +110,11 @@ writing rules.
 2. Presentation as tools.
 3. Card-order rule and disagreement channel (built).
 4. Consistency eval (built).
-5. Chat principles behind `PRINCIPLES_PROMPT`, off.
+5. Chat principles: dropped on 2026-11-19 (see item 4).
 6. Past questions in the deep loop behind `DEEP_PAST`, off.
 7. One live check covering both switches, after the Gemini cap resets on December 1 or with the
-   user's yes on its token estimate. It gates both flips: `PRINCIPLES_PROMPT` and `DEEP_PAST` are
-   turned on only in PRs that follow a passing check. The `analyticalMode` retirement follows the
-   principles flip.
+   user's yes on its token estimate. It gates the `DEEP_PAST` flip: it is turned on only in a PR that
+   follows a passing check.
 
 After each piece: merge, then pull and publish in Google AI Studio for it to reach the live app.
 

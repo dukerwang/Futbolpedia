@@ -300,11 +300,8 @@ export function formatClubSituation(c: ClubSituation): string {
   return lines.join('\n');
 }
 
-/**
- * The snapshot as the writer reads it; empty when there's nothing to say. `principles`: the header
- * the chat principle set reads, which describes the block and leaves how to argue to the principles.
- */
-export function formatSituation(s: Situation | null | undefined, options: { principles?: boolean } = {}): string {
+/** The snapshot as the writer reads it; empty when there's nothing to say. */
+export function formatSituation(s: Situation | null | undefined): string {
   if (!s || (s.clubs.length === 0 && s.players.length === 0)) return '';
   const blocks = [
     ...s.clubs.map(formatClubSituation),
@@ -316,11 +313,8 @@ export function formatSituation(s: Situation | null | undefined, options: { prin
     ),
     ...(s.unknowns.length ? [`Still unknown: ${s.unknowns.join('; ')}`] : []),
   ];
-  const header = options.principles
-    ? `The present as of ${s.asOf}, worked out from the evidence below: the first-choice player for each role (an even split marked with its alternative), who is out, and what is still unknown.`
-    : `The present as of ${s.asOf}, worked out from the evidence below. Argue from it: name the first-choice player for each role it lists, mention another player only where it marks an even split and then as the alternative rather than a joint holder, and treat anyone out as unavailable.`;
   return `<situation_snapshot>
-${header}
+The present as of ${s.asOf}, worked out from the evidence below. Argue from it: name the first-choice player for each role it lists, mention another player only where it marks an even split and then as the alternative rather than a joint holder, and treat anyone out as unavailable.
 ${blocks.join('\n\n')}
 </situation_snapshot>`;
 }

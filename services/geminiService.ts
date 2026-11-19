@@ -1,6 +1,6 @@
 import type { ChatMessage, GaffaContextBag, GaffaTradeScorecard, PlayerProfile, RatingRequest, ReplyBlock } from '../types';
 import { ThinkingTier } from '../constants/modelProfiles';
-import { buildConversationalScoutInstruction, PRINCIPLES_PROMPT } from '../prompts/chatPrompt';
+import { buildConversationalScoutInstruction } from '../prompts/chatPrompt';
 import {
   FLASH_MODEL,
   generateProseTurn,
@@ -215,12 +215,6 @@ export interface SendMessageOptions {
    * `--set historical --past-mode` and the tests set it.
    */
   pastMode?: boolean;
-  /**
-   * Overrides `PRINCIPLES_PROMPT` (`prompts/chatPrompt.ts`) for one turn: true has the chat writer
-   * read the principle set, false the instructions from before it. Tests and the eval's
-   * `--principles` set it.
-   */
-  principles?: boolean;
   /** Called as each path starts: once for the path chosen, and again on the stage run that follows a chat turn's failure. */
   onPath?: (info: PathInfo) => void;
   /** Fakes and overrides for the chat loop's model, tools and budget, for tests and the eval. */
@@ -272,7 +266,6 @@ const buildTurnContext = (
   route: TurnRoute,
   conversationDossiers: PlayerProfile[],
   savedDossiers: PlayerProfile[],
-  principles = false,
 ): TurnContext => {
   const savedResult = resolveSavedDossiersForRequest(
     message,
@@ -283,7 +276,6 @@ const buildTurnContext = (
   const savedDossiersBlock = buildSavedDossiersBlock(
     savedResult.dossiers,
     savedResult.inventoryOnly,
-    principles,
   );
 
   const referencedDossiers = findReferencedDossiers(
@@ -308,7 +300,6 @@ const buildTurnContext = (
       ],
       route.isHistorical,
     ),
-    principles,
   );
   const peerLedgerOptions = { targetPlayers: route.targetPlayers, message };
   const peerLedger = selectPositionalPeerLedger(savedDossiers, conversationDossiers, peerLedgerOptions);
@@ -915,9 +906,7 @@ export const sendMessageToAI = async (
   }
 
   // 4. Resolve conversation-locked and saved-archive dossiers
-  // Which instruction set the chat writer reads this turn (`PRINCIPLES_PROMPT`, or the caller's override).
-  const principles = options?.principles ?? PRINCIPLES_PROMPT;
-  const context = buildTurnContext(message, route, conversationDossiers, turnDossiers, principles);
+  const context = buildTurnContext(message, route, conversationDossiers, turnDossiers);
   const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock } = context;
 
   // 5. The chat loop: one model loop decides the research, for a question about the present, a Gaffa
@@ -962,7 +951,6 @@ export const sendMessageToAI = async (
       initiative,
       // Gaffa's panel draws its replies as text, so it is offered no views.
       views: !options?.noRating,
-      principles,
       perf,
     });
   let fellBack = false;
@@ -989,7 +977,6 @@ export const sendMessageToAI = async (
             onStreamChunk,
             onStageChange: options?.onStageChange,
             conversationId: options?.conversationId,
-            principles,
             perf,
             // Past mode reads these only while it is on; off, they change nothing.
             ...(pastMode ? { pastMode, historical: historicalThread } : {}),

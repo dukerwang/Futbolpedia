@@ -2,8 +2,7 @@
 /**
  * Offline checks for past mode in the chat loop (`services/pastTurn.ts`, `services/chatTurn.ts`,
  * behind `PAST_MODE`): which turns take the loop with the switch on and off, the first message's
- * cards, era snapshots and settled verdicts, the past budget and instructions under both
- * instruction sets, `commit_verdict` against the cards and a settled verdict, card pairs reported
+ * cards, era snapshots and settled verdicts, the past budget and instructions, `commit_verdict` against the cards and a settled verdict, card pairs reported
  * with path `commit`, proposals and departures sent to the settled-verdict store, the figure budget
  * from a commitment, a present turn comparing carded versions, and that with the switch off every
  * path builds exactly what it built before. The model, tools, stores and network are faked; Gemini
@@ -56,7 +55,6 @@ const {
 const { checkCommitment, toStanding } = await import('../services/debateConsistency');
 const { memoryVerdictDb, verdictKey, fingerprintOf, DEBATE_VERDICT_VERSION } = await import('../services/debateVerdicts');
 const { readDisagreementReport } = await import('../services/cardDisagreements');
-const { PRINCIPLE_SOURCES } = await import('../prompts/chatPrompt');
 const { addEvidence, emptyLedger } = await import('../services/evidenceLedger');
 type ChatModel = import('../services/chatTurn').ChatModel;
 type ChatRoundReply = import('../services/chatTurn').ChatRoundReply;
@@ -325,16 +323,6 @@ await test('a past turn reads the cards in order, their era snapshots and the se
   assert.ok(opened.declarations.includes('commit_verdict'));
 });
 
-await test('under the principle set, a past turn\'s instructions carry only its data line', async () => {
-  const h = pastDeps();
-  const fake = fakeModel([answer('An answer.')]);
-  await quietly(() => runChatTurn(params('Prime Stopper or prime Marker?', [HIGH, LOW], { historical: true, pastMode: true, principles: true }), { ...h.deps, model: fake.model }));
-  const prompt = String(fake.sent[0].message);
-  assert.match(prompt, new RegExp(`<instructions>\\n1\\. ${PRINCIPLE_SOURCES.pastMode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n</instructions>`));
-  assert.ok(!prompt.includes(PAST_LOOP_RULES));
-  assert.ok(fake.opened().systemInstruction.includes(PAST_RESEARCH_NOTE));
-});
-
 // --- commit_verdict ---------------------------------------------------------------------------
 
 await test('a commitment against the cards: told so, asked for a reason, the pair reported as a commitment, and the reason recorded', async () => {
@@ -583,7 +571,7 @@ await test('the card note tells the loop that level cards leave the order to the
 });
 
 await test('the past notes and the tool description are descriptive: no players, clubs or quoted phrases', () => {
-  for (const text of [PAST_RESEARCH_NOTE, CARD_ANCHOR_NOTE, PAST_LOOP_RULES, String(COMMIT_VERDICT_DECLARATION.description), PRINCIPLE_SOURCES.pastMode]) {
+  for (const text of [PAST_RESEARCH_NOTE, CARD_ANCHOR_NOTE, PAST_LOOP_RULES, String(COMMIT_VERDICT_DECLARATION.description)]) {
     assert.doesNotMatch(text, /["“”]/);
     assert.doesNotMatch(text, /\b(Arsenal|Barcelona|Milan|Madrid|Zidane|Messi|Maldini|\d{2} Overall)\b/);
   }

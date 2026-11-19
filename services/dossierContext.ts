@@ -226,17 +226,12 @@ export const mostRecentlyShownCard = (
   return undefined;
 };
 
-/** The `<locked_dossiers>` header under the principle set: what the cards are, with no rating offered in chat. */
-const LOCKED_DOSSIERS_HEADER_PRINCIPLES =
-  'The cards below were already rated earlier in this conversation and are your settled analysis. Their Overall, Potential and attribute values are exact, never to be recomputed or drifted.';
-
-/** `principles`: the header the principle set reads (`PRINCIPLES_PROMPT`); off, the header as it was. */
-export const buildLockedDossiersBlock = (dossiers: PlayerProfile[], principles = false): string => {
+export const buildLockedDossiersBlock = (dossiers: PlayerProfile[]): string => {
   if (dossiers.length === 0) return '';
   const body = dossiers.map(serializeProfileForHistory).join('\n\n');
   return `
     <locked_dossiers>
-    ${principles ? LOCKED_DOSSIERS_HEADER_PRINCIPLES : "The player(s) below were ALREADY rated earlier in this conversation. They are your settled analysis: any Overall, Potential or attribute value you state must match them exactly, never recomputed or drifted. They constrain what you say, not what you bring up: quote their numbers only where they help the reader, for the version under discussion. Only a player NOT listed here may be rated fresh from the factual foundation."}
+    The player(s) below were ALREADY rated earlier in this conversation. They are your settled analysis: any Overall, Potential or attribute value you state must match them exactly, never recomputed or drifted. They constrain what you say, not what you bring up: quote their numbers only where they help the reader, for the version under discussion. Only a player NOT listed here may be rated fresh from the factual foundation.
     ${body}
     </locked_dossiers>`;
 };
@@ -263,7 +258,6 @@ export const wantsSavedDossierInventory = (message: string): boolean =>
 export const buildSavedDossiersBlock = (
   dossiers: PlayerProfile[],
   inventoryOnly: boolean,
-  principles = false,
 ): string => {
   const confident = dossiers.filter(isConfidentDossier);
   if (confident.length === 0) return '';
@@ -283,7 +277,7 @@ export const buildSavedDossiersBlock = (
   const body = confident.map((p) => serializeCard(p, SAVED_DOSSIER_HEADER)).join('\n\n');
   return `
     <saved_dossiers>
-    ${principles ? "Cards from the user's saved archive, rated in other conversations, which the user asked you to reference. Their ratings and attributes are exact." : 'The user explicitly asked you to reference dossier(s) from their saved archive (profiles generated in other conversations). Use these exact ratings and attributes — do NOT regenerate or contradict them unless they ask for a fresh rating.'}
+    The user explicitly asked you to reference dossier(s) from their saved archive (profiles generated in other conversations). Use these exact ratings and attributes — do NOT regenerate or contradict them unless they ask for a fresh rating.
     ${body}
     </saved_dossiers>`;
 };

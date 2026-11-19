@@ -2,15 +2,7 @@ import { Type } from '@google/genai';
 import type { AskPrompt, ChatMessage, GaffaContextBag, GaffaTradeScorecard, GoDeeper, PlayerProfile } from '../types';
 import type { ThinkingTier } from '../constants/modelProfiles';
 import { ATTRIBUTE_KEYS } from '../constants/ratingTiers';
-import {
-  buildConversationalScoutInstruction,
-  GAFFA_CLUB_SOURCES,
-  INITIATIVE_RULES,
-  PRINCIPLE_SOURCES,
-  principleInstructions,
-  PRINCIPLES_PROMPT,
-  viewRules,
-} from '../prompts/chatPrompt';
+import { buildConversationalScoutInstruction, INITIATIVE_RULES, viewRules } from '../prompts/chatPrompt';
 import {
   generateProseTurn,
   type ProseToolMode,
@@ -344,11 +336,6 @@ export interface ConversationalScoutParams {
    * whose replies Gaffa draws as text; a challenge turn and a Gaffa trade scorecard never get them.
    */
   views?: boolean;
-  /**
-   * Which instruction set the writer reads: the principle set when true, the instructions built
-   * before it when false. Left out, `PRINCIPLES_PROMPT` decides. Tests and the eval set it.
-   */
-  principles?: boolean;
   /** The gate feedback round's model and clock, for tests (`gateFeedback.ts`). */
   gateFeedback?: { correct?: CorrectionModel; now?: () => number };
 }
@@ -630,32 +617,19 @@ export const MANAGER_FIDELITY_RULE =
   "CRITICAL MANAGER FIDELITY: Never cite former or sacked managers from pre-trained memory. Name a club's current head coach only as given in <verified_managers>; for any club not listed there, describe the tactical setup and intrinsic player mechanics without naming a manager.";
 
 /**
- * The stage writer's `<instructions>`. Off (`principles` false), exactly the block built before the
- * principle set: the router's answer template, the fact, manager and continuity rules, and the
- * offered tools' rules (`extraRules`). On, only the turn's data: where its facts sit, its notes
- * (cards shown, cards missing, a prime with no card) and the Gaffa line. Pinned in
- * `scripts/test-chat-prompt.ts`.
+ * The stage writer's `<instructions>`: the answer guidance for the turn's mode, its notes (cards
+ * shown, cards missing, a prime with no card), the fact, manager and continuity rules, and the
+ * offered tools' rules (`extraRules`). Pinned in `scripts/test-chat-prompt.ts`.
  */
 export function stageInstructions(args: {
-  principles: boolean;
   route: TurnRoute;
   analyticalMode: string;
   currentSeason: string;
   debate: DebateBrief | null;
   notes: string;
-  gaffa: boolean;
   extraRules: string[];
 }): string {
-  const { principles, route, analyticalMode, currentSeason, debate, notes, gaffa, extraRules } = args;
-  if (principles) {
-    const sources =
-      route.intent === 'archive_inventory' || analyticalMode === 'archive'
-        ? PRINCIPLE_SOURCES.archive
-        : debate
-          ? `${PRINCIPLE_SOURCES.past}${debate.kind === 'other' ? ` ${PRINCIPLE_SOURCES.pastOther}` : ''}`
-          : PRINCIPLE_SOURCES.present;
-    return principleInstructions([sources, notes, gaffa ? GAFFA_CLUB_SOURCES : '']);
-  }
+  const { route, analyticalMode, currentSeason, debate, notes, extraRules } = args;
   const modeGuidance = proseModeGuidance(route, analyticalMode, currentSeason, debate);
   return `<instructions>
 1. ${modeGuidance}${notes}
@@ -666,21 +640,14 @@ ${debate ? `2. ${PAST_FACT_RULES}` : `2. ${presentFactRules(currentSeason)}
 }
 
 /** The challenge task's `<instructions>`, which define its structured output. Pinned in `scripts/test-chat-prompt.ts`. */
-export const challengeInstructions = (principles: boolean): string => `<instructions>
+export const challengeInstructions = (): string => `<instructions>
 The user is challenging, questioning, or requesting an adjustment to the dossier above.
-${principles ? CHALLENGE_STEPS_PRINCIPLES : CHALLENGE_STEPS_LEGACY}
+1. Evaluate their point honestly against the Scout's Code, the recalibrated Section III Rating Tier Scale (where World-Class starts strictly at 90), and any grounding verification or peer benchmarks above. Start from what the user actually argued and answer it with evidence; never attribute their view to bias or sentiment.
+2. Check your own earlier replies in <ongoing_thread>. If they ranked these players differently from what the dossiers' Overall ratings show, say so in your opening paragraph before anything else.
 3. If the current dossier rating/attribute is justified, set \`revisedDossier: false\` and explain why with concrete tactical/statistical reasoning in \`replyProse\`, addressing the user's specific argument.
 4. If the user makes a valid evidence-backed point (or explicitly asks to adjust a rating/attribute), set \`revisedDossier: true\`, populate \`dossierPatch\` with the exact updated values so the UI card updates live, and explain the revision clearly in \`replyProse\`.
 5. Ensure every number you mention in \`replyProse\` matches the dossiers above (the active one and any in <locked_dossiers>) or your \`dossierPatch\`. Quote another player's attributes only from his dossier.
 </instructions>`;
-
-/** The challenge task's first two steps, as they were before the principle set. */
-const CHALLENGE_STEPS_LEGACY = `1. Evaluate their point honestly against the Scout's Code, the recalibrated Section III Rating Tier Scale (where World-Class starts strictly at 90), and any grounding verification or peer benchmarks above. Start from what the user actually argued and answer it with evidence; never attribute their view to bias or sentiment.
-2. Check your own earlier replies in <ongoing_thread>. If they ranked these players differently from what the dossiers' Overall ratings show, say so in your opening paragraph before anything else.`;
-
-/** The same steps under the principle set, which already says how to answer an argument and own an earlier reply. */
-const CHALLENGE_STEPS_PRINCIPLES = `1. Weigh their point against the Scout's Code, the Section III scale and any grounding verification or peer benchmarks above, starting from what they actually argued.
-2. Check your earlier replies in <ongoing_thread>: where they ranked these players differently from the dossiers' Overall ratings, say so plainly.`;
 
 export async function runConversationalScout(
   params: ConversationalScoutParams,
@@ -704,8 +671,7 @@ export async function runConversationalScout(
   } = params;
 
   const { year, month, currentSeason } = getCurrentSeasonInfo();
-  const principles = params.principles ?? PRINCIPLES_PROMPT;
-  const systemInstruction = buildConversationalScoutInstruction(isEAFCRequest, principles);
+  const systemInstruction = buildConversationalScoutInstruction(isEAFCRequest);
   const ongoingThread = buildOngoingThreadBlock(history);
 
   // 1. Live Dossier Challenge / Revision Path
@@ -769,9 +735,9 @@ ${peerLedgerBlock ?? ''}
 <active_dossier>
 ${serializeProfileForHistory(targetDossier)}
 </active_dossier>
-${buildLockedDossiersBlock(otherCards, principles)}
+${buildLockedDossiersBlock(otherCards)}
 ${groundingNotes ? `<grounding_verification>\n${groundingNotes}\n</grounding_verification>` : ''}
-${challengeInstructions(principles)}
+${challengeInstructions()}
 <user_message>${message}</user_message>`;
 
       const result = await generateStructured<ChallengeTurnResponse>({
@@ -834,7 +800,7 @@ ${challengeInstructions(principles)}
     const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
     const { matchedCards, unratedPlayers, lockedCards } = cardsForTurn(message, route.targetPlayers, allCalibrated, isHistoricalThread);
     if (lockedCards.length > 0) {
-      effectiveLockedBlock = buildLockedDossiersBlock(lockedCards, principles);
+      effectiveLockedBlock = buildLockedDossiersBlock(lockedCards);
     }
     cardsInPlay = lockedCards;
     gaps = editionGaps(lockedCards, isHistoricalThread, message, matchedCards);
@@ -963,7 +929,7 @@ ${challengeInstructions(principles)}
     ledger && (ledger.entries.length > 0 || ledger.gaps.length > 0)
       ? formatLedger(ledger, debate ? {} : { seasonStart: seasonStartDate(seasonStartYear) })
       : '';
-  let situationBlock = formatSituation(situation, { principles });
+  let situationBlock = formatSituation(situation);
   let situationData = situation;
   const threadSig = threadSignature;
   if (situationBlock) {
@@ -987,7 +953,6 @@ ${challengeInstructions(principles)}
       cards: mergeAllCalibratedDossiers(savedDossiers, conversationDossiers),
       ongoingThread,
       factualFoundation,
-      principles,
     });
     if (gaffaTurn.scorecard) params.onGaffaScorecard?.(gaffaTurn.scorecard);
     perf?.(`gaffa club (${gaffaTurn.focus})`);
@@ -1024,29 +989,20 @@ ${challengeInstructions(principles)}
   const viewNote = offersViews ? viewRules() : '';
   const extraRules = [initiativeNote, viewNote].filter(Boolean);
   // What the user is trying to do, from whichever brief the turn wrote, read before everything else.
-  const needBlock = debate ? formatNeedForWriter(debate.need, { principles }) : formatBriefNeedForWriter(brief, { principles });
+  const needBlock = debate ? formatNeedForWriter(debate.need) : formatBriefNeedForWriter(brief);
   const fullPrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${needBlock}
 ${gaffaBlock}
 ${ongoingThread}
 ${situationBlock}
 ${factualFoundation ? `<factual_foundation>\n${factualFoundation}\n</factual_foundation>` : ''}
-${brief && researched ? formatBriefForWriter(brief, { principles }) : ''}
+${brief && researched ? formatBriefForWriter(brief) : ''}
 ${debate ? formatDebateBriefForWriter(debate, debateCards) : ''}
 ${formatVerifiedManagersBlock(verifiedManagers)}
 ${peerLedgerBlock ?? ''}
 ${effectiveLockedBlock}
 ${savedDossiersBlock}
-${stageInstructions({
-  principles,
-  route,
-  analyticalMode,
-  currentSeason,
-  debate,
-  notes: `${shownNote}${missingNote}${gapNote}`,
-  gaffa: Boolean(gaffaTurn),
-  extraRules,
-})}
+${stageInstructions({ route, analyticalMode, currentSeason, debate, notes: `${shownNote}${missingNote}${gapNote}`, extraRules })}
 <task>${message}</task>`;
 
   const historyContents = buildHistoryContents(history, conversationDossiers);
@@ -1167,7 +1123,6 @@ ${stageInstructions({
     imageData,
     thinkingLevelOverride,
     toolMode,
-    principles,
     dossiersPool,
     gaffaBag,
     dossierTools,
