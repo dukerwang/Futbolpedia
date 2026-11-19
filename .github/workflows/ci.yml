@@ -44,3 +44,11 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # The Gemini key must never ship to browsers: fail if any built file holds a Google API key.
+      - name: No API key in the build
+        run: |
+          if grep -rEl 'AIza[0-9A-Za-z_-]{35}' dist; then
+            echo "A Google API key is in the browser build."
+            exit 1
+          fi

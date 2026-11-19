@@ -14,9 +14,21 @@ import { DossierGrepParams, grepDossiers } from './dossierStore';
 
 export const FLASH_MODEL = DEFAULT_FAST_MODEL;
 
+/**
+ * The browser never holds a Gemini key. There, the SDK sends every call to this site's
+ * `/gemini-api-proxy`, which adds the server's key and forwards only the app's own models and
+ * methods (`services/geminiProxy.ts`); the placeholder below is ignored by the proxy. On the server
+ * (Gaffa's panel, snapshot builds, the scout's day) and in scripts, the SDK uses the real key from
+ * the environment directly.
+ */
+const PROXY_PLACEHOLDER_KEY = 'browser-uses-server-proxy';
+const inBrowser = (): boolean => typeof window !== 'undefined' && typeof window.location?.origin === 'string';
+
 let _ai: GoogleGenAI | null = null;
 export const getAi = (): GoogleGenAI =>
-  (_ai ??= new GoogleGenAI({ apiKey: process.env.API_KEY as string }));
+  (_ai ??= inBrowser()
+    ? new GoogleGenAI({ apiKey: PROXY_PLACEHOLDER_KEY, httpOptions: { baseUrl: `${window.location.origin}/gemini-api-proxy` } })
+    : new GoogleGenAI({ apiKey: process.env.API_KEY as string }));
 
 // gemini-3.8-flash and gemini-4-hydrogen both reject ThinkingLevel.MINIMAL with HTTP 400; map
 // 'minimal' to LOW.
