@@ -2,14 +2,7 @@ import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration
 import type { ChatMessage, GaffaContextBag, PlayerProfile } from '../types';
 import { grepGaffaBag, type GaffaMarketGrepParams } from '../constants/gaffaRules';
 import { resolveTaskModelConfig, samplingFor, type ThinkingTier } from '../constants/modelProfiles';
-import {
-  buildConversationalScoutInstruction,
-  GAFFA_CLUB_SOURCES,
-  PRINCIPLE_SOURCES,
-  principleInstructions,
-  PRINCIPLES_PROMPT,
-  viewRules,
-} from '../prompts/chatPrompt';
+import { buildConversationalScoutInstruction, viewRules } from '../prompts/chatPrompt';
 import {
   blockedOrEmptyResponseError,
   getAi,
@@ -488,23 +481,21 @@ const CHAT_FACT_SOURCES =
   'your tool results this turn, <stored_snapshots>, the numbered entries in <factual_foundation>, or existing dossiers';
 
 /** The turn's rule when a Gaffa club is attached: where its facts are and which tools read the rest. */
-export const CHAT_GAFFA_RULE = GAFFA_CLUB_SOURCES;
+export const CHAT_GAFFA_RULE =
+  "The user's Gaffa club is in <gaffa_club> and the blocks after it: they are the source for its squad, saved lineup, Club Balance, league market and rules. grep_gaffa_market filters the league's free agents, squad, listings and auctions at no cost; get_player_season gives any Premier League player's FPL status, including a player who isn't in the squad.";
 
 /**
- * The loop's `<instructions>`. Off (`principles` false), exactly the block built before the principle
- * set: the router's answer template with the loop's team rules, the fact, manager and continuity rules,
- * and the Gaffa line. On, only the turn's data. Pinned in `scripts/test-chat-prompt.ts`.
+ * The loop's `<instructions>`: the answer guidance for the turn's mode with the loop's team rules,
+ * the fact, manager and continuity rules, and the Gaffa line. Pinned in `scripts/test-chat-prompt.ts`.
  */
 export function chatInstructions(args: {
-  principles: boolean;
   route: TurnRoute;
   analyticalMode: string;
   currentSeason: string;
   notes: string;
   gaffa: boolean;
 }): string {
-  const { principles, route, analyticalMode, currentSeason, notes, gaffa } = args;
-  if (principles) return principleInstructions([PRINCIPLE_SOURCES.chat, notes, gaffa ? GAFFA_CLUB_SOURCES : '']);
+  const { route, analyticalMode, currentSeason, notes, gaffa } = args;
   return `<instructions>
 1. ${proseModeGuidance(route, analyticalMode, currentSeason, null, CHAT_TEAM_RULES)}${notes}
 2. ${presentFactRules(currentSeason, CHAT_FACT_SOURCES)}
@@ -516,33 +507,8 @@ export function chatInstructions(args: {
 const RESEARCH_OVER =
   'Research is over: the budget is spent. Write the whole answer now from what you have, and say plainly what you could not verify.';
 
-/** The same note under the chat principle set, which already says when to name what couldn't be verified. */
-const RESEARCH_OVER_PRINCIPLES = 'Research is over: the budget is spent. Write the whole answer now from what you have.';
-
 /** The note on a past turn whose budget ran out before it committed: it may still commit, then writes. */
 const COMMIT_STILL_OPEN = 'If the answer is a judgment you have not yet recorded with commit_verdict, call it now, before you write; no other tool is available.';
-
-/**
- * The loop's part of the system instruction under the chat principle set: the budget and how to
- * spend it, and nothing the principles already say about the need, pushback or views. Descriptive only.
- */
-export const principleResearchRules = (budget: ResearchBudget): string => `## Research
-
-In this conversation you decide your own research. Your tools read live club data, Premier League player seasons, league tables, past club seasons, player careers, the web, the stored dossier cards and the user's saved dossiers; the show tools draw views in your reply.
-
-Budget for this turn: ${Math.round(budget.ms / 1000)} seconds of research, ${budget.calls} lookups (at most ${budget.searches} of them web searches) and ${budget.rounds} rounds of tool calls. The local dossier search and the show tools are free: drawing views costs no lookup, search or round. Every tool result ends with what's left. When any part of the budget runs out, research is over and your next reply must be the answer.
-
-How to research:
-- Look up only what the user's need requires. A fact the user disputes is looked up this turn, and a fact already in the conversation's evidence counts as looked up. Stop researching as soon as you have what the answer needs; a question the conversation or the cards already answer needs no lookup.
-- Call independent lookups together in one round: they run in parallel. Follow up only on what a result left open.
-- For who plays, results, availability and standings, use the live feeds. Use web search for what the feeds don't cover (tactical analysis, transfers and their dates, news, clubs or players outside the feeds), naming the season. A web search is the slowest and scarcest lookup: don't search for what a feed already gave you.
-- A lookup that came back not covered won't work if asked again.
-- For a question about the present, find out what is different this season for the club or player (the people, the coach, the shape, the role or the form), unless the conversation, a stored snapshot or a result already says it.
-- For who is missing or doubtful, read team news as well as the injury list: no free source records knocks between list updates, and news reports them first.
-- Each result also lists what is still unchecked for the clubs and players in the question. Spend on those only where the answer needs them.
-- Write nothing to the user while you look things up: text you write in a round that also calls a lookup is discarded. When research is done, write the answer. To place a view inside it, write the part that leads into the view, call the view tool in that same turn, and carry on with the rest after its result; a turn that only draws views keeps its text.
-
-${RESEARCH_COVERAGE_NOTE}`;
 
 const formatBudget = (left: ResearchBudget): string =>
   `Budget left: ${Math.max(0, Math.round(left.ms / 1000))} s, ${Math.max(0, left.calls)} lookups, ${Math.max(0, left.searches)} web searches, ${Math.max(0, left.rounds)} rounds.`;
@@ -630,8 +596,6 @@ export interface ChatTurnParams {
   onStageChange?: (stageLabel: string) => void;
   perf?: (label: string) => void;
   conversationId?: string;
-  /** Which instruction set the loop reads; left out, `PRINCIPLES_PROMPT` decides (`chatPrompt.ts`). */
-  principles?: boolean;
   /** The thread is about the past (`threadIsHistorical`). Read only when past mode is on. */
   historical?: boolean;
   /** Overrides `PAST_MODE` for this turn, for tests and the eval. */
@@ -711,8 +675,7 @@ const noLive: Promise<ToolOutcome> = Promise.resolve({ status: 'empty', result: 
 
 export async function runChatTurn(params: ChatTurnParams, deps: ChatTurnDeps = {}): Promise<string> {
   const { message, route, history, perf } = params;
-  const principles = params.principles ?? PRINCIPLES_PROMPT;
-  const researchOver = principles ? RESEARCH_OVER_PRINCIPLES : RESEARCH_OVER;
+  const researchOver = RESEARCH_OVER;
   const composer = params.composer ?? new ReplyComposer();
   const model = deps.model ?? liveChatModel;
   const now = deps.now ?? Date.now;
@@ -741,7 +704,7 @@ export async function runChatTurn(params: ChatTurnParams, deps: ChatTurnDeps = {
   let gaffaTurn: GaffaTurn | null = null;
   if (gaffaBag) {
     params.onStageChange?.('Reading your Gaffa club...');
-    gaffaTurn = await buildGaffaTurn({ message, history, bag: gaffaBag, cards: allCalibrated, ongoingThread, fetchAvailability: deps.gaffaAvailability, scorecard: false, principles });
+    gaffaTurn = await buildGaffaTurn({ message, history, bag: gaffaBag, cards: allCalibrated, ongoingThread, fetchAvailability: deps.gaffaAvailability, scorecard: false });
     deps.onGaffaTurn?.(gaffaTurn);
     perf?.(`gaffa club (${gaffaTurn.focus})`);
   }
@@ -823,16 +786,14 @@ ${params.lockedDossiersBlock}
 ${params.savedDossiersBlock}${anchoredBlocks ? `\n${anchoredBlocks}` : ''}
 ${
   past
-    ? pastInstructions({ principles, notes: `${shownNote}${missingNote}${gapNote}` })
-    : chatInstructions({ principles, route, analyticalMode, currentSeason, notes: `${shownNote}${missingNote}${gapNote}`, gaffa: Boolean(gaffaBag) })
+    ? pastInstructions({ notes: `${shownNote}${missingNote}${gapNote}` })
+    : chatInstructions({ route, analyticalMode, currentSeason, notes: `${shownNote}${missingNote}${gapNote}`, gaffa: Boolean(gaffaBag) })
 }
 <task>${message}</task>`;
 
   const pastNotes = `${past ? `\n\n${PAST_RESEARCH_NOTE}` : ''}${anchored ? `\n\n${CARD_ANCHOR_NOTE}` : ''}`;
   const conversation = model.open({
-    systemInstruction: principles
-      ? `${buildConversationalScoutInstruction(params.isEAFCRequest, true)}\n\n${principleResearchRules(budget)}${pastNotes}`
-      : `${buildConversationalScoutInstruction(params.isEAFCRequest, false)}\n\n${researchRules(budget)}${pastNotes}`,
+    systemInstruction: `${buildConversationalScoutInstruction(params.isEAFCRequest)}\n\n${researchRules(budget)}${pastNotes}`,
     history: buildHistoryContents(history, params.conversationDossiers),
     declarations: chatDeclarations(Boolean(gaffaBag), anchored),
     thinkingLevel: deps.thinkingLevel,

@@ -32,7 +32,6 @@
  *   npm run eval:live -- --set historical --only 2,3 --repeat 2 --grade --figure-check   # twice, graded, figures checked
  *   npm run eval:live -- --set historical --past-mode --only 2,3   # questions about the past through the chat loop (PAST_MODE)
  *   npm run eval:live -- --stage --label stage   # the live set through the stage pipeline instead of the chat loop
- *   npm run eval:live -- --only 11 --principles --label principles   # the chat writer reads the principle set (PRINCIPLES_PROMPT)
  *   npm run eval:live -- --conversations --only C1,C2   # the multi-turn cases (--grade to score their conduct)
  *   npm run eval:live -- --repeat 2 --only 4,11,1 --grade --shared-cards --label drift   # how far the chat loop's answers vary between runs
  *
@@ -88,12 +87,6 @@ if (args.includes('--deep')) {
   console.error('--deep is gone: the chat loop is the default path. On the historical set, --past-mode sends questions about the past through it.');
   process.exit(1);
 }
-/**
- * `--principles`: send every question with `principles: true`, so the chat writer reads the principle
- * set (`PRINCIPLES_PROMPT` in prompts/chatPrompt.ts) whatever the constant says. It combines with
- * `--stage`, `--past-mode` and `--set historical`.
- */
-const principlesFlag = args.includes('--principles');
 /**
  * `--no-prior`: on `--set historical --past-mode`, every question starts with an empty settled-verdict
  * store, to measure the loop's own consistency. Without it, run 2 and each paraphrase read what an
@@ -429,7 +422,6 @@ async function askInner(question: string, context: AskContext = {}): Promise<Run
         path = p;
       },
       ...(stage ? { stage: true } : {}),
-      ...(principlesFlag ? { principles: true } : {}),
       ...(pastMode ? { pastMode: true } : {}),
       chatDeps: { onStats: (s) => (stats = s), ...(pastMode ? { verdicts: noPrior ? memoryVerdictDb() : evalVerdicts } : {}) },
     });

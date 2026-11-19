@@ -1,6 +1,29 @@
 # Chat principles
 
-Date: 2026-11-18. Status: steps 1 to 6 built; the switch ships off, pending the live check. No live calls.
+Date: 2026-11-18. Status: dropped on 2026-11-19; see Outcome. Step 1 (the core's section
+constants and the hash pins) stays.
+
+## Outcome
+
+Dropped on 2026-11-19 after two eval-key checks of the principle set against the answers the
+current instructions give (`2026-11-18-2243-principles-check.md` on `main` at `3ce5dc0`, and
+`2026-11-19-0210-principles-recheck.md` on the fixes branch, each on questions 11, 1 and 13). The
+rating and prose-offer fixes worked, but the set didn't beat the current answers:
+
+- Question 1 still hedged roles (a player with alternatives in brackets, two ways of playing
+  offered as a choice), even with the team rule moved into principle 5 and a team data line added
+  to the turn.
+- Question 11, the head-to-head, was no deeper than without the template, and the figure gate cut
+  the sentence that named a player, leaving the next one opening on a pronoun.
+- First tokens took 22 to 45 seconds against 12 to 18 on the first check.
+
+The switch (`PRINCIPLES_PROMPT`), the principle set, its declaration variants, per-turn data lines,
+block-header options, the `principles` option and the eval's `--principles` flag were removed in
+one PR, with every chat prompt byte-identical to `main` (the hashes in
+`scripts/test-chat-prompt.ts`). What stays from this work: the section constants from step 1, the
+per-path hash pins, and the exported `stageInstructions`, `chatInstructions` and
+`challengeInstructions` builders that make those pins possible. The inventory below still describes
+the duplicates and conflicts in the current instructions.
 
 Builds on the card-mentions edits (branch `card-mentions-judgment`). When this spec was written
 those edits were still uncommitted in the main checkout (`/Users/dukewang/Futbolpedia`), so this

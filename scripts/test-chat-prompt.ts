@@ -4,7 +4,8 @@
  * splitting or moving a section never changes a prompt by accident. A deliberate prompt change
  * updates the hash here in the same commit, with the reason in the commit message.
  *
- * Design: docs/superpowers/specs/2026-11-18-chat-principles-design.md.
+ * They also pin every chat path's turn instructions, block headers and tool declarations, built
+ * with fixed inputs, so a change to what the writer reads is always a deliberate one.
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -20,45 +21,18 @@ import {
   SCOUT_CORE_INSTRUCTION,
 } from '../prompts/scoutCore';
 import { DOSSIER_SYNTHESIS_SYSTEM_INSTRUCTION } from '../prompts/dossierPrompt';
-import {
-  buildConversationalScoutInstruction,
-  CHAT_PRINCIPLES,
-  GAFFA_CLUB_SOURCES,
-  HOW_CARDS_WORK,
-  INITIATIVE_RULES,
-  PRINCIPLE_NAMES,
-  PRINCIPLE_SOURCES,
-  RATING_CODE,
-  viewRules,
-} from '../prompts/chatPrompt';
-import {
-  CORE_BANNED_WORDS,
-  CORE_CANONICAL_POSITIONS,
-  CORE_NICKNAMES,
-  CORE_POSITIVE_RELEVANCE,
-  CORE_STRAWMAN_BAN,
-} from '../prompts/scoutCore';
+import { buildConversationalScoutInstruction, viewRules } from '../prompts/chatPrompt';
 import type { PlayerProfile } from '../types';
 import { CALIBRATION_EPOCH_MS } from '../services/dossierCache';
 import { buildLockedDossiersBlock, buildSavedDossiersBlock } from '../services/dossierContext';
 import { challengeInstructions, initiativeRules, stageInstructions } from '../services/conversationalScout';
-import { CHAT_DECLARATIONS, DEFAULT_RESEARCH_BUDGET, chatInstructions, researchRules, principleResearchRules } from '../services/chatTurn';
+import { CHAT_DECLARATIONS, DEFAULT_RESEARCH_BUDGET, chatInstructions, researchRules } from '../services/chatTurn';
 import { readDebateBrief } from '../services/debateBrief';
-import { CARD_ANCHOR_NOTE, COMMIT_VERDICT_DECLARATION, PAST_RESEARCH_NOTE } from '../services/pastTurn';
 import { formatSituation } from '../services/situationSnapshot';
 import { formatBriefForWriter, type ResearchBrief } from '../services/researchAgent';
 import { formatNeedForWriter } from '../services/userNeed';
-import {
-  ASK_USER_DECLARATION,
-  LOOK_UP_DOSSIER_DECLARATION,
-  OFFER_RATING_DECLARATION,
-  OFFER_RATING_DECLARATION_PRINCIPLES,
-  PREPARE_CLUB_DECLARATION,
-  PREPARE_CLUB_DECLARATION_PRINCIPLES,
-  SHOW_DOSSIER_DECLARATION,
-} from '../services/aiClient';
+import { ASK_USER_DECLARATION, OFFER_RATING_DECLARATION, PREPARE_CLUB_DECLARATION } from '../services/aiClient';
 import { GAFFA_MANAGER_REASONING } from '../constants/gaffaRules';
-import { REPLY_BLOCKS } from '../services/replyBlocks/registry';
 import type { TurnRoute } from '../services/turnRouter';
 
 let passes = 0;
@@ -114,7 +88,7 @@ await test('the system instructions are byte-stable: the same on every call', ()
 });
 
 // ---------------------------------------------------------------------------------------------
-// With PRINCIPLES_PROMPT off: every path's instructions as they were, byte for byte
+// Every path's instructions, byte for byte
 
 const SEASON = '2026-27';
 const route = (analyticalMode: string, intent = 'tactical_chat'): TurnRoute =>
@@ -162,28 +136,26 @@ const need = { goal: 'Decide a lineup', settle: ['Who starts'], objection: 'The 
 const MODES = ['head_to_head', 'archive', 'player_qa', 'ranking_or_tierlist', 'tactical_or_system', 'squad_or_recruitment', 'debate_or_verdict', 'dossier'];
 const extraRules = [initiativeRules(), viewRules()];
 
-/** Every instruction builder's output with fixed inputs, as the writer reads it with the switch off. */
-const legacyOutputs = (): Record<string, string> => {
+/** Every instruction builder's output with fixed inputs, as the writer reads it. */
+const pathOutputs = (): Record<string, string> => {
   const out: Record<string, string> = {};
   for (const mode of MODES) {
-    out[`stage ${mode}`] = stageInstructions({ principles: false, route: route(mode), analyticalMode: mode, currentSeason: SEASON, debate: null, notes: NOTES, gaffa: false, extraRules });
-    out[`chat ${mode}`] = chatInstructions({ principles: false, route: route(mode), analyticalMode: mode, currentSeason: SEASON, notes: NOTES, gaffa: false });
+    out[`stage ${mode}`] = stageInstructions({ route: route(mode), analyticalMode: mode, currentSeason: SEASON, debate: null, notes: NOTES, extraRules });
+    out[`chat ${mode}`] = chatInstructions({ route: route(mode), analyticalMode: mode, currentSeason: SEASON, notes: NOTES, gaffa: false });
   }
-  out['stage compare'] = stageInstructions({ principles: false, route: route('debate_or_verdict', 'compare'), analyticalMode: 'debate_or_verdict', currentSeason: SEASON, debate: null, notes: '', gaffa: true, extraRules: [] });
-  out['chat gaffa'] = chatInstructions({ principles: false, route: route('squad_or_recruitment'), analyticalMode: 'squad_or_recruitment', currentSeason: SEASON, notes: '', gaffa: true });
+  out['stage compare'] = stageInstructions({ route: route('debate_or_verdict', 'compare'), analyticalMode: 'debate_or_verdict', currentSeason: SEASON, debate: null, notes: '', extraRules: [] });
+  out['chat gaffa'] = chatInstructions({ route: route('squad_or_recruitment'), analyticalMode: 'squad_or_recruitment', currentSeason: SEASON, notes: '', gaffa: true });
   for (const kind of ['head_to_head', 'ranking', 'single', 'other'] as const) {
     out[`stage past ${kind}`] = stageInstructions({
-      principles: false,
       route: route('debate_or_verdict'),
       analyticalMode: 'debate_or_verdict',
       currentSeason: SEASON,
       debate: readDebateBrief({ kind }, { message: 'm' }),
       notes: NOTES,
-      gaffa: false,
       extraRules,
     });
   }
-  out.challenge = challengeInstructions(false);
+  out.challenge = challengeInstructions();
   out.researchRules = researchRules(DEFAULT_RESEARCH_BUDGET);
   out.lockedDossiers = buildLockedDossiersBlock([card('Player One')]);
   out.savedDossiers = buildSavedDossiersBlock([card('Player One')], false);
@@ -198,12 +170,11 @@ const legacyOutputs = (): Record<string, string> => {
 };
 
 /**
- * Their hashes, taken when the switch was added and checked against `main` before it: a full
- * `npm test` run captured every writer prompt (stage, chat loop and challenge) on `main` and on the
- * branch with the switch off, and the two were identical. A deliberate change to an old builder
- * updates its hash here; with the switch flipped, these go with the old builders.
+ * Their hashes. They were checked against `main` when the builders became pure functions: a full
+ * `npm test` run captured every writer prompt (stage, chat loop and challenge) before and after, and
+ * the two were identical. A deliberate change to a builder updates its hash here.
  */
-const LEGACY_PINS: Record<string, string> = {
+const PINS: Record<string, string> = {
   "stage head_to_head": 'cc41eaedf609c94f0a785c8242a98d275da0bdda508eed08546e8c00f1a476b5',
   "chat head_to_head": 'f26470877551af744a93df5edc98ed289f5119bec2c065685ba95d3ecdf2cbc0',
   "stage archive": '6f725a70705cf9edbf6e5df25c977021b8d2f1d1744fa64471c06b50d332c35c',
@@ -239,149 +210,12 @@ const LEGACY_PINS: Record<string, string> = {
   "chatTools": '59c3c2600cd96552a2c0a9e33503177f35f7118da0ac72c8378217a4a9fcf2ad',
 };
 
-await test('with the switch off, every path builds the instructions it always did', () => {
-  const outputs = legacyOutputs();
-  const changed = Object.entries(outputs).filter(([key, text]) => sha(text) !== LEGACY_PINS[key]);
+await test('every path builds the instructions it always did', () => {
+  const outputs = pathOutputs();
+  const changed = Object.entries(outputs).filter(([key, text]) => sha(text) !== PINS[key]);
   if (process.env.PRINT_PINS) console.log(JSON.stringify(Object.fromEntries(Object.entries(outputs).map(([k, t]) => [k, sha(t)])), null, 2));
   assert.deepEqual(changed.map(([key]) => key), []);
-  assert.deepEqual(Object.keys(LEGACY_PINS).sort(), Object.keys(outputs).sort());
-});
-
-// ---------------------------------------------------------------------------------------------
-// With PRINCIPLES_PROMPT on: one principle set, and turn data only
-
-const principled = (eafc = false) => buildConversationalScoutInstruction(eafc, true);
-
-await test('the principle set is byte-stable and differs from the old system instruction', () => {
-  assert.equal(principled(), principled());
-  assert.notEqual(principled(), buildConversationalScoutInstruction(false, false));
-  assert.equal(buildConversationalScoutInstruction(false), buildConversationalScoutInstruction(false, false), 'the switch ships off');
-  assert.ok(principled().startsWith(RATING_CODE));
-  assert.ok(principled(true).includes('VII. FC PLAYSTYLES REFERENCE DIRECTORY'));
-  assert.ok(!principled().includes('${'), 'no unfilled interpolation');
-});
-
-await test('each principle appears once, in order, and How cards work once', () => {
-  const system = principled();
-  let at = -1;
-  for (const [i, name] of PRINCIPLE_NAMES.entries()) {
-    const heading = `${i + 1}. **${name}:**`;
-    assert.equal(system.split(heading).length - 1, 1, heading);
-    assert.ok(system.indexOf(heading) > at, `${heading} in order`);
-    at = system.indexOf(heading);
-  }
-  assert.equal(system.split('**How cards work:**').length - 1, 1);
-});
-
-/** The principle set's own words: the text with the core's word rules and How cards work taken out. */
-const ownPrinciples = [CORE_BANNED_WORDS, CORE_STRAWMAN_BAN, CORE_POSITIVE_RELEVANCE, CORE_NICKNAMES, CORE_CANONICAL_POSITIONS, HOW_CARDS_WORK].reduce(
-  (text, part) => text.replace(part, ''),
-  CHAT_PRINCIPLES,
-);
-
-/** Everything the writer reads under the principle set besides the principles, by name. */
-const principleParts = (): Record<string, string> => ({
-  ...Object.fromEntries(Object.entries(PRINCIPLE_SOURCES).map(([k, v]) => [`sources ${k}`, v])),
-  gaffaSources: GAFFA_CLUB_SOURCES,
-  ratingCode: RATING_CODE,
-  principleResearchRules: principleResearchRules(DEFAULT_RESEARCH_BUDGET),
-  challenge: challengeInstructions(true),
-  lockedHeader: buildLockedDossiersBlock([card('Player One')], true).split('\n')[2],
-  savedHeader: buildSavedDossiersBlock([card('Player One')], false, true).split('\n')[2],
-  situation: formatSituation(situation, { principles: true }),
-  researchBrief: formatBriefForWriter(brief, { principles: true }),
-  need: formatNeedForWriter(need, { principles: true }),
-  gaffaReasoning: GAFFA_MANAGER_REASONING.split('\n').slice(0, -1).join('\n'),
-  ask: ASK_USER_DECLARATION.description,
-  prepare: PREPARE_CLUB_DECLARATION_PRINCIPLES.description,
-  offer: OFFER_RATING_DECLARATION_PRINCIPLES.description,
-  lookUp: LOOK_UP_DOSSIER_DECLARATION.description,
-  pastResearchNote: PAST_RESEARCH_NOTE,
-  cardAnchorNote: CARD_ANCHOR_NOTE,
-  commitVerdict: String(COMMIT_VERDICT_DECLARATION.description),
-  showDossier: SHOW_DOSSIER_DECLARATION.description,
-  ...Object.fromEntries(
-    Object.values(REPLY_BLOCKS)
-      .filter((e: any) => e.tool)
-      .map((e: any) => [`tool ${e.tool.name}`, String(e.tool.description)]),
-  ),
-});
-
-const words = (text: string): string[] => text.toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, ' ').split(/\s+/).filter(Boolean);
-/** The first run of `n` consecutive words two texts share, or null. */
-const sharedRun = (a: string, b: string, n = 12): string | null => {
-  const wa = words(a);
-  const runs = new Set<string>();
-  for (let i = 0; i + n <= wa.length; i++) runs.add(wa.slice(i, i + n).join(' '));
-  const wb = words(b);
-  for (let i = 0; i + n <= wb.length; i++) {
-    const run = wb.slice(i, i + n).join(' ');
-    if (runs.has(run)) return run;
-  }
-  return null;
-};
-
-await test('the duplication guard: nothing the writer reads restates the principles, or another part, in 12 words or more', () => {
-  const parts = principleParts();
-  const found: string[] = [];
-  for (const [name, text] of Object.entries(parts)) {
-    const withPrinciples = sharedRun(ownPrinciples, text);
-    if (withPrinciples) found.push(`${name} restates the principles: "${withPrinciples}"`);
-  }
-  const names = Object.keys(parts);
-  for (let i = 0; i < names.length; i++) {
-    for (let j = i + 1; j < names.length; j++) {
-      const run = sharedRun(parts[names[i]], parts[names[j]]);
-      if (run) found.push(`${names[i]} and ${names[j]} share: "${run}"`);
-    }
-  }
-  assert.deepEqual(found, []);
-});
-
-await test('the principle set retires the old personas, templates and rating offers', () => {
-  const read = [principled(), ...Object.values(principleParts())].join('\n');
-  for (const retired of [
-    'Chief Football Scout',
-    'Senior Tactical Columnist',
-    'Chief-Scout',
-    'Sporting Director',
-    'These dossiers are LAW',
-    'rated fresh',
-    'fresh rating',
-    'concrete phases of play',
-    'final-third creation',
-    'rest-defense',
-    'CRITICAL MANAGER FIDELITY',
-    'THREAD CONTINUITY',
-    'My analysis is strictly limited to football',
-    'for the answer to lead with',
-    'in your opening paragraph',
-    'in your first paragraph',
-  ]) {
-    assert.ok(!read.includes(retired), retired);
-  }
-  // The tier bands live in Section III only.
-  assert.ok(!ownPrinciples.includes('World-Class Elite'));
-});
-
-await test('the principle set is descriptive: no players, clubs or quoted sample phrases', () => {
-  assert.doesNotMatch(ownPrinciples, /["“”]/);
-  assert.doesNotMatch(ownPrinciples, /\b(Arsenal|Chelsea|Madrid|Barcelona|Liverpool|Messi|Saka|Zidane|Gaffa|\d{2} Overall)\b/);
-  for (const line of Object.values(PRINCIPLE_SOURCES)) assert.doesNotMatch(line, /["“”]|\b(Arsenal|Messi|Gaffa)\b/);
-});
-
-await test('under the principle set, the turn instructions carry data only: no answer template, whatever the router said', () => {
-  for (const mode of MODES) {
-    const stage = stageInstructions({ principles: true, route: route(mode), analyticalMode: mode, currentSeason: SEASON, debate: null, notes: NOTES, gaffa: false, extraRules });
-    const loop = chatInstructions({ principles: true, route: route(mode), analyticalMode: mode, currentSeason: SEASON, notes: NOTES, gaffa: false });
-    if (mode === 'archive') assert.equal(stage, `<instructions>\n1. ${PRINCIPLE_SOURCES.archive}\n2. ${NOTES.trim()}\n</instructions>`);
-    else assert.equal(stage, `<instructions>\n1. ${PRINCIPLE_SOURCES.present}\n2. ${NOTES.trim()}\n</instructions>`, mode);
-    assert.equal(loop, `<instructions>\n1. ${PRINCIPLE_SOURCES.chat}\n2. ${NOTES.trim()}\n</instructions>`, mode);
-  }
-  const other = stageInstructions({ principles: true, route: route('debate_or_verdict'), analyticalMode: 'debate_or_verdict', currentSeason: SEASON, debate: readDebateBrief({ kind: 'other' }, { message: 'm' }), notes: '', gaffa: true, extraRules });
-  assert.equal(other, `<instructions>\n1. ${PRINCIPLE_SOURCES.past} ${PRINCIPLE_SOURCES.pastOther}\n2. ${GAFFA_CLUB_SOURCES}\n</instructions>`);
-  // The initiative and view rules live in the tools' descriptions, offered with the tools.
-  for (const rule of [...Object.values(INITIATIVE_RULES), viewRules()]) assert.ok(!other.includes(rule));
+  assert.deepEqual(Object.keys(PINS).sort(), Object.keys(outputs).sort());
 });
 
 console.log(`${passes} passed, ${failures} failed`);

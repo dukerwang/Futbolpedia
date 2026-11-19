@@ -42,7 +42,6 @@ const {
   stageLabel,
   CHAT_DECLARATIONS,
   researchRules,
-  principleResearchRules,
   DEFAULT_RESEARCH_BUDGET,
   uncheckedFor,
   runChatWithFallback,
@@ -750,31 +749,6 @@ await test('a loop that is slow but answers never falls back', async () => {
   assert.deepEqual(turn.paths, [{ path: 'chat' }]);
   assert.deepEqual(turn.warnings.filter((w) => w.includes('[chat] fallback')), []);
   assert.ok(!turn.stages.includes(FALLBACK_STAGE_LABEL));
-});
-
-await test('with the principle set on, the loop reads the principles and the research rules, and its instructions carry only the turn\'s data', async () => {
-  let prompt = '';
-  const fake = fakeModel([(sent) => ((prompt = String(sent[0].message)), answer('Southside play a 4-3-3.'))]);
-  await quietly(() => runChatTurn({ ...baseParams('How do Southside line up?'), principles: true }, { model: fake.model, tools: fakeTools({ t: 0 }).tools, snapshots: null, managers: async () => [] }));
-  const system = fake.opened()!.systemInstruction;
-  assert.equal(system.split('VIII. CHAT PRINCIPLES').length - 1, 1, 'the principles, once');
-  assert.ok(system.endsWith(principleResearchRules(DEFAULT_RESEARCH_BUDGET)), 'the research rules close the system instruction');
-  assert.doesNotMatch(system, /Reading the User|Views: you can draw a view/);
-  const instructions = prompt.slice(prompt.indexOf('<instructions>'), prompt.indexOf('</instructions>'));
-  assert.match(instructions, /^<instructions>\n1\. This turn's facts are in your tool results/);
-  for (const retired of ['Build the team', 'CRITICAL MANAGER FIDELITY', 'THREAD CONTINUITY', 'Current-state facts', 'phases of play', 'Chief Scout']) {
-    assert.ok(!instructions.includes(retired), retired);
-  }
-});
-
-await test("the loop's research rules leave the need, pushback and views to the principles", () => {
-  const rules = principleResearchRules(DEFAULT_RESEARCH_BUDGET);
-  assert.match(rules, /^## Research\n/);
-  assert.match(rules, /Budget for this turn: 120 seconds of research, 12 lookups \(at most 4 of them web searches\) and 10 rounds of tool calls/);
-  assert.match(rules, /Stop researching as soon as you have what the answer needs/);
-  assert.match(rules, /read team news as well as the injury list/);
-  assert.doesNotMatch(rules, /First work out what the user is trying to decide|The user's word neither settles it|Views: you can draw/);
-  assert.doesNotMatch(rules, /\b(Arsenal|Chelsea|Madrid|Messi|Saka|\d{2} Overall)\b/);
 });
 
 console.log(`${passes} passed, ${failures} failed`);
