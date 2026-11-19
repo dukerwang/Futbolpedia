@@ -28,6 +28,10 @@ import { liveToolset } from "./services/researchTools";
 import { CARD_REVIEW_DEFAULT_CALLS, liveCardReview, memoryCardReviewStore, supabaseCardReviewStore } from "./services/cardReview";
 import { readDisagreementReport, setDisagreementSink } from "./services/cardDisagreements";
 import { readCardRows, servedPool } from "./services/cardReview";
+import { createProxyLimiter, decideProxy } from "./services/geminiProxy";
+
+/** The site's own hosts, allowed as `Origin` on the Gemini proxy beside the request's own host. */
+const PROXY_SITE_ORIGINS = ["futbolpedia.org", "www.futbolpedia.org", "futbolpedia.ai.studio", "localhost:3000"];
 import { eraEntry, rowToSnapshot } from "./services/eraSnapshots";
 import { getCardKey } from "./services/dossierCards";
 import {
@@ -238,7 +242,7 @@ async function startServer() {
   const API_KEY = process.env.API_FOOTBALL_KEY;
   const API_URL = "https://v3.football.api-sports.io";
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
-  console.log(`[startup] GEMINI_API_KEY set: ${!!GEMINI_API_KEY} (${GEMINI_API_KEY ? GEMINI_API_KEY.slice(0, 6) + '...' : 'MISSING'})`);
+  console.log(`[startup] GEMINI_API_KEY set: ${!!GEMINI_API_KEY}`);
   // Without it, club research has no lineups, injury list or squad; chat answers fall back to web search.
   console.log(`[startup] API_FOOTBALL_KEY set: ${!!API_KEY}`);
 
@@ -991,33 +995,49 @@ async function startServer() {
   app.post("/api/debates/settle", settleHandler(verdicts, verdictSource));
   app.post("/api/debates/departure", departureHandler(verdicts, verdictSource));
 
-  // AI Studio's service worker intercepts browser requests to generativelanguage.googleapis.com
-  // and redirects them here. This route forwards them back to Google using the server-side
-  // GEMINI_API_KEY. We ignore the incoming x-goog-api-key header because AI Studio's service
-  // worker injects its own internal key there, which has different/lower quota than the user's key.
+  // The browser's only way to Gemini (services/geminiProxy.ts). The browser holds no key: the SDK in
+  // services/aiClient.ts sends its calls here, and this route adds the server's key. The route is
+  // public, so it forwards only POSTs from a page on this site to the app's own models and content
+  // methods, within per-visitor and daily limits; everything else is refused before it reaches
+  // Google. Any incoming key header is ignored.
+  const proxySalt = randomBytes(16).toString("hex");
+  const proxyLimiter = createProxyLimiter();
   app.all("/gemini-api-proxy/*path", async (req, res) => {
     try {
-      const proxyPath = Array.isArray(req.params.path) ? req.params.path.join('/') : req.params.path;
-      const targetUrl = `https://generativelanguage.googleapis.com/${proxyPath}`;
-      // Strip AI Studio internal params (e.g. __applet_proxy) before forwarding to Google.
-      const params = Object.fromEntries(
-        Object.entries(req.query).filter(([key]) => !key.startsWith('__'))
+      const proxyPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path ?? '');
+      const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "";
+      const source = createHash("sha256").update(`${proxySalt}|${forwarded}|${req.socket.remoteAddress ?? ""}`).digest("hex").slice(0, 16);
+      const decision = decideProxy(
+        {
+          method: req.method,
+          path: proxyPath,
+          query: req.query as Record<string, unknown>,
+          body: req.body,
+          origin: typeof req.headers.origin === "string" ? req.headers.origin : undefined,
+          host: req.headers["x-forwarded-host"] ? String(req.headers["x-forwarded-host"]).split(",")[0].trim() : req.headers.host,
+          source,
+        },
+        { key: GEMINI_API_KEY, limiter: proxyLimiter, extraOrigins: PROXY_SITE_ORIGINS },
       );
-      console.log(`[gemini-proxy] ${req.method} ${proxyPath} key=${GEMINI_API_KEY ? GEMINI_API_KEY.slice(0,6) + '...' : 'MISSING'}`);
+      if (decision.forward === false) {
+        const refusal = decision as { status: number; error: string };
+        console.warn(`[gemini-proxy] refused ${req.method} ${proxyPath.slice(0, 120)}: ${refusal.error}`);
+        res.status(refusal.status).json({ error: refusal.error });
+        return;
+      }
       const response = await axios({
-        method: req.method as any,
-        url: targetUrl,
-        params,
-        data: req.method !== "GET" ? req.body : undefined,
+        method: "POST",
+        url: decision.url,
+        params: decision.params,
+        data: req.body,
         headers: {
           "Content-Type": "application/json",
-          // Always use the server-side key — never trust the incoming header from AI Studio's SW.
           "x-goog-api-key": GEMINI_API_KEY || "",
         },
         responseType: "stream",
         validateStatus: () => true,
       });
-      console.log(`[gemini-proxy] response status: ${response.status}`);
+      if (response.status >= 400) console.warn(`[gemini-proxy] ${decision.model}: Google answered ${response.status}`);
       res.status(response.status);
       const forward = ["content-type", "x-goog-safety-encoding", "cache-control"];
       forward.forEach(h => { if (response.headers[h]) res.setHeader(h, response.headers[h]); });

@@ -244,7 +244,8 @@ const respond = (text: string) =>
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input);
   if (url.startsWith('/api/')) return new Response('{}', { status: 404 });
-  if (!url.includes('generativelanguage.googleapis.com')) return realFetch(input, init);
+  // This test runs as a browser, whose Gemini calls go to the site's proxy, never to Google directly.
+  if (!url.includes('generativelanguage.googleapis.com') && !url.includes('/gemini-api-proxy/')) return realFetch(input, init);
   const body = JSON.parse(init?.body ?? '{}');
   const raw = JSON.stringify(body);
   const prompt = JSON.stringify([body.contents ?? '', body.systemInstruction ?? '']);
