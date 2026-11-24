@@ -29,6 +29,7 @@ import { CARD_REVIEW_DEFAULT_CALLS, liveCardReview, memoryCardReviewStore, supab
 import { readDisagreementReport, setDisagreementSink } from "./services/cardDisagreements";
 import { readCardRows, servedPool } from "./services/cardReview";
 import { createProxyLimiter, decideProxy } from "./services/geminiProxy";
+import { applyServerKey } from "./services/serverKey";
 
 /** The site's own hosts, allowed as `Origin` on the Gemini proxy beside the request's own host. */
 const PROXY_SITE_ORIGINS = ["futbolpedia.org", "www.futbolpedia.org", "futbolpedia.ai.studio", "localhost:3000"];
@@ -75,7 +76,10 @@ async function startServer() {
     typeof input === "string" && input.startsWith("/")
       ? nodeFetch(`http://127.0.0.1:${PORT}${input}`, init)
       : nodeFetch(input, init)) as typeof fetch;
-  if (!process.env.API_KEY && process.env.GEMINI_API_KEY) process.env.API_KEY = process.env.GEMINI_API_KEY;
+  // FUTBOLPEDIA_GEMINI_KEY, an ordinary secret, wins over the GEMINI_API_KEY that AI Studio injects
+  // at publish (services/serverKey.ts).
+  const keySource = applyServerKey(process.env);
+  console.log(`[startup] Gemini key from ${keySource}`);
   // Shared cards and snapshots, read with the same key and row-level security as a browser.
   {
     const { supabasePublishableKey, useServerSupabase } = await import("./services/dossierCache");

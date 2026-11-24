@@ -166,5 +166,17 @@ await test('in the browser, the SDK calls this site\'s proxy with a placeholder,
   delete (globalThis as any).window;
 });
 
+await test('the server takes FUTBOLPEDIA_GEMINI_KEY over the GEMINI_API_KEY AI Studio injects', async () => {
+  const { applyServerKey } = await import('../services/serverKey');
+  const env: Record<string, string | undefined> = { GEMINI_API_KEY: 'injected-old', API_KEY: 'injected-old', FUTBOLPEDIA_GEMINI_KEY: ' own-new ' };
+  assert.equal(applyServerKey(env), 'FUTBOLPEDIA_GEMINI_KEY');
+  assert.equal(env.GEMINI_API_KEY, 'own-new');
+  assert.equal(env.API_KEY, 'own-new');
+  const injectedOnly: Record<string, string | undefined> = { GEMINI_API_KEY: 'injected' };
+  assert.equal(applyServerKey(injectedOnly), 'GEMINI_API_KEY');
+  assert.equal(injectedOnly.API_KEY, 'injected');
+  assert.equal(applyServerKey({ FUTBOLPEDIA_GEMINI_KEY: '  ' }), 'none');
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
