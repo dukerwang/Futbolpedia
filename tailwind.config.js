@@ -41,11 +41,11 @@ export default {
         era: { 400: '#93AEE3', 500: '#6B8CCF', 600: '#3F63A8', 700: '#304D86' },
         copper: { 400: '#E2A283', 500: '#C97B57', 600: '#A65A3A', 700: '#86452B' },
         // The Overall's ramp above the World-Class line: a muted sage, then the app's emerald,
-        // then a cool teal for the greatest, so it climbs without borrowing an edition's ink.
+        // then violet for the greatest, so it climbs without borrowing an edition's ink.
         tier: {
           wc: '#5E8C74', 'wc-dark': '#8FB9A2',
           elite: '#059669', 'elite-dark': '#34D399',
-          icon: '#0B7F86', 'icon-dark': '#4FE0D6',
+          icon: '#6D3FD1', 'icon-dark': '#B79CFF',
         },
       },
       fontFamily: {

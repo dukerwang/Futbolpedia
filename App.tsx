@@ -1250,18 +1250,22 @@ const App: React.FC = () => {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
+  const openInSidePanel = useCallback((profile: PlayerProfile) => {
+    handleSelectProfile(profile);
+    setPanelMode('dossier');
+    setIsPanelOpen(true);
+  }, [handleSelectProfile]);
+
   const handleSelectHubDossier = useCallback((profile: PlayerProfile, from: HubTab) => {
-    // A shared card opens its own page. Your own list keeps the side panel: it can hold personal
-    // revisions, which have no address of their own.
+    // A shared card opens its own page (its menu can open it in the side panel instead). Your own
+    // list keeps the side panel: it can hold personal revisions, which have no address of their own.
     const path = from === 'global' ? cardPath(profile) : null;
     if (path) {
       openCardPage(path);
       return;
     }
-    handleSelectProfile(profile);
-    setPanelMode('dossier');
-    setIsPanelOpen(true);
-  }, [handleSelectProfile, openCardPage]);
+    openInSidePanel(profile);
+  }, [openInSidePanel, openCardPage]);
 
   const handleCardPageSave = useCallback((profile: PlayerProfile) => {
     const dated = stampDossier(profile, Date.now());
@@ -1436,6 +1440,7 @@ const App: React.FC = () => {
               savedProfiles={globalDossiers}
               activeCardKey={showPanel && activeProfile ? getCardKey(activeProfile) : null}
               onSelectDossier={handleSelectHubDossier}
+              onOpenInPanel={openInSidePanel}
               onAskAbout={handleAskAboutDossier}
               onRenameDossier={handleRenameDossier}
               onDeleteDossier={handleDeleteDossier}

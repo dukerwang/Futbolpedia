@@ -47,7 +47,7 @@ export { shortEditionLabel };
 /**
  * The Overall's colour everywhere a card shows it (hub, Scout, card page, side panel). Below the
  * World-Class line it's ink; from 90 it climbs by tier band: a muted sage for World-Class,
- * emerald for World-Class Elite, a cool teal from Generational Icon up. Gold and periwinkle blue
+ * emerald for World-Class Elite, violet from Generational Icon up. Gold and periwinkle blue
  * stay out, because they already name a card's edition.
  */
 export const overallText = (overall: number): string => {
@@ -61,11 +61,3 @@ export const overallText = (overall: number): string => {
 export const attributeBarFill = (value: number): string =>
   value >= 90 ? 'bg-emerald-500' : value >= 80 ? 'bg-emerald-400/80' : 'bg-charcoal/40 dark:bg-cream-300/45';
 
-/** A faint wash of the edition's colour across the top of a hub card. */
-export const INK_WASH: Record<EditionInk, string> = {
-  current: 'bg-[linear-gradient(180deg,rgba(16,185,129,0.10),rgba(16,185,129,0)_55%)] dark:bg-[linear-gradient(180deg,rgba(52,211,153,0.14),rgba(52,211,153,0)_55%)]',
-  prime: 'bg-[linear-gradient(180deg,rgba(194,154,69,0.14),rgba(194,154,69,0)_55%)] dark:bg-[linear-gradient(180deg,rgba(217,176,97,0.2),rgba(217,176,97,0)_55%)]',
-  era: 'bg-[linear-gradient(180deg,rgba(107,140,207,0.13),rgba(107,140,207,0)_55%)] dark:bg-[linear-gradient(180deg,rgba(147,174,227,0.17),rgba(147,174,227,0)_55%)]',
-  season: 'bg-[linear-gradient(180deg,rgba(201,123,87,0.13),rgba(201,123,87,0)_55%)] dark:bg-[linear-gradient(180deg,rgba(226,162,131,0.17),rgba(226,162,131,0)_55%)]',
-  older: '',
-};
