@@ -5,7 +5,7 @@ import { getCardKey, isPrimeCard } from '../../services/dossierCards';
 import { shareDossierCard, type GlobalHubDossierItem } from '../../services/dossierCache';
 import { getAttributeLabel, getShortTierLabel, positionCodes } from '../../constants/ratingTiers';
 import { ActionMenu } from './Menu';
-import { attributeBarFill, editionInkOf, INK_TEXT, INK_WASH, overallText, shortEditionLabel } from './editionInk';
+import { attributeBarFill, editionInkOf, INK_TEXT, overallText, shortEditionLabel } from './editionInk';
 import { EditionLabel, RevisionNote } from '../EditionLabel';
 
 /** One entry of the hub, drawn as a card (grid) or a ranked row (list). */
@@ -25,6 +25,8 @@ export interface HubEntryProps {
   onOpen: () => void;
   onOpenVersion: (profile: PlayerProfile) => void;
   onShowAllVersions: () => void;
+  /** Shared cards open their page; this reads one in the side panel instead. */
+  onOpenInPanel?: () => void;
   onAsk: () => void;
   onRename?: (newName: string) => void;
   onDelete?: () => void;
@@ -100,7 +102,8 @@ const useEntryActions = (profile: PlayerProfile, onRename?: (name: string) => vo
   return { shareState, share, isEditing, setIsEditing, nameDraft, setNameDraft, startRename, saveRename };
 };
 
-const menuItems = (shareState: string, canEdit: boolean) => [
+const menuItems = (shareState: string, canEdit: boolean, canOpenInPanel: boolean) => [
+  ...(canOpenInPanel ? [{ id: 'panel', label: 'Open in side panel', icon: 'view_sidebar' }] : []),
   { id: 'share', label: shareState === 'copied' ? 'Link copied' : 'Copy link', icon: shareState === 'copied' ? 'check' : 'link' },
   ...(canEdit
     ? [
@@ -207,7 +210,7 @@ const handleKeyOpen = (isEditing: boolean, onOpen: () => void) => (e: React.Keyb
 
 /** The grid's collectible card: the Overall set large beside its tier and edition, then the player, then his three best attributes. */
 export const HubCard: React.FC<HubEntryProps> = (props) => {
-  const { item, tab, isSelected, isSaved, otherVersions, enterIndex, showTier = true, onOpen, onOpenVersion, onShowAllVersions, onAsk, onRename, onDelete } = props;
+  const { item, tab, isSelected, isSaved, otherVersions, enterIndex, showTier = true, onOpen, onOpenInPanel, onOpenVersion, onShowAllVersions, onAsk, onRename, onDelete } = props;
   const { profile, isCurrentRating, trajectoryDiff, previousRatingDate } = item;
   const actions = useEntryActions(profile, onRename);
   const earlierRating = tab === 'global' && !isCurrentRating && !isPrimeCard(profile);
@@ -216,7 +219,8 @@ export const HubCard: React.FC<HubEntryProps> = (props) => {
   const position = positionCodes(profile.basicInfo.position);
 
   const onMenu = (id: string) => {
-    if (id === 'share') actions.share();
+    if (id === 'panel') onOpenInPanel?.();
+    else if (id === 'share') actions.share();
     else if (id === 'rename') actions.startRename();
     else if (id === 'delete') onDelete?.();
   };
@@ -238,7 +242,6 @@ export const HubCard: React.FC<HubEntryProps> = (props) => {
           : 'border-charcoal/[0.07] dark:border-white/[0.06] can-hover:hover:-translate-y-[3px] can-hover:hover:shadow-lift dark:can-hover:hover:shadow-lift-dark can-hover:hover:border-charcoal/[0.14] dark:can-hover:hover:border-white/[0.12]'
       }`}
     >
-      <span aria-hidden="true" className={`pointer-events-none absolute inset-x-0 top-0 h-32 rounded-t-[14px] ${INK_WASH[earlierRating ? 'older' : editionInkOf(profile)]}`} />
       <div className="relative px-5 pt-5">
         <div className="flex items-start gap-4">
           <span className={`font-serif font-extrabold text-[46px] leading-[0.82] tracking-[-0.03em] ${overallText(profile.ratings.overall)} [font-variant-numeric:lining-nums_tabular-nums]`}>
@@ -334,7 +337,7 @@ export const HubCard: React.FC<HubEntryProps> = (props) => {
             <span aria-hidden="true" className="material-symbols-outlined text-[17px]">chat_bubble</span>
             Ask
           </button>
-          <ActionMenu label={`More for ${profile.basicInfo.name}`} items={menuItems(actions.shareState, !!onRename)} onAction={onMenu} />
+          <ActionMenu label={`More for ${profile.basicInfo.name}`} items={menuItems(actions.shareState, !!onRename, !!onOpenInPanel)} onAction={onMenu} />
         </div>
       </div>
     </article>
@@ -343,7 +346,7 @@ export const HubCard: React.FC<HubEntryProps> = (props) => {
 
 /** The list's ranked row: rank, Overall, the player and his version, and where he plays. */
 export const HubRow: React.FC<HubEntryProps> = (props) => {
-  const { item, tab, rank, isSelected, otherVersions, enterIndex, onOpen, onOpenVersion, onShowAllVersions, onAsk, onRename, onDelete } = props;
+  const { item, tab, rank, isSelected, enterIndex, onOpen, onOpenInPanel, onAsk, onRename, onDelete } = props;
   const { profile, isCurrentRating, trajectoryDiff, previousRatingDate } = item;
   const actions = useEntryActions(profile, onRename);
   const earlierRating = tab === 'global' && !isCurrentRating && !isPrimeCard(profile);
@@ -353,6 +356,7 @@ export const HubRow: React.FC<HubEntryProps> = (props) => {
 
   const onMenu = (id: string) => {
     if (id === 'ask') onAsk();
+    else if (id === 'panel') onOpenInPanel?.();
     else if (id === 'share') actions.share();
     else if (id === 'rename') actions.startRename();
     else if (id === 'delete') onDelete?.();
@@ -409,21 +413,15 @@ export const HubRow: React.FC<HubEntryProps> = (props) => {
         )}
       </div>
 
-      <div className="hidden lg:flex flex-col gap-0.5 min-w-0 text-[12.5px] font-sans">
+      <div className="hidden lg:flex min-w-0">
         <EditionMark profile={profile} earlierRating={earlierRating} />
-        {otherVersions.length > 0 && (
-          <div className="pl-3">
-            <VersionLinks versions={otherVersions} onOpen={onOpenVersion} onMore={onShowAllVersions} />
-          </div>
-        )}
       </div>
 
-      <div className="hidden lg:block min-w-0 text-[12.5px] font-sans">
-        <p className="truncate text-charcoal/80 dark:text-cream-200">
-          {position && <span className="font-semibold tracking-wide mr-2">{position}</span>}
-          {profile.basicInfo.club}
+      <div className="hidden lg:block min-w-0 text-[12.5px] font-sans leading-snug">
+        <p className="truncate text-charcoal/80 dark:text-cream-200">{profile.basicInfo.club}</p>
+        <p className="truncate text-charcoal/45 dark:text-cream-400/70">
+          {[position, profile.basicInfo.nationality].filter(Boolean).join(' · ')}
         </p>
-        <p className="truncate text-charcoal/45 dark:text-cream-400/70">{profile.basicInfo.nationality}</p>
       </div>
 
       <div className="hidden lg:block min-w-0 text-[12px] font-sans text-charcoal/55 dark:text-cream-400/80">
@@ -446,7 +444,7 @@ export const HubRow: React.FC<HubEntryProps> = (props) => {
         </button>
         <ActionMenu
           label={`More for ${profile.basicInfo.name}`}
-          items={[{ id: 'ask', label: 'Ask in chat', icon: 'chat_bubble' }, ...menuItems(actions.shareState, !!onRename)]}
+          items={[{ id: 'ask', label: 'Ask in chat', icon: 'chat_bubble' }, ...menuItems(actions.shareState, !!onRename, !!onOpenInPanel)]}
           onAction={onMenu}
         />
       </div>

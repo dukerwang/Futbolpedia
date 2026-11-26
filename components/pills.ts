@@ -44,7 +44,9 @@ const EDITION_NAMES: Record<string, string> = {
 };
 
 /** "2013-14" -> "2013–14". */
-const formatSeason = (era: string): string => era.replace(/^(\d{4})\s*[-/–]\s*(\d{2,4})$/, '$1–$2');
+/** A season or window in the app's one form, "1961–63": a four-digit end year is cut to two. */
+const formatSeason = (era: string): string =>
+  era.replace(/^(\d{4})\s*[-/–]\s*(\d{2,4})$/, (_, start: string, end: string) => `${start}–${end.slice(-2)}`);
 
 const formatMonth = (isoDate: string): string =>
   new Date(`${isoDate}T12:00:00Z`).toLocaleDateString('en-US', {

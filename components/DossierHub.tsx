@@ -20,6 +20,8 @@ interface DossierHubProps {
   /** Card open in the side panel, highlighted in the grid. */
   activeCardKey: string | null;
   onSelectDossier: (profile: PlayerProfile, from: HubTab) => void;
+  /** Reads a shared card in the side panel rather than on its page. */
+  onOpenInPanel: (profile: PlayerProfile) => void;
   /** Takes the card into the chat to ask about it. */
   onAskAbout: (profile: PlayerProfile, from: HubTab) => void;
   onRenameDossier: (cardKey: string, newName: string) => void;
@@ -188,6 +190,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   savedProfiles,
   activeCardKey,
   onSelectDossier,
+  onOpenInPanel,
   onAskAbout,
   onRenameDossier,
   onDeleteDossier,
@@ -400,6 +403,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
       showTier: sortOption !== 'overall_desc',
       onOpen: () => onSelectDossier(item.profile, tab),
       onOpenVersion: (version: PlayerProfile) => onSelectDossier(version, tab),
+      onOpenInPanel: tab === 'global' ? () => onOpenInPanel(item.profile) : undefined,
       onAsk: () => onAskAbout(item.profile, tab),
       onShowAllVersions: () => {
         setEditionFilter('all');
