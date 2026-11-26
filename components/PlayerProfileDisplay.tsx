@@ -5,7 +5,8 @@ import { getTierForRating, normalizePosition } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { isPrimeCard } from '../services/geminiService';
-import { describeCardEdition, describeConfidence, latestUpdateLabel, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
+import { describeConfidence, latestUpdateLabel, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
+import { EditionLabel, RevisionNote } from './EditionLabel';
 
 interface PlayerProfileDisplayProps {
   profile: PlayerProfile;
@@ -68,7 +69,6 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
   } = profile;
 
   const isPrime = isPrimeCard(profile);
-  const edition = describeCardEdition(profile);
   const confidenceInfo = confidence ? describeConfidence(confidence.grade) : null;
   const gradeTone: PillTone = confidenceInfo?.tone ?? 'neutral';
 
@@ -94,18 +94,10 @@ export const PlayerProfileDisplay: React.FC<PlayerProfileDisplayProps> = ({ prof
         {/* Card Header & Version Stamp */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-6 border-b border-cream-200 dark:border-charcoal-border text-left">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={pillClass(edition.tone)} title={edition.title}>
-              <span className={PILL_ICON_CLASS}>{edition.icon}</span>
-              {edition.label}
-            </span>
+            <EditionLabel profile={profile} size="md" />
 
             {profile.revision && (
-              <span
-                className={pillClass('indigo')}
-                title="Your accepted challenge. The shared card weighs it at its next monthly re-rating."
-              >
-                Your revision
-              </span>
+              <RevisionNote size="md" title="Your accepted challenge. The shared card weighs it at its next monthly re-rating." />
             )}
 
             {ageCurve && (

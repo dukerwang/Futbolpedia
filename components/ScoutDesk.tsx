@@ -4,8 +4,8 @@ import { fetchCardIndex, getCardKey } from '../services/dossierStore';
 import { searchPlayers } from '../services/playerSearch';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { PlayerPicker, cardRows, type PickerRow } from './PlayerPicker';
-import { describeCardEdition, pillClass } from './pills';
 import { ratingRequestFromText, ratingVersionLabel, scoutRequest, type ScoutVersion } from '../services/ratingCommand';
+import { EditionLabel, InkLabel } from './EditionLabel';
 
 /** A rating the Scout desk is working on. Finished ratings leave the queue for your dossiers. */
 export interface ScoutJob {
@@ -346,9 +346,12 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
                     <span className="min-w-0 truncate font-serif font-bold text-[17px] text-charcoal dark:text-cream-50">
                       {job.request.name}
                       {ratingVersionLabel(job.request) && (
-                        <span className={`${pillClass(job.request.edition === 'era' ? 'blue' : job.request.edition === 'current' ? 'emerald' : 'amber', 'xs')} ml-2 align-middle`}>
-                          {ratingVersionLabel(job.request)}
-                        </span>
+                        <InkLabel
+                          ink={job.request.edition === 'era' ? 'era' : job.request.edition === 'current' ? 'current' : job.request.edition === 'season' ? 'season' : 'prime'}
+                          name={ratingVersionLabel(job.request)!}
+                          size="xs"
+                          className="ml-2 align-middle"
+                        />
                       )}
                     </span>
                     {job.status === 'running' && job.startedAt && (
@@ -415,7 +418,6 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
             <ul>
               {library.map((profile) => {
                 const key = getCardKey(profile);
-                const edition = describeCardEdition(profile);
                 const archetype = profile.playstyleAndRole?.playstyle?.archetype;
                 return (
                   <li
@@ -453,7 +455,7 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
                         <span className="block truncate font-serif italic text-sm text-emerald-700 dark:text-emerald-400">
                           {archetype || getShortTierLabel(profile.ratings.overall)}
                         </span>
-                        <span className={`${pillClass(edition.tone, 'xs')} mt-1.5`}>{edition.label}</span>
+                        <EditionLabel profile={profile} size="xs" className="mt-1.5 max-w-full" />
                       </span>
                     </button>
                     <button

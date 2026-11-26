@@ -3,8 +3,8 @@ import type { ChatMessage as ChatMessageType, ChatDossierRef } from '../types';
 import { ReplyBody } from './ReplyBody';
 import { blocksOf, copyTextOf, LEGACY_ERROR_PREFIX } from '../services/replyBlocks';
 import { getLegacyDossierRef } from '../services/dossierRefs';
-import { pillClass, type PillTone } from './pills';
 import { ratingVersionLabel } from '../services/ratingCommand';
+import { InkLabel } from './EditionLabel';
 
 const copyText = async (text: string): Promise<boolean> => {
     try {
@@ -91,7 +91,6 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
     if (isUser && message.rating) {
         const version = ratingVersionLabel(message.rating);
         const { edition } = message.rating;
-        const versionTone: PillTone = edition === 'prime' ? 'amber' : edition === 'era' ? 'blue' : 'neutral';
         return (
             <div className="flex justify-end w-full py-2 sm:py-4 animate-fade-in">
                 <div className="flex flex-col items-end gap-1 max-w-[88%] md:max-w-[70%]">
@@ -99,7 +98,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onOpenDossier
                         <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-emerald-600 dark:text-emerald-400">star</span>
                         <span className="text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/55 dark:text-cream-400/60">Rate</span>
                         <span className="min-w-0 truncate font-serif font-bold text-[15px]">{message.rating.name}</span>
-                        {version && <span className={pillClass(versionTone, 'xs')}>{version}</span>}
+                        {version && <InkLabel ink={edition === 'prime' ? 'prime' : edition === 'era' ? 'era' : edition === 'season' ? 'season' : 'current'} name={version} size="xs" />}
                     </div>
                     <span className="text-[10px] text-cream-800 dark:text-cream-400 tracking-wider uppercase font-medium">
                         You{timestamp ? ` · ${formatTime(timestamp)}` : ''}

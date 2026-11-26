@@ -26,7 +26,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [isDesktop, setIsDesktop] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches);
   const [sharingId, setSharingId] = useState<string | null>(null);
   const [sharedId, setSharedId] = useState<string | null>(null);
 

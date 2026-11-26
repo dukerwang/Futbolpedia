@@ -5,30 +5,13 @@ import { cardEdition, toBasePlayerSlug } from '../services/dossierCards';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { describeCardEdition } from './pills';
 import { GaffaMark, GaffaWordmark, GAFFA_PUBLIC_URL } from './GaffaClubChip';
+import { markWelcomeSeen } from './welcomeSeen';
 
 /**
  * The first-visit walkthrough: what Futbolpedia is, how to read a rating, how to use Scout, the
  * shared library, the analyst, and Gaffa. Shown once, and again from the header's guide button.
  */
 
-/** Bump when the walkthrough changes enough that everyone should see it once more. */
-export const WELCOME_SEEN_KEY = 'futbolpedia-welcome-seen-v1';
-
-export function hasSeenWelcome(): boolean {
-  try {
-    return Boolean(localStorage.getItem(WELCOME_SEEN_KEY));
-  } catch {
-    return true;
-  }
-}
-
-function markWelcomeSeen(): void {
-  try {
-    localStorage.setItem(WELCOME_SEEN_KEY, String(Date.now()));
-  } catch {
-    /* private mode: it shows again next time */
-  }
-}
 
 interface WelcomeWalkthroughProps {
   open: boolean;

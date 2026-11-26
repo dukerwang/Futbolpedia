@@ -1,13 +1,18 @@
-import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { Header, type AppView } from './components/Header';
 import { ChatHistory } from './components/ChatHistory';
 import { ChatInput, type Mention } from './components/ChatInput';
-import { ScoutDesk, type ScoutJob } from './components/ScoutDesk';
+import type { ScoutJob } from './components/ScoutDesk';
 import { SidePanel } from './components/SidePanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
-import { WelcomeWalkthrough, hasSeenWelcome } from './components/WelcomeWalkthrough';
-import { DossierHub, type HubTab } from './components/DossierHub';
-import { CardPage } from './components/CardPage';
+import { hasSeenWelcome } from './components/welcomeSeen';
+import type { HubTab } from './components/DossierHub';
+
+// Views a visitor may never open load on demand, so the first paint carries only the chat.
+const WelcomeWalkthrough = lazy(() => import('./components/WelcomeWalkthrough').then((m) => ({ default: m.WelcomeWalkthrough })));
+const DossierHub = lazy(() => import('./components/DossierHub').then((m) => ({ default: m.DossierHub })));
+const CardPage = lazy(() => import('./components/CardPage').then((m) => ({ default: m.CardPage })));
+const ScoutDesk = lazy(() => import('./components/ScoutDesk').then((m) => ({ default: m.ScoutDesk })));
 import { cardPath, legacyHashToPath, parsePath } from './services/cardPaths';
 import { cardReference } from './components/pills';
 import type {
@@ -132,12 +137,35 @@ const App: React.FC = () => {
   const [globalDossiers, setGlobalDossiers] = useState<PlayerProfile[]>([]);
   // Main view: the chat, or the dossier hub (the global hub and "Your dossiers" as tabs)
   const [view, setView] = useState<AppView>('chat');
+  const [hubMounted, setHubMounted] = useState(false);
+  useEffect(() => {
+    if (view === 'hub') setHubMounted(true);
+  }, [view]);
+  // Once the chat is up and the browser is idle, fetch the hub and Scout so they open instantly.
+  useEffect(() => {
+    const warm = () => {
+      import('./components/DossierHub');
+      import('./components/ScoutDesk');
+    };
+    const ric = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+    const id = ric ? ric(warm, { timeout: 4000 }) : window.setTimeout(warm, 2500);
+    return () => {
+      if (ric) (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(id);
+      else window.clearTimeout(id);
+    };
+  }, []);
   const [hubTab, setHubTab] = useState<HubTab>('global');
   // The welcome walkthrough: shown once on a first visit to the chat (not over a shared card or
   // chat someone came to see), and again from the header's guide button.
   const [welcomeOpen, setWelcomeOpen] = useState<boolean>(
     () => !hasSeenWelcome() && !parsePath(window.location.pathname) && !/^#\/(p|c)\//.test(window.location.hash),
   );
+  // The walkthrough and the hub load the first time they're needed, then stay mounted so they
+  // keep their state (the walkthrough animates out; the hub keeps its scroll, tab and filters).
+  const [welcomeMounted, setWelcomeMounted] = useState(welcomeOpen);
+  useEffect(() => {
+    if (welcomeOpen) setWelcomeMounted(true);
+  }, [welcomeOpen]);
   // The card page's address (`/p/…`) while the card view is open.
   const [cardPagePath, setCardPagePath] = useState<string | null>(null);
   // The view to return to when the card page is left by Back.
@@ -1324,12 +1352,16 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-cream-200 dark:bg-charcoal text-charcoal dark:text-cream-100 transition-colors duration-300 relative">
-      <WelcomeWalkthrough
-        open={welcomeOpen}
-        onClose={() => setWelcomeOpen(false)}
-        onStartTalking={() => changeView('chat')}
-        onRatePlayer={() => openScout()}
-      />
+      {welcomeMounted && (
+        <Suspense fallback={null}>
+          <WelcomeWalkthrough
+            open={welcomeOpen}
+            onClose={() => setWelcomeOpen(false)}
+            onStartTalking={() => changeView('chat')}
+            onRatePlayer={() => openScout()}
+          />
+        </Suspense>
+      )}
       
       <Header 
         onOpenScout={() => (showPanel && panelMode === 'scout' ? setIsPanelOpen(false) : openScout())}
@@ -1362,6 +1394,7 @@ const App: React.FC = () => {
           onBack={() => setPanelMode('scout')}
           onChallenge={handleChallengeDossier}
           scout={
+            <Suspense fallback={null}>
             <ScoutDesk
               jobs={scoutJobs}
               dossiers={globalDossiers}
@@ -1376,6 +1409,7 @@ const App: React.FC = () => {
               focusToken={scoutFocus}
               prefill={scoutPrefill}
             />
+            </Suspense>
           }
       />
 
@@ -1397,6 +1431,8 @@ const App: React.FC = () => {
             className={`absolute inset-0 z-30 flex flex-col bg-cream-200 dark:bg-charcoal transition-[padding] duration-500 ease-ios-ease ${view === 'hub' ? '' : 'invisible'} ${showPanel ? 'md:pl-[450px]' : ''} ${isConversationsOpen ? 'md:pr-[350px]' : ''}`}
             inert={view !== 'hub'}
           >
+            {hubMounted && (
+            <Suspense fallback={null}>
             <DossierHub
               isActive={view === 'hub'}
               tab={hubTab}
@@ -1409,11 +1445,14 @@ const App: React.FC = () => {
               onDeleteDossier={handleDeleteDossier}
               onScout={(name) => (name ? handleScoutName(name) : openScout())}
             />
+            </Suspense>
+            )}
           </div>
 
           {/* A card's page (`/p/…`), layered like the hub */}
           {view === 'card' && cardPagePath && (
             <div className={`absolute inset-0 z-40 flex flex-col transition-[padding] duration-500 ease-ios-ease ${showPanel ? 'md:pl-[450px]' : ''} ${isConversationsOpen ? 'md:pr-[350px]' : ''}`}>
+              <Suspense fallback={null}>
               <CardPage
                 path={cardPagePath}
                 onNavigate={openCardPage}
@@ -1423,6 +1462,7 @@ const App: React.FC = () => {
                 onScout={(name) => (name ? handleScoutName(name) : openScout())}
                 onOpenLibrary={() => { setHubTab('global'); changeView('hub'); }}
               />
+              </Suspense>
             </div>
           )}
 
