@@ -1052,6 +1052,13 @@ async function startServer() {
     }
   });
 
+  // robots.txt: every crawler may read the site, but not the API routes (they spend the server's
+  // keys). Without this route the SPA fallback answered with the app's HTML, which crawlers that
+  // read robots.txt first can't parse.
+  app.get("/robots.txt", (_req, res) => {
+    res.type("text/plain").send("User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /gemini-api-proxy/\n");
+  });
+
   // Shareable links (/p/…, /c/<code>) and their preview images (/og/…). Registered before the
   // app's own files, so a card's address gets its own tags in index.html.
   const { registerShareRoutes, builtIndexHtml } = await import("./services/shareServer");
