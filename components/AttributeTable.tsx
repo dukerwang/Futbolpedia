@@ -1,6 +1,6 @@
 import React from 'react';
 import type { Attributes, GoalkeeperAttributes } from '../types';
-import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
+import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants/ratingTiers';
 
 interface AttributeTableProps {
   attributes: Attributes;

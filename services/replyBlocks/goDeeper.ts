@@ -1,4 +1,5 @@
 import type { GoDeeper, ReadyBlock } from '../../types';
+import { BLOCK_TEXT } from './blockText';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const goDeeperBlock = (id: string, goDeeper: GoDeeper): ReadyBlock<'goDeeper'> => readyBlock('goDeeper', id, goDeeper);
@@ -15,7 +16,5 @@ export const goDeeperEntry: BlockEntry<'goDeeper'> = {
     return { block: goDeeperBlock(ctx.newId(), { reason: goDeeper.reason.trim() }) };
   },
   toolResult: () => ({ flagged: true }),
-  // A chip is an affordance, not something the reader read.
-  toHistory: () => '',
-  toCopy: () => '',
+  ...BLOCK_TEXT.goDeeper,
 };

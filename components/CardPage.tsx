@@ -2,13 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
 import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
-import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS } from './pills';
+import { latestUpdateLabel } from './pills';
 import { AttributeLine, CardSectionTitle, renderCardMarkdown } from './cardParts';
 import { parsePath } from '../services/cardPaths';
 import { cardEdition, getDossierEvaluationDate } from '../services/dossierCards';
 import { resolveCardPage, storeReads, type CardPage as ResolvedCardPage, type ShareReads } from '../services/sharePages';
 import { cardTitle } from '../services/shareMeta';
 import { starterQuestions } from '../services/starterQuestions';
+import { EditionLabel, InkLabel } from './EditionLabel';
+import { overallText, type EditionInk } from './hub/editionInk';
 
 /**
  * A card's own page (`/p/<player>…`): the card at page width with the player's other versions
@@ -70,9 +72,7 @@ const Icon: React.FC<{ name: string; className?: string }> = ({ name, className 
 
 const RatingNumeral: React.FC<{ value: number; size: 'lg' | 'sm' }> = ({ value, size }) => (
   <span
-    className={`block font-serif font-bold leading-[0.74] tracking-[-0.02em] ${size === 'lg' ? 'text-[72px]' : 'text-[52px]'} ${
-      value >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-white'
-    }`}
+    className={`block font-serif font-bold leading-[0.74] tracking-[-0.02em] ${size === 'lg' ? 'text-[72px]' : 'text-[52px]'} ${overallText(value)}`}
     style={LINING}
   >
     {value}
@@ -105,7 +105,6 @@ const Rating: React.FC<{ card: PlayerProfile; size: 'lg' | 'sm' }> = ({ card, si
 };
 
 const CardHeader: React.FC<{ card: PlayerProfile }> = ({ card }) => {
-  const edition = describeCardEdition(card);
   const type = cardEdition(card);
   const facts: Array<[string, string]> = [
     ['Position', positionCodes(card.basicInfo.position)],
@@ -122,10 +121,7 @@ const CardHeader: React.FC<{ card: PlayerProfile }> = ({ card }) => {
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="mb-4">
-              <span className={pillClass(edition.tone, 'sm')} title={edition.title}>
-                <span className={PILL_ICON_CLASS}>{edition.icon}</span>
-                {edition.label}
-              </span>
+              <EditionLabel profile={card} size="md" />
             </div>
             <h1 className="font-serif font-bold text-charcoal dark:text-white leading-[1.04] text-[32px] @lg:text-[46px] tracking-tight">
               {card.basicInfo.name}
@@ -237,7 +233,7 @@ const CardSections: React.FC<{ card: PlayerProfile }> = ({ card }) => {
         </div>
       </section>
       {card.latestUpdate && (
-        <section className="bg-cream-50 dark:bg-charcoal-surface p-5 border-l-4 border-charcoal dark:border-cream-400 shadow-sm rounded-r-lg">
+        <section className="bg-cream-50 dark:bg-charcoal-surface p-5 rounded-xl border border-charcoal/[0.1] dark:border-white/[0.08]">
           <h3 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-2">
             Latest Intelligence{update && <span className="font-normal"> · {update}</span>}
           </h3>
@@ -403,32 +399,34 @@ const Actions: React.FC<{ card: PlayerProfile; canonical: string } & Pick<CardPa
   );
 };
 
+const VERSION_INK: Record<string, EditionInk> = { current: 'current', prime: 'prime', era: 'era', season_snapshot: 'season', season: 'season' };
+
+/** The player's cards as a row of tabs, each in its edition's ink, the open one underlined. */
 const VersionChips: React.FC<{ page: Extract<ResolvedCardPage, { kind: 'card' }>; onNavigate: CardPageProps['onNavigate'] }> = ({ page, onNavigate }) => {
   if (page.versions.length < 2) return null;
-  const tones: Record<string, string> = {
-    current: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25',
-    era: 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/25',
-    default: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25',
-  };
   return (
-    <nav aria-label="Versions" className="flex flex-wrap items-center gap-1.5">
-      <span className="text-[10px] uppercase tracking-widest font-bold text-charcoal/40 dark:text-cream-400/60 mr-1">Versions</span>
-      {page.versions.map((v) => (
-        <button
-          key={v.path}
-          type="button"
-          aria-current={v.current ? 'page' : undefined}
-          onClick={() => !v.current && onNavigate(v.path)}
-          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-            v.current
-              ? tones[v.edition] ?? tones.default
-              : 'border-cream-300 dark:border-charcoal-border text-charcoal/70 dark:text-cream-300 hover:border-cream-400 dark:hover:border-cream-400/40 bg-white/60 dark:bg-charcoal-surface/60'
-          }`}
-        >
-          {v.label}
-          <span className="font-mono font-bold">{v.overall}</span>
-        </button>
-      ))}
+    <nav aria-label="His cards" className="-mx-1 flex items-stretch gap-1 overflow-x-auto scrollbar-hide border-b border-charcoal/[0.08] dark:border-white/[0.07]">
+      {page.versions.map((v) => {
+        const [name, when] = v.label.split(' · ');
+        return (
+          <button
+            key={v.path}
+            type="button"
+            aria-current={v.current ? 'page' : undefined}
+            onClick={() => !v.current && onNavigate(v.path)}
+            className={`group relative shrink-0 flex items-center gap-3 px-3 pt-1.5 pb-3 rounded-t-md transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 ${
+              v.current ? '' : 'opacity-70 hover:opacity-100'
+            }`}
+          >
+            <InkLabel ink={VERSION_INK[v.edition] ?? 'prime'} name={name} when={when} size="sm" />
+            <span className="font-mono text-[13px] font-bold text-charcoal dark:text-cream-50 [font-variant-numeric:tabular-nums]">{v.overall}</span>
+            <span
+              aria-hidden="true"
+              className={`absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-charcoal dark:bg-cream-50 origin-center transition-transform duration-300 ease-out-expo ${v.current ? 'scale-x-100' : 'scale-x-0'}`}
+            />
+          </button>
+        );
+      })}
     </nav>
   );
 };

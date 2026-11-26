@@ -1,6 +1,7 @@
 import type { ReadyBlock } from '../../types';
 import type { ChatDossierRef, PlayerProfile } from '../../types';
 import { toChatDossierRef } from '../dossierRefs';
+import { BLOCK_TEXT } from './blockText';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const cardBlock = (id: string, dossier: ChatDossierRef): ReadyBlock<'card'> => readyBlock('card', id, dossier);
@@ -14,7 +15,5 @@ export const cardEntry: BlockEntry<'card'> = {
     return { block: cardBlockOf(ctx.newId(), profile) };
   },
   toolResult: () => ({ shown: true }),
-  toHistory: ({ data: d }) =>
-    `[shown: dossier card, ${d.name}${d.versionLabel ? ` (${d.versionLabel})` : ''}${d.overall != null ? `, Overall ${d.overall}` : ''}]`,
-  toCopy: () => '',
+  ...BLOCK_TEXT.card,
 };

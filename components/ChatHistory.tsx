@@ -167,10 +167,12 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                   key={conversationKey || 'empty'}
                   className="new-chat-stage flex flex-col items-center justify-center min-h-[50vh] py-8 select-none"
               >
-                  <div className="new-chat-crest size-16 rounded-full border-2 border-charcoal/15 dark:border-cream-400/15 flex items-center justify-center mb-4">
-                       <span className="font-serif italic text-4xl text-charcoal/25 dark:text-cream-400/25 font-bold">F</span>
-                  </div>
-                  <p className="new-chat-caption font-serif italic text-lg text-charcoal/35 dark:text-cream-400/40">Awaiting Query...</p>
+                  <h2 className="new-chat-crest text-center font-serif font-bold text-[34px] sm:text-[44px] leading-[1.02] tracking-[-0.025em] text-charcoal dark:text-cream-50 [text-wrap:balance]">
+                    Ask the scout.
+                  </h2>
+                  <p className="new-chat-caption mt-3 max-w-[30rem] text-center text-[15px] leading-relaxed text-charcoal/55 dark:text-cream-400 [text-wrap:pretty]">
+                    Ratings on one all-era scale, comparisons, tactics and transfers. Type <kbd className="font-mono text-[13px] text-charcoal/75 dark:text-cream-200">@</kbd> to bring a card into the conversation.
+                  </p>
 
                   {onSuggestion && gaffaClub && (
                     <div className="new-chat-caption w-full flex justify-center">
@@ -178,23 +180,26 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                     </div>
                   )}
                   {onSuggestion && !gaffaClub && (
-                    <div className="new-chat-caption mt-8 grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-[560px]">
-                      {STARTER_PROMPTS.map((s) => (
-                        <button
-                          key={s.prompt}
-                          type="button"
-                          onClick={() => (s.label === 'Build a dossier' && onOpenScout ? onOpenScout() : onSuggestion(s.prompt))}
-                          disabled={isLoading}
-                          className="btn-new-chat text-left flex items-start gap-3 px-4 py-3 border border-charcoal/10 dark:border-cream-400/15 bg-cream-50/60 dark:bg-charcoal-surface/60 hover:border-charcoal/30 dark:hover:border-cream-400/35 disabled:opacity-40 select-text"
-                        >
-                          <span className="material-symbols-outlined text-[20px] text-emerald-600 dark:text-emerald-400 mt-0.5">{s.icon}</span>
-                          <span className="min-w-0">
-                            <span className="block text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/60">{s.label}</span>
-                            <span className="block font-serif italic text-[15px] leading-snug text-charcoal/85 dark:text-cream-100/85">{s.prompt}</span>
-                          </span>
-                        </button>
+                    <ul className="new-chat-caption mt-9 w-full max-w-[540px] border-t border-charcoal/[0.08] dark:border-white/[0.07]">
+                      {STARTER_PROMPTS.map((s, i) => (
+                        <li key={s.prompt} className="border-b border-charcoal/[0.08] dark:border-white/[0.07]">
+                          <button
+                            type="button"
+                            onClick={() => (s.label === 'Build a dossier' && onOpenScout ? onOpenScout() : onSuggestion(s.prompt))}
+                            disabled={isLoading}
+                            aria-label={`${s.label}: ${s.prompt}`}
+                            style={{ animationDelay: `${120 + i * 45}ms` }}
+                            className="group w-full text-left flex items-center gap-4 px-2 sm:px-3 py-3.5 rounded-lg motion-safe:animate-fade-in transition-[background-color,transform] duration-150 hover:bg-charcoal/[0.035] dark:hover:bg-white/[0.04] active:scale-[0.99] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60"
+                          >
+                            <span aria-hidden="true" className="material-symbols-outlined text-[20px] text-charcoal/35 dark:text-cream-400/60 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors duration-150">{s.icon}</span>
+                            <span className="flex-1 min-w-0 font-serif italic text-[16px] leading-snug text-charcoal/85 dark:text-cream-100/90">{s.prompt}</span>
+                            <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-charcoal/30 dark:text-cream-400/50 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 group-focus-visible:opacity-100 group-focus-visible:translate-x-0 transition-[opacity,transform] duration-200 ease-out-expo">
+                              arrow_forward
+                            </span>
+                          </button>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   )}
               </div>
           )}

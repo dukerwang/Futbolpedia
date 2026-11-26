@@ -1,34 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { PlayerProfile } from '../types';
-import { fetchCardIndex } from '../services/dossierStore';
+import { fetchCardIndex } from '../services/dossierCache';
 import { cardEdition, toBasePlayerSlug } from '../services/dossierCards';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { describeCardEdition } from './pills';
 import { GaffaMark, GaffaWordmark, GAFFA_PUBLIC_URL } from './GaffaClubChip';
+import { markWelcomeSeen } from './welcomeSeen';
+import { overallText } from './hub/editionInk';
 
 /**
  * The first-visit walkthrough: what Futbolpedia is, how to read a rating, how to use Scout, the
  * shared library, the analyst, and Gaffa. Shown once, and again from the header's guide button.
  */
 
-/** Bump when the walkthrough changes enough that everyone should see it once more. */
-export const WELCOME_SEEN_KEY = 'futbolpedia-welcome-seen-v1';
-
-export function hasSeenWelcome(): boolean {
-  try {
-    return Boolean(localStorage.getItem(WELCOME_SEEN_KEY));
-  } catch {
-    return true;
-  }
-}
-
-function markWelcomeSeen(): void {
-  try {
-    localStorage.setItem(WELCOME_SEEN_KEY, String(Date.now()));
-  } catch {
-    /* private mode: it shows again next time */
-  }
-}
 
 interface WelcomeWalkthroughProps {
   open: boolean;
@@ -129,7 +113,7 @@ const Pill: React.FC<{ card: Showcase }> = ({ card }) => (
 
 const Rating: React.FC<{ value: number; className: string }> = ({ value, className }) => (
   <span
-    className={`block font-serif font-bold leading-[0.8] ${value >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-white'} ${className}`}
+    className={`block font-serif font-bold leading-[0.8] ${overallText(value)} ${className}`}
     style={LINING}
   >
     {value}

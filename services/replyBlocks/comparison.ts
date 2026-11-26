@@ -1,10 +1,10 @@
 import { Type } from '@google/genai';
 import type { PlayerProfile, ReadyBlock } from '../../types';
 import { isGoalkeeperSide, type ComparisonSide, type ComparisonViewData } from '../../components/views/viewData';
-import { ATTRIBUTE_LABELS, GK_ATTRIBUTE_LABELS } from '../../constants/ratingTiers';
 import { getCardKey } from '../dossierCards';
 import { toChatDossierRef } from '../dossierRefs';
 import type { DossierLookup } from '../dossierLookup';
+import { BLOCK_TEXT, sideNumbers } from './blockText';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const comparisonBlock = (id: string, data: ComparisonViewData): ReadyBlock<'comparison'> => readyBlock('comparison', id, data);
@@ -24,17 +24,6 @@ export function lookupFailure(name: string, found: DossierLookup, toolHint: stri
   if (found.status === 'ambiguous') return `"${name}" matches several rated players (${found.names.join(', ')}); name the one you mean.`;
   return `No stored card for ${name}, so nothing is drawn. ${toolHint}`;
 }
-
-/** A side as one line: headline numbers and, with `withAttributes`, every attribute the card holds. */
-const numbers = (side: ComparisonSide, withAttributes = true): string => {
-  const d = side.dossier;
-  const attrs = isGoalkeeperSide(side) ? side.goalkeeperAttributes : side.attributes;
-  const labels = (isGoalkeeperSide(side) ? GK_ATTRIBUTE_LABELS : ATTRIBUTE_LABELS) as Record<string, string>;
-  const list = (withAttributes ? Object.entries(attrs ?? {}) : [])
-    .map(([k, v]) => `${labels[k] ?? k} ${v}`)
-    .join(', ');
-  return `${d.name}${d.versionLabel ? ` (${d.versionLabel})` : ''}: Overall ${d.overall ?? 'n/a'}, Potential ${d.potential ?? 'n/a'}${d.archetype ? `, ${d.archetype}` : ''}${list ? `. ${list}` : ''}`;
-};
 
 /** Two stored cards side by side. Never rates anyone: a player with no card is an error the model can offer a rating for. */
 export const comparisonEntry: BlockEntry<'comparison'> = {
@@ -75,11 +64,9 @@ export const comparisonEntry: BlockEntry<'comparison'> = {
     return {
       shown: true,
       ...(mixed ? { note: "One is a goalkeeper and one isn't: the view shows their headline numbers and archetypes only, since their attributes don't share a scale." } : {}),
-      a: numbers(data.a, !mixed),
-      b: numbers(data.b, !mixed),
+      a: sideNumbers(data.a, !mixed),
+      b: sideNumbers(data.b, !mixed),
     };
   },
-  toHistory: ({ data }) =>
-    `[shown: comparison of ${data.a.dossier.name} (Overall ${data.a.dossier.overall ?? 'n/a'}) and ${data.b.dossier.name} (Overall ${data.b.dossier.overall ?? 'n/a'})]`,
-  toCopy: ({ data }) => `${numbers(data.a, false)}\n${numbers(data.b, false)}`,
+  ...BLOCK_TEXT.comparison,
 };

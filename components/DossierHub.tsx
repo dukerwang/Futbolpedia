@@ -1,16 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { cardPath } from '../services/cardPaths';
 import type { PlayerProfile } from '../types';
-import {
-  fetchGlobalHubDossiers,
-  type GlobalHubDossierItem,
-  getCardKey,
-  isPrimeCard,
-  shareDossierCard,
-} from '../services/geminiService';
-import { cardEdition, compareVersions, formatEraQualifier } from '../services/dossierStore';
-import { getAttributeLabel, getShortTierLabel, positionCodes } from '../constants/ratingTiers';
-import { describeCardEdition, pillClass, PILL_ICON_CLASS, shortEditionLabel } from './pills';
+import { fetchGlobalHubDossiers, type GlobalHubDossierItem } from '../services/dossierCache';
+import { cardEdition, compareVersions, formatEraQualifier, getCardKey, isPrimeCard } from '../services/dossierCards';
+import { getTierDefinition, RATING_TIERS } from '../constants/ratingTiers';
+import { SelectMenu } from './hub/Menu';
+import { HubCard, HubRow } from './hub/HubEntries';
+import { INK_DOT, INK_TEXT } from './hub/editionInk';
+import { Segmented, useSlidingIndicator, type SegmentedOption } from './hub/Segmented';
 
 /** "global" is every shared card in Supabase; "mine" is the user's own dossiers (localStorage). */
 export type HubTab = 'global' | 'mine';
@@ -35,16 +31,20 @@ interface DossierHubProps {
 type EditionFilter = 'all' | 'current' | 'prime' | 'era' | 'season';
 type PositionFilter = 'all' | 'forward' | 'midfield' | 'defender' | 'goalkeeper';
 type SortOption = 'overall_desc' | 'recent' | 'name_asc' | 'trajectory_desc';
+type HubLayout = 'grid' | 'list';
 
 /** A background refetch of the global tab runs when it's re-entered after this long. */
 const GLOBAL_STALE_MS = 2 * 60 * 1000;
+const LAYOUT_KEY = 'futbolpedia-hub-layout';
+/** Entries past this many are offscreen on first paint, so they skip the entrance. */
+const ANIMATED_ENTRIES = 14;
 
-const EDITION_OPTIONS: Array<{ id: EditionFilter; label: string; activeClass: string }> = [
-  { id: 'all', label: 'All', activeClass: 'bg-white dark:bg-charcoal text-charcoal dark:text-cream-50 shadow-xs' },
-  { id: 'current', label: 'Current', activeClass: 'bg-emerald-600 text-white shadow-xs' },
-  { id: 'prime', label: 'Prime', activeClass: 'bg-amber-600 text-white shadow-xs' },
-  { id: 'era', label: 'Eras', activeClass: 'bg-blue-600 text-white shadow-xs' },
-  { id: 'season', label: 'Seasons', activeClass: 'bg-amber-600 text-white shadow-xs' },
+const EDITION_OPTIONS: SegmentedOption<EditionFilter>[] = [
+  { id: 'all', label: 'All' },
+  { id: 'current', label: 'Current', dot: INK_DOT.current, activeText: INK_TEXT.current },
+  { id: 'prime', label: 'Prime', dot: INK_DOT.prime, activeText: INK_TEXT.prime },
+  { id: 'era', label: 'Eras', dot: INK_DOT.era, activeText: INK_TEXT.era },
+  { id: 'season', label: 'Seasons', dot: INK_DOT.season, activeText: INK_TEXT.season },
 ];
 
 /** The card editions each edition filter keeps. Current needs a recorded edition, so pre-edition cards stay under All. */
@@ -57,14 +57,27 @@ const matchesEdition = (p: PlayerProfile, filter: EditionFilter): boolean => {
   return edition === 'prime';
 };
 
-/** At most this many of a player's other versions show as chips on a card. */
-const MAX_VERSION_CHIPS = 3;
-
 const SORT_OPTIONS: Array<{ id: SortOption; label: string; globalOnly?: boolean }> = [
+  { id: 'overall_desc', label: 'Rating' },
   { id: 'recent', label: 'Most recent' },
-  { id: 'overall_desc', label: 'Rating (high to low)' },
-  { id: 'name_asc', label: 'Name (A–Z)' },
+  { id: 'name_asc', label: 'Name' },
   { id: 'trajectory_desc', label: 'Biggest risers', globalOnly: true },
+];
+
+const POSITION_OPTIONS: Array<{ id: PositionFilter; label: string }> = [
+  { id: 'all', label: 'All positions' },
+  { id: 'forward', label: 'Attackers' },
+  { id: 'midfield', label: 'Midfielders' },
+  { id: 'defender', label: 'Defenders' },
+  { id: 'goalkeeper', label: 'Goalkeepers' },
+];
+
+const RATING_OPTIONS: Array<{ id: number; label: string; hint?: string }> = [
+  { id: 0, label: 'Any rating' },
+  { id: 96, label: '96 and up', hint: 'Icons' },
+  { id: 90, label: '90 and up', hint: 'World-class' },
+  { id: 85, label: '85 and up' },
+  { id: 80, label: '80 and up' },
 ];
 
 /** Substrings of a lowercased position that put a card in each position filter. */
@@ -75,12 +88,8 @@ const POSITION_FILTER_KEYWORDS: Record<Exclude<PositionFilter, 'all'>, string[]>
   goalkeeper: ['goalkeeper', 'gk'],
 };
 
-const SELECT_CLASS =
-  'shrink-0 px-2.5 py-1.5 text-xs font-sans rounded-lg bg-cream-100 dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border text-charcoal dark:text-cream-50 focus:outline-none focus:ring-1 focus:ring-emerald-500';
-
 const playerKey = (p: PlayerProfile) => getCardKey(p).split(':')[0];
 
-/** When the card was added to the user's dossiers, else when it was rated. */
 /**
  * When a shared card was rated: a re-rating, else its generation time. The evaluation date is no
  * use here, since a prime card's is the end of his peak, years ago.
@@ -88,304 +97,89 @@ const playerKey = (p: PlayerProfile) => getCardKey(p).split(':')[0];
 const ratedAtMs = (p: PlayerProfile): number =>
   p.rerateAt || p.createdAt || Date.parse(p.evaluationDate || p.version?.evaluationDate || '') || 0;
 
-const Dot = () => <span className="w-1 h-1 rounded-full bg-charcoal/20 dark:bg-cream-400/20 shrink-0" />;
+const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-GB')} ${n === 1 ? one : many}`;
 
-interface DossierCardProps {
-  item: GlobalHubDossierItem;
-  tab: HubTab;
-  isSelected: boolean;
-  isSaved: boolean;
-  /** The player's other cards in this tab (current form, prime, eras, seasons), in version order. */
-  otherVersions: PlayerProfile[];
-  onOpen: () => void;
-  onOpenVersion: (profile: PlayerProfile) => void;
-  onShowAllVersions: () => void;
-  onAsk: () => void;
-  onRename?: (newName: string) => void;
-  onDelete?: () => void;
-}
+/** "26 November", with the year only when it isn't this one. */
+const dayInWords = (iso: string): string => {
+  const date = new Date(`${iso.slice(0, 10)}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return iso;
+  const sameYear = date.getUTCFullYear() === new Date().getUTCFullYear();
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', ...(sameYear ? {} : { year: 'numeric' }), timeZone: 'UTC' });
+};
 
-const DossierCard: React.FC<DossierCardProps> = ({
-  item,
-  tab,
-  isSelected,
-  isSaved,
-  otherVersions,
-  onOpen,
-  onOpenVersion,
-  onShowAllVersions,
-  onAsk,
-  onRename,
-  onDelete,
-}) => {
-  const { profile, isCurrentRating, trajectoryDiff, previousRatingDate } = item;
-  const [shareState, setShareState] = useState<'idle' | 'saving' | 'copied'>('idle');
-  const [isEditing, setIsEditing] = useState(false);
-  const [nameDraft, setNameDraft] = useState('');
-  const [confirmDelete, setConfirmDelete] = useState(false);
+const initialLayout = (): HubLayout => {
+  try {
+    const stored = localStorage.getItem(LAYOUT_KEY);
+    if (stored === 'grid' || stored === 'list') return stored;
+  } catch {
+    /* storage blocked */
+  }
+  return typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches ? 'grid' : 'list';
+};
 
-  useEffect(() => {
-    if (!confirmDelete) return;
-    const timer = setTimeout(() => setConfirmDelete(false), 3000);
-    return () => clearTimeout(timer);
-  }, [confirmDelete]);
-
-  const edition = describeCardEdition(profile);
-  // In the global registry an older current card is shown as an earlier rating of that player.
-  const isEarlierRating = tab === 'global' && !isCurrentRating && !isPrimeCard(profile);
-
-  const handleShare = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (shareState === 'saving') return;
-    setShareState('saving');
-    try {
-      const slug = await shareDossierCard(profile);
-      const path = profile.revision ? null : cardPath(profile);
-      await navigator.clipboard.writeText(`${window.location.origin}${path ?? `/#/p/${slug}`}`);
-      setShareState('copied');
-      setTimeout(() => setShareState('idle'), 2000);
-    } catch (err) {
-      console.error('Share failed:', err);
-      setShareState('idle');
-      if (err instanceof Error) window.alert(err.message);
-    }
-  };
-
-  const handleSaveRename = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (nameDraft.trim() && onRename) onRename(nameDraft.trim());
-    setIsEditing(false);
-  };
-
-  const iconButton =
-    'p-1.5 rounded-md transition-colors text-charcoal/50 dark:text-cream-400/70 hover:bg-cream-200 dark:hover:bg-charcoal-light';
-
+const Skeleton: React.FC<{ layout: HubLayout }> = ({ layout }) => {
+  const shimmer =
+    'bg-[linear-gradient(100deg,transparent_30%,rgba(26,31,46,0.05)_50%,transparent_70%)] dark:bg-[linear-gradient(100deg,transparent_30%,rgba(255,255,255,0.05)_50%,transparent_70%)] bg-[length:200%_100%] motion-safe:animate-shimmer';
+  if (layout === 'list') {
+    return (
+      <div className="pt-6 divide-y divide-charcoal/[0.06] dark:divide-white/[0.05]" aria-hidden="true">
+        {Array.from({ length: 9 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-4 py-4 px-2">
+            <div className={`w-9 h-7 rounded-md bg-charcoal/[0.05] dark:bg-white/[0.05] ${shimmer}`} />
+            <div className="flex-1 space-y-2">
+              <div className={`h-3.5 w-40 rounded bg-charcoal/[0.06] dark:bg-white/[0.06] ${shimmer}`} />
+              <div className={`h-2.5 w-56 rounded bg-charcoal/[0.04] dark:bg-white/[0.04] ${shimmer}`} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-pressed={isSelected}
-      onClick={() => !isEditing && onOpen()}
-      onKeyDown={(e) => {
-        if (!isEditing && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className={`group relative flex flex-col justify-between p-5 rounded-2xl bg-white dark:bg-charcoal-surface border shadow-sm hover:shadow-md transition-[border-color,box-shadow] duration-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-        isSelected
-          ? 'border-emerald-500 ring-1 ring-emerald-500/40'
-          : 'border-cream-300/80 dark:border-charcoal-border hover:border-emerald-500/50'
-      }`}
-    >
-      <div>
-        <div className="flex flex-wrap items-center gap-1.5 mb-3">
-          <span className={pillClass(isEarlierRating ? 'neutral' : edition.tone, 'sm')} title={edition.title}>
-            <span className={PILL_ICON_CLASS}>{isEarlierRating ? 'history' : edition.icon}</span>
-            {isEarlierRating ? edition.label.replace('Current form', 'Earlier rating') : edition.label}
-          </span>
-          {profile.revision && (
-            <span className={pillClass('indigo', 'sm')} title="Your accepted challenge of the shared card">
-              Your revision
-            </span>
-          )}
-        </div>
-
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div className="min-w-0 flex-1 pt-0.5">
-            {isEditing ? (
-              <form onSubmit={handleSaveRename} onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
-                <input
-                  type="text"
-                  value={nameDraft}
-                  onChange={(e) => setNameDraft(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Escape' && setIsEditing(false)}
-                  autoFocus
-                  aria-label="Dossier name"
-                  className="min-w-0 flex-1 px-2.5 py-1 text-base font-serif font-bold bg-cream-100 dark:bg-charcoal border border-emerald-500/50 rounded-md focus:outline-none focus:ring-1 focus:ring-emerald-500 text-charcoal dark:text-cream-50"
-                />
-                <button type="submit" className="p-1 text-emerald-600 hover:text-emerald-500" title="Save name">
-                  <span className="material-symbols-outlined text-[18px] block">check</span>
-                </button>
-                <button type="button" onClick={() => setIsEditing(false)} className="p-1 text-red-500 hover:text-red-400" title="Cancel">
-                  <span className="material-symbols-outlined text-[18px] block">close</span>
-                </button>
-              </form>
-            ) : (
-              <h3 className="text-lg font-serif font-bold text-charcoal dark:text-cream-50 leading-tight truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
-                {profile.basicInfo.name}
-              </h3>
-            )}
-            {profile.playstyleAndRole?.playstyle?.archetype && (
-              <p className="text-xs font-serif italic text-emerald-600 dark:text-emerald-400 mt-0.5 line-clamp-1">
-                {profile.playstyleAndRole.playstyle.archetype}
-              </p>
-            )}
+    <div className="pt-8 grid grid-cols-[repeat(auto-fill,minmax(min(100%,18.5rem),1fr))] gap-5" aria-hidden="true">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="h-[19.5rem] rounded-[14px] p-5 bg-cream-50/70 dark:bg-charcoal-surface/60 border border-charcoal/[0.06] dark:border-white/[0.05]">
+          <div className="flex gap-4">
+            <div className={`w-14 h-10 rounded-md bg-charcoal/[0.06] dark:bg-white/[0.06] ${shimmer}`} />
+            <div className="flex-1 space-y-2 pt-1">
+              <div className={`h-2.5 w-24 rounded bg-charcoal/[0.05] dark:bg-white/[0.05] ${shimmer}`} />
+              <div className={`h-2.5 w-32 rounded bg-charcoal/[0.05] dark:bg-white/[0.05] ${shimmer}`} />
+            </div>
           </div>
-
-          <div className="flex flex-col items-end text-right shrink-0">
-            <span className="whitespace-nowrap text-[10px] leading-tight font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">
-              {getShortTierLabel(profile.ratings.overall)}
-            </span>
-            <span
-              className={`text-2xl font-mono font-bold leading-none ${
-                profile.ratings.overall >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-cream-50'
-              }`}
-            >
-              {profile.ratings.overall}
-            </span>
-            <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">OVR</span>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5 text-xs text-charcoal/60 dark:text-cream-400 mb-3">
-          <span className="font-semibold text-charcoal dark:text-cream-200">{positionCodes(profile.basicInfo.position) || 'N/A'}</span>
-          <Dot />
-          <span className="truncate max-w-[140px]">{profile.basicInfo.club}</span>
-          <Dot />
-          <span>{profile.basicInfo.nationality}</span>
-          {profile.basicInfo.age != null && (
-            <>
-              <Dot />
-              <span>Age {profile.basicInfo.age}</span>
-            </>
-          )}
-        </div>
-
-        {profile.version?.peakContext && (
-          <p className="mb-3 text-xs font-serif italic text-charcoal/70 dark:text-cream-300 leading-snug line-clamp-2">
-            {profile.version.peakContext}
-          </p>
-        )}
-
-        {typeof trajectoryDiff === 'number' && trajectoryDiff !== 0 && (
-          <div className="flex items-center gap-1.5 text-[11px] font-sans mb-3">
-            <span className={pillClass(trajectoryDiff > 0 ? 'emerald' : 'red', 'xs')}>
-              {trajectoryDiff > 0 ? `+${trajectoryDiff}` : trajectoryDiff} OVR
-            </span>
-            <span className="text-charcoal/40 dark:text-cream-400">vs {previousRatingDate} evaluation</span>
-          </div>
-        )}
-
-        {profile.signatureSpikes && profile.signatureSpikes.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {profile.signatureSpikes.slice(0, 3).map((spike) => (
-              <span key={spike} className={pillClass('neutral', 'xs')}>
-                {getAttributeLabel(spike)}
-              </span>
+          <div className={`mt-7 h-5 w-44 rounded bg-charcoal/[0.07] dark:bg-white/[0.07] ${shimmer}`} />
+          <div className={`mt-2 h-3 w-36 rounded bg-charcoal/[0.04] dark:bg-white/[0.04] ${shimmer}`} />
+          <div className="mt-8 space-y-3">
+            {[0, 1, 2].map((r) => (
+              <div key={r} className={`h-2.5 rounded bg-charcoal/[0.04] dark:bg-white/[0.04] ${shimmer}`} />
             ))}
           </div>
-        )}
-
-        {otherVersions.length > 0 && (
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            <span className="text-[10px] font-sans font-semibold uppercase tracking-wider text-charcoal/40 dark:text-cream-400/60 mr-0.5">
-              Also
-            </span>
-            {otherVersions.slice(0, MAX_VERSION_CHIPS).map((version) => {
-              const versionEdition = describeCardEdition(version);
-              return (
-                <button
-                  key={getCardKey(version)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenVersion(version);
-                  }}
-                  className={`${pillClass(versionEdition.tone, 'xs')} hover:brightness-95 dark:hover:brightness-125 transition`}
-                  title={`Open ${versionEdition.label}`}
-                >
-                  <span className="max-w-[9rem] truncate">{shortEditionLabel(version)}</span>
-                  <span className="font-mono font-bold">{version.ratings.overall}</span>
-                </button>
-              );
-            })}
-            {otherVersions.length > MAX_VERSION_CHIPS && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onShowAllVersions();
-                }}
-                className="text-[10px] font-sans font-semibold text-emerald-600 dark:text-emerald-400 hover:underline"
-              >
-                +{otherVersions.length - MAX_VERSION_CHIPS} more
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="pt-3 mt-4 border-t border-cream-200 dark:border-charcoal-border flex items-center justify-between text-xs">
-        <span className="flex items-center gap-1.5 text-[11px] font-sans font-semibold text-emerald-600 dark:text-emerald-400">
-          {isSelected ? 'Open in panel' : 'Open dossier'}
-          <span className="material-symbols-outlined text-[14px] group-hover:translate-x-0.5 transition-transform">arrow_forward</span>
-          {tab === 'global' && isSaved && (
-            <span className="ml-1 flex items-center gap-0.5 font-medium text-charcoal/40 dark:text-cream-400/70" title="In your dossiers">
-              <span className="material-symbols-outlined text-[14px]">bookmark_added</span>
-              Saved
-            </span>
-          )}
-        </span>
-
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onAsk();
-            }}
-            className="mr-1 flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-sans font-semibold text-charcoal/70 dark:text-cream-300 hover:text-emerald-700 dark:hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors"
-            title={`Ask about ${profile.basicInfo.name} in chat`}
-          >
-            <span aria-hidden="true" className="material-symbols-outlined text-[16px]">chat_bubble</span>
-            Ask
-          </button>
-          <button
-            onClick={handleShare}
-            className={`${iconButton} ${shareState === 'copied' ? '!text-emerald-600 dark:!text-emerald-400' : 'hover:text-emerald-600 dark:hover:text-emerald-400'}`}
-            title={shareState === 'copied' ? 'Link copied' : 'Copy share link'}
-          >
-            <span className="material-symbols-outlined text-[16px] block">
-              {shareState === 'saving' ? 'hourglass_empty' : shareState === 'copied' ? 'check' : 'link'}
-            </span>
-          </button>
-          {onRename && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setNameDraft(profile.basicInfo.name);
-                setIsEditing(true);
-              }}
-              className={`${iconButton} hover:text-emerald-600 dark:hover:text-emerald-400`}
-              title="Rename"
-            >
-              <span className="material-symbols-outlined text-[16px] block">edit</span>
-            </button>
-          )}
-          {onDelete && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (confirmDelete) onDelete();
-                else setConfirmDelete(true);
-              }}
-              className={
-                confirmDelete
-                  ? 'px-2 py-1 rounded-md bg-red-500/10 text-red-600 border border-red-500/30 hover:bg-red-500 hover:text-white transition-colors text-[10px] font-sans font-bold uppercase tracking-wider'
-                  : `${iconButton} hover:text-red-500`
-              }
-              title={confirmDelete ? 'Click again to remove' : 'Remove from your dossiers'}
-            >
-              {confirmDelete ? 'Remove' : <span className="material-symbols-outlined text-[16px] block">delete</span>}
-            </button>
-          )}
         </div>
-      </div>
+      ))}
     </div>
   );
 };
 
+const EmptyState: React.FC<{ icon: string; title: string; body: string; children?: React.ReactNode }> = ({ icon, title, body, children }) => (
+  <div className="flex flex-col items-center text-center py-24 px-6 motion-safe:animate-fade-in">
+    <span aria-hidden="true" className="grid place-items-center w-12 h-12 rounded-full border border-charcoal/10 dark:border-white/10 text-charcoal/40 dark:text-cream-400/60">
+      <span className="material-symbols-outlined text-[22px]">{icon}</span>
+    </span>
+    <h3 className="mt-5 font-serif font-bold text-[22px] tracking-[-0.01em] text-charcoal dark:text-cream-50">{title}</h3>
+    <p className="mt-2 max-w-sm text-[14px] leading-relaxed text-charcoal/60 dark:text-cream-400">{body}</p>
+    {children && <div className="flex flex-wrap justify-center gap-2.5 mt-7">{children}</div>}
+  </div>
+);
+
+const primaryButton =
+  'inline-flex items-center gap-2 h-10 px-4 rounded-lg text-[13px] font-medium bg-charcoal text-cream-50 dark:bg-cream-100 dark:text-charcoal hover:bg-charcoal/90 dark:hover:bg-white transition-[background-color,transform] duration-150 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-cream-200 dark:focus-visible:ring-offset-charcoal';
+const secondaryButton =
+  'inline-flex items-center gap-2 h-10 px-4 rounded-lg text-[13px] font-medium text-charcoal dark:text-cream-100 border border-charcoal/15 dark:border-white/15 hover:border-charcoal/30 dark:hover:border-white/30 transition-[border-color,transform] duration-150 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60';
+
 /**
  * The dossier library as a main view: the global hub (every shared card) and "Your dossiers"
- * (cards this browser has scouted or opened) as tabs over one card grid and one set of filters.
+ * (cards this browser has scouted or opened) as tabs over one set of filters. Ordered by rating,
+ * the cards fall into chapters by tier band, like an almanac; shown as collectible cards or as a
+ * ranked register.
  */
 export const DossierHub: React.FC<DossierHubProps> = ({
   isActive,
@@ -405,13 +199,24 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   const lastGlobalFetchRef = useRef(0);
   const savedProfilesRef = useRef(savedProfiles);
   savedProfilesRef.current = savedProfiles;
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [editionFilter, setEditionFilter] = useState<EditionFilter>('all');
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('all');
   const [minTierFilter, setMinTierFilter] = useState<number>(0);
   const [sortByTab, setSortByTab] = useState<Record<HubTab, SortOption>>({ mine: 'recent', global: 'overall_desc' });
+  const [layout, setLayout] = useState<HubLayout>(initialLayout);
   const sortOption = sortByTab[tab];
+
+  const changeLayout = (next: HubLayout) => {
+    setLayout(next);
+    try {
+      localStorage.setItem(LAYOUT_KEY, next);
+    } catch {
+      /* storage blocked */
+    }
+  };
 
   const loadGlobal = useCallback(async (showSkeleton: boolean) => {
     if (showSkeleton) setGlobalStatus('loading');
@@ -433,22 +238,29 @@ export const DossierHub: React.FC<DossierHubProps> = ({
 
   useEffect(() => {
     if (!isActive || tab !== 'global') return;
-    const stale =
-      Date.now() - lastGlobalFetchRef.current > GLOBAL_STALE_MS || newestRatedMs > lastGlobalFetchRef.current;
+    const stale = Date.now() - lastGlobalFetchRef.current > GLOBAL_STALE_MS || newestRatedMs > lastGlobalFetchRef.current;
     if (globalStatus === 'idle') loadGlobal(true);
     else if (globalStatus === 'ready' && stale) loadGlobal(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, tab, newestRatedMs]);
 
-  const mineItems = useMemo<GlobalHubDossierItem[]>(
-    () => savedProfiles.map((profile) => ({ profile, isCurrentRating: false })),
-    [savedProfiles],
-  );
+  // "/" jumps to the search, as in most libraries, unless the user is already typing somewhere.
+  useEffect(() => {
+    if (!isActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isActive]);
+
+  const mineItems = useMemo<GlobalHubDossierItem[]>(() => savedProfiles.map((profile) => ({ profile, isCurrentRating: false })), [savedProfiles]);
   const savedKeys = useMemo(() => new Set(savedProfiles.map(getCardKey)), [savedProfiles]);
-  const libraryOrder = useMemo(
-    () => new Map(savedProfiles.map((p, i) => [getCardKey(p), i] as const)),
-    [savedProfiles],
-  );
+  const libraryOrder = useMemo(() => new Map(savedProfiles.map((p, i) => [getCardKey(p), i] as const)), [savedProfiles]);
 
   const items = tab === 'mine' ? mineItems : globalItems;
 
@@ -466,30 +278,26 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   }, [items, tab]);
   const isLoading = tab === 'global' && globalStatus !== 'ready';
 
-  const summary = useMemo(() => {
+  /** One plain sentence about the collection. */
+  const standfirst = useMemo(() => {
     const players = new Set(items.map((i) => playerKey(i.profile))).size;
     if (tab === 'mine') {
+      if (items.length === 0) return 'Players you scout or open are kept here, on this device.';
       const revisions = items.filter((i) => i.profile.revision).length;
-      return [
-        `${items.length} ${items.length === 1 ? 'dossier' : 'dossiers'}`,
-        `${players} ${players === 1 ? 'player' : 'players'}`,
-        ...(revisions ? [`${revisions} your ${revisions === 1 ? 'revision' : 'revisions'}`] : []),
-      ];
+      const revisionNote = revisions ? `, ${plural(revisions, 'of them your own revision', 'of them your own revisions')}` : '';
+      return `${plural(items.length, 'card')} on ${plural(players, 'player')} you've scouted or opened${revisionNote}, kept on this device.`;
     }
-    const worldClass = items.filter((i) => i.profile.ratings.overall >= 90).length;
-    const eras = items.filter((i) => cardEdition(i.profile) === 'era').length;
-    const latest = items.map((i) => i.profile.evaluationDate).filter(Boolean).sort().reverse()[0];
-    return [
-      `${items.length} cards`,
-      `${players} players`,
-      ...(eras ? [`${eras} ${eras === 1 ? 'era' : 'eras'}`] : []),
-      `${worldClass} rated 90+`,
-      ...(latest ? [`latest ${latest}`] : []),
-    ];
-  }, [items, tab]);
+    if (isLoading) return 'Every shared card on Futbolpedia, one version of a player each.';
+    if (items.length === 0) return 'Every shared card on Futbolpedia appears here once a player is scouted.';
+    const latest = items
+      .map((i) => i.profile.evaluationDate)
+      .filter(Boolean)
+      .sort()
+      .reverse()[0];
+    return `${plural(items.length, 'card')} on ${plural(players, 'player')}${latest ? `, the latest rated on ${dayInWords(latest)}` : ''}.`;
+  }, [items, tab, isLoading]);
 
-  const filtersActive =
-    searchQuery.trim() !== '' || editionFilter !== 'all' || positionFilter !== 'all' || minTierFilter > 0;
+  const filtersActive = searchQuery.trim() !== '' || editionFilter !== 'all' || positionFilter !== 'all' || minTierFilter > 0;
 
   const resetFilters = () => {
     setSearchQuery('');
@@ -521,9 +329,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
       });
     }
 
-    if (editionFilter !== 'all') {
-      result = result.filter((i) => matchesEdition(i.profile, editionFilter));
-    }
+    if (editionFilter !== 'all') result = result.filter((i) => matchesEdition(i.profile, editionFilter));
 
     if (positionFilter !== 'all') {
       const keywords = POSITION_FILTER_KEYWORDS[positionFilter];
@@ -533,9 +339,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
       });
     }
 
-    if (minTierFilter > 0) {
-      result = result.filter((i) => i.profile.ratings.overall >= minTierFilter);
-    }
+    if (minTierFilter > 0) result = result.filter((i) => i.profile.ratings.overall >= minTierFilter);
 
     result.sort((a, b) => {
       if (sortOption === 'overall_desc') {
@@ -549,283 +353,291 @@ export const DossierHub: React.FC<DossierHubProps> = ({
           ? (libraryOrder.get(getCardKey(b.profile)) ?? -1) - (libraryOrder.get(getCardKey(a.profile)) ?? -1)
           : ratedAtMs(b.profile) - ratedAtMs(a.profile);
       }
-      if (sortOption === 'name_asc') {
-        return (
-          playerKey(a.profile).localeCompare(playerKey(b.profile)) || compareVersions(a.profile, b.profile)
-        );
-      }
-      if (sortOption === 'trajectory_desc') {
-        return (b.trajectoryDiff ?? -999) - (a.trajectoryDiff ?? -999);
-      }
+      if (sortOption === 'name_asc') return playerKey(a.profile).localeCompare(playerKey(b.profile)) || compareVersions(a.profile, b.profile);
+      if (sortOption === 'trajectory_desc') return (b.trajectoryDiff ?? -999) - (a.trajectoryDiff ?? -999);
       return 0;
     });
 
     return result;
   }, [items, tab, libraryOrder, searchQuery, editionFilter, positionFilter, minTierFilter, sortOption]);
 
-  const tabs: Array<{ id: HubTab; label: string; icon: string; count?: number }> = [
-    { id: 'global', label: 'Global hub', icon: 'public', count: globalStatus === 'ready' ? globalItems.length : undefined },
-    { id: 'mine', label: 'Your dossiers', icon: 'folder_shared', count: savedProfiles.length },
+  // Ordered by rating, the cards fall into chapters by tier band.
+  const sections = useMemo(() => {
+    if (sortOption !== 'overall_desc') return [{ id: 'all', tier: null as (typeof RATING_TIERS)[number] | null, items: filteredItems }];
+    const byTier = new Map<string, GlobalHubDossierItem[]>();
+    for (const item of filteredItems) {
+      const tier = getTierDefinition(Math.round(item.profile.ratings.overall));
+      byTier.set(tier.id, [...(byTier.get(tier.id) ?? []), item]);
+    }
+    return RATING_TIERS.filter((t) => byTier.has(t.id)).map((tier) => ({ id: tier.id, tier, items: byTier.get(tier.id)! }));
+  }, [filteredItems, sortOption]);
+
+  const tabs: Array<{ id: HubTab; label: string; count?: number }> = [
+    { id: 'global', label: 'Global hub', count: globalStatus === 'ready' ? globalItems.length : undefined },
+    { id: 'mine', label: 'Your dossiers', count: savedProfiles.length },
   ];
+  const tabIndicator = useSlidingIndicator<HubTab>(tab);
+  const layoutIndicator = useSlidingIndicator<HubLayout>(layout);
+
   // A search that found nothing is usually a player nobody has rated yet.
   const scoutQuery = searchQuery.trim().length >= 2 ? searchQuery.trim() : '';
+  // Re-run the entrance when the view changes shape, not on every keystroke of a search.
+  const viewKey = `${tab}|${editionFilter}|${positionFilter}|${minTierFilter}|${sortOption}|${layout}`;
+  const ranked = sortOption === 'overall_desc' && layout === 'list';
+
+  let entryIndex = 0;
+  const renderEntry = (item: GlobalHubDossierItem) => {
+    const cardKey = getCardKey(item.profile);
+    const index = entryIndex++;
+    const props = {
+      item,
+      tab,
+      rank: ranked ? index + 1 : undefined,
+      isSelected: cardKey === activeCardKey,
+      isSaved: savedKeys.has(cardKey),
+      otherVersions: (versionsByPlayer.get(playerKey(item.profile)) ?? []).filter((v) => getCardKey(v) !== cardKey),
+      enterIndex: index < ANIMATED_ENTRIES ? index : undefined,
+      showTier: sortOption !== 'overall_desc',
+      onOpen: () => onSelectDossier(item.profile, tab),
+      onOpenVersion: (version: PlayerProfile) => onSelectDossier(version, tab),
+      onAsk: () => onAskAbout(item.profile, tab),
+      onShowAllVersions: () => {
+        setEditionFilter('all');
+        setSearchQuery(item.profile.basicInfo.name);
+      },
+      onRename: tab === 'mine' ? (name: string) => onRenameDossier(cardKey, name) : undefined,
+      onDelete: tab === 'mine' ? () => onDeleteDossier(cardKey) : undefined,
+    };
+    return layout === 'grid' ? <HubCard key={cardKey} {...props} /> : <HubRow key={cardKey} {...props} />;
+  };
+
+  const toolbarButtonRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60';
 
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden">
-      {/* Title and tabs */}
-      <div className="max-w-6xl mx-auto px-4 md:px-8 pt-6">
-        <div className="flex items-end justify-between gap-4">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
+      {/* Masthead */}
+      <header className="max-w-6xl mx-auto px-5 md:px-8 pt-8 md:pt-12">
+        <div className="flex items-end justify-between gap-6">
           <div className="min-w-0">
-            <h2 className="text-2xl font-serif font-bold tracking-tight text-charcoal dark:text-cream-50">Dossiers</h2>
-            <p className="text-xs text-charcoal/60 dark:text-cream-400 font-sans mt-1">
-              {tab === 'mine'
-                ? 'Players you have scouted or opened, kept on this device.'
-                : 'Every shared card on Futbolpedia, with dated versions and rating trajectories.'}
-            </p>
+            <h2 className="font-serif font-bold text-[40px] md:text-[56px] leading-[0.95] tracking-[-0.03em] text-charcoal dark:text-cream-50">Dossiers</h2>
+            <p className="mt-3 max-w-xl text-[14.5px] leading-relaxed text-charcoal/60 dark:text-cream-400 [text-wrap:pretty]">{standfirst}</p>
           </div>
           {tab === 'global' && (
             <button
               onClick={() => loadGlobal(false)}
               disabled={isRefreshing}
-              className="shrink-0 p-2 rounded-lg text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-cream-300/60 dark:hover:bg-charcoal-light transition-colors disabled:opacity-60"
-              title="Refresh global hub"
+              className={`shrink-0 grid place-items-center w-10 h-10 rounded-full text-charcoal/50 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50 hover:bg-charcoal/[0.05] dark:hover:bg-white/[0.06] transition-[background-color,color,transform] duration-150 active:scale-[0.94] disabled:opacity-60 ${toolbarButtonRing}`}
+              title="Refresh the global hub"
+              aria-label="Refresh the global hub"
             >
-              <span className={`material-symbols-outlined text-[20px] block ${isRefreshing ? 'animate-spin' : ''}`}>refresh</span>
+              <span aria-hidden="true" className={`material-symbols-outlined text-[20px] block ${isRefreshing ? 'animate-spin' : ''}`}>
+                refresh
+              </span>
             </button>
           )}
         </div>
 
-        <div role="tablist" aria-label="Dossier collections" className="flex gap-6 mt-5 border-b border-cream-300 dark:border-charcoal-border">
-          {tabs.map(({ id, label, icon, count }) => {
+        <div className="flex items-end gap-4 mt-8 border-b border-charcoal/[0.1] dark:border-white/[0.08]">
+        <div role="tablist" aria-label="Dossier collections" className="relative flex gap-5 md:gap-7 min-w-0">
+          {tabs.map(({ id, label, count }) => {
             const selected = tab === id;
             return (
               <button
                 key={id}
+                ref={tabIndicator.register(id)}
                 role="tab"
                 aria-selected={selected}
                 onClick={() => onTabChange(id)}
-                className={`-mb-px flex items-center gap-2 pb-3 pt-1 border-b-2 text-sm font-sans font-semibold transition-colors ${
-                  selected
-                    ? 'border-emerald-600 text-charcoal dark:text-cream-50'
-                    : 'border-transparent text-charcoal/50 dark:text-cream-400/70 hover:text-charcoal dark:hover:text-cream-100'
+                className={`relative flex items-baseline gap-1.5 md:gap-2 whitespace-nowrap pb-3.5 pt-1 text-[14.5px] md:text-[15px] font-sans font-medium transition-colors duration-200 rounded-sm ${toolbarButtonRing} ${
+                  selected ? 'text-charcoal dark:text-cream-50' : 'text-charcoal/45 dark:text-cream-400/70 hover:text-charcoal/80 dark:hover:text-cream-200'
                 }`}
               >
-                <span className={`material-symbols-outlined text-[18px] ${selected ? 'text-emerald-600 dark:text-emerald-400' : ''}`}>{icon}</span>
                 {label}
                 {count != null && (
-                  <span
-                    className={`px-1.5 py-px rounded-full text-[10px] font-mono font-bold ${
-                      selected ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-cream-300/70 dark:bg-charcoal-light text-charcoal/60 dark:text-cream-400'
-                    }`}
-                  >
+                  <span className={`font-mono text-[11px] [font-variant-numeric:tabular-nums] transition-colors duration-200 ${selected ? 'text-charcoal/50 dark:text-cream-400' : 'text-charcoal/30 dark:text-cream-400/50'}`}>
                     {count}
                   </span>
                 )}
               </button>
             );
           })}
+          <span
+            aria-hidden="true"
+            style={tabIndicator.style}
+            className="absolute left-0 -bottom-px h-[2px] rounded-full bg-charcoal dark:bg-cream-50 transition-[transform,width] duration-[420ms] ease-out-expo"
+          />
         </div>
-      </div>
-
-      {/* Search and filters stay pinned while the grid scrolls */}
-      <div className="sticky top-0 z-10 bg-cream-200/95 dark:bg-charcoal/95 backdrop-blur-sm">
-        <div className="max-w-6xl mx-auto px-4 md:px-8 py-3 flex flex-col lg:flex-row lg:items-center gap-2.5">
-          <div className="relative flex-1 lg:max-w-sm">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-charcoal/40 dark:text-cream-400 text-[18px]">
-              search
-            </span>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search player, club, nationality, role…"
-              aria-label="Search dossiers"
-              className="w-full pl-9 pr-8 py-2 text-xs font-sans rounded-lg bg-cream-100 dark:bg-charcoal-surface border border-cream-300 dark:border-charcoal-border text-charcoal dark:text-cream-50 placeholder-charcoal/40 dark:placeholder-cream-400/50 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+        <div className="ml-auto pb-2">
+            <div className="relative shrink-0 self-center -mt-1 flex items-center p-0.5 rounded-lg" role="group" aria-label="Layout">
+            <span
+              aria-hidden="true"
+              style={layoutIndicator.style}
+              className="absolute left-0 top-0.5 bottom-0.5 rounded-md bg-charcoal/[0.07] dark:bg-white/[0.09] transition-[transform,width] duration-300 ease-out-expo"
             />
-            {searchQuery && (
+            {(
+              [
+                { id: 'grid', icon: 'grid_view', label: 'Cards' },
+                { id: 'list', icon: 'view_list', label: 'List' },
+              ] as const
+            ).map(({ id, icon, label }) => (
               <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-charcoal/40 hover:text-charcoal dark:text-cream-400"
-                title="Clear search"
+                key={id}
+                ref={layoutIndicator.register(id)}
+                onClick={() => changeLayout(id)}
+                aria-pressed={layout === id}
+                aria-label={`Show as ${label.toLowerCase()}`}
+                title={label}
+                className={`relative grid place-items-center w-8 h-8 rounded-md transition-colors duration-150 ${toolbarButtonRing} ${
+                  layout === id ? 'text-charcoal dark:text-cream-50' : 'text-charcoal/40 dark:text-cream-400/60 hover:text-charcoal/70 dark:hover:text-cream-200'
+                }`}
               >
-                <span className="material-symbols-outlined text-[16px] block">close</span>
+                <span aria-hidden="true" className="material-symbols-outlined text-[19px]">{icon}</span>
               </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide lg:ml-auto">
-            <div className="shrink-0 flex items-center p-0.5 rounded-lg bg-cream-300/60 dark:bg-charcoal-light/50 border border-cream-300 dark:border-charcoal-border text-[11px] font-sans font-semibold">
-              {EDITION_OPTIONS.map(({ id, label, activeClass }) => (
-                <button
-                  key={id}
-                  onClick={() => setEditionFilter(id)}
-                  className={`px-2.5 py-1 rounded-md transition-colors ${
-                    editionFilter === id ? activeClass : 'text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-100'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <select
-              value={positionFilter}
-              onChange={(e) => setPositionFilter(e.target.value as PositionFilter)}
-              className={SELECT_CLASS}
-              aria-label="Position"
-            >
-              <option value="all">All positions</option>
-              <option value="forward">Attackers</option>
-              <option value="midfield">Midfielders</option>
-              <option value="defender">Defenders</option>
-              <option value="goalkeeper">Goalkeepers</option>
-            </select>
-
-            <select
-              value={minTierFilter}
-              onChange={(e) => setMinTierFilter(Number(e.target.value))}
-              className={SELECT_CLASS}
-              aria-label="Minimum rating"
-            >
-              <option value={0}>Any rating</option>
-              <option value={90}>90+</option>
-              <option value={85}>85+</option>
-              <option value={80}>80+</option>
-            </select>
-
-            <select
-              value={sortOption}
-              onChange={(e) => setSortByTab((prev) => ({ ...prev, [tab]: e.target.value as SortOption }))}
-              className={SELECT_CLASS}
-              aria-label="Sort"
-            >
-              {SORT_OPTIONS.filter((o) => !o.globalOnly || tab === 'global').map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+            ))}
           </div>
         </div>
-        <div className="border-b border-cream-300/70 dark:border-charcoal-border/70" />
+        </div>
+      </header>
+
+      {/* Search and filters stay pinned while the cards scroll */}
+      <div className="sticky top-0 z-20 bg-cream-200/85 dark:bg-charcoal/85 backdrop-blur-md backdrop-saturate-150 border-b border-charcoal/[0.06] dark:border-white/[0.05]">
+        <div className="max-w-6xl mx-auto px-5 md:px-8 py-3 flex flex-col lg:flex-row lg:items-center gap-2.5">
+          <div className="flex items-center lg:contents">
+            <label className="relative flex-1 lg:flex-none lg:w-64 group/search">
+              <span aria-hidden="true" className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[19px] text-charcoal/35 dark:text-cream-400/60 group-focus-within/search:text-charcoal/70 dark:group-focus-within/search:text-cream-200 transition-colors">
+                search
+              </span>
+              <input
+                ref={searchRef}
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setSearchQuery('');
+                    e.currentTarget.blur();
+                  }
+                }}
+                placeholder="Search players, clubs, roles"
+                aria-label="Search dossiers"
+                className="w-full h-9 pl-9 pr-9 text-[13.5px] font-sans rounded-lg bg-cream-50/80 dark:bg-white/[0.04] border border-charcoal/[0.1] dark:border-white/[0.08] text-charcoal dark:text-cream-50 placeholder:text-charcoal/40 dark:placeholder:text-cream-400/50 hover:border-charcoal/20 dark:hover:border-white/15 focus:outline-none focus:border-charcoal/30 dark:focus:border-white/25 focus:bg-cream-50 dark:focus:bg-white/[0.06] focus:ring-4 focus:ring-charcoal/[0.04] dark:focus:ring-white/[0.04] transition-[border-color,background-color,box-shadow] duration-150 [&::-webkit-search-cancel-button]:appearance-none"
+              />
+              {searchQuery ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    searchRef.current?.focus();
+                  }}
+                  className={`absolute right-1.5 top-1/2 -translate-y-1/2 grid place-items-center w-6 h-6 rounded-md text-charcoal/40 hover:text-charcoal dark:text-cream-400/70 dark:hover:text-cream-50 hover:bg-charcoal/[0.06] dark:hover:bg-white/[0.08] transition-colors ${toolbarButtonRing}`}
+                  aria-label="Clear search"
+                >
+                  <span aria-hidden="true" className="material-symbols-outlined text-[16px]">close</span>
+                </button>
+              ) : (
+                <kbd className="hidden md:grid absolute right-2 top-1/2 -translate-y-1/2 place-items-center w-5 h-5 rounded border border-charcoal/15 dark:border-white/15 font-mono text-[10.5px] text-charcoal/40 dark:text-cream-400/60">
+                  /
+                </kbd>
+              )}
+            </label>
+
+          </div>
+
+          <div className="-mx-5 px-5 lg:mx-0 lg:px-0 flex items-center gap-2 overflow-x-auto scrollbar-hide lg:flex-1 lg:overflow-visible">
+            <Segmented<EditionFilter> label="Version" value={editionFilter} options={EDITION_OPTIONS} onChange={setEditionFilter} />
+
+            <span aria-hidden="true" className="shrink-0 w-px h-5 mx-1 bg-charcoal/10 dark:bg-white/10" />
+
+            <div className="flex items-center gap-2 lg:ml-auto">
+              <SelectMenu<PositionFilter> label="Position" value={positionFilter} options={POSITION_OPTIONS} onChange={setPositionFilter} />
+              <SelectMenu<number> label="Rating" value={minTierFilter} options={RATING_OPTIONS} onChange={setMinTierFilter} />
+              <SelectMenu
+                label="Sort"
+                showLabel
+                align="end"
+                value={sortOption}
+                options={SORT_OPTIONS.filter((o) => !o.globalOnly || tab === 'global')}
+                onChange={(value) => setSortByTab((prev) => ({ ...prev, [tab]: value }))}
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Grid */}
-      <div className="max-w-6xl mx-auto px-4 md:px-8 pt-4 pb-12">
-        {!isLoading && items.length > 0 && (
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-4 text-[11px] font-mono text-charcoal/50 dark:text-cream-400/70">
-            {filtersActive && (
-              <>
-                <span className="font-bold text-charcoal/70 dark:text-cream-300">Showing {filteredItems.length}</span>
-                <span>of</span>
-              </>
-            )}
-            {summary.map((part, i) => (
-              <React.Fragment key={part}>
-                {i > 0 && <Dot />}
-                <span>{part}</span>
-              </React.Fragment>
-            ))}
-            {filtersActive && (
-              <button onClick={resetFilters} className="ml-1 font-sans font-semibold text-emerald-600 dark:text-emerald-400 hover:underline">
-                Clear filters
-              </button>
-            )}
+      <div className="max-w-6xl mx-auto px-5 md:px-8 pb-24">
+        {filtersActive && !isLoading && items.length > 0 && (
+          <div className="flex items-center gap-3 pt-5 text-[13px] text-charcoal/60 dark:text-cream-400 motion-safe:animate-fade-in" aria-live="polite">
+            <span>
+              {filteredItems.length === 0
+                ? 'Nothing matches.'
+                : `${filteredItems.length.toLocaleString('en-GB')} of ${plural(items.length, 'card')} ${filteredItems.length === 1 ? 'matches' : 'match'}.`}
+            </span>
+            <button onClick={resetFilters} className={`font-medium text-charcoal dark:text-cream-100 underline decoration-charcoal/25 dark:decoration-white/25 underline-offset-[3px] hover:decoration-current transition-[text-decoration-color] rounded-sm ${toolbarButtonRing}`}>
+              Clear filters
+            </button>
           </div>
         )}
 
         {isLoading ? (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,19rem),1fr))] gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-56 rounded-2xl bg-white/50 dark:bg-charcoal-surface/40 border border-cream-300 dark:border-charcoal-border animate-pulse"
-              />
-            ))}
-          </div>
+          <Skeleton layout={layout} />
         ) : tab === 'mine' && items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <span className="material-symbols-outlined text-[44px] text-charcoal/25 dark:text-cream-400/30 mb-3">folder_open</span>
-            <h3 className="text-base font-serif font-bold text-charcoal dark:text-cream-50">No dossiers yet</h3>
-            <p className="text-xs text-charcoal/60 dark:text-cream-400 mt-1 max-w-sm leading-relaxed">
-              Scout a player and the dossier lands here. Any card you open from the global hub is kept here too.
-            </p>
-            <div className="flex flex-wrap justify-center gap-2 mt-5">
-              <button
-                onClick={() => onScout()}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
-              >
-                <span className="material-symbols-outlined text-[16px]">person_search</span>
-                Scout a player
-              </button>
-              <button
-                onClick={() => onTabChange('global')}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors"
-              >
-                <span className="material-symbols-outlined text-[16px]">public</span>
-                Browse the global hub
-              </button>
-            </div>
-          </div>
+          <EmptyState icon="folder_open" title="No dossiers yet" body="Scout a player and his card lands here. Any card you open from the global hub is kept here too.">
+            <button onClick={() => onScout()} className={primaryButton}>
+              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">person_search</span>
+              Scout a player
+            </button>
+            <button onClick={() => onTabChange('global')} className={secondaryButton}>
+              Browse the global hub
+            </button>
+          </EmptyState>
         ) : filteredItems.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <span className="material-symbols-outlined text-[44px] text-charcoal/25 dark:text-cream-400/30 mb-3">filter_alt_off</span>
-            <h3 className="text-base font-serif font-bold text-charcoal dark:text-cream-50">
-              {items.length === 0 ? 'No shared cards yet' : 'No dossiers match'}
-            </h3>
-            <p className="text-xs text-charcoal/60 dark:text-cream-400 mt-1 max-w-sm">
-              {items.length === 0
+          <EmptyState
+            icon={scoutQuery ? 'person_search' : 'filter_alt_off'}
+            title={items.length === 0 ? 'No shared cards yet' : scoutQuery ? `No card for “${scoutQuery}”` : 'No dossiers match'}
+            body={
+              items.length === 0
                 ? 'Cards appear here once players are scouted.'
                 : scoutQuery
-                  ? `No card matches “${scoutQuery}”. Scout him and the card lands here.`
-                  : 'Try a broader search or clear the filters.'}
-            </p>
-            <div className="flex flex-wrap justify-center gap-2 mt-4">
-              {scoutQuery && (
-                <button
-                  onClick={() => onScout(scoutQuery)}
-                  className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
-                >
-                  <span className="material-symbols-outlined text-[16px]">person_search</span>
-                  Scout “{scoutQuery}”
-                </button>
-              )}
-              {filtersActive && (
-                <button
-                  onClick={resetFilters}
-                  className="px-3 py-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 rounded-lg hover:bg-emerald-500/20 transition-colors"
-                >
-                  Clear filters
-                </button>
-              )}
-            </div>
-          </div>
+                  ? 'Nobody has scouted him yet. Scout him and his card lands here for everyone.'
+                  : 'Try a broader filter, or clear them all.'
+            }
+          >
+            {scoutQuery && (
+              <button onClick={() => onScout(scoutQuery)} className={primaryButton}>
+                <span aria-hidden="true" className="material-symbols-outlined text-[18px]">person_search</span>
+                Scout {scoutQuery}
+              </button>
+            )}
+            {filtersActive && (
+              <button onClick={resetFilters} className={secondaryButton}>
+                Clear filters
+              </button>
+            )}
+          </EmptyState>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,19rem),1fr))] gap-4">
-            {filteredItems.map((item) => {
-              const cardKey = getCardKey(item.profile);
-              return (
-                <DossierCard
-                  key={cardKey}
-                  item={item}
-                  tab={tab}
-                  isSelected={cardKey === activeCardKey}
-                  isSaved={savedKeys.has(cardKey)}
-                  otherVersions={(versionsByPlayer.get(playerKey(item.profile)) ?? []).filter(
-                    (v) => getCardKey(v) !== cardKey,
-                  )}
-                  onOpen={() => onSelectDossier(item.profile, tab)}
-                  onOpenVersion={(version) => onSelectDossier(version, tab)}
-                  onAsk={() => onAskAbout(item.profile, tab)}
-                  onShowAllVersions={() => {
-                    setEditionFilter('all');
-                    setSearchQuery(item.profile.basicInfo.name);
-                  }}
-                  onRename={tab === 'mine' ? (name) => onRenameDossier(cardKey, name) : undefined}
-                  onDelete={tab === 'mine' ? () => onDeleteDossier(cardKey) : undefined}
-                />
-              );
-            })}
+          <div key={viewKey}>
+            {sections.map(({ id, tier, items: sectionItems }) => (
+              <section key={id} aria-labelledby={tier ? `tier-${id}` : undefined} className={tier ? 'pt-10 md:pt-14 first:pt-8' : 'pt-6'}>
+                {tier && (
+                  <header className="flex items-baseline gap-3 md:gap-4 pb-3 mb-5 border-b border-charcoal/[0.12] dark:border-white/[0.1]">
+                    <h3 id={`tier-${id}`} className="font-serif font-bold text-[24px] md:text-[30px] leading-none tracking-[-0.02em] text-charcoal dark:text-cream-50">
+                      {tier.label}
+                    </h3>
+                    <span className="font-mono text-[12px] text-charcoal/40 dark:text-cream-400/60 [font-variant-numeric:tabular-nums]">
+                      {tier.min === tier.max ? tier.min : `${tier.min}–${tier.max}`}
+                    </span>
+                    <span className="ml-auto text-[12.5px] text-charcoal/45 dark:text-cream-400/70 [font-variant-numeric:tabular-nums]">
+                      {plural(sectionItems.length, 'card')}
+                    </span>
+                  </header>
+                )}
+                {layout === 'grid' ? (
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18.5rem),1fr))] gap-4 md:gap-5">{sectionItems.map(renderEntry)}</div>
+                ) : (
+                  <div className={`divide-y divide-charcoal/[0.06] dark:divide-white/[0.05] ${tier ? '-mt-2' : ''}`}>{sectionItems.map(renderEntry)}</div>
+                )}
+              </section>
+            ))}
           </div>
         )}
       </div>

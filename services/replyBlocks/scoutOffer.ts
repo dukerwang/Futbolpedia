@@ -1,4 +1,5 @@
 import type { ReadyBlock } from '../../types';
+import { BLOCK_TEXT } from './blockText';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const scoutOfferBlock = (id: string, name: string): ReadyBlock<'scoutOffer'> => readyBlock('scoutOffer', id, { name });
@@ -12,6 +13,5 @@ export const scoutOfferEntry: BlockEntry<'scoutOffer'> = {
     return { block: scoutOfferBlock(ctx.newId(), clean) };
   },
   toolResult: () => ({ offered: true }),
-  toHistory: ({ data }) => `[offered: Scout ${data.name}, who has no card yet]`,
-  toCopy: () => '',
+  ...BLOCK_TEXT.scoutOffer,
 };
