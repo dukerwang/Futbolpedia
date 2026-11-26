@@ -58,93 +58,63 @@ function ratedOn(card: PlayerProfile): string | null {
   return at ? new Date(at).toISOString().slice(0, 10) : getDossierEvaluationDate(card);
 }
 
-const ACCENT: Record<string, string> = {
-  current: 'from-emerald-500 via-teal-500 to-emerald-600',
-  era: 'from-blue-400 via-sky-500 to-blue-600',
-  prime: 'from-amber-400 via-yellow-500 to-amber-600',
-};
-
 const Icon: React.FC<{ name: string; className?: string }> = ({ name, className = 'text-[18px]' }) => (
   <span className={`material-symbols-outlined leading-none ${className}`} aria-hidden="true">
     {name}
   </span>
 );
 
-const RatingNumeral: React.FC<{ value: number; size: 'lg' | 'sm' }> = ({ value, size }) => (
-  <span
-    className={`block font-serif font-bold leading-[0.74] tracking-[-0.02em] ${size === 'lg' ? 'text-[72px]' : 'text-[52px]'} ${overallText(value)}`}
-    style={LINING}
-  >
-    {value}
-  </span>
-);
-
-/** The rating with its caption (tier, then Potential), sitting on the number's baseline. */
-const Rating: React.FC<{ card: PlayerProfile; size: 'lg' | 'sm' }> = ({ card, size }) => {
-  const { overall, potential } = card.ratings;
-  const caption = (
-    <div className={`flex flex-col gap-1.5 ${size === 'lg' ? 'items-end text-right' : 'items-start'}`}>
-      <span className="text-[15px] font-semibold leading-none text-charcoal dark:text-cream-100">{getShortTierLabel(overall)}</span>
-      {potential !== overall && (
-        <span className="text-[13px] leading-none text-charcoal/55 dark:text-cream-400">
-          Potential{' '}
-          <span className="font-semibold text-charcoal/80 dark:text-cream-200" style={LINING}>
-            {potential}
-          </span>
-        </span>
-      )}
-    </div>
-  );
-  return (
-    <div className={`flex items-end ${size === 'lg' ? 'gap-4' : 'gap-3.5'}`}>
-      {size === 'sm' && <RatingNumeral value={overall} size="sm" />}
-      {caption}
-      {size === 'lg' && <RatingNumeral value={overall} size="lg" />}
-    </div>
-  );
-};
-
+/**
+ * The card's masthead, set like the hub's: no box and no colour bar, just the edition, the name in
+ * display serif, the archetype, and the Overall as the page's one large numeral in its tier's
+ * colour. A hairline closes it, and the facts sit under it as a quiet row.
+ */
 const CardHeader: React.FC<{ card: PlayerProfile }> = ({ card }) => {
   const type = cardEdition(card);
+  const { overall, potential } = card.ratings;
   const facts: Array<[string, string]> = [
     ['Position', positionCodes(card.basicInfo.position)],
     ['Club', card.basicInfo.club],
   ];
+  if (card.basicInfo.nationality) facts.push(['Nation', card.basicInfo.nationality]);
   if (type === 'current' && card.basicInfo.age) facts.push(['Age', String(card.basicInfo.age)]);
   const rated = fmtDay(ratedOn(card));
   if (rated) facts.push(['Rated', rated]);
 
   return (
-    <header className="relative overflow-hidden rounded-2xl border border-cream-300/80 dark:border-charcoal-border bg-cream-50 dark:bg-charcoal-surface shadow-paper">
-      <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${ACCENT[type] ?? ACCENT.prime}`} />
-      <div className="px-5 pt-6 @lg:px-8 @lg:pt-8">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="mb-4">
-              <EditionLabel profile={card} size="md" />
-            </div>
-            <h1 className="font-serif font-bold text-charcoal dark:text-white leading-[1.04] text-[32px] @lg:text-[46px] tracking-tight">
-              {card.basicInfo.name}
-            </h1>
-            {card.playstyleAndRole?.playstyle?.archetype && (
-              <p className="font-serif italic text-emerald-700 dark:text-emerald-400 text-[17px] @lg:text-[21px] mt-2">
-                {card.playstyleAndRole.playstyle.archetype}
-              </p>
-            )}
-          </div>
-          <div className="hidden @lg:block shrink-0 pt-[26px]">
-            <Rating card={card} size="lg" />
-          </div>
+    <header className="px-1 @lg:px-2">
+      <EditionLabel profile={card} size="md" />
+      <div className="mt-4 flex items-end justify-between gap-5 @lg:gap-8">
+        <div className="min-w-0 flex-1 pb-1">
+          <h1 className="font-serif font-extrabold text-charcoal dark:text-cream-50 leading-[0.98] tracking-[-0.02em] text-[36px] @lg:text-[56px] [text-wrap:balance]">
+            {card.basicInfo.name}
+          </h1>
+          {card.playstyleAndRole?.playstyle?.archetype && (
+            <p className="mt-3 font-serif italic text-emerald-700 dark:text-emerald-400 text-[17px] @lg:text-[22px] leading-snug">
+              {card.playstyleAndRole.playstyle.archetype}
+            </p>
+          )}
         </div>
-        <div className="@lg:hidden mt-6">
-          <Rating card={card} size="sm" />
+        <div className="shrink-0 flex flex-col items-end text-right">
+          <span
+            className={`block font-serif font-extrabold leading-[0.8] tracking-[-0.04em] text-[72px] @lg:text-[112px] ${overallText(overall)}`}
+            style={LINING}
+          >
+            {overall}
+          </span>
+          <span className="mt-3 text-[13px] @lg:text-[14px] font-medium leading-none text-charcoal/80 dark:text-cream-200">{getShortTierLabel(overall)}</span>
+          {potential !== overall && (
+            <span className="mt-1.5 text-[12.5px] leading-none text-charcoal/50 dark:text-cream-400/80">
+              Potential <span className="font-semibold text-charcoal/75 dark:text-cream-200" style={LINING}>{potential}</span>
+            </span>
+          )}
         </div>
       </div>
-      <dl className="mt-6 grid grid-cols-2 @lg:flex @lg:flex-wrap gap-y-4 gap-x-10 border-t border-cream-300/80 dark:border-charcoal-border px-5 py-4 @lg:px-8 @lg:py-5 bg-cream-100/60 dark:bg-charcoal/40">
+      <dl className="mt-7 mb-4 py-5 border-y border-charcoal/[0.1] dark:border-white/[0.08] grid grid-cols-2 @lg:flex @lg:flex-wrap gap-y-4 gap-x-10">
         {facts.map(([label, value]) => (
           <div key={label} className="min-w-0">
-            <dt className="text-[9.5px] font-bold uppercase tracking-[0.18em] text-charcoal/45 dark:text-cream-400/80">{label}</dt>
-            <dd className="mt-1 text-[14px] font-medium text-charcoal dark:text-cream-100 truncate">{value}</dd>
+            <dt className="text-[12px] text-charcoal/50 dark:text-cream-400/75">{label}</dt>
+            <dd className="mt-0.5 text-[14.5px] font-medium text-charcoal dark:text-cream-100 truncate">{value}</dd>
           </div>
         ))}
       </dl>
@@ -155,7 +125,7 @@ const CardHeader: React.FC<{ card: PlayerProfile }> = ({ card }) => {
 const Traits: React.FC<{ title: string; items: string[]; tone: 'good' | 'bad' }> = ({ title, items, tone }) => (
   <div>
     <h4
-      className={`text-[11px] font-bold uppercase tracking-widest mb-3 ${
+      className={`font-serif font-bold text-[17px] mb-3 ${
         tone === 'good' ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'
       }`}
     >
@@ -222,7 +192,7 @@ const CardSections: React.FC<{ card: PlayerProfile }> = ({ card }) => {
         <div className="grid grid-cols-1 @xl:grid-cols-2 gap-x-10 gap-y-8">
           {Object.entries(categories).map(([category, list]) => (
             <div key={category}>
-              <h4 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-4">{category}</h4>
+              <h4 className="text-[13px] font-medium text-charcoal/55 dark:text-cream-400/80 mb-4">{category}</h4>
               <div className="space-y-4">
                 {list.map((a) => (
                   <AttributeLine key={a.key} label={a.label} rating={attrs?.[a.key] || 0} />
@@ -234,8 +204,8 @@ const CardSections: React.FC<{ card: PlayerProfile }> = ({ card }) => {
       </section>
       {card.latestUpdate && (
         <section className="bg-cream-50 dark:bg-charcoal-surface p-5 rounded-xl border border-charcoal/[0.1] dark:border-white/[0.08]">
-          <h3 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-2">
-            Latest Intelligence{update && <span className="font-normal"> · {update}</span>}
+          <h3 className="font-serif font-bold text-[17px] text-charcoal dark:text-cream-50 mb-2">
+            Latest Intelligence{update && <span className="font-sans font-normal text-[13px] text-charcoal/50 dark:text-cream-400/80"> · {update}</span>}
           </h3>
           <div className="text-[13px] text-charcoal dark:text-cream-200 leading-relaxed" dangerouslySetInnerHTML={renderCardMarkdown(card.latestUpdate)} />
         </section>
@@ -256,7 +226,7 @@ const AskBlock: React.FC<{ card: PlayerProfile; onAsk: CardPageProps['onAsk'] }>
     <section className="rounded-2xl border border-cream-300/80 dark:border-charcoal-border bg-white dark:bg-charcoal-surface shadow-paper p-5">
       <div className="flex items-center gap-2 mb-1">
         <Icon name="forum" className="text-[18px] text-emerald-600 dark:text-emerald-400" />
-        <h2 className="font-serif font-bold text-[17px] text-charcoal dark:text-white">Ask about {card.basicInfo.name}</h2>
+        <h2 className="font-serif font-bold text-[17px] text-charcoal dark:text-white">Ask About {card.basicInfo.name}</h2>
       </div>
       <p className="text-[12px] text-charcoal/55 dark:text-cream-400 mb-4">The analyst reads this card and argues from it.</p>
       <div className="space-y-2">
@@ -355,7 +325,7 @@ const HistoryBlock: React.FC<{ page: Extract<ResolvedCardPage, { kind: 'card' }>
 
   return (
     <section className="rounded-2xl border border-cream-300/80 dark:border-charcoal-border bg-white dark:bg-charcoal-surface shadow-paper p-5">
-      <h2 className="text-[10px] font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400 mb-3">{type === 'current' ? 'Rating history' : 'About this card'}</h2>
+      <h2 className="font-serif font-bold text-[17px] text-charcoal dark:text-white mb-2">{type === 'current' ? 'Rating History' : 'About This Card'}</h2>
       {typeof body === 'string' ? <p className="text-[13px] leading-relaxed text-charcoal/70 dark:text-cream-300">{body}</p> : body}
     </section>
   );
@@ -473,7 +443,7 @@ const NotFound: React.FC<{ player: string; onScout: CardPageProps['onScout']; on
       <div className="mx-auto mb-6 size-14 rounded-full border border-cream-300 dark:border-charcoal-border bg-white dark:bg-charcoal-surface flex items-center justify-center">
         <Icon name="person_search" className="text-[26px] text-emerald-600 dark:text-emerald-400" />
       </div>
-      <p className="text-[10px] font-bold uppercase tracking-widest text-charcoal/45 dark:text-cream-400 mb-3">Not rated yet</p>
+      <p className="text-[10px] font-bold uppercase tracking-widest text-charcoal/45 dark:text-cream-400 mb-3">Not Rated Yet</p>
       <h1 className="font-serif font-bold text-[32px] @lg:text-[40px] leading-tight text-charcoal dark:text-white">{name}</h1>
       <p className="mt-4 text-[15px] leading-relaxed text-charcoal/70 dark:text-cream-300">
         Nobody has scouted {name} yet. Scout them and the card joins the library everyone shares, on the same all-time scale as every other player.
@@ -557,7 +527,7 @@ export const CardPage: React.FC<CardPageProps> = ({ path, onNavigate, onAsk, onS
         <NotFound player={page.player} onScout={onScout} onOpenLibrary={onOpenLibrary} />
       ) : page.kind === 'unavailable' ? (
         <div className="max-w-xl mx-auto px-5 py-24 text-center">
-          <h1 className="font-serif font-bold text-[28px] text-charcoal dark:text-white">The library can't be reached</h1>
+          <h1 className="font-serif font-bold text-[28px] text-charcoal dark:text-white">The Library Can't Be Reached</h1>
           <p className="mt-3 text-[15px] text-charcoal/70 dark:text-cream-300">This card couldn't be loaded just now. Try again in a moment.</p>
           <button type="button" onClick={() => {
               setLoadedPath(null);

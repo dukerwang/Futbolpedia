@@ -974,7 +974,7 @@ async function main() {
     assert.equal(p.version?.label, 'Paris Saint-Germain era (2017-20)');
     assert.equal(p.version?.seasonOrEra, '2017-20');
     assert.equal(p.version?.evaluationDate, '2020-08-23');
-    assert.equal(describeCardEdition(p).label, 'Paris Saint-Germain era · 2017–20');
+    assert.equal(describeCardEdition(p).label, 'Paris Saint-Germain Era · 2017–20');
 
     const asCurrent = currentCard('Lionel Messi', TODAY);
     const q = applyVersionRules(asCurrent, true, null, 'young');

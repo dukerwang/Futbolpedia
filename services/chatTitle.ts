@@ -18,7 +18,7 @@ export async function generateChatTitle(brief: string): Promise<string | null> {
       prompt: `Write a title for this football conversation, for a list of past chats.
 
 - Two to six words, naming the players, clubs or topic it is about.
-- Sentence case: capitalise the first word and every proper noun (players, clubs, competitions, countries), spelled as they are officially written even when the user typed them in lowercase; every other word stays lowercase.
+- Title Case: capitalise every word except short joining words (a, an, the, and, or, of, in, on, at, to, for, by, vs) after the first; write players, clubs, competitions and countries as they are officially written, even when the user typed them in lowercase.
 - Describe the subject, not the request: no leading verb such as "rate" or "analyze".
 - Keep any edition the user asked about, such as a player's prime, an era or a season.
 - No quotes, emoji or closing punctuation.

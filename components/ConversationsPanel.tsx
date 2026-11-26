@@ -144,7 +144,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
             className="btn-new-chat w-full py-3 px-4 flex items-center justify-center gap-2 border border-emerald-500/30 hover:border-emerald-500 hover:bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 font-serif font-bold text-sm tracking-wide rounded-xl shadow-sm hover:shadow"
           >
             <span className="material-symbols-outlined text-[18px] btn-new-chat-icon">add_comment</span>
-            New briefing
+            New Briefing
           </button>
         </div>
 
@@ -153,7 +153,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
           {conversations.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 opacity-40 text-center px-4 select-none">
               <span className="material-symbols-outlined text-[32px] mb-2">chat_bubble_outline</span>
-              <p className="text-xs font-serif italic">No archived briefings found</p>
+              <p className="text-xs font-serif italic">No Archived Briefings Found</p>
             </div>
           ) : (
             conversations.map((conv) => {

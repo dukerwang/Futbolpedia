@@ -18,6 +18,7 @@ import {
   lineupCaption,
   lineupViewOf,
   placeXI,
+  positionLabels,
   surnameOf,
   type LineupSlot,
 } from '../services/lineupView';
@@ -154,12 +155,27 @@ test('an even split and an empty slot show their labels', () => {
   assert.match(html, /Rice/);
   assert.match(html, /or Zubimendi/);
   // The empty slot names its role, with an open disc.
-  assert.match(html, /<text[^>]*>AM<\/text>/);
-  assert.match(html, /<title>AM, no first choice found<\/title>/);
+  assert.match(html, /<text[^>]*>CAM<\/text>/);
+  assert.match(html, /<title>CAM, no first choice found<\/title>/);
   assert.match(html, /stroke-dasharray="3 3"/);
   assert.match(html, /Gabriel Jesus/);
   assert.match(html, /knee, back around late November/);
   assert.match(html, /First-choice XI · 4-2-3-1 · from 6 recent starting XIs · as of 2026-11-14/);
+});
+
+test('slots read in the positions a card uses, from their line and where they sit in it', () => {
+  const labels = (roles: string[]) => positionLabels(slotsOf(roles)).join(' ');
+  // ESPN names a 4-2-3-1's holding pair LM and RM: on the pitch they are two holding midfielders.
+  assert.equal(labels(['G', 'LB', 'CD-L', 'CD-R', 'RB', 'LM', 'RM', 'AM-L', 'AM', 'AM-R', 'F']), 'GK LB CB CB RB CDM CDM LW CAM RW CF');
+  assert.equal(labels(FORMATIONS['4-2-3-1']), 'GK LB CB CB RB CDM CDM LW CAM RW CF');
+  assert.equal(labels(FORMATIONS['4-3-3']), 'GK LB CB CB RB CM CM CM LW CF RW');
+  assert.equal(labels(FORMATIONS['4-4-2']), 'GK LB CB CB RB LM CM CM RM CF CF');
+  assert.equal(labels(FORMATIONS['3-5-2']), 'GK CB CB CB LWB CDM CM CM RWB CF CF');
+  assert.equal(labels(FORMATIONS['3-4-3']), 'GK CB CB CB LWB CM CM RWB LW CF RW');
+  assert.equal(labels(FORMATIONS['4-1-4-1']), 'GK LB CB CB RB CDM LM CM CM RM CF');
+  // A narrow pair behind the striker stays central.
+  assert.equal(labels(FORMATIONS['3-4-2-1']), 'GK CB CB CB LWB CM CM RWB CAM CAM CF');
+  assert.equal(labels(FORMATIONS['season starts, 4-3-3 by count']), 'GK DEF DEF DEF DEF MID MID MID FWD FWD FWD');
 });
 
 test('the caption follows the XI basis', () => {
