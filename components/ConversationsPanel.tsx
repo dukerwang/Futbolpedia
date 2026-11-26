@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { Conversation } from '../types';
-import { shareConversation } from '../services/geminiService';
+import { shareConversation } from '../services/dossierCache';
+import { displayTitle } from '../services/chatTitleText';
 
 interface ConversationsPanelProps {
   isOpen: boolean;
@@ -40,7 +41,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
   const handleStartRename = (conv: Conversation, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingId(conv.id);
-    setEditTitle(conv.title);
+    setEditTitle(displayTitle(conv.title));
   };
 
   const handleSaveRename = (id: string, e: React.FormEvent) => {
@@ -120,7 +121,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
         <div className="flex justify-between items-center px-6 py-5 border-b border-cream-300 dark:border-charcoal-border bg-cream-50 dark:bg-charcoal-surface rounded-t-2xl md:rounded-none sticky top-0 z-50">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-[20px] text-emerald-600 dark:text-emerald-400">forum</span>
-            <h3 className="text-sm font-serif font-bold text-charcoal dark:text-white uppercase tracking-widest">
+            <h3 className="font-serif font-bold text-[20px] leading-none tracking-[-0.015em] text-charcoal dark:text-cream-50">
               Chats
             </h3>
           </div>
@@ -143,7 +144,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
             className="btn-new-chat w-full py-3 px-4 flex items-center justify-center gap-2 border border-emerald-500/30 hover:border-emerald-500 hover:bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 font-serif font-bold text-sm tracking-wide rounded-xl shadow-sm hover:shadow"
           >
             <span className="material-symbols-outlined text-[18px] btn-new-chat-icon">add_comment</span>
-            Start New Briefing
+            New briefing
           </button>
         </div>
 
@@ -218,7 +219,7 @@ export const ConversationsPanel: React.FC<ConversationsPanelProps> = ({
                   ) : (
                     <div className="flex flex-col pr-12">
                       <h4 className="font-serif font-bold text-sm tracking-tight text-charcoal dark:text-cream-50 line-clamp-1">
-                        {conv.title || 'New Briefing'}
+                        {displayTitle(conv.title)}
                       </h4>
                       <div className="flex items-center gap-2 mt-1.5 text-[10px] font-mono text-charcoal/50 dark:text-cream-400 font-medium">
                         <span>{formattedDate}</span>

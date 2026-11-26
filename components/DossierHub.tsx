@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import type { PlayerProfile } from '../types';
-import { fetchGlobalHubDossiers, type GlobalHubDossierItem, getCardKey, isPrimeCard } from '../services/geminiService';
-import { cardEdition, compareVersions, formatEraQualifier } from '../services/dossierStore';
+import { fetchGlobalHubDossiers, type GlobalHubDossierItem } from '../services/dossierCache';
+import { cardEdition, compareVersions, formatEraQualifier, getCardKey, isPrimeCard } from '../services/dossierCards';
 import { getTierDefinition, RATING_TIERS } from '../constants/ratingTiers';
 import { SelectMenu } from './hub/Menu';
 import { HubCard, HubRow } from './hub/HubEntries';
-import { INK_DOT } from './hub/editionInk';
+import { INK_DOT, INK_TEXT } from './hub/editionInk';
+import { Segmented, useSlidingIndicator, type SegmentedOption } from './hub/Segmented';
 
 /** "global" is every shared card in Supabase; "mine" is the user's own dossiers (localStorage). */
 export type HubTab = 'global' | 'mine';
@@ -38,12 +39,12 @@ const LAYOUT_KEY = 'futbolpedia-hub-layout';
 /** Entries past this many are offscreen on first paint, so they skip the entrance. */
 const ANIMATED_ENTRIES = 14;
 
-const EDITION_OPTIONS: Array<{ id: EditionFilter; label: string; dot?: string }> = [
+const EDITION_OPTIONS: SegmentedOption<EditionFilter>[] = [
   { id: 'all', label: 'All' },
-  { id: 'current', label: 'Current', dot: INK_DOT.current },
-  { id: 'prime', label: 'Prime', dot: INK_DOT.prime },
-  { id: 'era', label: 'Eras', dot: INK_DOT.era },
-  { id: 'season', label: 'Seasons', dot: INK_DOT.season },
+  { id: 'current', label: 'Current', dot: INK_DOT.current, activeText: INK_TEXT.current },
+  { id: 'prime', label: 'Prime', dot: INK_DOT.prime, activeText: INK_TEXT.prime },
+  { id: 'era', label: 'Eras', dot: INK_DOT.era, activeText: INK_TEXT.era },
+  { id: 'season', label: 'Seasons', dot: INK_DOT.season, activeText: INK_TEXT.season },
 ];
 
 /** The card editions each edition filter keeps. Current needs a recorded edition, so pre-edition cards stay under All. */
@@ -115,44 +116,6 @@ const initialLayout = (): HubLayout => {
   }
   return typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches ? 'grid' : 'list';
 };
-
-/**
- * A highlight that slides between a row of options: measures the active option and moves one
- * element to it. The first measurement places it without a transition, so it never sweeps in
- * from the edge on load.
- */
-function useSlidingIndicator<K extends string>(active: K) {
-  const nodes = useRef(new Map<K, HTMLElement>());
-  const [box, setBox] = useState<{ x: number; w: number; animate: boolean } | null>(null);
-  const measured = useRef(false);
-
-  useLayoutEffect(() => {
-    const update = () => {
-      const el = nodes.current.get(active);
-      if (!el) return;
-      setBox({ x: el.offsetLeft, w: el.offsetWidth, animate: measured.current });
-      measured.current = true;
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    nodes.current.forEach((el) => ro.observe(el));
-    document.fonts?.ready.then(update).catch(() => {});
-    return () => ro.disconnect();
-  }, [active]);
-
-  const register = useCallback(
-    (key: K) => (el: HTMLElement | null) => {
-      if (el) nodes.current.set(key, el);
-      else nodes.current.delete(key);
-    },
-    [],
-  );
-
-  const style: React.CSSProperties = box
-    ? { transform: `translateX(${box.x}px)`, width: box.w, transition: box.animate ? undefined : 'none' }
-    : { opacity: 0 };
-  return { register, style };
-}
 
 const Skeleton: React.FC<{ layout: HubLayout }> = ({ layout }) => {
   const shimmer =
@@ -414,7 +377,6 @@ export const DossierHub: React.FC<DossierHubProps> = ({
     { id: 'mine', label: 'Your dossiers', count: savedProfiles.length },
   ];
   const tabIndicator = useSlidingIndicator<HubTab>(tab);
-  const editionIndicator = useSlidingIndicator<EditionFilter>(editionFilter);
   const layoutIndicator = useSlidingIndicator<HubLayout>(layout);
 
   // A search that found nothing is usually a player nobody has rated yet.
@@ -582,27 +544,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
           </div>
 
           <div className="-mx-5 px-5 lg:mx-0 lg:px-0 flex items-center gap-2 overflow-x-auto scrollbar-hide lg:flex-1 lg:overflow-visible">
-            <div className="relative shrink-0 flex items-center" role="group" aria-label="Version">
-              <span
-                aria-hidden="true"
-                style={editionIndicator.style}
-                className="absolute left-0 inset-y-0 rounded-lg bg-cream-50 dark:bg-white/[0.08] border border-charcoal/[0.1] dark:border-white/[0.08] shadow-[0_1px_2px_rgba(26,31,46,0.06)] transition-[transform,width] duration-300 ease-out-expo"
-              />
-              {EDITION_OPTIONS.map(({ id, label, dot }) => (
-                <button
-                  key={id}
-                  ref={editionIndicator.register(id)}
-                  onClick={() => setEditionFilter(id)}
-                  aria-pressed={editionFilter === id}
-                  className={`relative flex items-center gap-2 h-9 px-3 rounded-lg text-[13px] font-sans transition-colors duration-150 ${toolbarButtonRing} ${
-                    editionFilter === id ? 'text-charcoal dark:text-cream-50 font-medium' : 'text-charcoal/50 dark:text-cream-400/70 hover:text-charcoal/80 dark:hover:text-cream-200'
-                  }`}
-                >
-                  {dot && <span aria-hidden="true" className={`w-[6px] h-[6px] rotate-45 rounded-[1px] ${dot} ${editionFilter === id || editionFilter === 'all' ? '' : 'opacity-50'}`} />}
-                  {label}
-                </button>
-              ))}
-            </div>
+            <Segmented<EditionFilter> label="Version" value={editionFilter} options={EDITION_OPTIONS} onChange={setEditionFilter} />
 
             <span aria-hidden="true" className="shrink-0 w-px h-5 mx-1 bg-charcoal/10 dark:bg-white/10" />
 

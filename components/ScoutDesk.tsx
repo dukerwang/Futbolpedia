@@ -1,11 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { PlayerProfile, RatingRequest } from '../types';
-import { fetchCardIndex, getCardKey } from '../services/dossierStore';
+import { getCardKey } from '../services/dossierCards';
+import { fetchCardIndex } from '../services/dossierCache';
 import { searchPlayers } from '../services/playerSearch';
 import { getShortTierLabel } from '../constants/ratingTiers';
 import { PlayerPicker, cardRows, type PickerRow } from './PlayerPicker';
 import { ratingRequestFromText, ratingVersionLabel, scoutRequest, type ScoutVersion } from '../services/ratingCommand';
 import { EditionLabel, InkLabel } from './EditionLabel';
+import { Segmented } from './hub/Segmented';
+import { INK_DOT, INK_TEXT, overallText } from './hub/editionInk';
 
 /** A rating the Scout desk is working on. Finished ratings leave the queue for your dossiers. */
 export interface ScoutJob {
@@ -19,11 +22,11 @@ export interface ScoutJob {
 }
 
 /** The versions Scout rates, with the hint shown beside the switch. */
-const SCOUT_VERSIONS: Array<{ value: ScoutVersion; label: string; hint: string }> = [
-  { value: 'current', label: 'Current', hint: 'Prime, if retired' },
-  { value: 'prime', label: 'Prime', hint: 'Their best three seasons' },
-  { value: 'era', label: 'Era', hint: 'One chapter: a club or a spell' },
-  { value: 'season', label: 'Season', hint: 'One season of their career' },
+const SCOUT_VERSIONS: Array<{ value: ScoutVersion; label: string; hint: string; ink: 'current' | 'prime' | 'era' | 'season' }> = [
+  { value: 'current', label: 'Current', hint: 'Prime, if retired', ink: 'current' },
+  { value: 'prime', label: 'Prime', hint: 'Their best three seasons', ink: 'prime' },
+  { value: 'era', label: 'Era', hint: 'One chapter: a club or a spell', ink: 'era' },
+  { value: 'season', label: 'Season', hint: 'One season of their career', ink: 'season' },
 ];
 
 /** Scout keeps a short shelf of recent cards; the Dossiers hub holds the whole library. */
@@ -202,8 +205,8 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
       <div className="px-6 sm:px-8 pt-5 md:pt-7 pb-5 border-b border-cream-300 dark:border-charcoal-border bg-cream-50 dark:bg-charcoal-surface">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-2xl font-serif font-bold text-charcoal dark:text-white leading-tight">Scout</h2>
-            <p className="mt-1 font-serif italic text-[15px] text-charcoal/60 dark:text-cream-300/70 leading-snug">
+            <h2 className="font-serif font-bold text-[30px] leading-none tracking-[-0.025em] text-charcoal dark:text-cream-50">Scout</h2>
+            <p className="mt-2 text-[14px] text-charcoal/60 dark:text-cream-400 leading-snug [text-wrap:pretty]">
               Rate any player, any era. Cards land here and follow you into chat.
             </p>
           </div>
@@ -211,7 +214,7 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close Scout"
-            className="p-1.5 -mr-1.5 text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-white rounded-lg hover:bg-cream-200/60 dark:hover:bg-charcoal-light/40 transition-colors"
+            className="grid place-items-center w-9 h-9 -mr-2 rounded-full text-charcoal/50 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50 hover:bg-charcoal/[0.05] dark:hover:bg-white/[0.06] transition-[background-color,color,transform] duration-150 active:scale-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60"
           >
             <span className="material-symbols-outlined text-[20px] block">close</span>
           </button>
@@ -252,44 +255,30 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
               onClick={submit}
               disabled={!ready}
               aria-label={names.length > 1 ? `Scout ${names.length} players` : 'Scout'}
-              className="shrink-0 flex items-center gap-1.5 pl-3 pr-1 text-[11px] font-sans font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-400 disabled:text-charcoal/25 dark:disabled:text-cream-400/25 transition-colors"
+              className="shrink-0 self-center inline-flex items-center gap-1.5 h-8 pl-3 pr-2 rounded-lg text-[13px] font-sans font-medium bg-charcoal text-cream-50 dark:bg-cream-100 dark:text-charcoal hover:bg-charcoal/90 dark:hover:bg-white disabled:bg-charcoal/[0.06] disabled:text-charcoal/30 dark:disabled:bg-white/[0.06] dark:disabled:text-cream-400/40 transition-[background-color,color,transform] duration-150 active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60"
             >
               {names.length > 1 ? `Scout ${names.length}` : 'Scout'}
-              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">arrow_forward</span>
+              <span aria-hidden="true" className="material-symbols-outlined text-[17px]">arrow_forward</span>
             </button>
           </div>
         </div>
 
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <div
-            role="radiogroup"
-            aria-label="Version to rate"
-            className="flex shrink-0 border border-charcoal/25 dark:border-cream-400/30 text-[10px] font-sans font-bold uppercase tracking-[0.18em]"
-          >
-            {SCOUT_VERSIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={version === option.value}
-                onClick={() => setVersion(option.value)}
-                className={`px-3 py-1.5 transition-colors ${
-                  version === option.value
-                    ? 'bg-charcoal text-cream-50 dark:bg-cream-200 dark:text-charcoal'
-                    : 'text-charcoal/50 dark:text-cream-400/60 hover:text-charcoal dark:hover:text-cream-100'
-                }`}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-          <span className="truncate text-[12px] font-serif italic text-charcoal/50 dark:text-cream-400/55">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+          <Segmented<ScoutVersion>
+            kind="radio"
+            label="Version to rate"
+            value={version}
+            onChange={setVersion}
+            className="-ml-1"
+            options={SCOUT_VERSIONS.map((o) => ({ id: o.value, label: o.label, dot: INK_DOT[o.ink], activeText: INK_TEXT[o.ink] }))}
+          />
+          <span className="text-[12.5px] text-charcoal/50 dark:text-cream-400/60">
             {SCOUT_VERSIONS.find((o) => o.value === version)?.hint}
           </span>
         </div>
         {(version === 'era' || version === 'season') && (
           <label className="mt-4 block">
-            <span className="text-[10px] font-sans font-bold uppercase tracking-[0.18em] text-charcoal/50 dark:text-cream-400">
+            <span className="text-[12.5px] font-sans font-medium text-charcoal/70 dark:text-cream-300">
               {version === 'era' ? 'Which era' : 'Which season'}
             </span>
             <input
@@ -304,7 +293,7 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
               placeholder={version === 'era' ? 'A club, or a stretch of their career' : 'e.g. 2003-04'}
               autoComplete="off"
               spellCheck={false}
-              className="mt-1.5 w-full rounded-lg border border-cream-300 dark:border-charcoal-border bg-white dark:bg-charcoal px-3 py-2 text-[14px] font-sans text-charcoal dark:text-cream-100 placeholder:text-charcoal/35 dark:placeholder:text-cream-400/50 outline-none focus:border-emerald-500/60"
+              className="mt-1.5 w-full h-9 rounded-lg border border-charcoal/[0.1] dark:border-white/[0.08] bg-cream-50/80 dark:bg-white/[0.04] px-3 text-[13.5px] font-sans text-charcoal dark:text-cream-100 placeholder:text-charcoal/40 dark:placeholder:text-cream-400/50 outline-none hover:border-charcoal/20 dark:hover:border-white/15 focus:border-charcoal/30 dark:focus:border-white/25 focus:ring-4 focus:ring-charcoal/[0.04] dark:focus:ring-white/[0.04] transition-[border-color,box-shadow] duration-150"
             />
             {version === 'season' && detail.trim() && !requests[0] && names.length > 0 && (
               <span className="mt-1.5 block text-[12px] font-sans text-charcoal/55 dark:text-cream-400">
@@ -336,12 +325,12 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
       >
         {jobs.length > 0 && (
           <section aria-label="Being scouted" className="px-6 sm:px-8 pt-6">
-            <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-2 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">
+            <h3 className="font-serif font-bold text-[20px] leading-none tracking-[-0.015em] text-charcoal dark:text-cream-50 pb-3 border-b border-charcoal/[0.12] dark:border-white/[0.1]">
               On the desk
             </h3>
             <ul>
               {jobs.map((job) => (
-                <li key={job.id} className="relative py-3 border-b border-cream-300/70 dark:border-charcoal-border/70 overflow-hidden">
+                <li key={job.id} className="relative py-3 border-b border-charcoal/[0.06] dark:border-white/[0.05] overflow-hidden">
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="min-w-0 truncate font-serif font-bold text-[17px] text-charcoal dark:text-cream-50">
                       {job.request.name}
@@ -363,8 +352,8 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
                   {job.status === 'error' ? (
                     <div className="mt-1 flex items-start justify-between gap-3">
                       <p className="text-xs font-sans text-red-700 dark:text-red-400 leading-snug">{job.error}</p>
-                      <div className="shrink-0 flex items-center gap-3 text-[10px] font-sans font-bold uppercase tracking-widest">
-                        <button type="button" onClick={() => onRetry(job.id)} className="text-charcoal dark:text-cream-100 hover:text-emerald-700 dark:hover:text-emerald-400">
+                      <div className="shrink-0 flex items-center gap-3 text-[12.5px] font-sans font-medium">
+                        <button type="button" onClick={() => onRetry(job.id)} className="text-charcoal dark:text-cream-100 underline decoration-charcoal/25 dark:decoration-white/25 underline-offset-[3px] hover:decoration-current">
                           Retry
                         </button>
                         <button type="button" onClick={() => onDismiss(job.id)} className="text-charcoal/45 dark:text-cream-400/60 hover:text-charcoal dark:hover:text-cream-100">
@@ -391,17 +380,18 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
         )}
 
         <section aria-label="Recent dossiers" className="px-6 sm:px-8 pt-6 pb-10">
-          <div className="flex items-baseline justify-between mb-2 border-b border-cream-300 dark:border-charcoal-border">
-            <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] pb-2">
+          <div className="flex items-baseline justify-between mb-1 pb-3 border-b border-charcoal/[0.12] dark:border-white/[0.1]">
+            <h3 className="font-serif font-bold text-[20px] leading-none tracking-[-0.015em] text-charcoal dark:text-cream-50">
               Recent
             </h3>
             {dossiers.length > 0 && (
               <button
                 type="button"
                 onClick={onOpenHub}
-                className="pb-2 text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/50 dark:text-cream-400/60 hover:text-emerald-700 dark:hover:text-emerald-400 transition-colors"
+                className="group inline-flex items-center gap-1 text-[12.5px] font-sans font-medium text-charcoal/55 dark:text-cream-400/80 hover:text-charcoal dark:hover:text-cream-50 transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60"
               >
                 All {dossiers.length} in Dossiers
+                <span aria-hidden="true" className="material-symbols-outlined text-[16px] transition-transform duration-200 ease-out-expo group-hover:translate-x-0.5">arrow_forward</span>
               </button>
             )}
           </div>
@@ -422,30 +412,24 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
                 return (
                   <li
                     key={key}
-                    className={`group flex items-center gap-4 -mx-3 px-3 border-b border-cream-300/70 dark:border-charcoal-border/70 ${
+                    className={`group flex items-center gap-3 -mx-3 px-3 rounded-xl transition-colors duration-150 can-hover:hover:bg-charcoal/[0.035] dark:can-hover:hover:bg-white/[0.035] ${
                       fresh.has(key) ? 'animate-scout-landed' : ''
                     }`}
                   >
                     <button
                       type="button"
                       onClick={() => onOpenCard(profile)}
-                      className="flex-1 min-w-0 flex items-center gap-4 py-3 text-left"
+                      className="flex-1 min-w-0 flex items-center gap-4 py-3.5 text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60"
                     >
-                      <span className="shrink-0 w-10 flex flex-col items-center">
-                        <span
-                          className={`font-mono font-bold text-2xl leading-none tabular-nums ${
-                            profile.ratings.overall >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-cream-50'
-                          }`}
-                        >
-                          {profile.ratings.overall}
-                        </span>
-                        <span className="mt-1 text-[8px] font-sans font-bold uppercase tracking-wider text-charcoal/40 dark:text-cream-400/60">
-                          OVR
-                        </span>
+                      <span
+                        className={`shrink-0 w-11 text-center font-serif font-extrabold text-[30px] leading-none tracking-[-0.03em] [font-variant-numeric:lining-nums_tabular-nums] ${overallText(profile.ratings.overall)}`}
+                        aria-label={`${profile.ratings.overall} overall`}
+                      >
+                        {profile.ratings.overall}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-2 min-w-0">
-                          <span className="truncate font-serif font-bold text-[17px] leading-tight text-charcoal dark:text-cream-50 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+                          <span className="truncate font-serif font-bold text-[17px] leading-tight text-charcoal dark:text-cream-50">
                             {profile.basicInfo.name}
                           </span>
                           {fresh.has(key) && (
@@ -462,9 +446,9 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
                       type="button"
                       onClick={() => onAsk(profile)}
                       title={`Ask about ${profile.basicInfo.name} in chat`}
-                      className="shrink-0 flex items-center gap-1 min-h-9 px-2 -mr-2 text-[10px] font-sans font-bold uppercase tracking-widest text-charcoal/55 dark:text-cream-400/70 hover:text-emerald-700 dark:hover:text-emerald-400 transition-colors"
+                      className="shrink-0 inline-flex items-center gap-1.5 h-8 px-2.5 -mr-1 rounded-lg text-[12.5px] font-sans font-medium text-charcoal/70 dark:text-cream-300 hover:text-charcoal dark:hover:text-cream-50 hover:bg-charcoal/[0.05] dark:hover:bg-white/[0.06] transition-[background-color,color,transform] duration-150 active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60"
                     >
-                      <span aria-hidden="true" className="material-symbols-outlined text-[16px]">alternate_email</span>
+                      <span aria-hidden="true" className="material-symbols-outlined text-[17px]">chat_bubble</span>
                       Ask
                     </button>
                   </li>

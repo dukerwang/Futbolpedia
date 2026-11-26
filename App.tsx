@@ -27,21 +27,13 @@ import type {
   ReplyBlock,
 } from './types';
 import { toChatDossierRef } from './components/DossierChatCard';
-import {
-  sendMessageToAI,
-  ratePlayer,
-  resetChat,
-  getCachedDossier,
-  getSharedConversation,
-  ensureDossierDated,
-  getCardKey,
-  renameDossierCard,
-  stampDossier,
-} from './services/geminiService';
-import { withDossierBlock } from './services/replyBlocks';
+import { ensureDossierDated, getCardKey, renameDossierCard, stampDossier } from './services/dossierCards';
+import { fetchSharedEditions, getCachedDossier, getSharedConversation } from './services/dossierCache';
+// The AI pipeline loads on first use (and at idle), never with the first paint.
+import { loadPipeline } from './services/pipelineLoader';
+import { withDossierBlock } from './services/replyBlocks/blocksOf';
 import { isFullCard, ratingTask, requestForCard, scoutOfferRequest } from './services/ratingCommand';
-import { fetchSharedEditions } from './services/dossierStore';
-import { autoTitle, generateChatTitle, hasAutoTitle, titleBrief } from './services/chatTitle';
+import { autoTitle, hasAutoTitle, titleBrief } from './services/chatTitleText';
 import { LEGACY_PURGE_KEY, isLegacyShape, orphanKeys, withoutCards } from './services/legacyDossiers';
 import { asksToSeeMentions } from './services/chatIntent';
 import {
@@ -146,6 +138,8 @@ const App: React.FC = () => {
     const warm = () => {
       import('./components/DossierHub');
       import('./components/ScoutDesk');
+      // Fetched now so the first message doesn't wait on the download; a failure retries on use.
+      loadPipeline().catch(() => {});
     };
     const ric = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
     const id = ric ? ric(warm, { timeout: 4000 }) : window.setTimeout(warm, 2500);
@@ -635,7 +629,7 @@ const App: React.FC = () => {
     if (!brief) return;
     const id = activeConversationId;
     titleRequestsRef.current.add(id);
-    void generateChatTitle(brief).then(title => {
+    void loadPipeline().then(({ generateChatTitle }) => generateChatTitle(brief)).catch(() => null).then(title => {
       if (!title) return;
       setConversations(prev => {
         // A rename while the title was being written wins.
@@ -713,6 +707,7 @@ const App: React.FC = () => {
         if (isFullCard(m.card)) return stampDossier(m.card, Date.now());
         const local = globalDossiers.find(d => getCardKey(d) === getCardKey(m.card));
         if (local) return local;
+        const { ratePlayer } = await loadPipeline();
         const served = await ratePlayer(requestForCard(m.card), [], [], globalDossiers);
         if (typeof served === 'string') throw new Error(served);
         return stampDossier(served, Date.now());
@@ -808,6 +803,7 @@ const App: React.FC = () => {
             : [...prev, { id: streamingMessageId, sender: 'ai', content: '', timestamp: Date.now(), ...patch }],
         );
       };
+      const { sendMessageToAI } = await loadPipeline();
       const aiResponse = await sendMessageToAI(
         modelText,
         messages,
@@ -894,6 +890,7 @@ const App: React.FC = () => {
       rating: request,
     }]);
     try {
+      const { ratePlayer } = await loadPipeline();
       const reply = await ratePlayer(request, messages, allProfiles, globalDossiers, {
         onStageChange: (label) => setLoadingMessage(label),
       });
@@ -937,6 +934,7 @@ const App: React.FC = () => {
 
   const runScoutJob = useCallback(async (job: ScoutJob) => {
     try {
+      const { ratePlayer } = await loadPipeline();
       const reply = await ratePlayer(job.request, [], [], globalDossiersRef.current, {
         onStageChange: (stage) => updateJob(job.id, { stage }),
       });
@@ -1089,7 +1087,6 @@ const App: React.FC = () => {
   }, []);
 
   const handleSelectConversation = useCallback((id: string) => {
-    resetChat();
     setView('chat');
     const target = conversations.find(c => c.id === id);
     if (!target) return;
@@ -1105,7 +1102,6 @@ const App: React.FC = () => {
   }, [conversations]);
 
   const handleNewConversation = useCallback(() => {
-    resetChat();
     setView('chat');
     const newId = generateId();
     const newConv: Conversation = {

@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import type { PlayerProfile } from '../../types';
 import { cardPath } from '../../services/cardPaths';
-import { getCardKey, isPrimeCard, shareDossierCard, type GlobalHubDossierItem } from '../../services/geminiService';
+import { getCardKey, isPrimeCard } from '../../services/dossierCards';
+import { shareDossierCard, type GlobalHubDossierItem } from '../../services/dossierCache';
 import { getAttributeLabel, getShortTierLabel, positionCodes } from '../../constants/ratingTiers';
 import { ActionMenu } from './Menu';
-import { editionInkOf, INK_TEXT, shortEditionLabel } from './editionInk';
+import { attributeBarFill, editionInkOf, INK_TEXT, INK_WASH, overallText, shortEditionLabel } from './editionInk';
 import { EditionLabel, RevisionNote } from '../EditionLabel';
 
 /** One entry of the hub, drawn as a card (grid) or a ranked row (list). */
@@ -237,9 +238,10 @@ export const HubCard: React.FC<HubEntryProps> = (props) => {
           : 'border-charcoal/[0.07] dark:border-white/[0.06] can-hover:hover:-translate-y-[3px] can-hover:hover:shadow-lift dark:can-hover:hover:shadow-lift-dark can-hover:hover:border-charcoal/[0.14] dark:can-hover:hover:border-white/[0.12]'
       }`}
     >
-      <div className="px-5 pt-5">
+      <span aria-hidden="true" className={`pointer-events-none absolute inset-x-0 top-0 h-32 rounded-t-[14px] ${INK_WASH[earlierRating ? 'older' : editionInkOf(profile)]}`} />
+      <div className="relative px-5 pt-5">
         <div className="flex items-start gap-4">
-          <span className="font-serif font-extrabold text-[46px] leading-[0.82] tracking-[-0.03em] text-charcoal dark:text-cream-50 [font-variant-numeric:lining-nums_tabular-nums]">
+          <span className={`font-serif font-extrabold text-[46px] leading-[0.82] tracking-[-0.03em] ${overallText(profile.ratings.overall)} [font-variant-numeric:lining-nums_tabular-nums]`}>
             {profile.ratings.overall}
           </span>
           <div className="min-w-0 flex-1 flex flex-col gap-1.5 pt-0.5">
@@ -277,7 +279,7 @@ export const HubCard: React.FC<HubEntryProps> = (props) => {
             </h3>
           )}
           {archetype && (
-            <p className="mt-1 font-serif italic text-[14px] leading-snug text-charcoal/60 dark:text-cream-300/80 line-clamp-1">{archetype}</p>
+            <p className="mt-1 font-serif italic text-[14px] leading-snug text-emerald-700 dark:text-emerald-400 line-clamp-1">{archetype}</p>
           )}
           <p className="mt-2.5 flex items-center gap-2 text-[12px] font-sans text-charcoal/55 dark:text-cream-400/80 min-w-0">
             {showTier && position && <span className="shrink-0 font-semibold text-charcoal/80 dark:text-cream-200 tracking-wide">{position}</span>}
@@ -293,7 +295,7 @@ export const HubCard: React.FC<HubEntryProps> = (props) => {
               <dt className="truncate text-[12px] font-sans text-charcoal/65 dark:text-cream-300/80">{a.label}</dt>
               <span aria-hidden="true" className="relative h-[3px] rounded-full bg-charcoal/[0.07] dark:bg-white/[0.08] overflow-hidden">
                 <span
-                  className={`absolute inset-y-0 left-0 rounded-full origin-left bg-charcoal/75 dark:bg-cream-200/75 ${
+                  className={`absolute inset-y-0 left-0 rounded-full origin-left ${attributeBarFill(a.value)} ${
                     enterIndex !== undefined ? 'motion-safe:animate-bar-grow' : ''
                   }`}
                   style={{
@@ -378,7 +380,7 @@ export const HubRow: React.FC<HubEntryProps> = (props) => {
       {rank !== undefined && (
         <span className="text-right font-mono text-[11px] text-charcoal/35 dark:text-cream-400/50 [font-variant-numeric:tabular-nums]">{rank}</span>
       )}
-      <span className="font-serif font-extrabold text-[28px] md:text-[30px] leading-none tracking-[-0.03em] text-charcoal dark:text-cream-50 [font-variant-numeric:lining-nums_tabular-nums]">
+      <span className={`font-serif font-extrabold text-[28px] md:text-[30px] leading-none tracking-[-0.03em] ${overallText(profile.ratings.overall)} [font-variant-numeric:lining-nums_tabular-nums]`}>
         {profile.ratings.overall}
       </span>
 
@@ -403,7 +405,7 @@ export const HubRow: React.FC<HubEntryProps> = (props) => {
           <span className="truncate text-charcoal/50 dark:text-cream-400/70">{[position, profile.basicInfo.club].filter(Boolean).join(' · ')}</span>
         </div>
         {archetype && (
-          <p className="hidden lg:block mt-0.5 truncate font-serif italic text-[13px] text-charcoal/55 dark:text-cream-300/70">{archetype}</p>
+          <p className="hidden lg:block mt-0.5 truncate font-serif italic text-[13px] text-emerald-700 dark:text-emerald-400">{archetype}</p>
         )}
       </div>
 

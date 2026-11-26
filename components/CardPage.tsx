@@ -10,7 +10,7 @@ import { resolveCardPage, storeReads, type CardPage as ResolvedCardPage, type Sh
 import { cardTitle } from '../services/shareMeta';
 import { starterQuestions } from '../services/starterQuestions';
 import { EditionLabel, InkLabel } from './EditionLabel';
-import type { EditionInk } from './hub/editionInk';
+import { overallText, type EditionInk } from './hub/editionInk';
 
 /**
  * A card's own page (`/p/<player>…`): the card at page width with the player's other versions
@@ -72,9 +72,7 @@ const Icon: React.FC<{ name: string; className?: string }> = ({ name, className 
 
 const RatingNumeral: React.FC<{ value: number; size: 'lg' | 'sm' }> = ({ value, size }) => (
   <span
-    className={`block font-serif font-bold leading-[0.74] tracking-[-0.02em] ${size === 'lg' ? 'text-[72px]' : 'text-[52px]'} ${
-      value >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-white'
-    }`}
+    className={`block font-serif font-bold leading-[0.74] tracking-[-0.02em] ${size === 'lg' ? 'text-[72px]' : 'text-[52px]'} ${overallText(value)}`}
     style={LINING}
   >
     {value}

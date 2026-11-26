@@ -40,6 +40,13 @@ export default {
         gold: { 400: '#D9B061', 500: '#C29A45', 600: '#9A7424', 700: '#7C5C17' },
         era: { 400: '#93AEE3', 500: '#6B8CCF', 600: '#3F63A8', 700: '#304D86' },
         copper: { 400: '#E2A283', 500: '#C97B57', 600: '#A65A3A', 700: '#86452B' },
+        // The Overall's ramp above the World-Class line: a muted sage, then the app's emerald,
+        // then a cool teal for the greatest, so it climbs without borrowing an edition's ink.
+        tier: {
+          wc: '#5E8C74', 'wc-dark': '#8FB9A2',
+          elite: '#059669', 'elite-dark': '#34D399',
+          icon: '#0B7F86', 'icon-dark': '#4FE0D6',
+        },
       },
       fontFamily: {
         serif: ['Playfair Display', 'Georgia', 'serif'],

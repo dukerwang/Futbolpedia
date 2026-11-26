@@ -1,16 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import type { PlayerProfile } from '../types';
-import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
+import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants/ratingTiers';
 import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
 import { latestUpdateLabel } from './pills';
 import { AttributeLine, renderCardMarkdown as renderMarkdown } from './cardParts';
 import { cardPath } from '../services/cardPaths';
 import { EditionLabel, RevisionNote } from './EditionLabel';
-import {
-  getCardKey,
-  isPrimeCard,
-  shareDossierCard,
-} from '../services/geminiService';
+import { overallText } from './hub/editionInk';
+import { getCardKey, isPrimeCard } from '../services/dossierCards';
+import { shareDossierCard } from '../services/dossierCache';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -232,7 +230,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                         
                         <div className="flex gap-4">
                             <div className="flex flex-col items-center">
-                                <span className={`text-2xl font-mono font-bold leading-none ${profile.ratings.overall >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-white'}`}>{profile.ratings.overall}</span>
+                                <span className={`text-2xl font-mono font-bold leading-none ${overallText(profile.ratings.overall)}`}>{profile.ratings.overall}</span>
                                 <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">OVR</span>
                             </div>
                             <div className="flex flex-col items-center">
