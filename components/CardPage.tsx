@@ -235,7 +235,7 @@ const CardSections: React.FC<{ card: PlayerProfile }> = ({ card }) => {
         </div>
       </section>
       {card.latestUpdate && (
-        <section className="bg-cream-50 dark:bg-charcoal-surface p-5 border-l-4 border-charcoal dark:border-cream-400 shadow-sm rounded-r-lg">
+        <section className="bg-cream-50 dark:bg-charcoal-surface p-5 rounded-xl border border-charcoal/[0.1] dark:border-white/[0.08]">
           <h3 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-2">
             Latest Intelligence{update && <span className="font-normal"> · {update}</span>}
           </h3>
