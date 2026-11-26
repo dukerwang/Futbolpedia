@@ -30,7 +30,17 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
-    
+    <!-- An icon is written as its name ("person_search") and only the icon font turns it into a symbol,
+         so icons stay invisible, one em wide, until that font has loaded. If it never loads, they stay hidden. -->
+    <style>
+      html:not(.icons-ready) .material-symbols-outlined { visibility: hidden; width: 1em; overflow: hidden; }
+    </style>
+    <script>
+      document.fonts.load('24px "Material Symbols Outlined"').then(function (faces) {
+        if (faces.length) document.documentElement.classList.add('icons-ready');
+      }, function () {});
+    </script>
+
     <script>
       tailwind.config = {
         darkMode: 'class', 

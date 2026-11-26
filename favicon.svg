@@ -1,24 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+<!-- The header logo (components/Header.tsx) scaled 3.2x from 40px: Material Symbols "sports_soccer" (Apache 2.0) at 22px inside a 2px ring. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <style>
-    .icon-elem {
-      fill: #1A1F2E;
-    }
-    .border-ring {
-      fill: none;
-      stroke: #1A1F2E;
-      stroke-width: 8;
-    }
+    .icon-elem { fill: #1A1F2E; }
+    .border-ring { fill: none; stroke: #1A1F2E; stroke-width: 6.4; }
     @media (prefers-color-scheme: dark) {
-      .icon-elem {
-        fill: #FAF9F6;
-      }
-      .border-ring {
-        stroke: #FAF9F6;
-      }
+      .icon-elem { fill: #FFFEFA; }
+      .border-ring { stroke: #FFFEFA; }
     }
   </style>
-  <circle cx="64" cy="64" r="56" class="border-ring" />
-  <g transform="translate(25.6, 25.6) scale(3.2)">
-    <path class="icon-elem" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8 0-.05.01-.1.01-.15l3.52 1.14.73-2.24L4.85 7.63c.47-.94 1.15-1.74 1.97-2.35L9.61 7.7l2.39-.78L12 4.04c.83-.04 1.17-.04 2 0l-.01 2.88 2.39.78 2.78-2.42c.82.61 1.5 1.41 1.97 2.35l-3.41 1.12.73 2.24 3.52-1.14c0 .05.02.1.02.15 0 4.41-3.59 8-8 8zM8.5 13.5l3.5 2.5 3.5-2.5-1.34-4.12h-4.32L8.5 13.5z" />
-  </g>
+  <circle cx="64" cy="64" r="60.8" class="border-ring" />
+  <svg x="28.8" y="28.8" width="70.4" height="70.4" viewBox="0 -960 960 960">
+    <path class="icon-elem" d="M480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm200-500 54-18 16-54q-32-48-77-82.5T574-786l-54 38v56l160 112Zm-400 0 160-112v-56l-54-38q-54 17-99 51.5T210-652l16 54 54 18Zm-42 308 46-4 30-54-58-174-56-20-40 30q0 65 18 118.5T238-272Zm242 112q26 0 51-4t49-12l28-60-26-44H378l-26 44 28 60q24 8 49 12t51 4Zm-90-200h180l56-160-146-102-144 102 54 160Zm332 88q42-50 60-103.5T800-494l-40-28-56 18-58 174 30 54 46 4Z"/>
+  </svg>
 </svg>
