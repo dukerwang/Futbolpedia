@@ -1,6 +1,7 @@
 import type { PlayerProfile, RatingRequest } from '../types';
 import { cardEdition, formatEraQualifier } from './dossierCards';
-import { eraIn, extractCandidatePlayerName, hasCurrentFormCue, pastSeasonIn, type TurnRoute } from './turnRouter';
+import type { TurnRoute } from './turnRouter';
+import { eraIn, extractCandidatePlayerName, hasCurrentFormCue, pastSeasonIn } from './turnCues';
 
 /** The version a request asks for, for the command line in the chat; null for `auto`. */
 export const ratingVersionLabel = (request: RatingRequest): string | null => {

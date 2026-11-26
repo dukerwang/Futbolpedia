@@ -2,7 +2,7 @@ import React from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { ChatDossierRef, ChatMessage, ReplyBlock } from '../types';
-import { drawnBlocksOf } from '../services/replyBlocks';
+import { drawnBlocksOf } from '../services/replyBlocks/blocksOf';
 import { getLegacyDossierRef } from '../services/dossierRefs';
 import { useTypewriter } from './useTypewriter';
 import { GaffaTradeScorecardView } from './GaffaTradeScorecard';

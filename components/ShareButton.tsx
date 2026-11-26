@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabase } from '../services/geminiService';
+import { supabase } from '../services/dossierCache';
 
 interface ShareButtonProps {
   data: any;

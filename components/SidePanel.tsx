@@ -1,15 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import type { PlayerProfile } from '../types';
-import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
+import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants/ratingTiers';
 import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
-import { describeCardEdition, latestUpdateLabel, pillClass, PILL_ICON_CLASS } from './pills';
+import { latestUpdateLabel } from './pills';
 import { AttributeLine, renderCardMarkdown as renderMarkdown } from './cardParts';
 import { cardPath } from '../services/cardPaths';
-import {
-  getCardKey,
-  isPrimeCard,
-  shareDossierCard,
-} from '../services/geminiService';
+import { EditionLabel, RevisionNote } from './EditionLabel';
+import { overallText } from './hub/editionInk';
+import { getCardKey, isPrimeCard } from '../services/dossierCards';
+import { shareDossierCard } from '../services/dossierCache';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -41,7 +40,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   onChallenge,
 }) => {
   const [shareStatus, setShareStatus] = useState<'idle' | 'saving' | 'copied'>('idle');
-  const [isDesktop, setIsDesktop] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches);
   const [isVisible, setIsVisible] = useState(false);
 
   const profileKey = profile ? getCardKey(profile) : null;
@@ -178,7 +177,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({
             </div>
 
             {showScout ? scout : profile && (() => {
-            const edition = describeCardEdition(profile);
             const categories = profile.goalkeeperAttributes ? GK_ATTRIBUTE_CATEGORIES : ATTRIBUTE_CATEGORIES;
             const attrSource = profile.goalkeeperAttributes ? profile.goalkeeperAttributes : profile.attributes;
             return (<>
@@ -193,15 +191,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 <div className="flex justify-between items-start px-8 pt-2 md:pt-6 pb-4">
                     <div className="flex-1 pr-4">
                         <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                            <span className={pillClass(edition.tone, 'sm')} title={edition.title}>
-                                <span className={PILL_ICON_CLASS}>{edition.icon}</span>
-                                {edition.label}
-                            </span>
-                            {profile.revision && (
-                                <span className={pillClass('indigo', 'sm')} title="Your accepted challenge of the shared card">
-                                    Your revision
-                                </span>
-                            )}
+                            <EditionLabel profile={profile} size="sm" />
+                            {profile.revision && <RevisionNote />}
                         </div>
                         <h2 className="text-2xl font-serif font-bold text-charcoal dark:text-white leading-tight">{profile.basicInfo.name}</h2>
                         <p className="text-emerald-600 dark:text-emerald-400 font-serif italic text-base leading-tight mt-1 mb-1">
@@ -239,7 +230,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                         
                         <div className="flex gap-4">
                             <div className="flex flex-col items-center">
-                                <span className={`text-2xl font-mono font-bold leading-none ${profile.ratings.overall >= 90 ? 'text-emerald-600 dark:text-emerald-400' : 'text-charcoal dark:text-white'}`}>{profile.ratings.overall}</span>
+                                <span className={`text-2xl font-mono font-bold leading-none ${overallText(profile.ratings.overall)}`}>{profile.ratings.overall}</span>
                                 <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">OVR</span>
                             </div>
                             <div className="flex flex-col items-center">

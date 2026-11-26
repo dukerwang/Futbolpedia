@@ -3,6 +3,7 @@ import type { ReadyBlock } from '../../types';
 import { executeCall, fileOutcomes, type ResearchCall } from '../researchTools';
 import { lineupViewOf, type LineupView } from '../lineupView';
 import { applyStory, deriveClubCore, sameClubName } from '../situationSnapshot';
+import { BLOCK_TEXT } from './blockText';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const pitchBlock = (id: string, view: LineupView): ReadyBlock<'pitch'> => readyBlock('pitch', id, view);
@@ -51,7 +52,5 @@ export const pitchEntry: BlockEntry<'pitch'> = {
     xi: view.xi.map((s) => `${s.role} ${s.name ?? 'unknown'}${s.rotation ? ` (even split with ${s.rotation})` : ''}`).join(', '),
     out: view.out.map((o) => o.name).join(', ') || 'nobody listed',
   }),
-  toHistory: ({ data: view }) => `[shown: first-choice XI, ${view.club}${view.formation ? `, ${view.formation}` : ''}]`,
-  // Copy has never carried the drawing; the text version arrives with the views that have one.
-  toCopy: () => '',
+  ...BLOCK_TEXT.pitch,
 };

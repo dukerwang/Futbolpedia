@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import type { PlayerProfile } from '../types';
-import { fetchCardIndex, getCardKey, toBasePlayerSlug } from '../services/dossierStore';
+import { getCardKey, toBasePlayerSlug } from '../services/dossierCards';
+import { fetchCardIndex } from '../services/dossierCache';
 import { searchPlayers, type PlayerMatch } from '../services/playerSearch';
 import { PlayerPicker, cardRows, type PickerRow } from './PlayerPicker';
 import { cardReference } from './pills';

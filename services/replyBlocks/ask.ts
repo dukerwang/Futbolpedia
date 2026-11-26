@@ -1,4 +1,5 @@
 import type { AskPrompt, ReadyBlock } from '../../types';
+import { BLOCK_TEXT } from './blockText';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const askBlock = (id: string, ask: AskPrompt): ReadyBlock<'ask'> => readyBlock('ask', id, ask);
@@ -11,6 +12,5 @@ export const askEntry: BlockEntry<'ask'> = {
     return { block: askBlock(ctx.newId(), ask) };
   },
   toolResult: () => ({ asked: true, note: 'Your reply is this question. Write nothing else.' }),
-  toHistory: ({ data }) => `[offered replies: ${data.options.join(' | ')}]`,
-  toCopy: () => '',
+  ...BLOCK_TEXT.ask,
 };

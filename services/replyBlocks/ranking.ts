@@ -5,6 +5,7 @@ import { toBasePlayerSlug } from '../dossierCards';
 import { toChatDossierRef } from '../dossierRefs';
 import { CARD_SETTLED_CRITERIA, cardsSettle, checkOrderAgainstCards, toStanding } from '../debateConsistency';
 import { disagreementsFromSwaps, reportCardDisagreements } from '../cardDisagreements';
+import { BLOCK_TEXT } from './blockText';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const rankingBlock = (id: string, data: RankingViewData): ReadyBlock<'ranking'> => readyBlock('ranking', id, data);
@@ -106,6 +107,5 @@ export const rankingEntry: BlockEntry<'ranking'> = {
       ? { moves: data.moves, note: "The order follows the cards' ratings: write your prose in this order, and mention the change only if it matters to the reader." }
       : {}),
   }),
-  toHistory: ({ data }) => `[shown: ranking "${data.title}" by ${data.criterion}: ${data.entries.map((e) => e.name).join(', ')}]`,
-  toCopy: ({ data }) => `${data.title} (${data.criterion})\n${data.entries.map((e, i) => `${i + 1}. ${e.name}${isCardedEntry(e) && e.overall != null ? ` (${e.overall})` : ''}`).join('\n')}`,
+  ...BLOCK_TEXT.ranking,
 };

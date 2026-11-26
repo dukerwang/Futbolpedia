@@ -2,7 +2,8 @@ import React, { useEffect, useRef } from 'react';
 import type { PlayerProfile } from '../types';
 import type { PlayerMatch } from '../services/playerSearch';
 import { positionCodes } from '../constants/ratingTiers';
-import { describeCardEdition, pillClass } from './pills';
+import { EditionLabel } from './EditionLabel';
+import { describeCardEdition } from './pills';
 
 /** One pickable line: a card a player already has, or an action on what was typed. */
 export type PickerRow =
@@ -109,7 +110,6 @@ export const PlayerPicker: React.FC<PlayerPickerProps> = ({
               </li>
             );
           }
-          const edition = describeCardEdition(row.card);
           const meta = [positionCodes(row.match.position ?? ''), row.match.club].filter(Boolean).join(' · ');
           return (
             <li
@@ -118,7 +118,7 @@ export const PlayerPicker: React.FC<PlayerPickerProps> = ({
               data-row={index}
               role="option"
               aria-selected={active}
-              aria-label={`${row.match.name}, ${edition.label}, ${row.card.ratings?.overall ?? ''} overall`}
+              aria-label={`${row.match.name}, ${describeCardEdition(row.card).label}, ${row.card.ratings?.overall ?? ''} overall`}
               className={`${base} ${dividerClass}`}
               onMouseEnter={() => onHighlight(index)}
               onClick={() => onPick(row)}
@@ -133,7 +133,7 @@ export const PlayerPicker: React.FC<PlayerPickerProps> = ({
                   <span className="block truncate text-[11px] font-sans text-charcoal/55 dark:text-cream-400/60">{meta}</span>
                 )}
               </span>
-              <span className={`${pillClass(edition.tone, 'xs')} shrink-0 max-w-[45%] truncate`}>{edition.label}</span>
+              <EditionLabel profile={row.card} size="xs" className="shrink-0 max-w-[45%]" />
               <span className="shrink-0 w-7 text-right font-mono font-bold text-base tabular-nums text-charcoal dark:text-cream-50">
                 {row.card.ratings?.overall ?? '–'}
               </span>

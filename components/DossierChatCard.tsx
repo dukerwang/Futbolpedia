@@ -1,6 +1,6 @@
 import React from 'react';
 import type { ChatDossierRef, PlayerProfile } from '../types';
-import { getCardKey } from '../services/dossierStore';
+import { getCardKey } from '../services/dossierCards';
 import { getLegacyDossierRef, toChatDossierRef } from '../services/dossierRefs';
 import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
 
