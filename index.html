@@ -42,6 +42,17 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,800;1,400;1,600&family=JetBrains+Mono:wght@400;500;700&family=Newsreader:opsz,wght@6..72,700&display=swap" rel="stylesheet">
     <!-- Only the icons the source uses (vite.config.ts fills this in from scripts/iconNames.ts). -->
     <link href="%ICON_FONT_HREF%" rel="stylesheet">
+    <!-- An icon is written as its name ("person_search") and only the icon font turns it into a symbol.
+         display=block alone shows the names once a load runs past about three seconds, so icons stay
+         invisible, one em wide, until the font has loaded. If it never loads, they stay hidden. -->
+    <style>
+      html:not(.icons-ready) .material-symbols-outlined { visibility: hidden; width: 1em; overflow: hidden; }
+    </style>
+    <script>
+      document.fonts.load('24px "Material Symbols Outlined"').then(function (faces) {
+        if (faces.length) document.documentElement.classList.add('icons-ready');
+      }, function () {});
+    </script>
 </head>
   <body class="bg-cream-200 dark:bg-charcoal text-charcoal dark:text-cream-100 font-sans antialiased h-[100dvh] flex flex-col overflow-hidden selection:bg-charcoal selection:text-cream-50 dark:selection:bg-emerald-500">
     <div id="root" class="h-full flex flex-col"></div>

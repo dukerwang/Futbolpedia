@@ -45,7 +45,8 @@ export const Header: React.FC<HeaderProps> = ({
             aria-label="Futbolpedia, back to chat"
         >
             <div className="size-10 shrink-0 flex items-center justify-center text-charcoal dark:text-cream-50 border-2 border-charcoal dark:border-cream-50 rounded-full">
-                <span className="material-symbols-outlined text-[22px]">sports_soccer</span>
+                {/* Size 24's shape, which favicon.svg copies; the font would otherwise redraw the ball for 22px. */}
+                <span className="material-symbols-outlined text-[22px] [font-variation-settings:'opsz'_24]">sports_soccer</span>
             </div>
             <div className="hidden sm:flex flex-col">
                 <h1 className="text-charcoal dark:text-cream-50 text-xl font-serif font-bold tracking-tight leading-none">Futbolpedia</h1>
