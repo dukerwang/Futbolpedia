@@ -5,6 +5,7 @@ import { cardEdition, compareVersions, formatEraQualifier, getCardKey, isPrimeCa
 import { getTierDefinition, RATING_TIERS } from '../constants/ratingTiers';
 import { SelectMenu } from './hub/Menu';
 import { HubCard, HubRow } from './hub/HubEntries';
+import { Explore, type PositionGroup } from './hub/Explore';
 import { INK_DOT, INK_TEXT } from './hub/editionInk';
 import { Segmented, useSlidingIndicator, type SegmentedOption } from './hub/Segmented';
 
@@ -32,7 +33,7 @@ interface DossierHubProps {
 
 type EditionFilter = 'all' | 'current' | 'prime' | 'era' | 'season';
 type PositionFilter = 'all' | 'forward' | 'midfield' | 'defender' | 'goalkeeper';
-type SortOption = 'overall_desc' | 'recent' | 'name_asc' | 'trajectory_desc';
+type SortOption = 'explore' | 'overall_desc' | 'recent' | 'name_asc' | 'trajectory_desc';
 type HubLayout = 'grid' | 'list';
 
 /** A background refetch of the global tab runs when it's re-entered after this long. */
@@ -59,15 +60,16 @@ const matchesEdition = (p: PlayerProfile, filter: EditionFilter): boolean => {
   return edition === 'prime';
 };
 
-const SORT_OPTIONS: Array<{ id: SortOption; label: string; globalOnly?: boolean }> = [
+const SORT_OPTIONS: Array<{ id: SortOption; label: string; globalOnly?: boolean; hint?: string }> = [
+  { id: 'explore', label: 'Explore', globalOnly: true, hint: 'Spotlight and Shelves' },
   { id: 'overall_desc', label: 'Rating' },
-  { id: 'recent', label: 'Most recent' },
+  { id: 'recent', label: 'Most Recent' },
   { id: 'name_asc', label: 'Name' },
-  { id: 'trajectory_desc', label: 'Biggest risers', globalOnly: true },
+  { id: 'trajectory_desc', label: 'Biggest Risers', globalOnly: true },
 ];
 
 const POSITION_OPTIONS: Array<{ id: PositionFilter; label: string }> = [
-  { id: 'all', label: 'All positions' },
+  { id: 'all', label: 'All Positions' },
   { id: 'forward', label: 'Attackers' },
   { id: 'midfield', label: 'Midfielders' },
   { id: 'defender', label: 'Defenders' },
@@ -75,11 +77,11 @@ const POSITION_OPTIONS: Array<{ id: PositionFilter; label: string }> = [
 ];
 
 const RATING_OPTIONS: Array<{ id: number; label: string; hint?: string }> = [
-  { id: 0, label: 'Any rating' },
-  { id: 96, label: '96 and up', hint: 'Icons' },
-  { id: 90, label: '90 and up', hint: 'World-class' },
-  { id: 85, label: '85 and up' },
-  { id: 80, label: '80 and up' },
+  { id: 0, label: 'Any Rating' },
+  { id: 96, label: '96 and Up', hint: 'Icons' },
+  { id: 90, label: '90 and Up', hint: 'World-Class' },
+  { id: 85, label: '85 and Up' },
+  { id: 80, label: '80 and Up' },
 ];
 
 /** Substrings of a lowercased position that put a card in each position filter. */
@@ -91,6 +93,21 @@ const POSITION_FILTER_KEYWORDS: Record<Exclude<PositionFilter, 'all'>, string[]>
 };
 
 const playerKey = (p: PlayerProfile) => getCardKey(p).split(':')[0];
+
+/** The position filter a card falls under, in the filter's own order (a goalkeeper first). */
+const positionGroupOf = (p: PlayerProfile): PositionGroup | null => {
+  const pos = p.basicInfo.position.toLowerCase();
+  for (const group of ['goalkeeper', 'defender', 'midfield', 'forward'] as const) {
+    if (POSITION_FILTER_KEYWORDS[group].some((k) => pos.includes(k))) return group;
+  }
+  return null;
+};
+
+/** Today in the browser's own calendar, as YYYY-MM-DD. */
+const todayKey = (): string => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 /**
  * When a shared card was rated: a re-rating, else its generation time. The evaluation date is no
@@ -179,9 +196,10 @@ const secondaryButton =
 
 /**
  * The dossier library as a main view: the global hub (every shared card) and "Your dossiers"
- * (cards this browser has scouted or opened) as tabs over one set of filters. Ordered by rating,
- * the cards fall into chapters by tier band, like an almanac; shown as collectible cards or as a
- * ranked register.
+ * (cards this browser has scouted or opened) as tabs over one set of filters. The global hub opens
+ * on Explore (`hub/Explore.tsx`): a daily spotlight and shelves, each leading to the filtered list.
+ * Ordered by rating, the cards fall into chapters by tier band, like an almanac; shown as
+ * collectible cards or as a ranked register.
  */
 export const DossierHub: React.FC<DossierHubProps> = ({
   isActive,
@@ -203,14 +221,15 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   const savedProfilesRef = useRef(savedProfiles);
   savedProfilesRef.current = savedProfiles;
   const searchRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [editionFilter, setEditionFilter] = useState<EditionFilter>('all');
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('all');
   const [minTierFilter, setMinTierFilter] = useState<number>(0);
-  const [sortByTab, setSortByTab] = useState<Record<HubTab, SortOption>>({ mine: 'recent', global: 'overall_desc' });
+  const [sortByTab, setSortByTab] = useState<Record<HubTab, SortOption>>({ mine: 'recent', global: 'explore' });
   const [layout, setLayout] = useState<HubLayout>(initialLayout);
-  const sortOption = sortByTab[tab];
+  const chosenSort = sortByTab[tab];
 
   const changeLayout = (next: HubLayout) => {
     setLayout(next);
@@ -301,6 +320,9 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   }, [items, tab, isLoading]);
 
   const filtersActive = searchQuery.trim() !== '' || editionFilter !== 'all' || positionFilter !== 'all' || minTierFilter > 0;
+  // Explore is the global hub's front page; a search or a filter turns it into the list, by rating.
+  const exploring = tab === 'global' && chosenSort === 'explore' && !filtersActive;
+  const sortOption: SortOption = chosenSort === 'explore' ? 'overall_desc' : chosenSort;
 
   const resetFilters = () => {
     setSearchQuery('');
@@ -376,8 +398,8 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   }, [filteredItems, sortOption]);
 
   const tabs: Array<{ id: HubTab; label: string; count?: number }> = [
-    { id: 'global', label: 'Global hub', count: globalStatus === 'ready' ? globalItems.length : undefined },
-    { id: 'mine', label: 'Your dossiers', count: savedProfiles.length },
+    { id: 'global', label: 'Global Hub', count: globalStatus === 'ready' ? globalItems.length : undefined },
+    { id: 'mine', label: 'Your Dossiers', count: savedProfiles.length },
   ];
   const tabIndicator = useSlidingIndicator<HubTab>(tab);
   const layoutIndicator = useSlidingIndicator<HubLayout>(layout);
@@ -385,11 +407,11 @@ export const DossierHub: React.FC<DossierHubProps> = ({
   // A search that found nothing is usually a player nobody has rated yet.
   const scoutQuery = searchQuery.trim().length >= 2 ? searchQuery.trim() : '';
   // Re-run the entrance when the view changes shape, not on every keystroke of a search.
-  const viewKey = `${tab}|${editionFilter}|${positionFilter}|${minTierFilter}|${sortOption}|${layout}`;
-  const ranked = sortOption === 'overall_desc' && layout === 'list';
+  const viewKey = `${tab}|${editionFilter}|${positionFilter}|${minTierFilter}|${chosenSort}|${exploring ? 'explore' : layout}`;
+  const ranked = !exploring && sortOption === 'overall_desc' && layout === 'list';
 
   let entryIndex = 0;
-  const renderEntry = (item: GlobalHubDossierItem) => {
+  const renderEntry = (item: GlobalHubDossierItem, as: HubLayout = layout) => {
     const cardKey = getCardKey(item.profile);
     const index = entryIndex++;
     const props = {
@@ -400,7 +422,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
       isSaved: savedKeys.has(cardKey),
       otherVersions: (versionsByPlayer.get(playerKey(item.profile)) ?? []).filter((v) => getCardKey(v) !== cardKey),
       enterIndex: index < ANIMATED_ENTRIES ? index : undefined,
-      showTier: sortOption !== 'overall_desc',
+      showTier: exploring || sortOption !== 'overall_desc',
       onOpen: () => onSelectDossier(item.profile, tab),
       onOpenVersion: (version: PlayerProfile) => onSelectDossier(version, tab),
       onOpenInPanel: tab === 'global' ? () => onOpenInPanel(item.profile) : undefined,
@@ -412,13 +434,19 @@ export const DossierHub: React.FC<DossierHubProps> = ({
       onRename: tab === 'mine' ? (name: string) => onRenameDossier(cardKey, name) : undefined,
       onDelete: tab === 'mine' ? () => onDeleteDossier(cardKey) : undefined,
     };
-    return layout === 'grid' ? <HubCard key={cardKey} {...props} /> : <HubRow key={cardKey} {...props} />;
+    return as === 'grid' ? <HubCard key={cardKey} {...props} /> : <HubRow key={cardKey} {...props} />;
   };
 
   const toolbarButtonRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60';
 
+  /** A shelf's See all: show its list from the top, under the masthead. */
+  const seeAll = (apply: () => void) => {
+    apply();
+    scrollRef.current?.scrollTo({ top: 0 });
+  };
+
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
       {/* Masthead */}
       <header className="max-w-6xl mx-auto px-5 md:px-8 pt-8 md:pt-12">
         <div className="flex items-end justify-between gap-6">
@@ -471,7 +499,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
             className="absolute left-0 -bottom-px h-[2px] rounded-full bg-charcoal dark:bg-cream-50 transition-[transform,width] duration-[420ms] ease-out-expo"
           />
         </div>
-        <div className="ml-auto pb-2">
+        <div className={`ml-auto pb-2 transition-opacity duration-200 ${exploring ? 'opacity-0 pointer-events-none' : ''}`} aria-hidden={exploring || undefined}>
             <div className="relative shrink-0 self-center -mt-1 flex items-center p-0.5 rounded-lg" role="group" aria-label="Layout">
             <span
               aria-hidden="true"
@@ -559,7 +587,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
                 label="Sort"
                 showLabel
                 align="end"
-                value={sortOption}
+                value={chosenSort}
                 options={SORT_OPTIONS.filter((o) => !o.globalOnly || tab === 'global')}
                 onChange={(value) => setSortByTab((prev) => ({ ...prev, [tab]: value }))}
               />
@@ -577,7 +605,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
                 : `${filteredItems.length.toLocaleString('en-GB')} of ${plural(items.length, 'card')} ${filteredItems.length === 1 ? 'matches' : 'match'}.`}
             </span>
             <button onClick={resetFilters} className={`font-medium text-charcoal dark:text-cream-100 underline decoration-charcoal/25 dark:decoration-white/25 underline-offset-[3px] hover:decoration-current transition-[text-decoration-color] rounded-sm ${toolbarButtonRing}`}>
-              Clear filters
+              Clear Filters
             </button>
           </div>
         )}
@@ -585,19 +613,37 @@ export const DossierHub: React.FC<DossierHubProps> = ({
         {isLoading ? (
           <Skeleton layout={layout} />
         ) : tab === 'mine' && items.length === 0 ? (
-          <EmptyState icon="folder_open" title="No dossiers yet" body="Scout a player and his card lands here. Any card you open from the global hub is kept here too.">
+          <EmptyState icon="folder_open" title="No Dossiers Yet" body="Scout a player and his card lands here. Any card you open from the global hub is kept here too.">
             <button onClick={() => onScout()} className={primaryButton}>
               <span aria-hidden="true" className="material-symbols-outlined text-[18px]">person_search</span>
-              Scout a player
+              Scout a Player
             </button>
             <button onClick={() => onTabChange('global')} className={secondaryButton}>
-              Browse the global hub
+              Browse the Global Hub
             </button>
           </EmptyState>
+        ) : exploring && items.length > 0 ? (
+          <div key={viewKey}>
+            <Explore
+              items={items}
+              today={todayKey()}
+              positionOf={positionGroupOf}
+              ratedAtMs={ratedAtMs}
+              renderEntry={renderEntry}
+              onOpen={(profile) => onSelectDossier(profile, 'global')}
+              onAsk={(profile) => onAskAbout(profile, 'global')}
+              onSeeRecent={() => seeAll(() => setSortByTab((prev) => ({ ...prev, global: 'recent' })))}
+              // A filter under Explore lists by rating, and clearing it comes back to Explore.
+              onSeeCurrentForm={() => seeAll(() => setEditionFilter('current'))}
+              onSeeClub={(club) => seeAll(() => setSearchQuery(club))}
+              onSeeRisers={() => seeAll(() => setSortByTab((prev) => ({ ...prev, global: 'trajectory_desc' })))}
+              onSeePosition={(group) => seeAll(() => setPositionFilter(group))}
+            />
+          </div>
         ) : filteredItems.length === 0 ? (
           <EmptyState
             icon={scoutQuery ? 'person_search' : 'filter_alt_off'}
-            title={items.length === 0 ? 'No shared cards yet' : scoutQuery ? `No card for “${scoutQuery}”` : 'No dossiers match'}
+            title={items.length === 0 ? 'No Shared Cards Yet' : scoutQuery ? `No card for “${scoutQuery}”` : 'No Dossiers Match'}
             body={
               items.length === 0
                 ? 'Cards appear here once players are scouted.'
@@ -614,7 +660,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
             )}
             {filtersActive && (
               <button onClick={resetFilters} className={secondaryButton}>
-                Clear filters
+                Clear Filters
               </button>
             )}
           </EmptyState>
@@ -625,7 +671,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
                 {tier && (
                   <header className="flex items-baseline gap-3 md:gap-4 pb-3 mb-5 border-b border-charcoal/[0.12] dark:border-white/[0.1]">
                     <h3 id={`tier-${id}`} className="font-serif font-bold text-[24px] md:text-[30px] leading-none tracking-[-0.02em] text-charcoal dark:text-cream-50">
-                      {tier.label}
+                      {tier.shortLabel}
                     </h3>
                     <span className="font-mono text-[12px] text-charcoal/40 dark:text-cream-400/60 [font-variant-numeric:tabular-nums]">
                       {tier.min === tier.max ? tier.min : `${tier.min}–${tier.max}`}
@@ -636,9 +682,9 @@ export const DossierHub: React.FC<DossierHubProps> = ({
                   </header>
                 )}
                 {layout === 'grid' ? (
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18.5rem),1fr))] gap-4 md:gap-5">{sectionItems.map(renderEntry)}</div>
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18.5rem),1fr))] gap-4 md:gap-5">{sectionItems.map((item) => renderEntry(item))}</div>
                 ) : (
-                  <div className={`divide-y divide-charcoal/[0.06] dark:divide-white/[0.05] ${tier ? '-mt-2' : ''}`}>{sectionItems.map(renderEntry)}</div>
+                  <div className={`divide-y divide-charcoal/[0.06] dark:divide-white/[0.05] ${tier ? '-mt-2' : ''}`}>{sectionItems.map((item) => renderEntry(item))}</div>
                 )}
               </section>
             ))}

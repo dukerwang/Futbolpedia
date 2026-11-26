@@ -82,7 +82,7 @@ export function parseImageFile(file: string): { key: string; version: string } |
   }
 }
 
-/** "Bukayo Saka · 90 · Current form": the name, the Overall and the edition without its date. */
+/** "Bukayo Saka · 90 · Current Form": the name, the Overall and the edition without its date. */
 export function cardTitle(card: PlayerProfile): string {
   const edition = describeCardEdition(card).label.split(' · ')[0];
   const overall = card.ratings?.overall;

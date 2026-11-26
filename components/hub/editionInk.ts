@@ -39,7 +39,7 @@ export const INK_DOT: Record<EditionInk, string> = {
 export function editionParts(profile: PlayerProfile, earlierRating = false): { name: string; when: string; title?: string } {
   const { label, title } = describeCardEdition(profile);
   const [name, when = ''] = label.split(' · ');
-  return { name: earlierRating ? name.replace('Current form', 'Earlier rating') : name, when, title };
+  return { name: earlierRating ? name.replace('Current Form', 'Earlier Rating') : name, when, title };
 }
 
 export { shortEditionLabel };

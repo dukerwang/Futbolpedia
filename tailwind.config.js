@@ -69,7 +69,9 @@ export default {
         'picker-in': { from: { opacity: '0', transform: 'scale(0.985)' }, to: { opacity: '1', transform: 'scale(1)' } },
         // A scout's sweep: a short bar crossing the row while the card is built.
         'scout-sweep': { from: { transform: 'translateX(-100%)' }, to: { transform: 'translateX(250%)' } },
-        // A card that just landed on the desk settles from emerald to the row's own colour.
+        // A card that just landed on the desk settles from emerald to the row's own colour. Its
+        // animation keeps no end state (fill `backwards`), or it would hold the row's background
+        // transparent and hide the hover.
         'scout-landed': { from: { backgroundColor: 'rgba(16, 185, 129, 0.16)' }, to: { backgroundColor: 'rgba(16, 185, 129, 0)' } },
         // Hub entries rise into place, slightly blurred, on first paint and after a filter change.
         'rise-in': {
@@ -87,7 +89,7 @@ export default {
         'fade-in': 'fade-in 220ms cubic-bezier(0.23, 1, 0.32, 1) both',
         'picker-in': 'picker-in 160ms cubic-bezier(0.23, 1, 0.32, 1) both',
         'scout-sweep': 'scout-sweep 1.6s cubic-bezier(0.77, 0, 0.175, 1) infinite',
-        'scout-landed': 'scout-landed 2.4s cubic-bezier(0.23, 1, 0.32, 1) both',
+        'scout-landed': 'scout-landed 2.4s cubic-bezier(0.23, 1, 0.32, 1) backwards',
         'rise-in': 'rise-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both',
         'menu-in': 'menu-in 160ms cubic-bezier(0.23, 1, 0.32, 1) both',
         shimmer: 'shimmer 1.6s linear infinite',

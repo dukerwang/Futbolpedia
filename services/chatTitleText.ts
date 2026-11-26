@@ -8,30 +8,43 @@ import type { ChatMessage, Conversation } from '../types';
 /** Titles a conversation has before anything is said in it. */
 const PLACEHOLDER_TITLES = new Set(['', 'New Chat', 'New Briefing', 'New briefing']);
 
+/** Short joining words a title leaves lowercase after its first word. */
+const MINOR_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'by', 'vs', 'vs.', 'with']);
+
 const TITLE_MAX_CHARS = 48;
 
-/** A title's first letter in capitals: titles are sentence case, however the message was typed. */
+/** A title's first letter in capitals, however the message was typed. */
 const capitalizeFirst = (text: string): string => text.replace(/^(\s*)(\p{Ll})/u, (_, space: string, letter: string) => space + letter.toUpperCase());
+
+/**
+ * Title Case for a title cut from a message: each word's first letter in capitals except the short
+ * joining words after the first. Letters already in capitals stay ("PSG", "McTominay").
+ */
+const titleCase = (text: string): string =>
+  text
+    .split(/(\s+)/)
+    .map((word, i) => (i > 0 && MINOR_WORDS.has(word.toLowerCase()) ? word.toLowerCase() : capitalizeFirst(word)))
+    .join('');
 
 /** The stand-in title from the first message, shown until the generated one arrives. */
 export const autoTitle = (text: string): string =>
-  capitalizeFirst(text.substring(0, 30).trim()) + (text.length > 30 ? '...' : '');
+  titleCase(text.substring(0, 30).trim()) + (text.length > 30 ? '...' : '');
 
 /**
- * Older builds stored the placeholders in title case ("New Briefing") and stand-ins as typed
- * ("rate saka"). Shown, every title is sentence case: the first letter capitalised, the placeholders
- * lowered. Names inside a title are left exactly as written.
+ * Titles as the list shows them. Placeholders read "New Briefing" however an older build stored
+ * them, and a title starts with a capital however it was typed; otherwise a title is left exactly
+ * as written, so a rename or a name inside it is never changed.
  */
-const LEGACY_PLACEHOLDERS: Record<string, string> = {
-  'New Briefing': 'New briefing',
-  'New Chat': 'New briefing',
-  'Archived Briefing': 'Archived briefing',
-  'Shared Briefing': 'Shared briefing',
+const PLACEHOLDERS: Record<string, string> = {
+  'new briefing': 'New Briefing',
+  'new chat': 'New Briefing',
+  'archived briefing': 'Archived Briefing',
+  'shared briefing': 'Shared Briefing',
 };
 export const displayTitle = (title: string | undefined | null): string => {
   const trimmed = (title ?? '').trim();
-  if (!trimmed) return 'New briefing';
-  return LEGACY_PLACEHOLDERS[trimmed] ?? capitalizeFirst(trimmed);
+  if (!trimmed) return 'New Briefing';
+  return PLACEHOLDERS[trimmed.toLowerCase()] ?? capitalizeFirst(trimmed);
 };
 
 const firstUserText = (messages: ChatMessage[]): string | null => {
@@ -47,8 +60,8 @@ export const hasAutoTitle = (conv: Conversation): boolean => {
   if (conv.titleSource) return false;
   if (PLACEHOLDER_TITLES.has(conv.title)) return true;
   const text = firstUserText(conv.messages);
-  // Stand-ins from before titles were capitalised were stored as typed.
-  return text !== null && capitalizeFirst(conv.title) === autoTitle(text);
+  // Stand-ins were stored as typed, then in sentence case, before they were Title Case.
+  return text !== null && [conv.title, capitalizeFirst(conv.title), titleCase(conv.title)].some((t) => titleCase(t) === autoTitle(text));
 };
 
 /**

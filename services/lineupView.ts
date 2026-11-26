@@ -86,7 +86,7 @@ const MAX_LABEL = 14;
 export interface PlacedSlot {
   key: string;
   role: string;
-  /** The role as shown: ESPN's goalkeeper code G reads GK. */
+  /** The position as shown, in a card's codes (`positionLabels`). */
   roleLabel: string;
   x: number;
   y: number;
@@ -103,7 +103,48 @@ export interface PlacedSlot {
   labelWidth: number;
 }
 
-export const roleLabel = (role: string): string => (role.toUpperCase() === 'G' ? 'GK' : role.toUpperCase());
+/**
+ * Each slot's position in the codes a card uses (GK, CB, LB, CDM, CM, CAM, LM, LW, CF, …), read
+ * from its line and where it sits in that line rather than from ESPN's slot code alone. ESPN names
+ * a 4-2-3-1's holding pair LM and RM and its wide forwards AM-L and AM-R; on the pitch they are two
+ * defensive midfielders and two wingers. A slot counts as wide only at either end of a line of
+ * three or more and, below the attacking midfielders, only when ESPN's code says wide (LM, RF), so
+ * a 4-3-3's CM-L stays a central midfielder and a narrow pair stays central. A season-starts XI carries only broad lines
+ * (D, M, F), and says so: DEF, MID, FWD.
+ */
+export function positionLabels(xi: LineupSlot[]): string[] {
+  const broad = xi.some((s) => /^(D|M)$/i.test(s.role));
+  const rows = new Map<number, number[]>();
+  xi.forEach((s, i) => rows.set(roleRow(s.role), [...(rows.get(roleRow(s.role)) ?? []), i]));
+  for (const [row, members] of rows) {
+    rows.set(row, members.sort((a, b) => roleCol(xi[a].role) - roleCol(xi[b].role) || a - b));
+  }
+  const backThree = (rows.get(1)?.length ?? 0) === 3;
+  return xi.map((slot, i) => {
+    const code = slot.role.toUpperCase();
+    const row = roleRow(code);
+    if (row === 0) return 'GK';
+    if (broad) return code === 'D' ? 'DEF' : code === 'M' ? 'MID' : code === 'F' ? 'FWD' : code;
+    const line = rows.get(row)!;
+    const n = line.length;
+    const at = line.indexOf(i);
+    const outer = n >= 3 && (at === 0 || at === n - 1);
+    // ESPN's own wide codes (LM, RF, …) have no hyphen; CM-L or CF-R is the left of a central pair.
+    const sideCode = /^[LR]/.test(code) && !code.includes('-');
+    const left = at < (n - 1) / 2;
+    if (row === 1) return /^(LB|RB|LWB|RWB)$/.test(code) ? code : 'CB';
+    if (row === 2) return 'CDM';
+    if (row === 3) {
+      if (outer && sideCode) return backThree ? (left ? 'LWB' : 'RWB') : left ? 'LM' : 'RM';
+      // A pair with no holding line below it and attackers above it is the holding pair.
+      return n === 2 && !rows.has(2) && rows.has(4) ? 'CDM' : 'CM';
+    }
+    // A line of three behind the striker has its wide men at either end.
+    if (row === 4) return outer ? (left ? 'LW' : 'RW') : 'CAM';
+    if (code === 'SS') return 'SS';
+    return outer && sideCode ? (left ? 'LW' : 'RW') : 'CF';
+  });
+}
 
 const PARTICLES = new Set(['van', 'von', 'de', 'der', 'den', 'di', 'da', 'dos', 'das', 'do', 'del', 'della', 'le', 'la', 'el', 'al', 'bin', 'ter', 'ten', 'du']);
 const SUFFIXES = /^(jr\.?|sr\.?|ii|iii)$/i;
@@ -139,6 +180,7 @@ export function placeXI(xi: LineupSlot[]): PlacedSlot[] {
     byRow.set(row, [...(byRow.get(row) ?? []), { slot, index }]);
   });
   const rows = [...byRow.keys()].sort((a, b) => a - b);
+  const labels = positionLabels(xi);
   const placed: PlacedSlot[] = [];
   rows.forEach((row, r) => {
     const y = rows.length === 1 ? (Y_TOP + Y_BOTTOM) / 2 : Y_BOTTOM - (r * (Y_BOTTOM - Y_TOP)) / (rows.length - 1);
@@ -150,11 +192,11 @@ export function placeXI(xi: LineupSlot[]): PlacedSlot[] {
     const maxChars = Math.max(MIN_LABEL, Math.min(MAX_LABEL, Math.floor((step - 6) / (PITCH.nameSize * GLYPH))));
     line.forEach(({ slot, index }, i) => {
       const x = n === 1 ? centre : centre + (i - (n - 1) / 2) * step;
-      const label = slot.name ? fit(surnameOf(slot.name), maxChars) : roleLabel(slot.role);
+      const label = slot.name ? fit(surnameOf(slot.name), maxChars) : labels[index];
       const altChars = Math.max(MIN_LABEL, Math.floor((step - 6) / (PITCH.altSize * GLYPH)));
       const alt = slot.name && slot.rotation ? fit(`or ${surnameOf(slot.rotation)}`, altChars) : undefined;
       const detail = [
-        slot.name ? `${slot.name}, ${roleLabel(slot.role)}` : `${roleLabel(slot.role)}, no first choice found`,
+        slot.name ? `${slot.name}, ${labels[index]}` : `${labels[index]}, no first choice found`,
         ...(slot.name && slot.starts > 0 ? [`${slot.starts} starts`] : []),
         ...(slot.rotation ? [`even split with ${slot.rotation}`] : []),
         ...(slot.note ? [slot.note] : []),
@@ -162,7 +204,7 @@ export function placeXI(xi: LineupSlot[]): PlacedSlot[] {
       placed.push({
         key: `${index}-${slot.role}`,
         role: slot.role,
-        roleLabel: roleLabel(slot.role),
+        roleLabel: labels[index],
         x,
         y,
         empty: !slot.name,

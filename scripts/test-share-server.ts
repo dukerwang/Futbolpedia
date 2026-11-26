@@ -84,7 +84,7 @@ async function main() {
     const res = await get('/p/bukayo-saka');
     assert.equal(res.status, 200);
     const body = await res.text();
-    assert.match(body, /<title>Bukayo Saka · 90 · Current form<\/title>/);
+    assert.match(body, /<title>Bukayo Saka · 90 · Current Form<\/title>/);
     assert.match(body, /og:image" content="http:\/\/127\.0\.0\.1:\d+\/og\/p\/bukayo-saka--current--2026-11-04-[0-9a-f]{8}\.png"/);
     assert.match(body, /<link rel="canonical" href="https:\/\/futbolpedia.org\/p\/bukayo-saka">/);
     assert.equal((body.match(/<title>/g) ?? []).length, 1);

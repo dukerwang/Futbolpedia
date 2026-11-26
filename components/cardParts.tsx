@@ -36,10 +36,6 @@ export const AttributeLine: React.FC<{ label: string; rating: number }> = ({ lab
 );
 
 /** A card section's small-capitals serif heading with its hairline. */
-export const CardSectionTitle: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = 'mb-4' }) => (
-  <h3
-    className={`text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block ${className}`}
-  >
-    {children}
-  </h3>
+export const CardSectionTitle: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = 'mb-3' }) => (
+  <h3 className={`font-serif font-bold text-[22px] leading-tight tracking-[-0.01em] text-charcoal dark:text-cream-50 ${className}`}>{children}</h3>
 );

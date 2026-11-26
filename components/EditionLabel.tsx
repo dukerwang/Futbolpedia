@@ -66,6 +66,6 @@ export const EditionLabel: React.FC<EditionLabelProps> = ({ profile, earlierRati
 /** "Your revision", in the same written style, beside an edition label. */
 export const RevisionNote: React.FC<{ title?: string; size?: keyof typeof SIZE }> = ({ title = 'Your accepted challenge of the shared card', size = 'sm' }) => (
   <span className={`shrink-0 font-sans font-medium text-indigo-600 dark:text-indigo-300 ${SIZE[size].text}`} title={title}>
-    Your revision
+    Your Revision
   </span>
 );

@@ -103,12 +103,12 @@ const useEntryActions = (profile: PlayerProfile, onRename?: (name: string) => vo
 };
 
 const menuItems = (shareState: string, canEdit: boolean, canOpenInPanel: boolean) => [
-  ...(canOpenInPanel ? [{ id: 'panel', label: 'Open in side panel', icon: 'view_sidebar' }] : []),
-  { id: 'share', label: shareState === 'copied' ? 'Link copied' : 'Copy link', icon: shareState === 'copied' ? 'check' : 'link' },
+  ...(canOpenInPanel ? [{ id: 'panel', label: 'Open in Side Panel', icon: 'left_panel_open' }] : []),
+  { id: 'share', label: shareState === 'copied' ? 'Link Copied' : 'Copy Link', icon: shareState === 'copied' ? 'check' : 'link' },
   ...(canEdit
     ? [
         { id: 'rename', label: 'Rename', icon: 'edit' },
-        { id: 'delete', label: 'Remove from your dossiers', icon: 'delete', tone: 'danger' as const },
+        { id: 'delete', label: 'Remove from Your Dossiers', icon: 'delete', tone: 'danger' as const },
       ]
     : []),
 ];
@@ -197,6 +197,25 @@ const VersionLinks: React.FC<{ versions: PlayerProfile[]; onOpen: (p: PlayerProf
     </div>
   );
 };
+
+/**
+ * Reads a shared card in the side panel, beside the hub, instead of opening its page. An icon
+ * beside Ask, so the quick read is in reach without a trip through the menu.
+ */
+const PanelButton: React.FC<{ name: string; onOpen: () => void; className?: string }> = ({ name, onOpen, className = '' }) => (
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      onOpen();
+    }}
+    aria-label={`Open ${name} in the side panel`}
+    title="Open in Side Panel"
+    className={`shrink-0 inline-flex items-center justify-center size-8 rounded-lg text-charcoal/55 dark:text-cream-400 hover:text-charcoal dark:hover:text-cream-50 hover:bg-charcoal/[0.05] dark:hover:bg-white/[0.06] transition-[background-color,color,transform,opacity] duration-150 active:scale-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 ${className}`}
+  >
+    <span aria-hidden="true" className="material-symbols-outlined text-[18px]">left_panel_open</span>
+  </button>
+);
 
 const enterStyle = (enterIndex?: number): React.CSSProperties | undefined =>
   enterIndex === undefined ? undefined : { animationDelay: `${enterIndex * STAGGER_MS}ms` };
@@ -326,6 +345,7 @@ export const HubCard: React.FC<HubEntryProps> = (props) => {
               </span>
             ) : null}
           </div>
+          {onOpenInPanel && <PanelButton name={profile.basicInfo.name} onOpen={onOpenInPanel} />}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -337,7 +357,7 @@ export const HubCard: React.FC<HubEntryProps> = (props) => {
             <span aria-hidden="true" className="material-symbols-outlined text-[17px]">chat_bubble</span>
             Ask
           </button>
-          <ActionMenu label={`More for ${profile.basicInfo.name}`} items={menuItems(actions.shareState, !!onRename, !!onOpenInPanel)} onAction={onMenu} />
+          <ActionMenu label={`More for ${profile.basicInfo.name}`} items={menuItems(actions.shareState, !!onRename, false)} onAction={onMenu} />
         </div>
       </div>
     </article>
@@ -434,6 +454,13 @@ export const HubRow: React.FC<HubEntryProps> = (props) => {
       </div>
 
       <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
+        {onOpenInPanel && (
+          <PanelButton
+            name={profile.basicInfo.name}
+            onOpen={onOpenInPanel}
+            className="hidden md:inline-flex opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          />
+        )}
         <button
           onClick={onAsk}
           className="hidden md:inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[12.5px] font-medium text-charcoal/70 dark:text-cream-300 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-charcoal/[0.05] dark:hover:bg-white/[0.06] transition-[opacity,background-color] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60"
@@ -444,7 +471,7 @@ export const HubRow: React.FC<HubEntryProps> = (props) => {
         </button>
         <ActionMenu
           label={`More for ${profile.basicInfo.name}`}
-          items={[{ id: 'ask', label: 'Ask in chat', icon: 'chat_bubble' }, ...menuItems(actions.shareState, !!onRename, !!onOpenInPanel)]}
+          items={[{ id: 'ask', label: 'Ask in Chat', icon: 'chat_bubble' }, ...menuItems(actions.shareState, !!onRename, !!onOpenInPanel)]}
           onAction={onMenu}
         />
       </div>

@@ -3,7 +3,7 @@ import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants/ratingTiers';
 import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
 import { latestUpdateLabel } from './pills';
-import { AttributeLine, renderCardMarkdown as renderMarkdown } from './cardParts';
+import { AttributeLine, CardSectionTitle, renderCardMarkdown as renderMarkdown } from './cardParts';
 import { cardPath } from '../services/cardPaths';
 import { EditionLabel, RevisionNote } from './EditionLabel';
 import { overallText } from './hub/editionInk';
@@ -194,8 +194,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             <EditionLabel profile={profile} size="sm" />
                             {profile.revision && <RevisionNote />}
                         </div>
-                        <h2 className="text-2xl font-serif font-bold text-charcoal dark:text-white leading-tight">{profile.basicInfo.name}</h2>
-                        <p className="text-emerald-600 dark:text-emerald-400 font-serif italic text-base leading-tight mt-1 mb-1">
+                        <h2 className="text-[28px] font-serif font-extrabold tracking-[-0.015em] text-charcoal dark:text-cream-50 leading-[1.05] [text-wrap:balance]">{profile.basicInfo.name}</h2>
+                        <p className="text-emerald-700 dark:text-emerald-400 font-serif italic text-[16px] leading-snug mt-1.5 mb-1">
                             {profile.playstyleAndRole?.playstyle?.archetype}
                         </p>
                         <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-charcoal/60 dark:text-cream-400 font-sans">
@@ -226,18 +226,17 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     </div>
                     
                     <div className="flex flex-col items-end text-right shrink-0">
-                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1.5">{getShortTierLabel(profile.ratings.overall)}</span>
-                        
-                        <div className="flex gap-4">
-                            <div className="flex flex-col items-center">
-                                <span className={`text-2xl font-mono font-bold leading-none ${overallText(profile.ratings.overall)}`}>{profile.ratings.overall}</span>
-                                <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">OVR</span>
-                            </div>
-                            <div className="flex flex-col items-center">
-                                <span className="text-2xl font-mono font-bold leading-none text-charcoal/60 dark:text-cream-200">{profile.ratings.potential}</span>
-                                <span className="text-[8px] font-bold text-charcoal/40 dark:text-cream-400 uppercase tracking-wider mt-1">POT</span>
-                            </div>
-                        </div>
+                        <span
+                            className={`block font-serif font-extrabold leading-[0.8] tracking-[-0.04em] text-[56px] [font-variant-numeric:lining-nums_tabular-nums] ${overallText(profile.ratings.overall)}`}
+                        >
+                            {profile.ratings.overall}
+                        </span>
+                        <span className="mt-2 text-[12.5px] font-medium leading-none text-charcoal/80 dark:text-cream-200">{getShortTierLabel(profile.ratings.overall)}</span>
+                        {profile.ratings.potential !== profile.ratings.overall && (
+                            <span className="mt-1.5 text-[12px] leading-none text-charcoal/50 dark:text-cream-400/80">
+                                Potential <span className="font-semibold text-charcoal/75 dark:text-cream-200 [font-variant-numeric:lining-nums]">{profile.ratings.potential}</span>
+                            </span>
+                        )}
 
                         {/* Navigation Arrows placed in the blank space under OVR and POT, but above share/close buttons */}
                         {allProfiles.length > 1 && currentIndex !== -1 && (
@@ -278,10 +277,10 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 title="Back to Scout"
                             >
                                 <span className="material-symbols-outlined text-[18px] block">arrow_back</span>
-                                <span className="text-[10px] font-sans font-bold uppercase tracking-wider">Scout</span>
+                                <span className="text-[12.5px] font-sans font-medium">Scout</span>
                             </button>
                         ) : (
-                            <span className="text-[10px] uppercase tracking-widest text-charcoal/40 dark:text-cream-400/40 font-bold">Confidential Dossier</span>
+                            <span />
                         )}
                     </div>
                     
@@ -293,7 +292,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 title="Browse all dossiers"
                             >
                                 <span className="material-symbols-outlined text-[18px] block">grid_view</span>
-                                <span className="text-[10px] font-sans font-bold uppercase tracking-wider">All dossiers</span>
+                                <span className="text-[12.5px] font-sans font-medium">All Dossiers</span>
                             </button>
                         )}
 
@@ -304,7 +303,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 title="Think the rating is off? Make your case in the chat"
                             >
                                 <span className="material-symbols-outlined text-[18px] block">rate_review</span>
-                                <span className="text-[10px] font-sans font-bold uppercase tracking-wider">Challenge</span>
+                                <span className="text-[12.5px] font-sans font-medium">Challenge</span>
                             </button>
                         )}
 
@@ -335,31 +334,29 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 {/* 0. Peak Context (historical cards) */}
                 {profile.version?.peakContext && (
                     <div>
-                        <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Peak Context</h3>
+                        <CardSectionTitle>Peak Context</CardSectionTitle>
                         <p className="leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light font-sans">{profile.version.peakContext}</p>
                     </div>
                 )}
 
                 {/* 1. Scout Summary */}
                 <div>
-                        <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Scout Summary</h3>
-                        <div className="prose prose-sm dark:prose-invert leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light text-justify font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.shortBio)} />
+                        <CardSectionTitle>Scout Summary</CardSectionTitle>
+                        <div className="prose prose-sm dark:prose-invert leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.shortBio)} />
                 </div>
 
                 {/* 2. Tactical Brief */}
                 {profile.playstyleAndRole?.playstyle?.description && (
                      <div>
-                          <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">
-                              <span className="flex items-center gap-2">Tactical Brief</span>
-                          </h3>
-                          <div className="prose prose-sm dark:prose-invert leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light text-justify font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.playstyleAndRole.playstyle.description)} />
+                          <CardSectionTitle>Tactical Brief</CardSectionTitle>
+                          <div className="prose prose-sm dark:prose-invert leading-relaxed text-charcoal dark:text-cream-100 text-[15px] font-light font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.playstyleAndRole.playstyle.description)} />
                      </div>
                 )}
 
                 {/* 3. Best Roles */}
                 {profile.playstyleAndRole?.bestRoles && profile.playstyleAndRole.bestRoles.length > 0 && (
                      <div>
-                          <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-4 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Effective Roles</h3>
+                          <CardSectionTitle>Effective Roles</CardSectionTitle>
                           <div className="flex flex-wrap gap-2">
                               {profile.playstyleAndRole.bestRoles.map((role, idx) => (
                                   <span key={idx} className="px-3 py-1 bg-white dark:bg-charcoal-light border border-cream-300 dark:border-charcoal-border rounded-full text-xs font-bold text-charcoal/80 dark:text-cream-200 font-sans">
@@ -373,7 +370,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 {/* 4. Strengths & Weaknesses */}
                 <div className="grid grid-cols-1 gap-6">
                     <div>
-                            <h4 className="flex items-center gap-2 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-widest mb-3">
+                            <h4 className="font-serif font-bold text-[17px] text-emerald-700 dark:text-emerald-400 mb-3">
                             Key Strengths
                             </h4>
                             <ul className="text-sm text-charcoal dark:text-cream-200 space-y-2 list-none pl-0 font-sans">
@@ -386,7 +383,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             </ul>
                     </div>
                     <div>
-                            <h4 className="flex items-center gap-2 text-[11px] font-bold text-red-700 dark:text-red-400 uppercase tracking-widest mb-3">
+                            <h4 className="font-serif font-bold text-[17px] text-red-700 dark:text-red-400 mb-3">
                             Areas to Improve
                             </h4>
                             <ul className="text-sm text-charcoal dark:text-cream-200 space-y-2 list-none pl-0 font-sans">
@@ -402,11 +399,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
                 {/* 5. Attributes */}
                 <div>
-                    <h3 className="text-xs font-serif font-bold text-charcoal dark:text-white uppercase tracking-[0.2em] mb-6 border-b border-cream-300 dark:border-charcoal-border pb-2 inline-block">Technical Profile</h3>
+                    <CardSectionTitle className="mb-5">Technical Profile</CardSectionTitle>
                     <div className="space-y-8">
                         {Object.entries(categories).map(([category, list]) => (
                             <div key={category}>
-                                    <h4 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-4">
+                                    <h4 className="text-[13px] font-medium text-charcoal/55 dark:text-cream-400/80 mb-4">
                                     {category}
                                     </h4>
                                     <div className="space-y-4">
@@ -424,9 +421,9 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 </div>
 
                 {/* 6. Latest Update */}
-                <div className="bg-cream-50 dark:bg-charcoal-surface p-5 border-l-4 border-charcoal dark:border-cream-400 shadow-sm">
-                    <h3 className="text-[10px] font-bold text-charcoal/50 dark:text-cream-400 uppercase tracking-widest mb-2">
-                        Latest Intelligence{latestUpdateLabel(profile) && <span className="font-normal"> · {latestUpdateLabel(profile)}</span>}
+                <div className="bg-cream-50 dark:bg-charcoal-surface p-5 rounded-xl border border-charcoal/[0.1] dark:border-white/[0.08]">
+                    <h3 className="font-serif font-bold text-[17px] text-charcoal dark:text-cream-50 mb-2">
+                        Latest Intelligence{latestUpdateLabel(profile) && <span className="font-sans font-normal text-[13px] text-charcoal/50 dark:text-cream-400/80"> · {latestUpdateLabel(profile)}</span>}
                     </h3>
                     <div className="text-xs text-charcoal dark:text-cream-200 leading-relaxed font-sans" dangerouslySetInnerHTML={renderMarkdown(profile.latestUpdate)} />
                 </div>

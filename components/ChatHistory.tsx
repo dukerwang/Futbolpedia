@@ -21,10 +21,10 @@ interface ChatHistoryProps {
 }
 
 const STARTER_PROMPTS: { icon: string; label: string; prompt: string }[] = [
-  { icon: 'person_search', label: 'Build a dossier', prompt: 'Open Scout to rate any player' },
-  { icon: 'compare_arrows', label: 'Compare players', prompt: 'Compare Pedri and Vitinha as deep playmakers' },
-  { icon: 'travel_explore', label: 'Scout a shortlist', prompt: 'Best U21 centre-backs in Serie A right now' },
-  { icon: 'strategy', label: 'Tactical read', prompt: "Break down Arsenal's build-up shape this season" },
+  { icon: 'person_search', label: 'Build a Dossier', prompt: 'Open Scout to rate any player' },
+  { icon: 'compare_arrows', label: 'Compare Players', prompt: 'Compare Pedri and Vitinha as deep playmakers' },
+  { icon: 'travel_explore', label: 'Scout a Shortlist', prompt: 'Best U21 centre-backs in Serie A right now' },
+  { icon: 'strategy', label: 'Tactical Read', prompt: "Break down Arsenal's build-up shape this season" },
 ];
 
 /** Distance from the bottom (px) within which scrolling back down re-pins the view to the latest message. */
@@ -168,7 +168,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                   className="new-chat-stage flex flex-col items-center justify-center min-h-[50vh] py-8 select-none"
               >
                   <h2 className="new-chat-crest text-center font-serif font-bold text-[34px] sm:text-[44px] leading-[1.02] tracking-[-0.025em] text-charcoal dark:text-cream-50 [text-wrap:balance]">
-                    Ask the scout.
+                    Ask the Scout
                   </h2>
                   <p className="new-chat-caption mt-3 max-w-[30rem] text-center text-[15px] leading-relaxed text-charcoal/55 dark:text-cream-400 [text-wrap:pretty]">
                     Ratings on one all-era scale, comparisons, tactics and transfers. Type <kbd className="font-mono text-[13px] text-charcoal/75 dark:text-cream-200">@</kbd> to bring a card into the conversation.

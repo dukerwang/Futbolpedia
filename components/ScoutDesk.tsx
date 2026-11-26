@@ -326,7 +326,7 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
         {jobs.length > 0 && (
           <section aria-label="Being scouted" className="px-6 sm:px-8 pt-6">
             <h3 className="font-serif font-bold text-[20px] leading-none tracking-[-0.015em] text-charcoal dark:text-cream-50 pb-3 border-b border-charcoal/[0.12] dark:border-white/[0.1]">
-              On the desk
+              On the Desk
             </h3>
             <ul>
               {jobs.map((job) => (

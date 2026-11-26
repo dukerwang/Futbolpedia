@@ -36,7 +36,7 @@ export const pillClass = (tone: PillTone = 'neutral', size: keyof typeof PILL_SI
 export const PILL_ICON_CLASS = 'material-symbols-outlined text-[14px] leading-none';
 
 const EDITION_NAMES: Record<string, string> = {
-  current: 'Current form',
+  current: 'Current Form',
   prime: 'Prime',
   season_snapshot: 'Season',
   era: 'Era',
@@ -75,7 +75,7 @@ export function describeCardEdition(profile: PlayerProfile): {
     return {
       tone: 'neutral',
       icon: 'history',
-      label: date ? `Older card · ${formatMonth(date)}` : 'Older card',
+      label: date ? `Older Card · ${formatMonth(date)}` : 'Older Card',
       title: 'Rated before cards recorded their edition, so it may be a current or a prime rating. Ask for the player again for a fresh card.',
     };
   }
@@ -90,7 +90,7 @@ export function describeCardEdition(profile: PlayerProfile): {
   const when = era ? formatSeason(era) : date ? date.slice(0, 4) : '';
   const qualifier = edition === 'era' ? profile.version?.qualifier?.trim() : '';
   const name = qualifier
-    ? `${formatEraQualifier(qualifier)} era`
+    ? `${formatEraQualifier(qualifier)} Era`
     : EDITION_NAMES[edition] ?? EDITION_NAMES.prime;
   const label = when ? `${name} · ${when}` : name;
   // An era is a chapter of a career the user named, not the player at his best, so it doesn't
@@ -105,7 +105,7 @@ export function describeCardEdition(profile: PlayerProfile): {
  */
 export function shortEditionLabel(profile: PlayerProfile): string {
   const edition = cardEdition(profile);
-  if (edition === 'current') return profile.version ? 'Current' : 'Older card';
+  if (edition === 'current') return profile.version ? 'Current' : 'Older Card';
   const window = profile.version?.seasonOrEra?.trim();
   const when = window ? formatSeason(window) : '';
   if (edition === 'era') {
@@ -155,9 +155,9 @@ export function latestUpdateLabel(profile: PlayerProfile): string | null {
  * and data coverage), not how good the player is.
  */
 const CONFIDENCE: Record<EvidenceGrade, { tone: PillTone; label: string; hint: string }> = {
-  A: { tone: 'emerald', label: 'High confidence', hint: 'Large senior sample (80+ starts) with stable, well-covered data.' },
-  B: { tone: 'blue', label: 'Medium confidence', hint: 'Moderate sample (20–80 senior starts) or a recent move or role change.' },
-  C: { tone: 'amber', label: 'Low confidence', hint: 'Small senior sample (under 20 starts), a young prospect, or a long injury.' },
+  A: { tone: 'emerald', label: 'High Confidence', hint: 'Large senior sample (80+ starts) with stable, well-covered data.' },
+  B: { tone: 'blue', label: 'Medium Confidence', hint: 'Moderate sample (20–80 senior starts) or a recent move or role change.' },
+  C: { tone: 'amber', label: 'Low Confidence', hint: 'Small senior sample (under 20 starts), a young prospect, or a long injury.' },
 };
 
 export const describeConfidence = (grade: EvidenceGrade) => CONFIDENCE[grade] ?? CONFIDENCE.C;

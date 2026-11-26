@@ -54,7 +54,7 @@ const cardPage = (card: PlayerProfile): Extract<CardPage, { kind: 'card' }> => (
 
 test("a card's tags name the player, rating and edition and point at its image", () => {
   const tags = cardMeta(cardPage(saka), 'https://futbolpedia.ai.studio');
-  assert.match(tags, /<title>Bukayo Saka · 90 · Current form<\/title>/);
+  assert.match(tags, /<title>Bukayo Saka · 90 · Current Form<\/title>/);
   assert.match(tags, /<meta name="description" content="Decides games from the right with delivery and timing.">/);
   assert.match(tags, /<link rel="canonical" href="https:\/\/futbolpedia.org\/p\/bukayo-saka">/);
   assert.match(tags, /og:image" content="https:\/\/futbolpedia.ai.studio\/og\/p\/bukayo-saka--current--2026-11-04-[0-9a-f]{8}\.png"/);
