@@ -1,5 +1,5 @@
 import type { GaffaTradeScorecard, ReadyBlock } from '../../types';
-import { formatScorecardCopy } from '../gaffaScorecardText';
+import { BLOCK_TEXT } from './blockText';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const scorecardBlock = (id: string, card: GaffaTradeScorecard): ReadyBlock<'scorecard'> => readyBlock('scorecard', id, card);
@@ -12,6 +12,5 @@ export const scorecardEntry: BlockEntry<'scorecard'> = {
     return { block: scorecardBlock(ctx.newId(), card) };
   },
   toolResult: () => ({ shown: true }),
-  toHistory: ({ data }) => `[shown: trade scorecard, ${data.outgoing} for ${data.incoming}, verdict ${data.verdict}]`,
-  toCopy: ({ data }) => formatScorecardCopy(data),
+  ...BLOCK_TEXT.scorecard,
 };

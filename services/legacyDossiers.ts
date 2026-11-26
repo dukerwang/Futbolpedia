@@ -1,5 +1,6 @@
 import type { Conversation, PlayerProfile } from '../types';
-import { cardEdition, getCardKey, isRatedOnCurrentScale, toBasePlayerSlug } from './dossierStore';
+import { cardEdition, getCardKey, toBasePlayerSlug } from './dossierCards';
+import { isRatedOnCurrentScale } from './dossierCache';
 
 /**
  * One-time cleanup of the dossiers this browser kept from before the current rating pipeline.

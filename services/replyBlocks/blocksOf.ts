@@ -3,7 +3,7 @@ import { getLegacyDossierRef } from '../dossierRefs';
 import { askBlock } from './ask';
 import { cardBlock } from './card';
 import { goDeeperBlock } from './goDeeper';
-import { pitchBlock } from './pitch';
+import { readyBlock } from './entry';
 import { proseBlock } from './prose';
 import { scorecardBlock } from './scorecard';
 import { scoutOfferBlock } from './scoutOffer';
@@ -48,7 +48,7 @@ export function blocksOf(message: ChatMessage): ReplyBlock[] {
   if (dossier) blocks.push(cardBlock(id(), dossier));
   const text = proseTextOf(message);
   if (text) blocks.push(proseBlock(id(), text));
-  for (const view of message.lineups ?? []) blocks.push(pitchBlock(id(), view));
+  for (const view of message.lineups ?? []) blocks.push(readyBlock('pitch', id(), view));
   for (const card of message.cards ?? []) blocks.push(cardBlock(id(), card));
   for (const name of message.scoutOffers ?? []) blocks.push(scoutOfferBlock(id(), name));
   if (message.ask?.options.length) blocks.push(askBlock(id(), message.ask));

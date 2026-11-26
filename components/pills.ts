@@ -4,7 +4,7 @@ import {
   formatEraQualifier,
   getDossierEvaluationDate,
   getLatestUpdateDate,
-} from '../services/dossierStore';
+} from '../services/dossierCards';
 
 /**
  * The one pill style used across dossier cards, the side panel and the Global Dossier Hub:

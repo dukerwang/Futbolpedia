@@ -4,7 +4,7 @@ import { AttributeTable } from './AttributeTable';
 import { getTierForRating, normalizePosition } from '../constants/ratingTiers';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { isPrimeCard } from '../services/geminiService';
+import { isPrimeCard } from '../services/dossierCards';
 import { describeConfidence, latestUpdateLabel, pillClass, PILL_ICON_CLASS, type PillTone } from './pills';
 import { EditionLabel, RevisionNote } from './EditionLabel';
 

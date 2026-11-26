@@ -1,6 +1,6 @@
 import type { AskPrompt, DataBlock, GaffaTradeScorecard, PlayerProfile, ReadyBlock, ReplyBlock, ReplyBlockKind, ViewHint } from '../../types';
 import { isPrimeCard, toBasePlayerSlug } from '../dossierCards';
-import { getCardKey } from '../dossierStore';
+import { getCardKey } from '../dossierCards';
 import { askBlock } from './ask';
 import { cardBlockOf } from './card';
 import { proseBlock } from './prose';

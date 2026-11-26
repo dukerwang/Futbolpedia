@@ -11,7 +11,7 @@ import {
   getDossierEvaluationDate,
   isPrimeCard,
   toBasePlayerSlug,
-} from './dossierStore';
+} from './dossierCards';
 
 export const DEFENSIVE_SLOTS = new Set(['CB', 'LB', 'RB', 'LWB', 'RWB']);
 const MID_ATT_SLOTS = new Set(['DM', 'CM', 'AM', 'LW', 'RW', 'ST']);

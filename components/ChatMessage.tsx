@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import type { ChatMessage as ChatMessageType, ChatDossierRef } from '../types';
 import { ReplyBody } from './ReplyBody';
-import { blocksOf, copyTextOf, LEGACY_ERROR_PREFIX } from '../services/replyBlocks';
+import { blocksOf, LEGACY_ERROR_PREFIX } from '../services/replyBlocks/blocksOf';
+import { copyTextOf } from '../services/replyBlocks/blockText';
 import { getLegacyDossierRef } from '../services/dossierRefs';
 import { ratingVersionLabel } from '../services/ratingCommand';
 import { InkLabel } from './EditionLabel';

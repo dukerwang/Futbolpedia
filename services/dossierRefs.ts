@@ -1,5 +1,5 @@
 import type { ChatDossierRef, PlayerProfile } from '../types';
-import { getCardKey } from './dossierStore';
+import { getCardKey } from './dossierCards';
 
 export const toChatDossierRef = (p: PlayerProfile): ChatDossierRef => ({
   cardKey: getCardKey(p),

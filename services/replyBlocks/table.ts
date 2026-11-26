@@ -4,6 +4,7 @@ import { clubKey, type TableRow, type TableViewData } from '../../components/vie
 import { getCurrentSeasonInfo } from '../aiClient';
 import { executeCall, fileOutcomes, type ResearchCall } from '../researchTools';
 import { formatLeagueTable } from '../liveFootball';
+import { BLOCK_TEXT } from './blockText';
 import { readyBlock, type BlockEntry } from './entry';
 
 export const tableBlock = (id: string, data: TableViewData): ReadyBlock<'table'> => readyBlock('table', id, data);
@@ -12,10 +13,6 @@ const startYear = (season: string | null | undefined): number | null => {
   const m = season?.match(/\d{4}/);
   return m ? Number(m[0]) : null;
 };
-
-/** The table text the model reads back and Copy carries: the feed's own lines, under a heading. */
-const tableText = (data: TableViewData): string =>
-  `${data.league} table${data.season ? `, ${data.season}` : ''}\n${formatLeagueTable(data.rows)}`;
 
 /** A league's current table from the live feed, with the clubs the reply is about marked. */
 export const tableEntry: BlockEntry<'table'> = {
@@ -76,6 +73,5 @@ export const tableEntry: BlockEntry<'table'> = {
       table: formatLeagueTable(data.rows),
     };
   },
-  toHistory: ({ data }) => `[shown: ${data.league} table${data.season ? `, ${data.season}` : ''}]`,
-  toCopy: ({ data }) => tableText(data),
+  ...BLOCK_TEXT.table,
 };
