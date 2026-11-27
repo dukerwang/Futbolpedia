@@ -52,10 +52,10 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 
 /** The hashes of the prompts as they stood before the core was split into sections. */
 const PINNED = {
-  core: 'd2a733093940403da9262224e8f2f9345a8dcd8295c8b17e680bcd76419f7ed1',
-  synthesis: 'b4eec92983dea8d67da9a5a2abf6d7b771380fae5eabf51e62fca8f9337a1023',
-  chat: '991d0f5ad0628198fe8f0b9bc80839b613b464d8b0dff1ecf47d4450238c6410',
-  chatWithEafc: 'e9a32ba59557fede56d3689a8a6342eff6b2e6637d530dd69cf891616226af90',
+  core: '7f1e030e3dc2ada8e55ec302121b1cde7d588e3b3bd5ae9ed4d56348cab22846',
+  synthesis: '23b7c84a0bf7d9fc26a1b22cd123daeb31e053a78c531e405d960f654c26a9f2',
+  chat: 'b3d05e4be56d4138504de106dc53bff9f3dd435b05ac2d0fdb1f98656ed05ea1',
+  chatWithEafc: '029ff9623763d0a89a569af404b6c3680d1d73a2962e9ca2736a80885af01d72',
 };
 
 await test('the scouting core is byte-identical to the single string it was', () => {
@@ -197,7 +197,7 @@ const PINS: Record<string, string> = {
   "stage past ranking": 'a6d6afd823cd8b5ab7477dd3f43ea65a9bfb968b8fb9a84dc52be8b485bde74b',
   "stage past single": 'a6d6afd823cd8b5ab7477dd3f43ea65a9bfb968b8fb9a84dc52be8b485bde74b',
   "stage past other": '89c071de1fdcec6cd7395db1ea77dbb2dc44e15e9e3a3133e864cd4abc3c0849',
-  "challenge": '46453d235b9a38a3632ee2a4ff16dabf9383b78ab5b12fd01e3646bb780dcad5',
+  "challenge": 'd3b2ca787c9f683300e84d96dc35684d871b9da2e7920a33f467ec71d5e44485',
   "researchRules": '54d01293baafc0a3661c45a72e4a9f2dcdc5dae5f0786602c9c5b03a93719b28', // heading renamed from "## Deep mode" to "## Research" (2026-11-18-one-chat-path-design.md)
   "lockedDossiers": '3ffe99ef18557cdb462c8ba157a36603189bd3f41db0476f8a20db8cbe37992f',
   "savedDossiers": '97c351563c4a3e9f56e9f25df0be73f1876c69dab353401289bc837383d491ee',

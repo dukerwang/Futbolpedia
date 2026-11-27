@@ -127,3 +127,27 @@ export function applyPeerPlacement(
     },
   };
 }
+
+/**
+ * A challenge that moves a card's Overall goes through the same placement as a new rating. The
+ * revised Overall must agree with the placement the challenge gives (the peers he is now better
+ * than, level with and not as good as), or, when it gives none, with the placement already on the
+ * card, so correcting an attribute never moves the Overall past peers nobody re-placed him against.
+ * `placed` differs from `proposed` when the placement held the Overall back.
+ */
+export function placeRevisedOverall(
+  base: PlayerProfile,
+  revised: PlayerProfile,
+  placement: PeerPlacement | undefined,
+  ledger: PlayerProfile[],
+): { profile: PlayerProfile; proposed: number; placed: number } {
+  const proposed = revised.ratings.overall;
+  const given =
+    placement &&
+    (placement.betterThan?.length ?? 0) + (placement.levelWith?.length ?? 0) + (placement.notAsGoodAs?.length ?? 0) > 0
+      ? placement
+      : undefined;
+  if (proposed === base.ratings.overall && !given) return { profile: revised, proposed, placed: proposed };
+  const profile = applyPeerPlacement(revised, given ?? base.peerPlacement, ledger, isPrimeCard(base));
+  return { profile, proposed, placed: profile.ratings.overall };
+}

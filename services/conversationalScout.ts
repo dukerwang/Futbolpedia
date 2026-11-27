@@ -59,6 +59,7 @@ import { expandTables, gateFigureFindings, gateUnsupportedFigures, type FigureCl
 import { figureBudget, formatDebateBriefForWriter, runDebateResearch, type DebateBrief } from './debateBrief';
 import { standingsFor, type CardStanding } from './debateConsistency';
 import { liveDebateRecords, liveEraSnapshots } from './eraSnapshots';
+import { placeRevisedOverall } from './ratingPlacement';
 
 /**
  * What a conversation's last turn found, so a follow-up ("Which full-back is tucking in?") keeps
@@ -276,6 +277,17 @@ const CHALLENGE_TURN_SCHEMA: Record<string, unknown> = {
           nullable: true,
           items: { type: Type.STRING },
         },
+        peerPlacement: {
+          type: Type.OBJECT,
+          nullable: true,
+          description:
+            'Required when overall changes: the <calibrated_peer_ledger> peers (other players, names exactly as listed) this version is now a better footballer than, level with, and not as good as. The new overall must agree with it.',
+          properties: {
+            betterThan: { type: Type.ARRAY, items: { type: Type.STRING } },
+            levelWith: { type: Type.ARRAY, items: { type: Type.STRING } },
+            notAsGoodAs: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+        },
       },
       required: ['targetPlayerName'],
     },
@@ -306,6 +318,8 @@ export interface ConversationalScoutParams {
   lockedDossiersBlock: string;
   savedDossiersBlock: string;
   peerLedgerBlock?: string;
+  /** The cards in `peerLedgerBlock`, which a challenge's revised Overall is placed against. */
+  peerLedger?: PlayerProfile[];
   /** Filled with the cards the model shows and the players it found no card for. */
   composer?: ReplyComposer;
   /** The card the user chose to challenge; a challenge turn revises this one. */
@@ -646,6 +660,7 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 2. Check your own earlier replies in <ongoing_thread>. If they ranked these players differently from what the dossiers' Overall ratings show, say so in your opening paragraph before anything else.
 3. If the current dossier rating/attribute is justified, set \`revisedDossier: false\` and explain why with concrete tactical/statistical reasoning in \`replyProse\`, addressing the user's specific argument.
 4. If the user makes a valid evidence-backed point (or explicitly asks to adjust a rating/attribute), set \`revisedDossier: true\`, populate \`dossierPatch\` with the exact updated values so the UI card updates live, and explain the revision clearly in \`replyProse\`.
+   The Overall is your judgment of how good a footballer this version was against his peers, never a sum of attributes: correcting an attribute does not by itself move it, and the Overall is never explained as the result of one attribute. Change the Overall only when you now judge him a better or worse footballer than the card says, and then fill \`dossierPatch.peerPlacement\` with the ledger peers he is now better than, level with, and not as good as; the new Overall must sit above, level with and below them, and the reply says where he now stands among them.
 5. Ensure every number you mention in \`replyProse\` matches the dossiers above (the active one and any in <locked_dossiers>) or your \`dossierPatch\`. Quote another player's attributes only from his dossier.
 </instructions>`;
 
@@ -748,10 +763,27 @@ ${challengeInstructions()}
         thinkingLevelOverride: 'low',
       });
 
-      const revisedTarget =
+      let revisedTarget =
         result.revisedDossier && result.dossierPatch
           ? applyDossierPatch(targetDossier, result.dossierPatch)
           : targetDossier;
+      let placementNote = '';
+      if (revisedTarget !== targetDossier && result.dossierPatch) {
+        // A moved Overall is placed against the ledger like a new rating (`ratingPlacement.ts`).
+        const placement = placeRevisedOverall(
+          targetDossier,
+          revisedTarget,
+          result.dossierPatch.peerPlacement,
+          [...otherCards, ...(params.peerLedger ?? [])],
+        );
+        revisedTarget = placement.profile;
+        if (placement.placed !== placement.proposed) {
+          console.warn(
+            `[ChallengePlacement] ${targetDossier.basicInfo.name}: proposed ${placement.proposed}, placement allows ${placement.placed}`,
+          );
+          placementNote = `\n\nThe card's placement among the rated peers holds this version at **${placement.placed}** Overall, so that is what the card now shows.`;
+        }
+      }
       if (revisedTarget !== targetDossier) {
         // The challenger keeps this as their revision; the shared card weighs it at its next re-rating.
         void recordDossierRevision(targetDossier, revisedTarget, result.replyProse, groundingNotes);
@@ -759,7 +791,7 @@ ${challengeInstructions()}
       }
 
       const cleanedReply = sanitizeScoutProse(
-        result.replyProse,
+        placementNote ? `${result.replyProse}${placementNote}` : result.replyProse,
         {
           verifiedFacts: groundingNotes ? [groundingNotes] : [],
           clubManagers: challengeManagers,
