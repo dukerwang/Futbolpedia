@@ -43,6 +43,7 @@ import {
   EDITION_NAME_RE,
   formatEraQualifier,
   formatPrimeWindow,
+  formWindowFor,
   isValidEvaluationDate,
   seasonMatches,
   todayIso,
@@ -90,12 +91,12 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
     version: {
       type: Type.OBJECT,
       description:
-        'Mandatory card edition and temporal dating object. Identifies whether this card represents current form or a historical career peak, along with the exact snapshot date.',
+        'Mandatory card edition and temporal dating object. Identifies whether this card represents current form (the level played over the 12 months up to the evaluation date) or a historical version, along with the exact snapshot date.',
       properties: {
         type: {
           type: Type.STRING,
           enum: DOSSIER_VERSION_TYPES,
-          description: 'Card edition type.',
+          description: "Card edition type. 'current' rates the level he has played at over the 12 months up to the evaluation date.",
         },
         label: {
           type: Type.STRING,
@@ -110,13 +111,13 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         seasonOrEra: {
           type: Type.STRING,
           description:
-            'Season formatted YYYY-YY. For a prime or era card, the window from its first season to its last (YYYY-YY for one season).',
+            'Season formatted YYYY-YY: for a current card, the season in progress (the app records the 12-month window it rates). For a prime or era card, the window from its first season to its last (YYYY-YY for one season).',
         },
         primeWindow: {
           type: Type.OBJECT,
           nullable: true,
           description:
-            'Prime and era cards only: the first and last season of the window, each formatted YYYY-YY (YYYY for calendar-year leagues). For a prime, the two or three consecutive seasons when the player was at his best; for an era, the seasons that define the version the user asked for (the same season twice for a one-season era). Null for current and season cards.',
+            "Prime and era cards only: the first and last season of the window, each formatted YYYY-YY (YYYY for calendar-year leagues). For a prime, the two or three consecutive seasons when the player was at his best; for an era, the seasons that define the version the user asked for (the same season twice for a one-season era). Null for current and season cards; the app sets a current card's 12-month window itself.",
           properties: {
             startSeason: { type: Type.STRING },
             endSeason: { type: Type.STRING },
@@ -863,6 +864,7 @@ export function applyVersionRules(
         id: `${base}-current-${today}`,
         type: 'current',
         evaluationDate: today,
+        formWindow: formWindowFor(today),
         seasonOrEra: currentSeason,
         label: `Current Form (${month} ${year})`,
         peakContext: null,
@@ -1055,6 +1057,7 @@ export async function synthesizePlayerDossier(
 ): Promise<PlayerProfile> {
   const { year, month, currentSeason } = getCurrentSeasonInfo();
   const currentDateIso = todayIso();
+  const formWindow = formWindowFor(currentDateIso);
 
   const temporalRules = params.requestedSeason
     ? `
@@ -1082,8 +1085,10 @@ export async function synthesizePlayerDossier(
     : `
     - CURRENT FORM DATED CARD EVALUATION (${month} ${year}, Season ${currentSeason}, Date: ${currentDateIso}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <deterministic_bio_record> and <factual_foundation>.
     - DATING REQUIREMENT: Set \`version.type\` = "current", \`version.evaluationDate\` = "${currentDateIso}", \`version.seasonOrEra\` = "${currentSeason}", \`version.label\` = "Current Form (${month} ${year})", and \`version.peakContext\` = null.
-    - NO REPUTATION LAG: If the player is already performing at world-class level for an elite club right now, rate that level in his current Overall — do not undersell him at 87–89 Borderline World-Class and hide his current level in Potential.
-    - Leading a Champions League-winning or Ballon d'Or-caliber campaign is strong evidence of his level; it confirms how good he is rather than setting a fixed band.
+    - THE FORM WINDOW (${formWindow.from} to ${formWindow.to}): Rate the level he has played at over these 12 months, in the matches he played: the end of last season and this season so far. Matches within the window count equally, wherever in it they fall. Neither a few recent weeks nor his reputation from before the window moves the rating; only a lasting change the evidence shows does (age-related decline, an injury that changed how he plays, a new role), and then the card says so. The attributes describe him across the window.
+    - EVIDENCE FOR THE WINDOW: His career record covers the seasons before this one, including the part of the window that falls in them; where it and the live season record differ on this season, the live record is the newer. A search point marked older than the current season still counts when it is dated inside the window.
+    - NO REPUTATION LAG OR CARRY: Neither sets the band. Rate a level he has reached in the window in full in his current Overall, never holding part of it back in Potential, and add nothing for a standing the window's football doesn't support.
+    - Individual awards, rankings and team campaigns from the window are evidence of how he played; none of them sets a band.
     - Set \`calibration.verifiedCurrentHeadCoach\` ONLY if <factual_foundation> explicitly confirms the current head coach of the player's current club as of ${month} ${year}. Never name a head coach or manager anywhere in the card's prose; the app attaches the verified manager separately.
     - If grounding shows the player started a recent match, treat them as match fit.
     - Never write a stat-based qualifier in latestUpdate without a specific verified number from the grounding data.`;

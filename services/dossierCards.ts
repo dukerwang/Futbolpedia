@@ -50,6 +50,21 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Today's UTC date as YYYY-MM-DD. */
 export const todayIso = (): string => new Date().toISOString().split('T')[0];
 
+/** A current card rates the level a player played at over this many months up to its evaluation date. */
+export const FORM_WINDOW_MONTHS = 12;
+
+/**
+ * The window a current card evaluated on `evaluationDate` (YYYY-MM-DD) rates: from the same day
+ * FORM_WINDOW_MONTHS earlier (the month's last day when it has no such day) to the evaluation date.
+ */
+export const formWindowFor = (evaluationDate: string): { from: string; to: string } => {
+  const [year, month, day] = evaluationDate.split('-').map(Number);
+  const first = new Date(Date.UTC(year, month - 1 - FORM_WINDOW_MONTHS, 1));
+  const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  first.setUTCDate(Math.min(day, lastDay));
+  return { from: first.toISOString().slice(0, 10), to: evaluationDate };
+};
+
 /** True for a well-formed YYYY-MM-DD that isn't in the future. */
 export const isValidEvaluationDate = (s?: string | null): s is string =>
   typeof s === 'string' && ISO_DATE_RE.test(s) && s <= todayIso();
