@@ -259,6 +259,17 @@ describe('scrubFormerCoaches', () => {
     expect(scrubFormerCoaches(text, [moved, city])).toBe(text);
   });
 
+  it('rewrites a previous coach whose name starts or ends with an accented letter', () => {
+    const madrid = { club: 'Real Madrid', coach: 'Xabi Alonso', previousCoach: 'Álvaro Arbeloa' };
+    expect(scrubFormerCoaches("Real Madrid under Álvaro Arbeloa sat deep; Álvaro Arbeloa's 4-4-2 held.", [madrid])).toBe(
+      "Real Madrid under Xabi Alonso sat deep; Xabi Alonso's 4-4-2 held.",
+    );
+    const club = { club: 'Benfica', coach: 'Bruno Lage', previousCoach: 'Roger Schmidté' };
+    expect(scrubFormerCoaches('Benfica, managed by Roger Schmidté, pressed high.', [club])).toBe(
+      'Benfica, managed by Bruno Lage, pressed high.',
+    );
+  });
+
   it('does nothing without verified managers or a previous coach', () => {
     const text = 'Chelsea under Liam Rosenior pressed high.';
     expect(scrubFormerCoaches(text, [])).toBe(text);

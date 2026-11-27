@@ -106,6 +106,11 @@ export function scrubFormerCoaches(text: string, managers: VerifiedClubManager[]
   return scrubFormerCoachesDetailed(text, managers).text;
 }
 
+// A name's edges, read with Unicode letters: `\b` treats an accented first or last letter
+// ("Álvaro") as no word at all, so a predecessor named that way was never rewritten.
+const NAME_START = '(?<![\\p{L}\\p{N}_])';
+const NAME_END = '(?![\\p{L}\\p{N}_])';
+
 /** `scrubFormerCoaches`, also returning each former coach it rewrote and the coach it put in his place. */
 export function scrubFormerCoachesDetailed(
   text: string,
@@ -127,7 +132,7 @@ export function scrubFormerCoachesDetailed(
 
     // 1. "Under [Previous]" -> "Under [Coach]"
     result = result.replace(
-      new RegExp(`\\b(under)\\s+(?:manager\\s+|head\\s+coach\\s+|coach\\s+)?${escaped}\\b`, 'gi'),
+      new RegExp(`\\b(under)\\s+(?:manager\\s+|head\\s+coach\\s+|coach\\s+)?${escaped}${NAME_END}`, 'giu'),
       (_match, prefix: string) => {
         note();
         return `${prefix[0] === 'U' ? 'Under' : 'under'} ${coach}`;
@@ -135,7 +140,7 @@ export function scrubFormerCoachesDetailed(
     );
 
     // 2. "[Previous]'s" -> "[Coach]'s"
-    result = result.replace(new RegExp(`\\b${escaped}['’]s\\b`, 'gi'), () => {
+    result = result.replace(new RegExp(`${NAME_START}${escaped}['’]s\\b`, 'giu'), () => {
       note();
       return `${coach}'s`;
     });
@@ -143,8 +148,8 @@ export function scrubFormerCoachesDetailed(
     // 3. "[Previous] deploys / uses / fields" -> "[Coach] deploys / uses / fields"
     result = result.replace(
       new RegExp(
-        `\\b${escaped}\\s+(deploys|uses|fields|plays|favours|favors|prefers|relies on)\\b`,
-        'gi',
+        `${NAME_START}${escaped}\\s+(deploys|uses|fields|plays|favours|favors|prefers|relies on)\\b`,
+        'giu',
       ),
       (_match, verb) => {
         note();
@@ -154,7 +159,7 @@ export function scrubFormerCoachesDetailed(
 
     // 4. "managed by [Previous]" / "coached by [Previous]" -> "managed by [Coach]"
     result = result.replace(
-      new RegExp(`\\b(managed by|coached by)\\s+${escaped}\\b`, 'gi'),
+      new RegExp(`\\b(managed by|coached by)\\s+${escaped}${NAME_END}`, 'giu'),
       (_match, prefix) => {
         note();
         return `${prefix} ${coach}`;
