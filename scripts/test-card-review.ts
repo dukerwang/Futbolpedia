@@ -668,16 +668,29 @@ await test('gaps: the best current card below every recent historical card at it
   assert.equal(gaps[0].windowEnds, dayStr(Date.parse(`${daysAgo(12)}T00:00:00Z`) + 30 * DAY));
 });
 
+/** A lower-rated second current card at a position, so the position is checked. */
+const second = (position: string) => at(`Second ${position}`, position, 70);
+
+await test('gaps: a position with only one current card is not checked, however low it sits', () => {
+  const lone = at('Lone Stopper', 'Centre-Back', 77);
+  const scale = [prime('Old Stopper', 91, '2013-16', { position: 'Centre-Back' })];
+  assert.deepEqual(findCalibrationGaps([lone, ...scale], T0), []);
+  assert.deepEqual(findCalibrationGaps([lone, second('Centre-Back'), ...scale], T0).map((g) => g.current.player), ['Lone Stopper']);
+  // A second card at another position doesn't make up the number.
+  assert.deepEqual(findCalibrationGaps([lone, second('Left-Back'), ...scale], T0), []);
+});
+
 await test('gaps: a recent historical card level with or below the best current card closes the gap', () => {
+  const nines = [at('Nine Now', 'Centre Forward', 90), second('Centre Forward')];
   const above = prime('Old Nine', 93, '2014-17');
   for (const overall of [90, 89]) {
-    assert.deepEqual(findCalibrationGaps([at('Nine Now', 'Centre Forward', 90), above, prime('Other Nine', overall, '2019-22')], T0), []);
+    assert.deepEqual(findCalibrationGaps([...nines, above, prime('Other Nine', overall, '2019-22')], T0), []);
   }
   // A season card counts as historical too, and a position with no recent historical card has no gap.
   const season = prime('Season Nine', 89, '2024-25');
   season.version = { ...season.version!, type: 'season_snapshot', primeWindow: undefined };
-  assert.deepEqual(findCalibrationGaps([at('Nine Now', 'Centre Forward', 90), above, season], T0), []);
-  assert.deepEqual(findCalibrationGaps([at('Keeper Now', 'Goalkeeper', 80), above], T0), []);
+  assert.deepEqual(findCalibrationGaps([...nines, above, season], T0), []);
+  assert.deepEqual(findCalibrationGaps([at('Keeper Now', 'Goalkeeper', 80), second('Goalkeeper'), above], T0), []);
 });
 
 await test("gaps: the recent scale is the last 15 years, and a player's own historical card isn't part of it", () => {
@@ -686,9 +699,10 @@ await test("gaps: the recent scale is the last 15 years, and a player's own hist
     const card = prime('Edge Nine', 93, '2009-12');
     return { ...card, version: { ...card.version!, seasonOrEra: window } };
   };
-  assert.deepEqual(findCalibrationGaps([at('Nine Now', 'Centre Forward', 90), old('2010-11')], T0), []);
-  assert.equal(findCalibrationGaps([at('Nine Now', 'Centre Forward', 90), old('2011-12')], T0).length, 1);
-  assert.deepEqual(findCalibrationGaps([at('Nine Now', 'Centre Forward', 90), prime('Nine Now', 94, '2019-22')], T0), []);
+  const nines = [at('Nine Now', 'Centre Forward', 90), second('Centre Forward')];
+  assert.deepEqual(findCalibrationGaps([...nines, old('2010-11')], T0), []);
+  assert.equal(findCalibrationGaps([...nines, old('2011-12')], T0).length, 1);
+  assert.deepEqual(findCalibrationGaps([...nines, prime('Nine Now', 94, '2019-22')], T0), []);
 });
 
 await test('gaps: tied best current cards are each reported, and the list names the nearest of many', () => {
@@ -702,6 +716,7 @@ await test('gaps: tied best current cards are each reported, and the list names 
 
 const GAP_ROWS: StoredCard[] = [
   row('left-now', at('Left Now', 'Left-Back', 90)),
+  row('right-now', at('Right Now', 'Right-Back', 82)),
   // Past its window, so it isn't in the served pool the gap is read from.
   row('stale-winger', at('Stale Winger', 'Left Winger', 84, 33)),
   row('prime-old-left', prime('Old Left', 91, '2012-15', { position: 'Left-Back' })),
@@ -734,7 +749,7 @@ await test('gaps: a card in a gap is queued from the journal for the day its win
   // The day his window closes he is in the expired list, queued, ahead of a card nothing flagged.
   const later = T0 + 20 * DAY;
   const after = await gatherCardSignals(cardSources({ rows: async () => GAP_ROWS, queued: async () => queued }), (p) => (p === 'Stale Winger' ? 9 : 0), later);
-  assert.deepEqual(after.expiredCurrent.map((c) => [c.player, c.queued]), [['Left Now', true], ['Stale Winger', false]]);
+  assert.deepEqual(after.expiredCurrent.map((c) => [c.player, c.queued]), [['Left Now', true], ['Stale Winger', false], ['Right Now', false]]);
   assert.match(after.expiredCurrent[0].queuedReason!, /Full-Back and Wing-Back/);
   // A journal row written before gaps were reported is still read.
   const { calibrationGaps: _none, ...before } = flagged;

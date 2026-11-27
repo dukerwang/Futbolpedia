@@ -73,6 +73,8 @@ export const MIN_WINDOW_SEASONS = 2;
 export const STARTER_MIN_OVERALL = RATING_TIERS.find((t) => t.id === '80_83_QUALITY_STARTER')!.min;
 /** A historical card is on the recent scale when its window ended within this many years. */
 export const RECENT_HISTORICAL_YEARS = 15;
+/** A position is checked for a calibration gap only with this many current cards: one card is the best by default. */
+export const GAP_MIN_CURRENT_CARDS = 2;
 /** The most historical cards a calibration gap lists; it also counts them all. */
 export const GAP_CARDS_LISTED = 8;
 /** A disagreement pair enters the signals with at least this many counted reports (each source once a day). */
@@ -325,8 +327,10 @@ const windowClosed = (card: PlayerProfile): string | null => {
  * Finds, by code, the positions where current cards sit below the recent historical scale: the
  * best current card at a position (grouped as closest peers are, so full-backs on either flank are
  * one position) rated below every other player's prime, era and season card there whose window
- * ended in the last RECENT_HISTORICAL_YEARS. Tied best cards are each reported. A gap is a figure
- * about the pool: nothing here changes a rating.
+ * ended in the last RECENT_HISTORICAL_YEARS. A position with fewer than GAP_MIN_CURRENT_CARDS
+ * current cards isn't checked: a low lone card says the library is missing players, nothing about
+ * how current cards are rated. Tied best cards are each reported. A gap is a figure about the
+ * pool: nothing here changes a rating.
  */
 export function findCalibrationGaps(pool: PlayerProfile[], nowMs: number, cap: number = CARD_LIST_CAP): CalibrationGap[] {
   const cutoff = new Date(nowMs);
@@ -338,6 +342,7 @@ export function findCalibrationGaps(pool: PlayerProfile[], nowMs: number, cap: n
   for (const [group, position] of Object.entries(POSITION_GROUP_NAMES)) {
     const here = (p: PlayerProfile) => positionGroups(p.basicInfo?.position).has(group);
     const current = rated.filter((p) => !isPrimeCard(p) && here(p));
+    if (current.length < GAP_MIN_CURRENT_CARDS) continue;
     const best = Math.max(0, ...current.map((p) => p.ratings.overall));
     const historical = recent.filter(here);
     for (const card of current.filter((p) => p.ratings.overall === best)) {
@@ -644,7 +649,7 @@ ${list(s.coherence.cycles.map((c) => `${c.cards.map(refText).join(' > ')} > back
 Pairs of cards that answers ordered the other way before the cards settled the order (counted reports, each source once a day; only the counts were kept; either card may be the one out of place; a current card here can be re-rated only once its window ends, and is queued for that day):
 ${list((s.disagreements ?? []).map((d) => `answers put ${refText(d.lower)} above ${refText(d.higher)}: ${d.reports} reports on ${d.days} days, ${d.firstDay} to ${d.lastDay} (${describeVia(d.via)})${d.waiting.length ? `; waiting for its window: ${d.waiting.map((w) => `${w.player} until ${w.windowEnds}`).join(', ')}` : ''}`))}
 
-Calibration gaps: positions where the best current card sits below every other player's prime, era and season card there whose window ended in the last ${RECENT_HISTORICAL_YEARS} years (reported by code; it doesn't show which side is out of place and changes no rating; the current card can be re-rated only once its window ends, and is queued for that day):
+Calibration gaps: positions with at least ${GAP_MIN_CURRENT_CARDS} current cards where the best of them sits below every other player's prime, era and season card there whose window ended in the last ${RECENT_HISTORICAL_YEARS} years (reported by code; it doesn't show which side is out of place and changes no rating; the current card can be re-rated only once its window ends, and is queued for that day):
 ${list((s.calibrationGaps ?? []).map((g) => `${g.position}: ${refText(g.current)} sits below all ${g.recent} recent historical cards there, nearest first: ${g.above.map(refText).join(', ')}; window ends ${g.windowEnds}`))}
 
 Each position's Overall distribution against the whole pool (a reported figure, not a reason to review a card):
