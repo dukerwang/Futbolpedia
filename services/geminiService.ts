@@ -923,7 +923,7 @@ export const sendMessageToAI = async (
 
   // 4. Resolve conversation-locked and saved-archive dossiers
   const context = buildTurnContext(message, route, conversationDossiers, turnDossiers);
-  const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock, peerLedger } = context;
+  const { lockedDossiersBlock, savedDossiersBlock, peerLedgerBlock } = context;
 
   // 5. The chat loop: one model loop decides the research, for a question about the present, a Gaffa
   // club attached in the app included. Every other turn takes the conversational scout, and so does
@@ -956,7 +956,6 @@ export const sendMessageToAI = async (
       lockedDossiersBlock,
       savedDossiersBlock,
       peerLedgerBlock,
-      peerLedger,
       composer,
       challengeCard,
       onDossierUpdated: options?.onDossierUpdated,
