@@ -55,6 +55,7 @@ export const CORE_SCOUTS_CODE = `II. THE SCOUT'S CODE (EVALUATION & CALIBRATION 
 6. **Form vs. Class (Healthy Baseline) & Injury Quarantine (Protocol B):**
    - Overall and 25-attribute ratings measure established **Class (Healthy Baseline)**, not a two-week cold streak or injury layoff.
    - Injuries affect availability, not talent. Report confirmed injuries or rust in \`latestUpdate\` (or prose context), while keeping Overall and physical/technical attributes at the player's healthy baseline unless post-recovery evidence proves permanent physical decline.
+   - Availability is never footballing quality: matches missed, appearance totals and durability neither lower nor raise Overall, \`Consistency\` or any other attribute, and never separate two players' ratings. A version with fewer matches is rated on the level he played at in them; a thin sample lowers the card's confidence, not its rating.
    - **Starting XI Override:** If grounding confirms a player started or appeared in a match more recently than an older injury report, they are match fit — disregard the outdated injury claim.
 7. **Tactical Role Primacy & High-Risk Creation:**
    - Rate the tactical assignment and how well the player executes it, not raw box-score volume. A player whose job is mostly positional or off the ball is graded on how well he does that job, not on tackle or goal totals.
@@ -114,7 +115,7 @@ export const CORE_ATTRIBUTES = `IV. ATTRIBUTE FRAMEWORK (25 Outfield + 7 Goalkee
   - *Composure:* Calmness and execution clarity when tightly pressed or in chaotic penalty-box/build-up phases.
   - *Clutch:* Proven track record of delivering decisive actions in finals, Champions League knockouts, derbies, and late match states.
   - *Leadership:* Vocal organization, defensive/midfield line marshaling, competitive standards, and emotional steadiness under pressure.
-  - *Consistency:* Week-to-week floor and reliability of performance level across a full 50-match campaign.
+  - *Consistency:* Week-to-week floor and reliability of his performance level in the matches he played. Matches missed through injury or illness never lower it: that is availability, not consistency.
   - *Flair:* Creative audacity, improvisation, and unpredictability (descriptive; never artificially inflates Overall).
 - **Goalkeeper:**
   - *Reflexes:* Close-range reaction speed and shot-stopping explosiveness.
@@ -130,7 +131,7 @@ export const CORE_ATTRIBUTES = `IV. ATTRIBUTE FRAMEWORK (25 Outfield + 7 Goalkee
   2. *\`Dribbling\` vs. \`Retention\` vs. \`First Touch\`:* 1v1 isolation beating a defender and progressive carrying (\`Dribbling\`) ≠ shielding and press-resistant ball security (\`Retention\`) ≠ clean reception control (\`First Touch\`). A deep-lying controller can have elite \`Retention\` and \`First Touch\` without elite \`Dribbling\`.
   3. *\`Vision\` vs. \`Progressive Passing\` vs. \`Delivery\` vs. \`Combination Play\`:* Seeing disguised lanes early (\`Vision\`) ≠ vertical line-breaking pass execution (\`Progressive Passing\`) ≠ wide crosses/set-pieces/switches (\`Delivery\`) ≠ tight one-touch wall passes (\`Combination Play\`).
   4. *\`Defensive Positioning\` vs. \`Interceptions\` vs. \`Tackling\` vs. \`Pressing Intensity\`:* Holding structural shape and screening space (\`Defensive Positioning\`) ≠ stepping in to cut out passes (\`Interceptions\`) ≠ 1v1 ground dispossession (\`Tackling\`) ≠ high-energy pressing triggers and cover shadows (\`Pressing Intensity\`).
-  5. *\`Composure\` vs. \`Clutch\` vs. \`Consistency\`:* Calm execution under physical pressure (\`Composure\`) ≠ decisive big-game knockout moments (\`Clutch\`) ≠ week-in, week-out 8/10 reliability (\`Consistency\`).
+  5. *\`Composure\` vs. \`Clutch\` vs. \`Consistency\`:* Calm execution under physical pressure (\`Composure\`) ≠ decisive big-game knockout moments (\`Clutch\`) ≠ week-in, week-out 8/10 reliability when he plays (\`Consistency\`). None of them measures how many matches he was fit for.
 
 `;
 /** Section V heading. */

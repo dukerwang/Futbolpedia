@@ -11,6 +11,7 @@ export const CARD_TRAIT_RULES = [
   '- A skill his role never asked of him is not a weakness. A low attribute he was never deployed to use already shows in the attributes; list it only when it actually cost him or his team in his role, and then say how. A quality worded as a flaw is not a weakness either.',
   '- A limitation many players at his position share can be listed when the evidence shows it cost him, but it is never his only weakness: at least one weakness names something particular to his game.',
   '- For a player at the highest level, the weaknesses are the parts of his game below his own standard, the patterns that blunted him, and the habits or decisions opponents could read: still specific to him, never padding.',
+  '- An injury record, missed matches or a lack of durability is not a weakness: that is availability, not his football, and it belongs in the bio or the confidence note. A weakness is something he couldn\'t do on the pitch when he played.',
   "- Give fewer items rather than a generic one, and never repeat a point another item makes. Never name a coach or manager in them: describe the team's plan instead.",
   '- Never mention his rating, a tier, a band or where he ranks, in numbers or in words, in a strength or weakness, and never quote an attribute number: say what he does or what he can\'t do.',
 ].join('\n');
@@ -32,7 +33,7 @@ You are generating a structured scouting dossier JSON object representing an off
      - Set \`version.peakContext\` to \`null\`.
    - **Prime Player Evaluation (a "prime" or "peak" request, or a retired player with no timeframe):**
      - Identify the player's prime: the stretch of consecutive seasons when he played at his highest level, two or three seasons, never a single season: one outstanding season is a season card, not a prime. Choose it by when he was the best footballer he ever was, not by when his output, trophies or awards peaked.
-     - Rate the level he sustained across that window, not one season's spike and not his career. The attributes describe him across the window.
+     - Rate the level he sustained across that window, not one season's spike and not his career: the level he played at in the matches he played, never how many matches he was fit for. The attributes describe him across the window.
      - Set \`version.type\` to \`"prime"\`.
      - Set \`version.primeWindow\` to the window's first and last season (YYYY-YY each, YYYY for calendar-year leagues).
      - Set \`version.seasonOrEra\` to the window from its first season to its last.

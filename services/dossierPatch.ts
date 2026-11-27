@@ -1,4 +1,4 @@
-import type { Attributes, GoalkeeperAttributes, PlayerProfile } from '../types';
+import type { Attributes, GoalkeeperAttributes, PeerPlacement, PlayerProfile } from '../types';
 import { normalizeClub, normalizePosition } from '../constants/ratingTiers';
 import { getCardKey } from './dossierCards';
 
@@ -16,6 +16,8 @@ export interface DossierPatch {
   playstyleDescription?: string;
   bestRoles?: string[];
   latestUpdate?: string;
+  /** Where a revised Overall now sits among the ledger peers (`placeRevisedOverall`); not applied here. */
+  peerPlacement?: PeerPlacement;
 }
 
 export function applyDossierPatch(base: PlayerProfile, patch: DossierPatch): PlayerProfile {

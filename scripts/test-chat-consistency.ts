@@ -158,6 +158,7 @@ interface GeminiCall {
 }
 let calls: GeminiCall[] = [];
 let challengeReply = '';
+let challengePatch: Record<string, unknown> | null = null;
 let proseReply = '';
 let route: Record<string, unknown> = {};
 
@@ -179,7 +180,11 @@ globalThis.fetch = (async (input: any, init?: any) => {
   } else if (structured && prompt.includes('Classify the user')) {
     text = JSON.stringify(route);
   } else if (structured && prompt.includes('active_dossier')) {
-    text = JSON.stringify({ replyProse: challengeReply, revisedDossier: false });
+    text = JSON.stringify(
+      challengePatch
+        ? { replyProse: challengeReply, revisedDossier: true, dossierPatch: challengePatch }
+        : { replyProse: challengeReply, revisedDossier: false },
+    );
   } else if (structured) {
     text = '{}';
   } else {
@@ -278,6 +283,84 @@ await test('a debate turn locks both prime cards and corrects misquotes', async 
   assert.match(prosePrompt, /locked_dossiers[\s\S]*Name: Ronaldinho[\s\S]*Name: Mohamed Salah/);
   assert.match(prosePrompt, /Answer the Argument, Not the Person/);
   assert.equal(reply, 'Salah offered Stamina 92 and Pressing Intensity 85 that Ronaldinho never did.');
+});
+
+// --- A challenge that moves the Overall is placed against the peers ------------------------
+
+const LEVEL_RONALDINHO: PlayerProfile = {
+  ...RONALDINHO,
+  peerPlacement: { betterThan: [], levelWith: ['Mohamed Salah (2017-18)'], notAsGoodAs: [] },
+};
+const challengeRoute = {
+  intent: 'challenge_or_revise',
+  analyticalMode: 'debate_or_verdict',
+  targetPlayers: ['Ronaldinho'],
+  targetClubs: [],
+  searchQueries: [],
+  reasoningComplexity: 'high',
+  isHistorical: false,
+  wantsRegeneration: false,
+  needsSearch: false,
+};
+const runChallenge = async (patch: Record<string, unknown>): Promise<{ reply: string; updated?: PlayerProfile }> => {
+  calls = [];
+  route = challengeRoute;
+  challengeReply = 'Fair point: I am revising his card.';
+  challengePatch = patch;
+  let updated: PlayerProfile | undefined;
+  try {
+    const reply = await quietly(() =>
+      sendMessageToAI(PUSHBACK, debateHistory, undefined, [LEVEL_RONALDINHO, SALAH], [], {
+        challengeCardKey: getCardKey(LEVEL_RONALDINHO),
+        onDossierUpdated: (p: PlayerProfile) => {
+          updated = p;
+        },
+      }),
+    );
+    return { reply: reply as string, updated };
+  } finally {
+    challengePatch = null;
+  }
+};
+
+await test('a challenge prompt says the Overall is a judgment placed against peers, not a sum of attributes', async () => {
+  await runChallenge({ targetPlayerName: 'Ronaldinho', attributes: { consistency: 92 } });
+  const challengePrompt = calls.find((c) => c.structured && c.prompt.includes('active_dossier'))?.prompt ?? '';
+  assert.match(challengePrompt, /never a sum of attributes/);
+  assert.match(challengePrompt, /peerPlacement/);
+  assert.match(challengePrompt, /Availability is never footballing quality/);
+  assert.match(challengePrompt, /Availability and Team Success/);
+});
+
+await test('an attribute fix leaves the Overall where it was', async () => {
+  const { updated, reply } = await runChallenge({ targetPlayerName: 'Ronaldinho', attributes: { consistency: 92 } });
+  assert.equal(updated?.attributes.consistency, 92);
+  assert.equal(updated?.ratings.overall, 95);
+  assert.doesNotMatch(reply, /holds this version at/);
+});
+
+await test('a raised Overall with no new placement is held by the placement already on the card', async () => {
+  const { updated, reply } = await runChallenge({ targetPlayerName: 'Ronaldinho', overall: 96, potential: 96 });
+  assert.equal(updated?.ratings.overall, 95);
+  assert.equal(updated?.ratings.potential, 95);
+  assert.match(reply, /holds this version at \*\*95\*\* Overall/);
+});
+
+await test('a raised Overall with a placement that allows it is kept, and the placement recorded', async () => {
+  const { updated, reply } = await runChallenge({
+    targetPlayerName: 'Ronaldinho',
+    overall: 96,
+    potential: 96,
+    peerPlacement: { betterThan: ['Mohamed Salah'], levelWith: [], notAsGoodAs: [] },
+  });
+  assert.equal(updated?.ratings.overall, 96);
+  assert.deepEqual(updated?.peerPlacement?.betterThan, ['Mohamed Salah (2017-18)']);
+  assert.doesNotMatch(reply, /holds this version at/);
+});
+
+await test('card trait rules say an injury record is not a weakness', async () => {
+  const { CARD_TRAIT_RULES } = await import('../prompts/dossierPrompt');
+  assert.match(CARD_TRAIT_RULES, /injury record, missed matches or a lack of durability is not a weakness/);
 });
 
 console.log(`${passes} passed, ${failures} failed`);
