@@ -47,7 +47,7 @@ everyone in the squad of a club with a stored snapshot, and anyone a tool resolv
 | ESPN site API (already used) | Reachable, keyless, unofficial | Per-match box scores for every league in scope |
 | FPL feed (already used) | Reachable, Premier League only | Minutes, expected goals and assists, availability |
 | Wikipedia (already used) | Reachable | Season-by-season appearances and goals, honours |
-| Club Elo | Site answers; `api.clubelo.com` timed out twice | Team strength across eras, if the API comes back |
+| Club Elo | `api.clubelo.com` accepts connections and never answers; the site was rebuilt with no data endpoint or terms | None: team strength is computed from ESPN results |
 | FBref | Refuses scripted requests; lost its Opta advanced data on 2026-01-20 | None |
 | Understat | Served a page with no data to a scripted request; no documented API | None |
 | StatsBomb open data | Free event data for selected past competitions; licence unchecked | Later, historical calibration only |
@@ -62,7 +62,12 @@ What each source gives:
   each player's appearance, substitute flag, goals, assists, shots, shots on target, fouls
   committed and suffered, offsides, cards, saves and goals against, along with `keyEvents`
   (substitutions, so minutes can be derived), formation slots and commentary. It covers every
-  league in scope, not only the Premier League. How far back the box scores go is unverified.
+  league in scope, not only the Premier League. Spot checks found the same fields and the
+  substitutions for La Liga 2015-16, Serie A 2010-11, the Premier League 2004-05, the Bundesliga
+  2018-19 and the Champions League 2021-22. So a current player's 12 months and a prime window
+  from about 2004 on can be measured from the same source on the same terms, which is a
+  calibration aid of its own: a prime and a current card compared on figures neither era's
+  coverage favours.
 - **Advanced per-90 data** (progression, defensive actions, expected goals) beyond the Premier
   League has no free source the app may use. The analyst works from box scores, FPL and team
   strength, and the observations layer covers what box scores miss.
@@ -99,9 +104,13 @@ feeds), injuries with FPL's dated notes, coach changes (`club_managers`) and awa
 
 ### 4. Team strength
 
-`kb_team_strength`: club, date, rating, source. Club Elo when its API answers. Otherwise, a rating
-computed by code from ESPN results, which go back to 2003-04. Strength lets the analyst say what
-level a player faced and lets a 1999 side and a 2026 side be compared on more than reputation.
+`kb_team_strength`: club, date, rating, matches counted. An Elo rating computed by code from ESPN
+results in the leagues in scope and the European club competitions, which link the leagues to
+each other. Results start in 2003-04, so the first season is burn-in and ratings start in
+2004-05; earlier dates get no rating. Strength lets the analyst say what level a player faced
+and lets sides from different seasons be compared on more than reputation. It is keyed by ESPN
+team ID, with the Wikidata crosswalk added once identity lands. It doesn't depend on identity, so
+it is built alongside phase 1.
 
 ### 5. Observations (later)
 
@@ -146,7 +155,8 @@ rated.
    `services/groundingService.ts`.
 2. **Appearances and player seasons.** ESPN box scores in the sweep, Wikipedia for earlier
    seasons, `player_record` and `position_percentiles`.
-3. **Timeline and team strength.** `player_timeline`, `team_strength`. Retry Club Elo first.
+3. **Timeline.** `player_timeline`. Team strength (`team_strength`) is built alongside phase 1,
+   since it keys on ESPN team IDs and needs no identity.
 4. **Agentic rater.**
 5. **Observations,** after a fetch-and-quote path exists.
 
