@@ -9,6 +9,7 @@ import {
   type LiveTableResult,
 } from './liveFootball';
 import type { HistoryResult } from './historyFootball';
+import { WIKIDATA_ENTITY_PAGE, formatWhoIs, type WhoIsResponse } from './kb/identity';
 import { getCardKey } from './dossierCards';
 import { lookUpDossier } from './dossierLookup';
 import { serializeProfileForHistory } from './dossierContext';
@@ -108,6 +109,11 @@ export interface ResearchToolset {
   clubSeason(club: string, season: string): Promise<ToolOutcome>;
   /** A player's career record (Wikipedia). */
   playerCareer(name: string): Promise<ToolOutcome>;
+  /**
+   * Who a name means (Wikidata, through the knowledge base). Only the chat loop's `who_is` asks, so
+   * it isn't one of the brief's tools (`RESEARCH_TOOLS`).
+   */
+  whoIs?(name: string, hint?: string): Promise<ToolOutcome>;
 }
 
 export { formatLeagueTable };
@@ -188,7 +194,29 @@ export const liveToolset = (cardPool: PlayerProfile[], get: LiveGet = getLive): 
     if ('error' in res) return none('failed', res.error);
     return historyOutcome(res.data, 'career_record');
   },
+  async whoIs(name, hint) {
+    const res = await get<WhoIsResponse>(`/api/kb/who-is?${new URLSearchParams({ name, ...(hint ? { hint } : {}) })}`, KB_TIMEOUT_MS);
+    if ('error' in res) return none('failed', res.error);
+    return whoIsOutcome(name, res.data);
+  },
 });
+
+/** A name the knowledge base doesn't hold is a Wikidata search and one query. */
+const KB_TIMEOUT_MS = 20_000;
+
+/** The knowledge base route's answer as a lookup outcome. An unsettled name is found: its candidates are the answer. */
+export const whoIsOutcome = (name: string, data: WhoIsResponse): ToolOutcome => {
+  if (data.status === 'not_found') return none('empty', data.reason);
+  if (data.status === 'failed') return none('failed', data.reason);
+  const settled = data.status === 'resolved';
+  return found({
+    kind: 'identity',
+    label: settled ? data.entity.label : `"${name}" (not settled)`,
+    content: formatWhoIs(name, data),
+    sources: (settled ? [data.entity] : data.candidates).map((e) => `${WIKIDATA_ENTITY_PAGE}${e.id}`),
+    stage: 'facts',
+  });
+};
 
 /** A cold history lookup reads a long article and, for a club season, a sample of match lineups. */
 const HISTORY_TIMEOUT_MS = 12_000;

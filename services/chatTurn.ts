@@ -37,9 +37,11 @@ import {
 import { buildHistoryContents, getCardKey, grepDossiers, mergeAllCalibratedDossiers, serializeProfileForHistory, type DossierGrepParams } from './dossierStore';
 import {
   addEvidence,
+  addGap,
   emptyLedger,
   formatLedger,
   hasEvidence,
+  logLookup,
   seasonStartDate,
   type EvidenceLedger,
 } from './evidenceLedger';
@@ -113,7 +115,7 @@ import type { VerifiedClubManager } from '../packages/engine/src/gates/managerMe
 
 /** Research time for the whole turn, from its start; the answer is written after it. */
 export const CHAT_BUDGET_MS = 120_000;
-/** Lookups per turn (live feeds, history routes, web searches, cards). The local grep and the show tools are free. */
+/** Lookups per turn (live feeds, history routes, web searches, cards). The local grep, `who_is` and the show tools are free. */
 export const CHAT_MAX_CALLS = 12;
 /** Web searches per turn, counted inside `CHAT_MAX_CALLS`. */
 export const CHAT_MAX_SEARCHES = 4;
@@ -130,6 +132,11 @@ const STREAM_HOLD_CHARS = 200;
  * lookup budget on cards and never committed its order.
  */
 export const MAX_CARD_READS = 15;
+/**
+ * Names (`who_is`) a turn may look up. Like card reads they cost no model call and no lookup; this
+ * ceiling only stops a loop that asks forever.
+ */
+export const MAX_IDENTITY_READS = 15;
 /** Clubs whose stored snapshot comes free with the first round. */
 const MAX_CONTEXT_CLUBS = 3;
 
@@ -362,6 +369,23 @@ const CHAT_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
       required: ['name'],
     },
   },
+  {
+    name: 'who_is',
+    description:
+      "Says which football player or club a name means, from Wikidata. Returns the full name, other names, birth date, nationality, positions, current club, the clubs played for with their years, the English Wikipedia article and IDs on other football sites (a club returns its names and country). When more than one fits, or none clearly does, it returns the candidates and chooses none. It carries no statistics: no appearances, goals or honours. Its current club and spells can lag a recent transfer. Free.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING, description: 'The player or club name.' },
+        hint: {
+          type: Type.STRING,
+          description:
+            'What else is known, to tell people who share a name apart: a club they played for or a country, "born YYYY", or the years in question (YYYY-YY or YYYYs). Separate several with commas.',
+        },
+      },
+      required: ['name'],
+    },
+  },
   ...viewToolDeclarations(),
 ];
 
@@ -406,7 +430,8 @@ const PRESENTATION = new Set(['show_pitch', 'show_table', 'show_comparison', 'sh
 
 /**
  * Tools that cost a lookup: the ones that fetch a feed, a record or a search. The local greps
- * (dossiers, the Gaffa market), card reads (up to `MAX_CARD_READS`) and the presentation tools are free.
+ * (dossiers, the Gaffa market), card reads (up to `MAX_CARD_READS`), name lookups (`who_is`, up to
+ * `MAX_IDENTITY_READS`) and the presentation tools are free.
  */
 const COUNTED = new Set(Object.keys(RESEARCH_FUNCTIONS));
 
@@ -440,6 +465,8 @@ export function stageLabel(call: ChatFunctionCall): string {
       return `Drawing the ranking${str(a.title) ? `: ${str(a.title).slice(0, 60)}` : ''}`;
     case 'grep_saved_dossiers':
       return 'Searching your dossiers';
+    case 'who_is':
+      return str(a.name) ? `Checking who ${str(a.name)} is` : 'Checking a name';
     case 'grep_gaffa_market':
       return "Searching your league's market";
     case 'commit_verdict':
@@ -469,6 +496,7 @@ How to research:
 - An answer about who is missing or doubtful reads team news as well as the injury list: no free source records knocks between list updates, and news reports them first.
 - Each result also lists what is still unchecked for the clubs and players in the question. Spend on those only where the answer needs them.
 - ${viewRules()}
+- who_is says which player or club a name means, and when a name is shared it gives the candidates instead of choosing. It is free and carries no statistics.
 - Write nothing to the user while you look things up: text you write in a round that also calls a lookup is discarded. When research is done, write the answer. To place a view inside it, write the part that leads into the view, call the view tool in that same turn, and carry on with the rest after its result; a turn that only draws views keeps its text.
 
 ${RESEARCH_COVERAGE_NOTE}`;
@@ -931,11 +959,14 @@ ${
 
   /** Runs one round: refuses what the budget can't cover, runs the rest in parallel, files the results. */
   const runRound = async (round: ChatFunctionCall[]): Promise<ChatToolResponse[]> => {
-    const jobs = round.map(async (call): Promise<{ response: Record<string, unknown>; filed?: { call: ResearchCall; outcome: ToolOutcome } }> => {
+    const jobs = round.map(async (call): Promise<{ response: Record<string, unknown>; filed?: { call: ResearchCall; outcome: ToolOutcome }; identity?: ToolOutcome }> => {
       const args = call.args ?? {};
       const research = RESEARCH_FUNCTIONS[call.name];
       if (call.name === 'look_up_dossier' && ++cardReads > MAX_CARD_READS) {
         return { response: { status: 'not_run', reason: `The card-read ceiling (${MAX_CARD_READS} a turn) is reached.` } };
+      }
+      if (call.name === 'who_is' && ++identityReads > MAX_IDENTITY_READS) {
+        return { response: { status: 'not_run', reason: `The name-lookup ceiling (${MAX_IDENTITY_READS} a turn) is reached.` } };
       }
       if (COUNTED.has(call.name)) {
         if (calls >= budget.calls) return { response: { status: 'not_run', reason: 'The lookup budget is spent.' } };
@@ -975,6 +1006,14 @@ ${
             return { response: (await dossierTools.show(args as { name?: string })) as Record<string, unknown> };
           case 'grep_saved_dossiers':
             return { response: grepDossiers(dossiersPool, args as DossierGrepParams) as unknown as Record<string, unknown> };
+          case 'who_is': {
+            if (!str(args.name)) return { response: { status: 'not_run', reason: 'Missing argument.' } };
+            if (!tools.whoIs) return { response: { status: 'failed', error: 'Name lookups are not available here.' } };
+            const outcome =
+              (await within(tools.whoIs(str(args.name), str(args.hint)), timeLeft)) ??
+              ({ status: 'failed', result: null, missing: [], note: 'too slow: the time budget ran out', slow: true } as ToolOutcome);
+            return { response: describe(outcome), identity: outcome };
+          }
           case 'grep_gaffa_market':
             if (!gaffaBag) return { response: { error: 'No Gaffa club is attached to this conversation.' } };
             return { response: grepGaffaBag(gaffaBag, args as GaffaMarketGrepParams, dossiersPool) as unknown as Record<string, unknown> };
@@ -994,6 +1033,15 @@ ${
     const filed = done.flatMap((d) => (d.filed ? [d.filed] : []));
     ledger = fileOutcomes(ledger, filed.map((f) => f.call), filed.map((f) => f.outcome));
     if (past) startEraBuild(filed);
+    // A name's identity is evidence, so the figures gate counts its dates and years.
+    round.forEach((call, i) => {
+      const identity = done[i].identity;
+      if (!identity) return;
+      const subject = str(call.args?.name);
+      if (identity.result) ledger = addEvidence(ledger, identity.result);
+      else ledger = addGap(ledger, `Identity of ${subject} (Wikidata)${identity.note ? `: ${identity.note}` : ''}`, identity.slow ? 'slow' : identity.status === 'found' ? 'empty' : identity.status);
+      ledger = logLookup(ledger, { tool: 'who_is', subject, status: identity.status, ...(identity.note ? { note: identity.note } : {}) });
+    });
     // A card the model read is evidence too.
     round.forEach((call, i) => {
       const card = done[i].response.card;
@@ -1043,6 +1091,7 @@ ${
 
   const toolCalls: string[] = [];
   let cardReads = 0;
+  let identityReads = 0;
   let stop: TurnStats['stop'] = 'answered';
   let viewRounds = 0;
   let commitRounds = 0;
