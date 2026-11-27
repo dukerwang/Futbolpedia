@@ -45,6 +45,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
   const profileKey = profile ? getCardKey(profile) : null;
   const currentIndex = profileKey ? allProfiles.findIndex(p => getCardKey(p) === profileKey) : -1;
+  const showPager = allProfiles.length > 1 && currentIndex !== -1;
   
   // Mobile Gesture State
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -189,13 +190,43 @@ export const SidePanel: React.FC<SidePanelProps> = ({
             >
 
                 <div className="px-5 sm:px-8 pt-2 md:pt-6 pb-4">
-                    <div className="flex justify-between items-end gap-4">
+                    <div className="flex justify-between items-start gap-4">
                         <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-1.5 mb-2">
                                 <EditionLabel profile={profile} size="sm" />
                                 {profile.revision && <RevisionNote />}
                             </div>
                             <h2 className="text-[28px] font-serif font-extrabold tracking-[-0.015em] text-charcoal dark:text-cream-50 leading-[1.05] [text-wrap:balance]">{profile.basicInfo.name}</h2>
+                            {profile.playstyleAndRole?.playstyle?.archetype && (
+                                <p className="text-emerald-700 dark:text-emerald-400 font-serif italic text-[16px] leading-snug mt-2.5 [text-wrap:balance]">
+                                    {profile.playstyleAndRole.playstyle.archetype}
+                                </p>
+                            )}
+                            <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-charcoal/60 dark:text-cream-400 font-sans">
+                                <span className="font-semibold text-charcoal dark:text-cream-200">{positionCodes(profile.basicInfo.position)}</span>
+                                <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
+                                <span className="line-clamp-1">{profile.basicInfo.club}</span>
+                                {profile.basicInfo.age != null && (
+                                    <>
+                                        <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
+                                        <span>{profile.basicInfo.age}</span>
+                                    </>
+                                )}
+                                {profile.basicInfo.height && profile.basicInfo.height !== 'N/A' && (
+                                    <>
+                                        <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
+                                        <span>{profile.basicInfo.height}</span>
+                                    </>
+                                )}
+                            </div>
+                            {profile.clubManager && !isPrimeCard(profile) && (
+                                <p
+                                    className="mt-1 text-xs text-charcoal/60 dark:text-cream-400 font-sans line-clamp-1"
+                                    title={`Verified by live search on ${profile.clubManager.verifiedOn}`}
+                                >
+                                    Manager: {profile.clubManager.name}
+                                </p>
+                            )}
                         </div>
                         <div className="flex flex-col items-end text-right shrink-0">
                             <span
@@ -211,36 +242,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             )}
                         </div>
                     </div>
-                    {profile.playstyleAndRole?.playstyle?.archetype && (
-                        <p className="text-emerald-700 dark:text-emerald-400 font-serif italic text-[16px] leading-snug mt-2.5 [text-wrap:balance]">
-                            {profile.playstyleAndRole.playstyle.archetype}
-                        </p>
-                    )}
-                    <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-charcoal/60 dark:text-cream-400 font-sans">
-                        <span className="font-semibold text-charcoal dark:text-cream-200">{positionCodes(profile.basicInfo.position)}</span>
-                        <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
-                        <span className="line-clamp-1">{profile.basicInfo.club}</span>
-                        {profile.basicInfo.age != null && (
-                            <>
-                                <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                <span>{profile.basicInfo.age}</span>
-                            </>
-                        )}
-                        {profile.basicInfo.height && profile.basicInfo.height !== 'N/A' && (
-                            <>
-                                <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                <span>{profile.basicInfo.height}</span>
-                            </>
-                        )}
-                    </div>
-                    {profile.clubManager && !isPrimeCard(profile) && (
-                        <p
-                            className="mt-1 text-xs text-charcoal/60 dark:text-cream-400 font-sans line-clamp-1"
-                            title={`Verified by live search on ${profile.clubManager.verifiedOn}`}
-                        >
-                            Manager: {profile.clubManager.name}
-                        </p>
-                    )}
                 </div>
 
                 {/* Toolbar / All dossiers, Share and Close */}
@@ -256,7 +257,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 <span className="text-[12.5px] font-sans font-medium">Scout</span>
                             </button>
                         ) : null}
-                    {allProfiles.length > 1 && currentIndex !== -1 && (
+                    {showPager && (
                         <div className="flex items-center bg-cream-200/60 dark:bg-charcoal-light/35 rounded-lg p-0.5 border border-cream-300/60 dark:border-charcoal-border select-none ml-1">
                             <button 
                                 disabled={currentIndex === 0}
@@ -267,7 +268,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 <span className="material-symbols-outlined text-[15px] font-bold block">arrow_back</span>
                             </button>
                             
-                            <span className="text-[10px] font-mono font-bold px-2 text-charcoal/70 dark:text-cream-300">
+                            <span className="text-[10px] font-mono font-bold px-1.5 text-charcoal/70 dark:text-cream-300">
                                 {currentIndex + 1}/{allProfiles.length}
                             </span>
 
@@ -283,7 +284,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     )}
                     </div>
                     
-                    <div className="flex items-center gap-0.5 sm:gap-2 shrink-0">
+                    <div className="flex items-center gap-0.5 shrink-0">
                         {onOpenHub && (
                             <button 
                                 onClick={onOpenHub}
@@ -292,7 +293,10 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 aria-label="All Dossiers"
                             >
                                 <span className="material-symbols-outlined text-[18px] block">grid_view</span>
-                                <span className="max-sm:hidden text-[12.5px] font-sans font-medium whitespace-nowrap">All Dossiers</span>
+                                {/* The 450px panel can't fit this label beside the pager. */}
+                                {!showPager && (
+                                    <span className="max-sm:hidden text-[12.5px] font-sans font-medium whitespace-nowrap">All Dossiers</span>
+                                )}
                             </button>
                         )}
 
@@ -301,9 +305,10 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 onClick={() => onChallenge(profile)}
                                 className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center gap-1 rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 px-2 py-1"
                                 title="Think the rating is off? Make your case in the chat"
+                                aria-label="Challenge"
                             >
                                 <span className="material-symbols-outlined text-[18px] block">rate_review</span>
-                                <span className="text-[12.5px] font-sans font-medium whitespace-nowrap">Challenge</span>
+                                <span className={`text-[12.5px] font-sans font-medium whitespace-nowrap ${showPager ? 'max-sm:hidden' : ''}`}>Challenge</span>
                             </button>
                         )}
 
