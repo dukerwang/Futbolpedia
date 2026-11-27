@@ -675,25 +675,31 @@ const rateDossier = async (params: {
   const synthesisLockedBlock = route.wantsRegeneration
     ? ''
     : buildLockedDossiersBlock(freshReferencedDossiers);
-  const synthesisPeerLedgerOptions = { ...peerLedgerOptions, positionHint: grounding.apiPlayer?.position };
   // A re-rating starts from scratch: the player's own earlier cards never anchor it.
   const ownSlugs = new Set(
     [primaryPlayer, subjectName, identity.fullName, canonicalName].map((n) => toBasePlayerSlug(n ?? '')),
   );
-  const synthesisPeerLedger = (
-    grounding.apiPlayer?.position
-      ? selectPositionalPeerLedger(savedDossiers, conversationDossiers, synthesisPeerLedgerOptions)
-      : peerLedger
-  ).filter((p) => !reratingPrime() || !ownSlugs.has(toBasePlayerSlug(p.basicInfo.name)));
-  const synthesisPeerLedgerBlock =
-    grounding.apiPlayer?.position || reratingPrime()
-      ? buildPositionalPeerLedgerBlock(
-          savedDossiers,
-          conversationDossiers,
-          synthesisPeerLedgerOptions,
-          synthesisPeerLedger,
-        )
-      : peerLedgerBlock;
+  const synthesisPeerLedgerOptions = {
+    ...peerLedgerOptions,
+    positionHint: grounding.apiPlayer?.position,
+    wholeLibrary: true,
+    exclude: reratingPrime() ? (p: PlayerProfile) => ownSlugs.has(toBasePlayerSlug(p.basicInfo.name)) : undefined,
+  };
+  // The peers are chosen now, from the whole served library: the turn's context was built before
+  // the shared pool had loaded, and a rating with no peers of his level has nothing to place
+  // him against.
+  await fetchSupabaseCalibratedPool();
+  const synthesisPeerLedger = selectPositionalPeerLedger(
+    savedDossiers,
+    conversationDossiers,
+    synthesisPeerLedgerOptions,
+  );
+  const synthesisPeerLedgerBlock = buildPositionalPeerLedgerBlock(
+    savedDossiers,
+    conversationDossiers,
+    synthesisPeerLedgerOptions,
+    synthesisPeerLedger,
+  );
 
   // Challenges count only against the shared card this rating replaces: the newest prior card
   // of the requested edition (priorDossiers is oldest first).

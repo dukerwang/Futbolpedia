@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { PlayerProfile } from '../types';
 import { fetchGlobalHubDossiers, type GlobalHubDossierItem } from '../services/dossierCache';
 import { cardEdition, compareVersions, formatEraQualifier, getCardKey, isPrimeCard } from '../services/dossierCards';
-import { getTierDefinition, RATING_TIERS } from '../constants/ratingTiers';
+import { getTierDefinition, positionCodes, RATING_TIERS } from '../constants/ratingTiers';
 import { SelectMenu } from './hub/Menu';
 import { HubCard, HubRow } from './hub/HubEntries';
 import { Explore, type PositionGroup } from './hub/Explore';
@@ -84,23 +84,32 @@ const RATING_OPTIONS: Array<{ id: number; label: string; hint?: string }> = [
   { id: 80, label: '80 and Up' },
 ];
 
-/** Substrings of a lowercased position that put a card in each position filter. */
-const POSITION_FILTER_KEYWORDS: Record<Exclude<PositionFilter, 'all'>, string[]> = {
-  forward: ['striker', 'forward', 'winger', 'st', 'cf'],
-  midfield: ['midfielder', 'cm', 'cdm', 'cam'],
-  defender: ['back', 'cb', 'lb', 'rb', 'libero'],
-  goalkeeper: ['goalkeeper', 'gk'],
+/** Which group each position code on a card belongs to. CAM is settled by the code it's paired with. */
+const CODE_GROUP: Record<string, PositionGroup | 'am'> = {
+  GK: 'goalkeeper',
+  CB: 'defender', LB: 'defender', RB: 'defender', LWB: 'defender', RWB: 'defender', LIB: 'defender',
+  CDM: 'midfield', CM: 'midfield', LM: 'midfield', RM: 'midfield',
+  CAM: 'am',
+  CF: 'forward', SS: 'forward', ST: 'forward', FW: 'forward', LW: 'forward', RW: 'forward',
 };
 
 const playerKey = (p: PlayerProfile) => getCardKey(p).split(':')[0];
 
-/** The position filter a card falls under, in the filter's own order (a goalkeeper first). */
+/**
+ * The one position group a card counts under, for the position filter and Explore's Best by
+ * Position: its first listed position. An attacking midfielder goes with what he's paired with:
+ * beside a forward position (CF/CAM, CAM/SS) he's an attacker, beside a midfield one (CAM/CM), or on
+ * his own, a midfielder.
+ */
 const positionGroupOf = (p: PlayerProfile): PositionGroup | null => {
-  const pos = p.basicInfo.position.toLowerCase();
-  for (const group of ['goalkeeper', 'defender', 'midfield', 'forward'] as const) {
-    if (POSITION_FILTER_KEYWORDS[group].some((k) => pos.includes(k))) return group;
-  }
-  return null;
+  const groups = positionCodes(p.basicInfo.position)
+    .split('/')
+    .map((code) => CODE_GROUP[code.trim().toUpperCase()])
+    .filter(Boolean);
+  if (groups.length === 0) return null;
+  if (groups[0] !== 'am') return groups[0] as PositionGroup;
+  const partner = groups.find((g) => g !== 'am');
+  return partner === 'forward' ? 'forward' : 'midfield';
 };
 
 /** Today in the browser's own calendar, as YYYY-MM-DD. */
@@ -357,11 +366,7 @@ export const DossierHub: React.FC<DossierHubProps> = ({
     if (editionFilter !== 'all') result = result.filter((i) => matchesEdition(i.profile, editionFilter));
 
     if (positionFilter !== 'all') {
-      const keywords = POSITION_FILTER_KEYWORDS[positionFilter];
-      result = result.filter((i) => {
-        const pos = i.profile.basicInfo.position.toLowerCase();
-        return keywords.some((k) => pos.includes(k));
-      });
+      result = result.filter((i) => positionGroupOf(i.profile) === positionFilter);
     }
 
     if (minTierFilter > 0) result = result.filter((i) => i.profile.ratings.overall >= minTierFilter);

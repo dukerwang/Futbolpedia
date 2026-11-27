@@ -69,7 +69,11 @@ export const isRatedOnCurrentScale = (p: PlayerProfile, rowTimeMsFallback?: numb
 
 let supabaseCalibratedPool: PlayerProfile[] = [];
 let supabasePoolFetchedAt = 0;
-const SUPABASE_POOL_TTL_MS = 60 * 1000; // 60 seconds
+// Ten minutes: the whole served library is read now, and a card this browser writes joins the
+// pool at once (below), so a longer wait never hides the card just rated.
+const SUPABASE_POOL_TTL_MS = 10 * 60 * 1000;
+/** A ceiling well above the library's size, so the query stays bounded. */
+const SUPABASE_POOL_MAX_ROWS = 2000;
 
 /** Cards last loaded from (or written to) Supabase, without triggering a fetch. */
 export const getSupabaseCalibratedPool = (): PlayerProfile[] => supabaseCalibratedPool;
@@ -326,38 +330,48 @@ export const shareDossierCard = async (profile: PlayerProfile): Promise<string> 
 };
 
 /**
- * Fetches post-calibration dossiers from the global Supabase `player_profiles` JSONB table
- * and caches them in memory for 60s so grepDossiers and peer calibration work across devices.
+ * The served cards (every pointer row of `player_profiles`: each player's current card and his
+ * prime), cached in memory so peer calibration, grepDossiers and the ledger read the whole library.
+ * It used to be the 60 most recently updated rows, so which peers a rating was judged against
+ * depended on which cards had last been touched; a backfill could leave a prime with no peer of
+ * his level. Archive rows (`--` in the slug) are left out: they repeat a pointer or a card it
+ * replaced. Concurrent callers share one fetch.
  */
+let poolFetch: Promise<PlayerProfile[]> | null = null;
 export const fetchSupabaseCalibratedPool = async (): Promise<PlayerProfile[]> => {
   if (!supabase) return supabaseCalibratedPool;
   if (Date.now() - supabasePoolFetchedAt < SUPABASE_POOL_TTL_MS && supabaseCalibratedPool.length > 0) {
     return supabaseCalibratedPool;
   }
-  try {
-    const epochIso = new Date(CALIBRATION_EPOCH_MS).toISOString();
-    const { data, error } = await supabase
-      .from('player_profiles')
-      .select('player_data, updated_at')
-      .gte('updated_at', epochIso)
-      .order('updated_at', { ascending: false })
-      .limit(60);
-    if (!error && Array.isArray(data)) {
-      const loaded: PlayerProfile[] = [];
-      for (const row of data as PlayerProfileRow[]) {
-        const p = row?.player_data;
-        if (p && p.basicInfo?.name && p.ratings?.overall >= 60) {
-          const dated = ensureDossierDated(p, rowTimeMs(row.updated_at));
-          if (dated && !dated.revision) loaded.push(dated);
+  return (poolFetch ??= (async () => {
+    try {
+      const epochIso = new Date(CALIBRATION_EPOCH_MS).toISOString();
+      const { data, error } = await supabase
+        .from('player_profiles')
+        .select('player_data, updated_at')
+        .not('player_slug', 'like', '%--%')
+        .gte('updated_at', epochIso)
+        .order('updated_at', { ascending: false })
+        .limit(SUPABASE_POOL_MAX_ROWS);
+      if (!error && Array.isArray(data)) {
+        const loaded: PlayerProfile[] = [];
+        for (const row of data as PlayerProfileRow[]) {
+          const p = row?.player_data;
+          if (p && p.basicInfo?.name && p.ratings?.overall >= 60) {
+            const dated = ensureDossierDated(p, rowTimeMs(row.updated_at));
+            if (dated && !dated.revision) loaded.push(dated);
+          }
         }
+        supabaseCalibratedPool = loaded;
+        supabasePoolFetchedAt = Date.now();
       }
-      supabaseCalibratedPool = loaded;
-      supabasePoolFetchedAt = Date.now();
+    } catch {
+      // Non-fatal: fall back to current in-memory pool
+    } finally {
+      poolFetch = null;
     }
-  } catch {
-    // Non-fatal: fall back to current in-memory pool
-  }
-  return supabaseCalibratedPool;
+    return supabaseCalibratedPool;
+  })());
 };
 
 /**

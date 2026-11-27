@@ -89,11 +89,6 @@ const CardHeader: React.FC<{ card: PlayerProfile }> = ({ card }) => {
           <h1 className="font-serif font-extrabold text-charcoal dark:text-cream-50 leading-[0.98] tracking-[-0.02em] text-[36px] @lg:text-[56px] [text-wrap:balance]">
             {card.basicInfo.name}
           </h1>
-          {card.playstyleAndRole?.playstyle?.archetype && (
-            <p className="mt-3 font-serif italic text-emerald-700 dark:text-emerald-400 text-[17px] @lg:text-[22px] leading-snug">
-              {card.playstyleAndRole.playstyle.archetype}
-            </p>
-          )}
         </div>
         <div className="shrink-0 flex flex-col items-end text-right">
           <span
@@ -102,7 +97,7 @@ const CardHeader: React.FC<{ card: PlayerProfile }> = ({ card }) => {
           >
             {overall}
           </span>
-          <span className="mt-3 text-[13px] @lg:text-[14px] font-medium leading-none text-charcoal/80 dark:text-cream-200">{getShortTierLabel(overall)}</span>
+          <span className="mt-3 text-[13px] @lg:text-[14px] font-medium leading-none text-charcoal/80 dark:text-cream-200 whitespace-nowrap">{getShortTierLabel(overall)}</span>
           {potential !== overall && (
             <span className="mt-1.5 text-[12.5px] leading-none text-charcoal/50 dark:text-cream-400/80">
               Potential <span className="font-semibold text-charcoal/75 dark:text-cream-200" style={LINING}>{potential}</span>
@@ -110,7 +105,12 @@ const CardHeader: React.FC<{ card: PlayerProfile }> = ({ card }) => {
           )}
         </div>
       </div>
-      <dl className="mt-7 mb-4 py-5 border-y border-charcoal/[0.1] dark:border-white/[0.08] grid grid-cols-2 @lg:flex @lg:flex-wrap gap-y-4 gap-x-10">
+      {card.playstyleAndRole?.playstyle?.archetype && (
+        <p className="mt-3 font-serif italic text-emerald-700 dark:text-emerald-400 text-[17px] @lg:text-[22px] leading-snug [text-wrap:balance]">
+          {card.playstyleAndRole.playstyle.archetype}
+        </p>
+      )}
+      <dl className="mt-6 mb-4 py-5 border-y border-charcoal/[0.1] dark:border-white/[0.08] grid grid-cols-2 @lg:flex @lg:flex-wrap gap-y-4 gap-x-10">
         {facts.map(([label, value]) => (
           <div key={label} className="min-w-0">
             <dt className="text-[12px] text-charcoal/50 dark:text-cream-400/75">{label}</dt>

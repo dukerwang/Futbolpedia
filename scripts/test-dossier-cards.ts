@@ -53,6 +53,7 @@ import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynth
 import { getCurrentSeasonInfo } from '../services/aiClient';
 import { getAttributeLabel, normalizePosition, resolveLiberoPosition } from '../constants/ratingTiers';
 import { applyPeerPlacement, placementRange, resolvePlacement } from '../services/ratingPlacement';
+import { selectPositionalPeerLedger } from '../services/dossierLedger';
 
 const TODAY = new Date().toISOString().split('T')[0];
 const MAY_2020_MS = Date.parse('2020-05-23T15:00:00Z');
@@ -564,6 +565,10 @@ async function main() {
     assert.equal(extractCandidatePlayerName('alright, scout prime Zidane please'), 'Zidane');
     assert.equal(extractCandidatePlayerName('ok rate rodri then'), 'rodri');
     assert.equal(extractCandidatePlayerName('rate Son Heung-min'), 'Son Heung-min');
+    // An accented letter isn't a word boundary: the last "a" of "María" isn't the article.
+    assert.equal(extractCandidatePlayerName('rate prime Ángel Di María'), 'Ángel Di María');
+    assert.equal(extractCandidatePlayerName('scout a prime Kaká'), 'Kaká');
+    assert.equal(extractCandidatePlayerName('scout Thiago Almada for me'), 'Thiago Almada');
     const route = await classifyTurn({ message: 'okay rate prime rodri', history: [], conversationDossiers: [], hasImage: false });
     assert.equal(route.intent, 'single_dossier');
     assert.deepEqual(route.targetPlayers, ['rodri']);
@@ -1019,6 +1024,27 @@ async function main() {
     assert.equal(gk.sweeping, 0);
     assert.equal(gk.distribution, 0);
     assert.deepEqual(Object.keys(gk).sort(), ['GKpositioning', 'ballPlaying', 'commandOfArea', 'distribution', 'handling', 'reflexes', 'sweeping']);
+  });
+
+  await test('a rating sees every card in the library, without the player re-rated', () => {
+    const library = Array.from({ length: 40 }, (_, i) =>
+      card(`Peer Number ${i}`, { createdAt: Date.now(), ratings: { overall: 99 - (i % 12), potential: 99 - (i % 12) } }),
+    );
+    library.push(card('Rerated Player', { createdAt: Date.now(), ratings: { overall: 95, potential: 95 } }));
+    // Chat's ledger stays a compact sample.
+    assert.equal(selectPositionalPeerLedger(library, [], { message: 'how good is he' }).length, 18);
+    const ledger = selectPositionalPeerLedger(library, [], {
+      wholeLibrary: true,
+      exclude: (p) => p.basicInfo.name === 'Rerated Player',
+    });
+    // Every card but his (the pool may hold cards earlier checks wrote).
+    const everything = selectPositionalPeerLedger(library, [], { wholeLibrary: true });
+    assert.ok(everything.length >= 41);
+    assert.equal(ledger.length, everything.length - 1);
+    assert.ok(!ledger.some((p) => p.basicInfo.name === 'Rerated Player'));
+    assert.ok(library.slice(0, 40).every((c) => ledger.includes(c)));
+    // Highest first.
+    assert.ok(ledger.every((p, i) => i === 0 || ledger[i - 1].ratings.overall >= p.ratings.overall));
   });
 
   console.log(`${passes} passed, ${failures} failed`);
