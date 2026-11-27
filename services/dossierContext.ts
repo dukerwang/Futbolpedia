@@ -48,7 +48,7 @@ const AUTHORED_DOSSIER_HEADER =
 const SAVED_DOSSIER_HEADER =
   "[USER'S SAVED DOSSIER — from their archive (generated in another conversation). Treat as authoritative when they ask you to reference saved/archived profiles.]";
 
-const serializeCard = (p: PlayerProfile, header: string): string => {
+const serializeCard = (p: PlayerProfile, header: string, compact = false): string => {
   const bi = p.basicInfo;
   const attrs = p.goalkeeperAttributes
     ? Object.entries(p.goalkeeperAttributes)
@@ -61,13 +61,13 @@ const serializeCard = (p: PlayerProfile, header: string): string => {
   return [
     header,
     `Name: ${bi?.name} | Age: ${bi?.age} | Nationality: ${bi?.nationality} | Club: ${bi?.club} | Position: ${bi?.position}`,
-    p.clubManager
+    p.clubManager && !compact
       ? `Club manager (verified by live search on ${p.clubManager.verifiedOn}): ${p.clubManager.name}`
       : '',
     p.version
       ? `Edition: ${p.version.label} | Evaluated: ${getDossierEvaluationDate(p) ?? 'undated'}`
       : '',
-    p.revision
+    p.revision && !compact
       ? `Revision: this user's accepted challenge of the shared card. Stay consistent with it in this conversation; the shared card is unchanged.`
       : '',
     `Overall: ${p.ratings?.overall} | Potential: ${p.ratings?.potential}`,
@@ -84,11 +84,11 @@ const serializeCard = (p: PlayerProfile, header: string): string => {
     `${p.goalkeeperAttributes ? 'Goalkeeper Attributes' : 'Attributes'} (0-99): ${attrs}`,
     p.strengths?.length ? `Strengths: ${p.strengths.join(' ')}` : '',
     p.weaknesses?.length ? `Weaknesses: ${p.weaknesses.join(' ')}` : '',
-    p.playstyleAndRole?.playstyle?.description
+    p.playstyleAndRole?.playstyle?.description && !compact
       ? `Playstyle: ${p.playstyleAndRole.playstyle.description}`
       : '',
-    p.shortBio ? `Bio: ${p.shortBio}` : '',
-    p.latestUpdate ? `Latest Update: ${p.latestUpdate}` : '',
+    p.shortBio && !compact ? `Bio: ${p.shortBio}` : '',
+    p.latestUpdate && !compact ? `Latest Update: ${p.latestUpdate}` : '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -96,6 +96,13 @@ const serializeCard = (p: PlayerProfile, header: string): string => {
 
 export const serializeProfileForHistory = (p: PlayerProfile): string =>
   serializeCard(p, AUTHORED_DOSSIER_HEADER);
+
+/**
+ * A peer's card for a rating to judge a new card against: who he is, the version, Overall and
+ * placement, archetype and roles, every attribute, and his strengths and weaknesses. The bio,
+ * Latest Update, playstyle prose and manager are left out to keep the prompt short.
+ */
+export const serializePeerCard = (p: PlayerProfile): string => serializeCard(p, '[PEER CARD]', true);
 
 export const serializeLegacyComparisonForHistory = (content: {
   summary?: string;

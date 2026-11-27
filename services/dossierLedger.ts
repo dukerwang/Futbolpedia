@@ -1,8 +1,8 @@
 import type { Attributes, PlayerProfile } from '../types';
 import { ATTRIBUTE_LABELS } from '../constants/ratingTiers';
-import { cardEdition, getCardKey, isConfidentDossier, isPrimeCard, latestCardPerPlayer } from './dossierCards';
+import { cardEdition, getCardKey, isConfidentDossier, isPrimeCard, latestCardPerPlayer, toBasePlayerSlug } from './dossierCards';
 import { CALIBRATION_EPOCH_MS, getSupabaseCalibratedPool } from './dossierCache';
-import { findReferencedDossiers, formatTopAttributes } from './dossierContext';
+import { findReferencedDossiers, formatTopAttributes, serializePeerCard } from './dossierContext';
 
 /**
  * Calibrated-pool queries: the grep_saved_dossiers tool and the positional peer ledger that
@@ -337,9 +337,94 @@ export function buildPositionalPeerLedgerBlock(
     return `- ${p.basicInfo.name}${editionTag} (${p.basicInfo.position}, ${p.basicInfo.club}): ${p.ratings.overall} OVR / ${p.ratings.potential} POT${topSpikes ? ` [Spikes: ${topSpikes}]` : ''}${queriedSlice ? ` [Queried: ${queriedSlice}]` : ''}`;
   });
 
+  const header = options?.wholeLibrary
+    ? 'Every card already rated on the one all-era scale. Place this version among them by how good a footballer he was compared with each; their ratings stay as they are.'
+    : "Active peer benchmarks already rated on this user's calibrated Futbolpedia ledger (maintain strict relative consistency with these ratings):";
   return `
 <calibrated_peer_ledger>
-Active peer benchmarks already rated on this user's calibrated Futbolpedia ledger (maintain strict relative consistency with these ratings):
+${header}
 ${lines.join('\n')}
 </calibrated_peer_ledger>`;
+}
+
+/** How many peers' full cards a rating reads beside the one-line ledger. */
+export const CLOSEST_PEER_CARDS = 6;
+
+/**
+ * The broad groups a position belongs to, so a right-back is compared with full-backs and wing-backs
+ * on both flanks. API-Football's broad positions ("Defender", "Midfielder", "Attacker") cover every
+ * group they could mean.
+ */
+export function positionGroups(position: string | undefined | null): Set<string> {
+  const p = (position ?? '').split('/')[0].toLowerCase().trim();
+  if (!p) return new Set();
+  if (p.includes('goalkeeper') || p === 'gk') return new Set(['gk']);
+  if (p.includes('libero') || p.includes('centre-back') || p.includes('center back') || p.includes('centre back')) return new Set(['cb']);
+  if (p.includes('back')) return new Set(['fb']);
+  if (p.includes('defensive midfielder')) return new Set(['dm']);
+  if (p.includes('central midfielder')) return new Set(['cm']);
+  if (p.includes('attacking midfielder') || p.includes('second striker')) return new Set(['am']);
+  if (p.includes('winger') || p.includes('left midfielder') || p.includes('right midfielder')) return new Set(['wide']);
+  if (p.includes('forward') || p.includes('striker')) return new Set(['cf']);
+  if (p.includes('defender')) return new Set(['cb', 'fb']);
+  if (p.includes('midfielder')) return new Set(['dm', 'cm', 'am', 'wide']);
+  if (p.includes('attacker')) return new Set(['wide', 'cf', 'am']);
+  return new Set();
+}
+
+/** How far from the centre a peer can sit and still count as near (Overall points). */
+const NEAR_PEER_RANGE = 4;
+
+/**
+ * The peers whose full cards a rating reads: cards at the player's position, one per player, the
+ * ones nearest `centre` (the Overall of the card this rating replaces) when there is one, else
+ * spread across the range of Overalls at the position so the model can find his level among them.
+ * Prime, era and season cards come first: a player's historical card stands for him over his
+ * current one, and near historical cards are taken before near current ones, so the scale a new
+ * card is read against is the one the historical cards set. `exclude` drops the player's own cards.
+ */
+export function selectClosestPeers(
+  ledger: PlayerProfile[],
+  options: { position?: string | null; centre?: number | null; exclude?: (p: PlayerProfile) => boolean; limit?: number },
+): PlayerProfile[] {
+  const groups = positionGroups(options.position);
+  if (groups.size === 0) return [];
+  const limit = options.limit ?? CLOSEST_PEER_CARDS;
+  const byOverall = (a: PlayerProfile, b: PlayerProfile) => b.ratings.overall - a.ratings.overall;
+  const onePerPlayer = new Map<string, PlayerProfile>();
+  for (const p of ledger) {
+    if (options.exclude?.(p)) continue;
+    if (![...positionGroups(p.basicInfo?.position)].some((g) => groups.has(g))) continue;
+    const key = toBasePlayerSlug(p.basicInfo.name);
+    const held = onePerPlayer.get(key);
+    if (!held || (isPrimeCard(p) && !isPrimeCard(held))) onePerPlayer.set(key, p);
+  }
+  const atPosition = [...onePerPlayer.values()].sort(byOverall);
+  if (atPosition.length <= limit) return atPosition;
+  const centre = options.centre;
+  if (typeof centre === 'number') {
+    const distance = (p: PlayerProfile) => Math.abs(p.ratings.overall - centre);
+    const rank = (p: PlayerProfile) => (distance(p) <= NEAR_PEER_RANGE ? (isPrimeCard(p) ? 0 : 1) : 2);
+    return [...atPosition]
+      .sort((a, b) => rank(a) - rank(b) || distance(a) - distance(b) || byOverall(a, b))
+      .slice(0, limit)
+      .sort(byOverall);
+  }
+  const step = (atPosition.length - 1) / (limit - 1);
+  const picked = new Set<number>();
+  for (let i = 0; i < limit; i++) picked.add(Math.round(i * step));
+  return [...picked].map((i) => atPosition[i]);
+}
+
+/**
+ * The closest peers in full, after the one-line ledger: the rating judges the new card against
+ * each of them, footballer against footballer, before it fills the placement.
+ */
+export function buildClosestPeersBlock(peers: PlayerProfile[]): string {
+  if (peers.length === 0) return '';
+  return `
+<closest_peers>
+The rated cards closest to this player at his position, in full. Before you fill \`peerPlacement\`, judge him against each of them as footballers: what each did on the pitch in his version, his technique, decisions, physical and mental qualities, and how he shaped matches, with his strengths and weaknesses read against each other's. A peer's Overall is where that card was placed, not a level to fit beneath; place this player above, level with or below each by your own comparison. Matches missed, appearance totals, durability and the trophies his team won count for neither side.
+${peers.map(serializePeerCard).join('\n\n')}
+</closest_peers>`;
 }

@@ -467,6 +467,30 @@ async function main() {
     assert.ok(typeof card.rerateAt === 'number' && card.rerateAt > CALIBRATION_EPOCH_MS);
   });
 
+  await test('a rerate reads the closest peers at his position in full, never his own cards', async () => {
+    const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
+    const { CALIBRATION_EPOCH_MS } = await import('../services/dossierStore');
+    const prime = (name: string, position: string, overall: number, window: string): PlayerProfile => ({
+      ...sanitizeProfileData({
+        basicInfo: { name, age: 27, nationality: 'Spain', club: 'FC Barcelona', position },
+        ratings: { overall, potential: overall },
+        weaknesses: [`**Weakness of ${name}:** what he couldn't do.`],
+      }),
+      evaluationDate: '2010-05-27',
+      createdAt: CALIBRATION_EPOCH_MS + 1,
+      version: { id: `${name}-prime`, type: 'prime', label: `Prime Zenith (${window})`, evaluationDate: '2010-05-27', seasonOrEra: window },
+    });
+    const own = prime('Andrés Iniesta', 'Central Midfielder', 95, '2010-12');
+    scenario = { status: 'RETIRED', search: () => '- Summary of the player.' };
+    calls = [];
+    await rate('rerate prime Andrés Iniesta', [own, prime('Peer Conductor', 'Central Midfielder', 94, '2008-10'), prime('Peer Keeper', 'Goalkeeper', 95, '2008-10')]);
+    const prompt = synthesisPrompt();
+    assert.match(prompt, /<closest_peers>[\s\S]*Peer Conductor[\s\S]*Weakness of Peer Conductor[\s\S]*<\/closest_peers>/);
+    assert.doesNotMatch(prompt.slice(prompt.indexOf('<closest_peers>')), /Peer Keeper[\s\S]*<\/closest_peers>/);
+    assert.doesNotMatch(prompt, /Weakness of Andrés Iniesta/);
+    assert.match(prompt, /their ratings stay as they are/);
+  });
+
   await test("a prime card's Overall agrees with its peer placement", async () => {
     const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
     const { CALIBRATION_EPOCH_MS } = await import('../services/dossierStore');
