@@ -569,6 +569,10 @@ async function main() {
     assert.equal(extractCandidatePlayerName('rate prime Ángel Di María'), 'Ángel Di María');
     assert.equal(extractCandidatePlayerName('scout a prime Kaká'), 'Kaká');
     assert.equal(extractCandidatePlayerName('scout Thiago Almada for me'), 'Thiago Almada');
+    for (const name of ['Kylian Mbappé', 'Martin Ødegaard', 'İlkay Gündoğan', 'Luka Modrić', 'Zé Roberto', 'Cesc Fàbregas']) {
+      assert.equal(extractCandidatePlayerName(`rate prime ${name}`), name);
+      assert.equal(extractCandidatePlayerName(`scout ${name} for me`), name);
+    }
     const route = await classifyTurn({ message: 'okay rate prime rodri', history: [], conversationDossiers: [], hasImage: false });
     assert.equal(route.intent, 'single_dossier');
     assert.deepEqual(route.targetPlayers, ['rodri']);
