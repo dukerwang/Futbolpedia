@@ -53,7 +53,7 @@ import { applyVersionRules, sanitizeProfileData } from '../services/dossierSynth
 import { getCurrentSeasonInfo } from '../services/aiClient';
 import { getAttributeLabel, normalizePosition, resolveLiberoPosition } from '../constants/ratingTiers';
 import { applyPeerPlacement, placementRange, resolvePlacement } from '../services/ratingPlacement';
-import { selectPositionalPeerLedger } from '../services/dossierLedger';
+import { buildClosestPeersBlock, buildPositionalPeerLedgerBlock, positionGroups, selectClosestPeers, selectPositionalPeerLedger } from '../services/dossierLedger';
 
 const TODAY = new Date().toISOString().split('T')[0];
 const MAY_2020_MS = Date.parse('2020-05-23T15:00:00Z');
@@ -1049,6 +1049,68 @@ async function main() {
     assert.ok(library.slice(0, 40).every((c) => ledger.includes(c)));
     // Highest first.
     assert.ok(ledger.every((p, i) => i === 0 || ledger[i - 1].ratings.overall >= p.ratings.overall));
+  });
+
+  await test("a rating reads the closest peers at his position in full", () => {
+    const at = (name: string, position: string, overall: number) =>
+      card(name, {
+        createdAt: Date.now(),
+        basicInfo: { ...card(name).basicInfo, position },
+        ratings: { overall, potential: overall },
+        strengths: [`**Strength of ${name}:** what he did.`],
+        weaknesses: [`**Weakness of ${name}:** what he couldn't do.`],
+      });
+    const ledger = [
+      at('Right Back 94', 'Right Back', 94),
+      at('Left Back 92', 'Left Back', 92),
+      at('Wing Back 91', 'Right Wing-Back', 91),
+      at('Right Back 90', 'Right Back', 90),
+      at('Left Back 88', 'Left Back', 88),
+      at('Right Back 86', 'Right Back', 86),
+      at('Left Back 84', 'Left Back', 84),
+      at('Right Back 80', 'Right Back', 80),
+      at('Centre Back 91', 'Centre-Back', 91),
+      at('Keeper 90', 'Goalkeeper', 90),
+    ];
+    // Full-backs on either flank and wing-backs are one group; centre-backs and keepers are not.
+    assert.deepEqual([...positionGroups('Right Back/Central Midfielder')], ['fb']);
+    assert.deepEqual([...positionGroups('Defender')].sort(), ['cb', 'fb']);
+    // Centred on the card the rating replaces: the six nearest at his position, highest first.
+    const near = selectClosestPeers(ledger, { position: 'Right Back', centre: 90 });
+    assert.deepEqual(near.map((p) => p.basicInfo.name), ['Right Back 94', 'Left Back 92', 'Wing Back 91', 'Right Back 90', 'Left Back 88', 'Right Back 86']);
+    // With nothing to centre on, spread across the position's range.
+    const spread = selectClosestPeers(ledger, { position: 'Left Back', limit: 3 });
+    assert.deepEqual(spread.map((p) => p.basicInfo.name), ['Right Back 94', 'Left Back 88', 'Right Back 80']);
+    assert.deepEqual(selectClosestPeers(ledger, { position: 'Right Back', centre: 90, exclude: (p) => p.basicInfo.name === 'Right Back 90' }).map((p) => p.basicInfo.name).includes('Right Back 90'), false);
+    assert.deepEqual(selectClosestPeers(ledger, { position: undefined, centre: 90 }), []);
+    // One card per player, his historical card over his current one; near historical cards first.
+    const history = (name: string, position: string, overall: number) =>
+      card(name, {
+        createdAt: Date.now(),
+        basicInfo: { ...card(name).basicInfo, position },
+        ratings: { overall, potential: overall },
+        version: { id: `${name}-prime`, type: 'prime', label: 'Prime Zenith (2010-12)', evaluationDate: '2012-05-01', seasonOrEra: '2010-12' },
+      });
+    const mixed = [
+      ...ledger,
+      history('Right Back 90', 'Right Back', 93),
+      history('Old Right Back 87', 'Right Back', 87),
+      history('Old Left Back 89', 'Left Back', 89),
+    ];
+    const preferred = selectClosestPeers(mixed, { position: 'Right Back', centre: 90, limit: 4 });
+    assert.deepEqual(preferred.map((p) => `${p.basicInfo.name} ${p.ratings.overall}`), ['Right Back 90 93', 'Wing Back 91 91', 'Old Left Back 89 89', 'Old Right Back 87 87']);
+    // The block carries each card in full, minus its bio, and says how to use it.
+    const block = buildClosestPeersBlock(near);
+    assert.match(block, /<closest_peers>/);
+    assert.match(block, /Weakness of Left Back 92/);
+    assert.match(block, /Attributes \(0-99\):/);
+    assert.match(block, /not a level to fit beneath/);
+    assert.match(block, /durability and the trophies his team won count for neither side/);
+    assert.doesNotMatch(block, /Bio:|Latest Update:/);
+    assert.equal(buildClosestPeersBlock([]), '');
+    // A rating's ledger asks for placement by comparison; chat's keeps its old header.
+    assert.match(buildPositionalPeerLedgerBlock([], [], { wholeLibrary: true }, ledger), /their ratings stay as they are/);
+    assert.match(buildPositionalPeerLedgerBlock([], [], {}, ledger), /maintain strict relative consistency/);
   });
 
   console.log(`${passes} passed, ${failures} failed`);

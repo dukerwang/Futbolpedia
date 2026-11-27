@@ -23,6 +23,8 @@ import {
   buildHistoryContents,
   buildLockedDossiersBlock,
   buildPositionalPeerLedgerBlock,
+  buildClosestPeersBlock,
+  selectClosestPeers,
   selectPositionalPeerLedger,
   buildPriorDossierTrajectoryBlock,
   buildRevisionProposalsBlock,
@@ -694,12 +696,20 @@ const rateDossier = async (params: {
     conversationDossiers,
     synthesisPeerLedgerOptions,
   );
-  const synthesisPeerLedgerBlock = buildPositionalPeerLedgerBlock(
-    savedDossiers,
-    conversationDossiers,
-    synthesisPeerLedgerOptions,
-    synthesisPeerLedger,
-  );
+  // The card this rating replaces centres the closest peers, read in full beside the one-line ledger.
+  const replacedForPeers = priorDossiers.filter(matchesRequestedEdition).at(-1);
+  const closestPeers = selectClosestPeers(synthesisPeerLedger, {
+    position: replacedForPeers?.basicInfo.position ?? priorDossiers.at(-1)?.basicInfo.position ?? grounding.apiPlayer?.position,
+    centre: replacedForPeers?.ratings.overall ?? null,
+    exclude: (p) => ownSlugs.has(toBasePlayerSlug(p.basicInfo.name)),
+  });
+  const synthesisPeerLedgerBlock =
+    buildPositionalPeerLedgerBlock(
+      savedDossiers,
+      conversationDossiers,
+      synthesisPeerLedgerOptions,
+      synthesisPeerLedger,
+    ) + buildClosestPeersBlock(closestPeers);
 
   // Challenges count only against the shared card this rating replaces: the newest prior card
   // of the requested edition (priorDossiers is oldest first).
