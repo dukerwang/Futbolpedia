@@ -122,22 +122,29 @@ const CHAT_LEAD_IN = /^(?:(?:ok(?:ay)?|alright|aight|right|so|well|yeah|yes|yep|
 const CHAT_TAIL = /(?:[\s,]+(?:then|too|as well|pls|plz|please|thanks|thx))+[\s?!.]*$/i;
 const VERSION_WORDS = /\b(?:prime|peak|at (?:his|their) (?:best|peak))\b/gi;
 
+/**
+ * Whole words, read with Unicode letters: `\b` counts an accented letter as a word boundary, so a
+ * filler pass with it read the last "a" of "María" as the article and cut it.
+ */
+const wholeWords = (alternation: string): RegExp =>
+  new RegExp(`(?<![\\p{L}\\p{N}_])(?:${alternation})(?![\\p{L}\\p{N}_])`, 'giu');
+
 export const stripClubAndDossierQualifiers = (message: string): string =>
   stripEraPhrase(message.trim().replace(CHAT_LEAD_IN, '').replace(CHAT_TAIL, ''))
     .replace(VERSION_WORDS, '')
-    .replace(/\b(give me a?n?|create|generate|can you|please|show me|pull up|what is|what's)\b/gi, '')
+    .replace(wholeWords("give me a?n?|create|generate|can you|please|show me|pull up|what is|what's"), '')
     .replace(
-      /\b(rate|rating|profile|scout(?:ing)?(?: report)?|evaluate|dossier|how good is|rank(?:ing)?|tier|analyze|analysis|breakdown|report|brief(?:ing)?)\b/gi,
+      wholeWords('rate|rating|profile|scout(?:ing)?(?: report)?|evaluate|dossier|how good is|rank(?:ing)?|tier|analyze|analysis|breakdown|report|brief(?:ing)?'),
       '',
     )
     .replace(POSSESSIVE_CLUB_PREFIX_REGEX, '')
     .replace(TRAILING_CLUB_QUALIFIER_REGEX, '')
     // Strip trailing "'s" left over after dossier keywords were removed (e.g. "Cole Palmer's [dossier]")
     .replace(/['\u2019]s(?:\s*$)/gi, '')
-    .replace(/\b(on|for|about|of|a|an|the|me|right now|currently)\b/gi, '')
+    .replace(wholeWords('on|for|about|of|a|an|the|me|right now|currently'), '')
     // Timeframes ("Henry 2006", "Kaká in the 2006-07 season") are read separately.
     .replace(/\b(?:19|20)\d{2}(?:\s*[-/–]\s*(?:19|20)?\d{2})?\b/g, '')
-    .replace(/\b(in|during|season|campaign|version)\b/gi, '')
+    .replace(wholeWords('in|during|season|campaign|version'), '')
     .replace(/[?!.,]/g, '')
     .replace(/\s+/g, ' ')
     .trim();

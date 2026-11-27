@@ -8,10 +8,16 @@ import { cardEdition, formatEraQualifier } from './dossierCards';
  * the case for rating it higher. Only a current card asks about the present.
  */
 
-/** "Bukayo Saka" -> "Saka", "Kaká" -> "Kaká", "Neymar Jr" -> "Neymar". */
+/** Words that belong to the surname after them: "Di María", "van der Sar", "De Bruyne". */
+const SURNAME_PARTICLES = new Set(['di', 'de', 'da', 'do', 'dos', 'das', 'del', 'della', 'van', 'von', 'der', 'den', 'ter', 'ten', 'le', 'la', 'du']);
+
+/** "Bukayo Saka" -> "Saka", "Kaká" -> "Kaká", "Neymar Jr" -> "Neymar", "Ángel Di María" -> "Di María". */
 export function shortName(name: string): string {
   const words = name.trim().replace(/\s+(Jr\.?|Junior|Sr\.?|II|III)$/i, '').split(/\s+/);
-  return words.length > 1 ? words[words.length - 1] : words[0] ?? name;
+  if (words.length <= 1) return words[0] ?? name;
+  let start = words.length - 1;
+  while (start > 1 && SURNAME_PARTICLES.has(words[start - 1].toLowerCase())) start--;
+  return words.slice(start).join(' ');
 }
 
 /** "Right Winger/Right Midfielder" -> "right wingers"; "Centre-Back" -> "centre-backs". */

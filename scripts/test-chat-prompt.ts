@@ -52,10 +52,10 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 
 /** The hashes of the prompts as they stood before the core was split into sections. */
 const PINNED = {
-  core: '9f753a3a76a7c8579b23904b54d301f885715335709d82cbf48f2c81b07aa648',
-  synthesis: 'e4f46aaf4dbb161ca1dcb1f07a8512349ae7f90ac44cbad7d8f85e62a6028e31',
-  chat: '123657caa5ed656fd33fee918362eccf4f3121a9e8760a6956e9f8c414e25491',
-  chatWithEafc: '8fcdcb5aa15d4b954e14fa749bc80aa28826df9a5a7ffd86917866dbbc72985c',
+  core: 'd2a733093940403da9262224e8f2f9345a8dcd8295c8b17e680bcd76419f7ed1',
+  synthesis: 'b4eec92983dea8d67da9a5a2abf6d7b771380fae5eabf51e62fca8f9337a1023',
+  chat: '991d0f5ad0628198fe8f0b9bc80839b613b464d8b0dff1ecf47d4450238c6410',
+  chatWithEafc: 'e9a32ba59557fede56d3689a8a6342eff6b2e6637d530dd69cf891616226af90',
 };
 
 await test('the scouting core is byte-identical to the single string it was', () => {

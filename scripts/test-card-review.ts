@@ -506,9 +506,11 @@ await test('guard: code refuses a draft that jumps more than one tier band witho
   assert.equal(t.reviews.rows[0].rounds[0].by, 'code');
 });
 
-await test('guard: a window over three seasons and an Overall outside its own placement are refused by code', () => {
+await test('guard: a window of one season or over three, and an Overall outside its own placement are refused by code', () => {
   const wide = fullPrime(91, { version: { ...fullPrime(91).version!, seasonOrEra: '2001-05', primeWindow: { startSeason: '2001-02', endSeason: '2004-05' } } });
   assert.match(guardDraft(fullPrime(90), wide, OPENED, [])!, /4 seasons/);
+  const narrow = fullPrime(91, { version: { ...fullPrime(91).version!, seasonOrEra: '2003-04', primeWindow: { startSeason: '2003-04', endSeason: '2003-04' } } });
+  assert.match(guardDraft(fullPrime(90), narrow, OPENED, [])!, /one season/);
   const peer = prime('Zed Peer', 93, '2000-03');
   const above = fullPrime(91, { peerPlacement: P(['Zed Peer (2000-03)']) });
   assert.match(guardDraft(fullPrime(90), above, OPENED, [peer])!, /outside the range/);

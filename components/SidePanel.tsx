@@ -188,88 +188,64 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 onTouchEnd={handleTouchEnd}
             >
 
-                <div className="flex justify-between items-start px-8 pt-2 md:pt-6 pb-4">
-                    <div className="flex-1 pr-4">
-                        <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                            <EditionLabel profile={profile} size="sm" />
-                            {profile.revision && <RevisionNote />}
-                        </div>
-                        <h2 className="text-[28px] font-serif font-extrabold tracking-[-0.015em] text-charcoal dark:text-cream-50 leading-[1.05] [text-wrap:balance]">{profile.basicInfo.name}</h2>
-                        <p className="text-emerald-700 dark:text-emerald-400 font-serif italic text-[16px] leading-snug mt-1.5 mb-1">
-                            {profile.playstyleAndRole?.playstyle?.archetype}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-charcoal/60 dark:text-cream-400 font-sans">
-                                <span className="font-semibold text-charcoal dark:text-cream-200">{positionCodes(profile.basicInfo.position)}</span>
-                                <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                <span className="line-clamp-1">{profile.basicInfo.club}</span>
-                                {profile.basicInfo.age != null && (
-                                    <>
-                                        <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                        <span>{profile.basicInfo.age}</span>
-                                    </>
-                                )}
-                                {profile.basicInfo.height && profile.basicInfo.height !== 'N/A' && (
-                                    <>
-                                        <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
-                                        <span>{profile.basicInfo.height}</span>
-                                    </>
-                                )}
-                        </div>
-                        {profile.clubManager && !isPrimeCard(profile) && (
-                            <p
-                                className="mt-1 text-xs text-charcoal/60 dark:text-cream-400 font-sans line-clamp-1"
-                                title={`Verified by live search on ${profile.clubManager.verifiedOn}`}
-                            >
-                                Manager: {profile.clubManager.name}
-                            </p>
-                        )}
-                    </div>
-                    
-                    <div className="flex flex-col items-end text-right shrink-0">
-                        <span
-                            className={`block font-serif font-extrabold leading-[0.8] tracking-[-0.04em] text-[56px] [font-variant-numeric:lining-nums_tabular-nums] ${overallText(profile.ratings.overall)}`}
-                        >
-                            {profile.ratings.overall}
-                        </span>
-                        <span className="mt-2 text-[12.5px] font-medium leading-none text-charcoal/80 dark:text-cream-200">{getShortTierLabel(profile.ratings.overall)}</span>
-                        {profile.ratings.potential !== profile.ratings.overall && (
-                            <span className="mt-1.5 text-[12px] leading-none text-charcoal/50 dark:text-cream-400/80">
-                                Potential <span className="font-semibold text-charcoal/75 dark:text-cream-200 [font-variant-numeric:lining-nums]">{profile.ratings.potential}</span>
-                            </span>
-                        )}
-
-                        {/* Navigation Arrows placed in the blank space under OVR and POT, but above share/close buttons */}
-                        {allProfiles.length > 1 && currentIndex !== -1 && (
-                            <div className="flex items-center bg-cream-200/60 dark:bg-charcoal-light/35 rounded-lg p-0.5 border border-cream-300/60 dark:border-charcoal-border select-none mt-4">
-                                <button 
-                                    disabled={currentIndex === 0}
-                                    onClick={() => onSelectProfile(allProfiles[currentIndex - 1])}
-                                    className="p-1 rounded text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-white hover:bg-cream-200 dark:hover:bg-charcoal-light disabled:opacity-20 disabled:pointer-events-none transition-all active:scale-95"
-                                    title="Previous Dossier"
-                                >
-                                    <span className="material-symbols-outlined text-[15px] font-bold block">arrow_back</span>
-                                </button>
-                                
-                                <span className="text-[10px] font-mono font-bold px-2 text-charcoal/70 dark:text-cream-300">
-                                    {currentIndex + 1}/{allProfiles.length}
-                                </span>
-
-                                <button 
-                                    disabled={currentIndex === allProfiles.length - 1}
-                                    onClick={() => onSelectProfile(allProfiles[currentIndex + 1])}
-                                    className="p-1 rounded text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-white hover:bg-cream-200 dark:hover:bg-charcoal-light disabled:opacity-20 disabled:pointer-events-none transition-all active:scale-95"
-                                    title="Next Dossier"
-                                >
-                                    <span className="material-symbols-outlined text-[15px] font-bold block">arrow_forward</span>
-                                </button>
+                <div className="px-5 sm:px-8 pt-2 md:pt-6 pb-4">
+                    <div className="flex justify-between items-end gap-4">
+                        <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                                <EditionLabel profile={profile} size="sm" />
+                                {profile.revision && <RevisionNote />}
                             </div>
+                            <h2 className="text-[28px] font-serif font-extrabold tracking-[-0.015em] text-charcoal dark:text-cream-50 leading-[1.05] [text-wrap:balance]">{profile.basicInfo.name}</h2>
+                        </div>
+                        <div className="flex flex-col items-end text-right shrink-0">
+                            <span
+                                className={`block font-serif font-extrabold leading-[0.8] tracking-[-0.04em] text-[56px] [font-variant-numeric:lining-nums_tabular-nums] ${overallText(profile.ratings.overall)}`}
+                            >
+                                {profile.ratings.overall}
+                            </span>
+                            <span className="mt-2 text-[12.5px] font-medium leading-none text-charcoal/80 dark:text-cream-200 whitespace-nowrap">{getShortTierLabel(profile.ratings.overall)}</span>
+                            {profile.ratings.potential !== profile.ratings.overall && (
+                                <span className="mt-1.5 text-[12px] leading-none text-charcoal/50 dark:text-cream-400/80">
+                                    Potential <span className="font-semibold text-charcoal/75 dark:text-cream-200 [font-variant-numeric:lining-nums]">{profile.ratings.potential}</span>
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                    {profile.playstyleAndRole?.playstyle?.archetype && (
+                        <p className="text-emerald-700 dark:text-emerald-400 font-serif italic text-[16px] leading-snug mt-2.5 [text-wrap:balance]">
+                            {profile.playstyleAndRole.playstyle.archetype}
+                        </p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-charcoal/60 dark:text-cream-400 font-sans">
+                        <span className="font-semibold text-charcoal dark:text-cream-200">{positionCodes(profile.basicInfo.position)}</span>
+                        <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
+                        <span className="line-clamp-1">{profile.basicInfo.club}</span>
+                        {profile.basicInfo.age != null && (
+                            <>
+                                <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
+                                <span>{profile.basicInfo.age}</span>
+                            </>
+                        )}
+                        {profile.basicInfo.height && profile.basicInfo.height !== 'N/A' && (
+                            <>
+                                <span className="w-px h-3 bg-charcoal/20 dark:bg-cream-400/20"></span>
+                                <span>{profile.basicInfo.height}</span>
+                            </>
                         )}
                     </div>
+                    {profile.clubManager && !isPrimeCard(profile) && (
+                        <p
+                            className="mt-1 text-xs text-charcoal/60 dark:text-cream-400 font-sans line-clamp-1"
+                            title={`Verified by live search on ${profile.clubManager.verifiedOn}`}
+                        >
+                            Manager: {profile.clubManager.name}
+                        </p>
+                    )}
                 </div>
 
                 {/* Toolbar / All dossiers, Share and Close */}
-                <div className="flex justify-between items-center px-8 pb-5">
-                    <div className="flex items-center">
+                <div className="flex justify-between items-center gap-2 px-5 sm:px-8 pb-4 sm:pb-5">
+                    <div className="flex items-center gap-1 min-w-0">
                         {onBack ? (
                             <button
                                 onClick={onBack}
@@ -279,20 +255,44 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 <span className="material-symbols-outlined text-[18px] block">arrow_back</span>
                                 <span className="text-[12.5px] font-sans font-medium">Scout</span>
                             </button>
-                        ) : (
-                            <span />
-                        )}
+                        ) : null}
+                    {allProfiles.length > 1 && currentIndex !== -1 && (
+                        <div className="flex items-center bg-cream-200/60 dark:bg-charcoal-light/35 rounded-lg p-0.5 border border-cream-300/60 dark:border-charcoal-border select-none ml-1">
+                            <button 
+                                disabled={currentIndex === 0}
+                                onClick={() => onSelectProfile(allProfiles[currentIndex - 1])}
+                                className="p-1 rounded text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-white hover:bg-cream-200 dark:hover:bg-charcoal-light disabled:opacity-20 disabled:pointer-events-none transition-all active:scale-95"
+                                title="Previous Dossier"
+                            >
+                                <span className="material-symbols-outlined text-[15px] font-bold block">arrow_back</span>
+                            </button>
+                            
+                            <span className="text-[10px] font-mono font-bold px-2 text-charcoal/70 dark:text-cream-300">
+                                {currentIndex + 1}/{allProfiles.length}
+                            </span>
+
+                            <button 
+                                disabled={currentIndex === allProfiles.length - 1}
+                                onClick={() => onSelectProfile(allProfiles[currentIndex + 1])}
+                                className="p-1 rounded text-charcoal/60 dark:text-cream-400 hover:text-charcoal dark:hover:text-white hover:bg-cream-200 dark:hover:bg-charcoal-light disabled:opacity-20 disabled:pointer-events-none transition-all active:scale-95"
+                                title="Next Dossier"
+                            >
+                                <span className="material-symbols-outlined text-[15px] font-bold block">arrow_forward</span>
+                            </button>
+                        </div>
+                    )}
                     </div>
                     
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-0.5 sm:gap-2 shrink-0">
                         {onOpenHub && (
                             <button 
                                 onClick={onOpenHub}
                                 className="p-1.5 text-charcoal/60 dark:text-cream-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center gap-1 rounded-lg hover:bg-cream-200/50 dark:hover:bg-charcoal-light/30 px-2 py-1"
                                 title="Browse all dossiers"
+                                aria-label="All Dossiers"
                             >
                                 <span className="material-symbols-outlined text-[18px] block">grid_view</span>
-                                <span className="text-[12.5px] font-sans font-medium">All Dossiers</span>
+                                <span className="max-sm:hidden text-[12.5px] font-sans font-medium whitespace-nowrap">All Dossiers</span>
                             </button>
                         )}
 
@@ -303,7 +303,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 title="Think the rating is off? Make your case in the chat"
                             >
                                 <span className="material-symbols-outlined text-[18px] block">rate_review</span>
-                                <span className="text-[12.5px] font-sans font-medium">Challenge</span>
+                                <span className="text-[12.5px] font-sans font-medium whitespace-nowrap">Challenge</span>
                             </button>
                         )}
 
@@ -327,7 +327,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
             {/* Content Scroll Area */}
             <div 
-                className="flex-1 overflow-y-auto px-8 py-8 scrollbar-hide space-y-10 bg-cream-100 dark:bg-charcoal" 
+                className="flex-1 overflow-y-auto px-5 sm:px-8 py-6 sm:py-8 scrollbar-hide space-y-10 bg-cream-100 dark:bg-charcoal" 
                 onPointerDownCapture={e => e.stopPropagation()} 
                 onTouchStart={e => e.stopPropagation()} 
             >

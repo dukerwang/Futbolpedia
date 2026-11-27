@@ -63,11 +63,11 @@ function fakeProfile(prompt: string) {
     : prompt.includes('HISTORICAL / PRIME')
       ? {
           type: 'prime',
-          label: 'Prime Zenith (2011-12)',
+          label: 'Prime Zenith (2010-12)',
           evaluationDate: '2012-05-25',
-          seasonOrEra: '2011-12',
+          seasonOrEra: '2010-12',
           peakContext: 'Peak note.',
-          ...(scenario.window ? { primeWindow: scenario.window(prompt) } : {}),
+          primeWindow: scenario.window?.(prompt) ?? { startSeason: '2010-11', endSeason: '2011-12' },
         }
       : { type: 'current', label: 'Current Form', evaluationDate: today, seasonOrEra: '2026-27', peakContext: null };
   return {
@@ -423,6 +423,22 @@ async function main() {
     assert.equal(card.version?.seasonOrEra, '2009-12');
     assert.equal(card.version?.label, 'Prime Zenith (2009-12)');
     assert.deepEqual(card.version?.primeWindow, { startSeason: '2009-10', endSeason: '2011-12' });
+  });
+
+  await test('a one-season prime window is widened to a sustained stretch', async () => {
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      window: (prompt) =>
+        prompt.includes('validation_retry')
+          ? { startSeason: '2009-10', endSeason: '2010-11' }
+          : { startSeason: '2010-11', endSeason: '2010-11' },
+    };
+    const card = await rate('Rate prime Andrés Iniesta');
+    const syntheses = calls.filter((c) => c.structured && c.prompt.includes('synthesis_instructions'));
+    assert.equal(syntheses.length, 2);
+    assert.match(syntheses[1].prompt, /covers 1 season\./);
+    assert.equal(card.version?.seasonOrEra, '2009-11');
   });
 
   await test('"rerate prime" regenerates from scratch; "rate prime" keeps the old card in view', async () => {

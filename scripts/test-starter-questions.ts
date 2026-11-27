@@ -64,6 +64,9 @@ test('names and positions read naturally', () => {
   assert.equal(shortName('Bukayo Saka'), 'Saka');
   assert.equal(shortName('Kaká'), 'Kaká');
   assert.equal(shortName('Neymar Jr'), 'Neymar');
+  assert.equal(shortName('Ángel Di María'), 'Di María');
+  assert.equal(shortName('Edwin van der Sar'), 'van der Sar');
+  assert.equal(shortName('Kevin De Bruyne'), 'De Bruyne');
   assert.equal(positionPlural('Right Winger/Right Midfielder'), 'right wingers');
   assert.equal(positionPlural('Centre-Back'), 'centre-backs');
   assert.equal(positionPlural('N/A'), 'players in their position');

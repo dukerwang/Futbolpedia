@@ -34,6 +34,7 @@ export interface ExploreProps {
 
 const SHELF = 3;
 const POSITION_LIST = 5;
+const PHONE_POSITION_LIST = 3;
 /** A club needs this many players with cards before it gets a shelf of its own. */
 const CLUB_MIN_PLAYERS = 4;
 /** The spotlight is drawn from cards at World-Class Elite and up. */
@@ -162,7 +163,8 @@ const PositionList: React.FC<{ label: string; items: GlobalHubDossierItem[]; onO
     </div>
     <ol className="mt-1">
       {items.map(({ profile }, i) => (
-        <li key={getCardKey(profile)}>
+        // Phones show each position's top three, so four lists don't run to twenty rows.
+        <li key={getCardKey(profile)} className={i >= PHONE_POSITION_LIST ? 'max-sm:hidden' : undefined}>
           <button
             type="button"
             onClick={() => onOpen(profile)}

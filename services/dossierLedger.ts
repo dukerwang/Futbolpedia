@@ -178,6 +178,13 @@ export interface PeerLedgerOptions {
   targetPlayers?: string[];
   positionHint?: string;
   message?: string;
+  /** Cards never to include, such as the player's own on a re-rating. */
+  exclude?: (p: PlayerProfile) => boolean;
+  /**
+   * A rating: every card in the library is in the ledger, so a new card is placed against the whole
+   * of the one all-era scale rather than a sample of it (`exclude` still applies).
+   */
+  wholeLibrary?: boolean;
 }
 
 const inferPositionalFilterFromText = (text: string): string | null => {
@@ -237,14 +244,18 @@ const inferQueriedAttributesFromText = (text: string): Array<keyof Attributes> =
 /**
  * Picks a compact, position-aware peer calibration ledger from the user's freshly calibrated dossiers
  * (across Supabase global pool, local saved archive, and active conversation): the target's own
- * cards, up to 10 same-position peers, then the top-rated anchors, 18 cards in all.
+ * cards, up to 10 same-position peers, then the top-rated anchors, 18 cards in all. A rating asks
+ * for the whole library instead (`wholeLibrary`).
  */
 export function selectPositionalPeerLedger(
   savedDossiers: PlayerProfile[],
   conversationDossiers: PlayerProfile[],
   options?: PeerLedgerOptions,
 ): PlayerProfile[] {
-  const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers);
+  const exclude = options?.exclude;
+  const allCalibrated = mergeAllCalibratedDossiers(savedDossiers, conversationDossiers).filter(
+    (p) => !exclude?.(p),
+  );
   if (allCalibrated.length === 0) return [];
 
   const matchedTargets = findReferencedDossiers(
@@ -259,6 +270,7 @@ export function selectPositionalPeerLedger(
     (options?.message ? inferPositionalFilterFromText(options.message) : null);
 
   const sortedAll = [...allCalibrated].sort((a, b) => b.ratings.overall - a.ratings.overall);
+  if (options?.wholeLibrary) return sortedAll;
   const selectedBySlug = new Map<string, PlayerProfile>();
 
   // 1. Prioritize direct target matches so their exact ratings are always visible

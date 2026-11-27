@@ -65,6 +65,8 @@ export const CARD_LIST_CAP = 20;
 export const SITUATION_CHECKS = 60;
 /** Mirrors the synthesizer's prime window: at most three consecutive seasons. */
 export const MAX_WINDOW_SEASONS = 3;
+/** A prime spans at least two seasons; one season is a season card. */
+export const MIN_WINDOW_SEASONS = 2;
 /** A card rating him at least an everyday starter is contradicted by a first-choice XI without him. */
 export const STARTER_MIN_OVERALL = RATING_TIERS.find((t) => t.id === '80_83_QUALITY_STARTER')!.min;
 /** A disagreement pair enters the signals with at least this many counted reports (each source once a day). */
@@ -692,6 +694,7 @@ export function guardDraft(old: PlayerProfile, draft: PlayerProfile, opened: Ope
   if (toBasePlayerSlug(draft.basicInfo.name) !== toBasePlayerSlug(old.basicInfo.name)) return `the draft rates ${draft.basicInfo.name}, not ${old.basicInfo.name}`;
   const seasons = windowSeasons(draft);
   if (seasons !== null && seasons > MAX_WINDOW_SEASONS) return `the draft's window covers ${seasons} seasons, more than ${MAX_WINDOW_SEASONS}`;
+  if (seasons !== null && seasons < MIN_WINDOW_SEASONS) return `the draft's window covers one season; a prime spans at least ${MIN_WINDOW_SEASONS}`;
   const [before, after] = [Number(old.ratings?.overall) || 0, Number(draft.ratings?.overall) || 0];
   const crossed = bandsCrossed(before, after);
   if (crossed > 1 && !opened.evidence) {
@@ -783,7 +786,7 @@ export const buildReviewPrompt = (i: ReviewInput): string => `You are the review
 
 Answer four questions about the draft:
 1. evidenceDriven: is every change from the published card to the draft, in the rating, the window and the placement, driven by the evidence or the contradiction the review was opened for? A change nothing below explains does not hold.
-2. rulesHold: do the card rules hold? The Overall agrees with the draft's own placement and with the neighbouring cards it names; a prime is one stretch of at most ${MAX_WINDOW_SEASONS} consecutive seasons, rated at the level sustained across it; the rating judges how good a footballer the version was, with numbers and honours as evidence, never as the measure.
+2. rulesHold: do the card rules hold? The Overall agrees with the draft's own placement and with the neighbouring cards it names; a prime is one stretch of ${MIN_WINDOW_SEASONS} to ${MAX_WINDOW_SEASONS} consecutive seasons, rated at the level sustained across it; the rating judges how good a footballer the version was, with numbers and honours as evidence, never as the measure.
 3. figuresSupported: is every precise figure in the draft (appearances, goals, trophies, seasons, fees) supported by the evidence below or already on the published card?
 4. proportionate: does the rating move no further than the evidence warrants? A record that fills a gap can confirm a rating or move it as far as it shows; a contradiction with another card is resolved by the smallest move that resolves it, and may call for no move on this card when the other card is the one out of place.
 

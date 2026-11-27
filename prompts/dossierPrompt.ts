@@ -31,11 +31,11 @@ You are generating a structured scouting dossier JSON object representing an off
      - Set \`version.label\` to \`"Current Form (<Month> <Year>)"\`, with the month abbreviated.
      - Set \`version.peakContext\` to \`null\`.
    - **Prime Player Evaluation (a "prime" or "peak" request, or a retired player with no timeframe):**
-     - Identify the player's prime: the stretch of consecutive seasons when he played at his highest level, usually one to three seasons, a single season only when his best level genuinely lasted one season. Choose it by when he was the best footballer he ever was, not by when his output, trophies or awards peaked.
+     - Identify the player's prime: the stretch of consecutive seasons when he played at his highest level, two or three seasons, never a single season: one outstanding season is a season card, not a prime. Choose it by when he was the best footballer he ever was, not by when his output, trophies or awards peaked.
      - Rate the level he sustained across that window, not one season's spike and not his career. The attributes describe him across the window.
      - Set \`version.type\` to \`"prime"\`.
-     - Set \`version.primeWindow\` to the window's first and last season (YYYY-YY each, YYYY for calendar-year leagues; the same season twice for a one-season prime).
-     - Set \`version.seasonOrEra\` to the window from its first season to its last (YYYY-YY for one season).
+     - Set \`version.primeWindow\` to the window's first and last season (YYYY-YY each, YYYY for calendar-year leagues).
+     - Set \`version.seasonOrEra\` to the window from its first season to its last.
      - Set \`version.evaluationDate\` to a verified date from the window's last season (YYYY-MM-DD), such as the date that season concluded.
      - Set \`version.label\` to \`"Prime Zenith (<Window>)"\`.
      - Set \`version.peakContext\` to a concise 1–2 sentence note on why this stretch was the player at his best: his level, role and the evidence for it.

@@ -116,7 +116,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
           type: Type.OBJECT,
           nullable: true,
           description:
-            'Prime and era cards only: the first and last season of the window, each formatted YYYY-YY (YYYY for calendar-year leagues), the same season twice for a one-season window. For a prime, the stretch when the player was at his best; for an era, the seasons that define the version the user asked for. Null for current and season cards.',
+            'Prime and era cards only: the first and last season of the window, each formatted YYYY-YY (YYYY for calendar-year leagues). For a prime, the two or three consecutive seasons when the player was at his best; for an era, the seasons that define the version the user asked for (the same season twice for a one-season era). Null for current and season cards.',
           properties: {
             startSeason: { type: Type.STRING },
             endSeason: { type: Type.STRING },
@@ -949,6 +949,8 @@ export function applyVersionRules(
 
 /** A prime window longer than this is a career, not a version. */
 const MAX_PRIME_WINDOW_SEASONS = 3;
+/** A prime is a level he sustained, so it spans at least this many seasons; one season is a season card. */
+export const MIN_PRIME_WINDOW_SEASONS = 2;
 
 function findSynthesisValidationIssues(
   raw: RawSynthesizedProfile,
@@ -986,6 +988,12 @@ function findSynthesisValidationIssues(
       isEra
         ? `An era card rates one version of the player, not a whole spell: the window ${primeWindow.seasonOrEra} covers ${primeWindow.seasons} seasons. Narrow version.primeWindow to the seasons (at most ${MAX_PRIME_WINDOW_SEASONS}) when he was most fully that version and at his best in it, and rate that level.`
         : `A prime is the player's best stretch, not his career: the window ${primeWindow.seasonOrEra} covers ${primeWindow.seasons} seasons. Narrow version.primeWindow to the seasons (at most ${MAX_PRIME_WINDOW_SEASONS}) when he played at his very highest level, and rate that level.`,
+    );
+  }
+
+  if (primeWindow && !isEra && primeWindow.seasons < MIN_PRIME_WINDOW_SEASONS) {
+    issues.push(
+      `A prime is a level the player sustained, not one season: the window ${primeWindow.seasonOrEra} covers ${primeWindow.seasons} season. Widen version.primeWindow to the ${MIN_PRIME_WINDOW_SEASONS} or ${MAX_PRIME_WINDOW_SEASONS} consecutive seasons when he played at his highest level, and rate the level he sustained across them.`,
     );
   }
 
@@ -1065,11 +1073,11 @@ export async function synthesizePlayerDossier(
     : params.isHistorical
     ? `
     - HISTORICAL / PRIME DATED CARD EVALUATION: Evaluate the player in his prime on the exact same 1–99 scale as modern players (zero nostalgia inflation, zero conservative underselling).
-    - THE PRIME IS A WINDOW: His prime is the stretch of consecutive seasons when he played at his highest level, usually one to three seasons, and a single season only when his best level genuinely lasted one season. Choose it by when he was the best footballer he ever was, not by when his goals, assists, trophies or awards peaked. Rate the level he sustained across that window: his standard as a footballer in those seasons, not one season's spike and not his career, longevity, trophy count or legacy. Honours count only as evidence of how good he was then. The attributes describe him across the window (Consistency is how reliably he played at that level through it).
-    - PRIME DATING REQUIREMENT: Set \`version.type\` = "prime", \`version.primeWindow\` = { startSeason, endSeason } (YYYY-YY each, YYYY for calendar-year leagues; the same season twice for a one-season prime), \`version.seasonOrEra\` = the window from its first season to its last (YYYY-YY for one season), \`version.evaluationDate\` = a verified date from the window's last season (YYYY-MM-DD), \`version.label\` = "Prime Zenith (<Window>)", and \`version.peakContext\` = 1–2 sentences on why this stretch was the player at his best: his level, role and the evidence for it.
+    - THE PRIME IS A WINDOW: His prime is the stretch of consecutive seasons when he played at his highest level, two or three seasons, never a single season: one outstanding season is a season card, not a prime. Choose it by when he was the best footballer he ever was, not by when his goals, assists, trophies or awards peaked. Rate the level he sustained across that window: his standard as a footballer in those seasons, not one season's spike and not his career, longevity, trophy count or legacy. Honours count only as evidence of how good he was then. The attributes describe him across the window (Consistency is how reliably he played at that level through it).
+    - PRIME DATING REQUIREMENT: Set \`version.type\` = "prime", \`version.primeWindow\` = { startSeason, endSeason } (YYYY-YY each, YYYY for calendar-year leagues), \`version.seasonOrEra\` = the window from its first season to its last, \`version.evaluationDate\` = a verified date from the window's last season (YYYY-MM-DD), \`version.label\` = "Prime Zenith (<Window>)", and \`version.peakContext\` = 1–2 sentences on why this stretch was the player at his best: his level, role and the evidence for it.
     - basicInfo (club, age) describes him in the window's middle season; name the club he played for through most of it.
     - Rate the peak at the level of footballer he was, using the whole scale: 96–98 when he was among the greatest footballers the game has produced, whatever his position. Being the best at his position that season does not by itself fix a band, and it never caps him at 95; place him against the calibrated peers instead. Do not cap historic defenders or midfielders below attackers of the same ability.
-    - Because a prime dossier represents the player's realized peak level, set \`ratings.potential\` equal to \`ratings.overall\` (unless their career was cut short before their prime).
+    - Because a prime dossier represents the player's realized peak level, set \`ratings.potential\` equal to \`ratings.overall\`, even when injury or illness cut his career short.
     - Disregard their ${year} status (retired, manager, veteran) when rating attributes and Overall.`
     : `
     - CURRENT FORM DATED CARD EVALUATION (${month} ${year}, Season ${currentSeason}, Date: ${currentDateIso}): Ground basicInfo (club, age, height, weight) and latestUpdate strictly in <deterministic_bio_record> and <factual_foundation>.
