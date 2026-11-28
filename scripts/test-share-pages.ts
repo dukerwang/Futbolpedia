@@ -3,6 +3,8 @@
  * Offline checks for share pages (services/sharePages.ts): what each address resolves to, with the
  * shared store faked in memory. Covers the default-card rule, other spellings of a name, re-rated
  * primes, an active player's prime, missing cards, shared chats and a store that can't be read.
+ * Also how a shared chat is stored and read: by its code through the database function, never by
+ * selecting from the table.
  *
  * Usage:
  *   npx tsx scripts/test-share-pages.ts
@@ -11,7 +13,8 @@ import assert from 'node:assert/strict';
 import type { Conversation, PlayerProfile } from '../types';
 import { parsePath, type CardAddress } from '../services/cardPaths';
 import { getCardKey, toVersionedSlug, toDossierCardSlug, isPrimeCard } from '../services/dossierCards';
-import { resolveCardPage, resolveChatPage, SharePageCache, type ShareReads } from '../services/sharePages';
+import { resolveCardPage, resolveChatPage, SharePageCache, storeReads, type ShareReads } from '../services/sharePages';
+import { getSharedConversation, shareConversation, useServerSupabase } from '../services/dossierCache';
 
 let passes = 0;
 let failures = 0;
@@ -201,6 +204,44 @@ async function main() {
     assert.equal(page.replies, 2);
     assert.deepEqual(page.cards.map((c) => c.basicInfo.name), ['Thierry Henry', 'Alan Shearer']);
     assert.deepEqual(await resolveChatPage('ZZZZZZ', s.reads), { kind: 'not_found' });
+  });
+
+  await test('a shared chat is read only by its code, and the table is never selected from', async () => {
+    const calls: unknown[] = [];
+    const inserted: { share_code: string }[] = [];
+    const chat = { id: 'x', title: 'Shared', messages: [] } as unknown as Conversation;
+    useServerSupabase({
+      rpc: async (fn: string, args: { p_code: string }) => {
+        calls.push([fn, args]);
+        return { data: args.p_code === 'AB12CD' ? chat : null, error: null };
+      },
+      // Only an insert exists on the table, as under row-level security with no read policy.
+      from: (table: string) => {
+        assert.equal(table, 'shared_conversations');
+        return {
+          insert: async (row: { share_code: string }) => {
+            inserted.push(row);
+            return { error: null };
+          },
+        };
+      },
+    });
+    try {
+      assert.equal(await getSharedConversation('ab12cd'), chat);
+      assert.equal(await storeReads().sharedConversation('AB12CD'), chat, "the share routes' read");
+      assert.equal(await getSharedConversation('ZZZZZZ'), null);
+      assert.deepEqual(calls[0], ['get_shared_conversation', { p_code: 'AB12CD' }]);
+
+      const codes = [await shareConversation(chat), await shareConversation(chat)];
+      for (const code of codes) {
+        assert.match(code, /^[A-HJ-NP-Z2-9]{10}$/);
+        assert.deepEqual(parsePath(`/c/${code}`), { kind: 'chat', code, canonical: true });
+      }
+      assert.notEqual(codes[0], codes[1]);
+      assert.deepEqual(inserted.map((r) => r.share_code), codes);
+    } finally {
+      useServerSupabase(null);
+    }
   });
 
   await test('the page cache reuses answers and forgets failures', async () => {

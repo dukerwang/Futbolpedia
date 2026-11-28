@@ -1,20 +1,21 @@
-import { ThinkingLevel } from '@google/genai';
-import { outputCap, samplingFor } from '../constants/modelProfiles';
 import { normalizeClub } from '../constants/ratingTiers';
 import {
   sameCoach,
   type VerifiedClubManager,
 } from '../packages/engine/src/gates/managerMentions.ts';
-import { FLASH_MODEL, getAi, getCurrentSeasonInfo } from './aiClient';
-import { formatIsoDate, toPlayerSlug } from './dossierCards';
+import { toPlayerSlug } from './dossierCards';
 import { supabase } from './dossierCache';
-import { fetchApiFootballTeamContext } from './groundingService';
+import { getLive } from './researchTools';
 
 /**
  * Verified current head coach per club. API-Football lags managerial changes and model memory
  * is worse, so the source of truth is a focused Google-grounded search, cross-checked against
  * API-Football's record and shared through the Supabase `club_managers` table. A club is looked
  * up at most once a day across all users; nothing here is maintained by hand.
+ *
+ * The search and the write happen on the server (`services/clubManagerServer.ts`), which alone can
+ * write the table. A browser reads stored rows and, for a missing or stale one, asks the server by
+ * club name, so it never supplies a coach.
  */
 export interface ClubManagerRecord {
   club: string;
@@ -31,11 +32,35 @@ export interface ClubManagerRecord {
   verifiedOn: string;
 }
 
-const REFRESH_MS = 24 * 60 * 60 * 1000;
-/** A lookup whose search call errored is retried this soon, and never stored for other users. */
-const FAILED_RETRY_MS = 10 * 60 * 1000;
+export const CLUB_MANAGER_REFRESH_MS = 24 * 60 * 60 * 1000;
+/** How far ahead of this clock a stored row's date may be before the row is ignored. */
+const CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 export const toClubKey = (club: string): string => toPlayerSlug(normalizeClub(club.trim()));
+
+const CLUB_NAME_MAX_CHARS = 60;
+const CLUB_NAME_MAX_WORDS = 8;
+
+/**
+ * A club name that is safe to look up and store, else null. The lookup puts the name into a search
+ * prompt and files the answer under `toClubKey(name)`, which keeps only Latin letters and digits.
+ * Any other letter would reach the prompt without changing the key, so a caller could add
+ * instructions to a real club's name and decide what is stored on its row. Every letter and digit
+ * therefore has to count toward the key, and the name has to be short, plain text.
+ */
+export function readClubName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const name = raw
+    .normalize('NFC')
+    .replace(/[\u2010-\u2015]/g, '-')
+    .replace(/ +/g, ' ')
+    .trim();
+  if (!name || name === 'N/A' || name.length > CLUB_NAME_MAX_CHARS) return null;
+  if (!/^[\p{L}\p{N} .,'\u2019&()\/-]+$/u.test(name)) return null;
+  if (name.split(' ').length > CLUB_NAME_MAX_WORDS) return null;
+  if ((name.match(/[\p{L}\p{N}]/gu) ?? []).some((ch) => !toPlayerSlug(ch))) return null;
+  return toClubKey(name) ? name : null;
+}
 
 const clubTokens = (club: string): string[] =>
   toClubKey(club)
@@ -98,56 +123,23 @@ export function reconcileManagerSources(
 
 /** Whether a stored record is recent enough to reuse instead of searching again. */
 export const isClubManagerFresh = (verifiedAtMs: number, nowMs: number = Date.now()): boolean =>
-  nowMs - verifiedAtMs < REFRESH_MS;
+  nowMs - verifiedAtMs < CLUB_MANAGER_REFRESH_MS && verifiedAtMs - nowMs <= CLOCK_SKEW_MS;
 
-async function searchCurrentCoach(club: string) {
-  const { month, year } = getCurrentSeasonInfo();
-  const res = await getAi().models.generateContent({
-    model: FLASH_MODEL,
-    contents: `As of ${month} ${year}, who is the current first-team head coach (manager) of ${club}? Use the most recent reliable reports. If a caretaker or interim coach is in charge, name them. Reply with exactly one line and nothing else:
-COACH: <full name or UNKNOWN> | SINCE: <appointment date YYYY-MM-DD or UNKNOWN> | PREVIOUS: <the head coach immediately before them, full name, or UNKNOWN> | SOURCE_DATE: <publication date of your most recent source YYYY-MM-DD or UNKNOWN>`,
-    config: {
-      ...samplingFor(FLASH_MODEL, 0),
-      maxOutputTokens: outputCap(FLASH_MODEL, 120),
-      tools: [{ googleSearch: {} }],
-      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-    },
-  });
-  const chunks = (res as any).candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
-  const sourceUrl: string | null = chunks.find((c: any) => c?.web?.uri)?.web?.uri ?? null;
-  return { ...parseManagerLookup(res.text ?? ''), sourceUrl };
+/** A `club_managers` row. */
+export interface ClubManagerRow {
+  club_key: string;
+  club_name: string;
+  coach: string | null;
+  previous_coach: string | null;
+  coach_since: string | null;
+  source_url: string | null;
+  source_date: string | null;
+  api_coach: string | null;
+  sources_agree: boolean | null;
+  verified_at: string;
 }
 
-async function lookUpClubManager(
-  club: string,
-): Promise<{ record: ClubManagerRecord; searchFailed: boolean }> {
-  const [search, apiContext] = await Promise.all([
-    searchCurrentCoach(club).catch((e) => {
-      console.warn(`[ClubManagers] Search failed for ${club}:`, e);
-      return null;
-    }),
-    fetchApiFootballTeamContext(club),
-  ]);
-  const apiCoach = apiContext?.coach ?? null;
-  const { coach, sourcesAgree } = reconcileManagerSources(search?.coach ?? null, apiCoach);
-  if (sourcesAgree === false) {
-    console.info(`[ClubManagers] ${club}: search says ${coach}, API-Football says ${apiCoach}; using search.`);
-  }
-  const record: ClubManagerRecord = {
-    club,
-    coach,
-    previousCoach: coach && !sameCoach(search?.previousCoach, coach) ? search?.previousCoach ?? null : null,
-    coachSince: search?.coachSince ?? null,
-    sourceUrl: search?.sourceUrl ?? null,
-    sourceDate: search?.sourceDate ?? null,
-    apiCoach,
-    sourcesAgree,
-    verifiedOn: formatIsoDate(Date.now()),
-  };
-  return { record, searchFailed: search === null };
-}
-
-const rowToRecord = (row: any): ClubManagerRecord => ({
+export const rowToClubManager = (row: ClubManagerRow): ClubManagerRecord => ({
   club: row.club_name,
   coach: row.coach ?? null,
   previousCoach: row.previous_coach ?? null,
@@ -159,13 +151,57 @@ const rowToRecord = (row: any): ClubManagerRecord => ({
   verifiedOn: String(row.verified_at).slice(0, 10),
 });
 
+/** A coach record and how long it may be reused. */
+export interface ClubManagerAnswer {
+  record: ClubManagerRecord;
+  freshForMs: number;
+}
+
+/** Where `getClubManager` gets a record its memory doesn't hold. Null means no answer this time. */
+export type ClubManagerSource = (club: string) => Promise<ClubManagerAnswer | null>;
+
+/** A lookup is a grounded search on the server; past this the turn stops waiting. */
+const SERVER_LOOKUP_TIMEOUT_MS = 60_000;
+
+/** The shared row when it's fresh, else the server's lookup (`GET /api/clubs/manager`). */
+const sharedSource: ClubManagerSource = async (club) => {
+  if (supabase) {
+    try {
+      const { data } = await supabase.from('club_managers').select('*').eq('club_key', toClubKey(club)).maybeSingle();
+      const atMs = data ? Date.parse(data.verified_at) : NaN;
+      if (data && isClubManagerFresh(atMs)) {
+        return { record: rowToClubManager(data), freshForMs: atMs + CLUB_MANAGER_REFRESH_MS - Date.now() };
+      }
+    } catch (e) {
+      console.warn('[ClubManagers] Read failed:', e);
+    }
+  }
+  const res = await getLive<{ manager: ClubManagerAnswer | null }>(
+    `/api/clubs/manager?${new URLSearchParams({ club })}`,
+    SERVER_LOOKUP_TIMEOUT_MS,
+  );
+  if ('error' in res) {
+    console.warn(`[ClubManagers] Lookup for ${club} ${res.error}`);
+    return null;
+  }
+  return res.data.manager ?? null;
+};
+
+let source: ClubManagerSource = sharedSource;
+
+/** The server's own turns ask its lookup directly instead of calling its public route. */
+export function useServerClubManagers(serverSource: ClubManagerSource): void {
+  if (typeof window === 'undefined') source = serverSource;
+}
+
 const memoryCache = new Map<string, { record: ClubManagerRecord; expiresAtMs: number }>();
 const inFlight = new Map<string, Promise<ClubManagerRecord | null>>();
 
 /**
- * The verified current head coach of `club`: from memory, then the shared Supabase row, then a
- * fresh search when the row is missing or more than a day old. Resolves to null only for an
- * empty club name; a record with `coach: null` means the lookup could not confirm anyone.
+ * The verified current head coach of `club`: from memory, then the shared Supabase row, then the
+ * server's search when the row is missing or more than a day old. Resolves to null for an empty
+ * club name or when no answer could be had; a record with `coach: null` means the lookup could not
+ * confirm anyone.
  */
 export async function getClubManager(club: string | null | undefined): Promise<ClubManagerRecord | null> {
   const name = club?.trim();
@@ -180,48 +216,10 @@ export async function getClubManager(club: string | null | undefined): Promise<C
   if (pending) return pending;
 
   const job = (async (): Promise<ClubManagerRecord | null> => {
-    if (supabase) {
-      try {
-        const { data } = await supabase.from('club_managers').select('*').eq('club_key', key).maybeSingle();
-        const atMs = data ? Date.parse(data.verified_at) : NaN;
-        if (data && isClubManagerFresh(atMs)) {
-          const record = rowToRecord(data);
-          memoryCache.set(key, { record, expiresAtMs: atMs + REFRESH_MS });
-          return record;
-        }
-      } catch (e) {
-        console.warn('[ClubManagers] Read failed:', e);
-      }
-    }
-
-    const { record, searchFailed } = await lookUpClubManager(normalizeClub(name));
-    memoryCache.set(key, {
-      record,
-      expiresAtMs: Date.now() + (searchFailed ? FAILED_RETRY_MS : REFRESH_MS),
-    });
-    if (supabase && !searchFailed) {
-      void supabase
-        .from('club_managers')
-        .upsert(
-          {
-            club_key: key,
-            club_name: record.club,
-            coach: record.coach,
-            previous_coach: record.previousCoach,
-            coach_since: record.coachSince,
-            source_url: record.sourceUrl,
-            source_date: record.sourceDate,
-            api_coach: record.apiCoach,
-            sources_agree: record.sourcesAgree,
-            verified_at: new Date().toISOString(),
-          },
-          { onConflict: 'club_key' },
-        )
-        .then(({ error }: { error: unknown }) => {
-          if (error) console.warn('[ClubManagers] Upsert failed:', error);
-        });
-    }
-    return record;
+    const answer = await source(name);
+    if (!answer) return null;
+    memoryCache.set(key, { record: answer.record, expiresAtMs: Date.now() + answer.freshForMs });
+    return answer.record;
   })().finally(() => inFlight.delete(key));
 
   inFlight.set(key, job);

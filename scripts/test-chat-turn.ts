@@ -459,9 +459,9 @@ await test('each view tool has a progress label', () => {
 });
 
 await test('each tool call has a short progress label', () => {
-  assert.equal(stageLabel(call('get_club_recent_team', { team: 'Arsenal' })), "Reading Arsenal's recent lineups");
-  assert.equal(stageLabel(call('web_search', { query: 'Arsenal build-up 2026-27' })), 'Searching: Arsenal build-up 2026-27');
-  assert.equal(stageLabel(call('club_season', { club: 'Arsenal', season: '2003-04' })), "Reading Arsenal's 2003-04 season");
+  assert.equal(stageLabel(call('get_club_recent_team', { team: 'Arsenal' })), "Studying Arsenal");
+  assert.equal(stageLabel(call('web_search', { query: 'Arsenal build-up 2026-27' })), 'Digging deeper');
+  assert.equal(stageLabel(call('club_season', { club: 'Arsenal', season: '2003-04' })), "Revisiting Arsenal 2003-04");
   assert.equal(stageLabel(call('look_up_dossier', {})), 'Reading a card');
 });
 
@@ -647,7 +647,7 @@ await test('a loop that fails runs the stage pipeline once, with its label and a
   assert.deepEqual(labels, []);
   assert.deepEqual(paths, [{ path: 'chat' }]);
   assert.deepEqual(warnings, []);
-  assert.match(FALLBACK_STAGE_LABEL, /standard route/);
+  assert.match(FALLBACK_STAGE_LABEL, /second look/);
 });
 
 await test('the stage run starts only after the loop has stopped', async () => {

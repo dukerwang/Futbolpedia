@@ -99,7 +99,7 @@ export async function withFreshLatestUpdate(
     const shared = await getCachedDossier(toDossierCardSlug(card.basicInfo.name)).catch(() => null);
     if (shared && getCardKey(shared) === key && !needsLatestUpdateRefresh(shared)) return shared;
 
-    onStageChange?.(`Refreshing ${card.basicInfo.name}'s latest update...`);
+    onStageChange?.(`Bringing ${card.basicInfo.name}'s card up to date...`);
     try {
       const refreshed = await rewriteLatestUpdate(shared && getCardKey(shared) === key ? shared : card);
       if (refreshed.latestUpdateAsOf) void publishLatestUpdate(refreshed);

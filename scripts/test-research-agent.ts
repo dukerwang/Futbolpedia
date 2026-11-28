@@ -163,10 +163,10 @@ await test('reflect adds a second round only when the first left a gap', async (
   assert.equal(ledger.entries.length, 2);
   assert.deepEqual(final.unresolved, ['How long the injured centre-back is out']);
   assert.deepEqual(stages, [
-    'Working out what the question needs...',
-    'Checking Club recent team...',
-    'Reading the evidence...',
-    'Checking 1 search...',
+    'Thinking it through...',
+    'Studying Club...',
+    'Weighing it up...',
+    'Digging deeper...',
   ]);
 });
 
@@ -241,7 +241,7 @@ await test('progress lines and league tables read plainly', () => {
       { tool: 'web_search', subject: 'b' },
       { tool: 'player_season', subject: 'c' },
     ]),
-    'Checking Club recent team, 2 searches, 1 more lookup...',
+    'Studying Club...',
   );
   assert.equal(
     formatLeagueTable([

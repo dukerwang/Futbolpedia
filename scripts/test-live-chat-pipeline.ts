@@ -210,7 +210,7 @@ await test('a question about the present researches facts, then analysis, and th
   // The pressing figure was never looked up, so its sentence goes; the rest stands.
   assert.equal(reply, 'New Fullback starts at left-back in a back four. Main Nine leads the line.');
   assert.ok(liveAsked.some((u) => u.includes('name=Southside')), 'the club was looked up live');
-  assert.ok(stages.includes('Working out what the question needs...'));
+  assert.ok(stages.includes('Thinking it through...'));
 
   // The analysis search came with the live facts; the transfer search didn't.
   const analysisSearch = calls.find((c) => c.search && c.prompt.includes('Southside tactical analysis 2026-27'));
@@ -258,7 +258,7 @@ await test('on the stage path, a flagged figure gets one correction round before
   }
   assert.equal(corrections, 1, 'one round');
   assert.equal(reply, 'New Fullback starts at left-back in a back four. They press from a back four. Main Nine leads the line.');
-  assert.ok(stages.includes('Checking the figures...'));
+  assert.ok(stages.includes('Polishing the report...'));
   assert.ok(perf.some((l) => l.startsWith('[Perf] gate feedback: flagged 1, fixed 1, dropped 0, removed 0')), perf.join('\n'));
 });
 

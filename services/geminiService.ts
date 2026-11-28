@@ -584,12 +584,12 @@ const rateDossier = async (params: {
 
   options?.onStageChange?.(
     season
-      ? `Researching ${subjectName || 'player'}'s ${season} season...`
+      ? `Studying ${subjectName || 'player'}'s ${season} season...`
       : era
-        ? `Researching ${subjectName || 'player'}'s ${formatEraQualifier(era)} era...`
+        ? `Studying ${subjectName || 'player'}'s ${formatEraQualifier(era)} era...`
         : isHistorical
-          ? `Researching ${subjectName || 'player'}'s career peak & honours...`
-          : `Verifying ${subjectName || 'player'}'s live club, coach & stats...`,
+          ? `Studying ${subjectName || 'player'}'s peak years...`
+          : `Studying ${subjectName || 'player'}...`,
   );
 
   // Prior cards and the career status check run alongside grounding, so active players wait
@@ -645,7 +645,7 @@ const rateDossier = async (params: {
     if (primeCard && !hasRevisionConsensus(await fetchRevisionsForCard(primeCard))) {
       return primeCard;
     }
-    options?.onStageChange?.(`Researching ${subjectName}'s career peak & honours...`);
+    options?.onStageChange?.(`Studying ${subjectName}'s peak years...`);
     grounding = await gatherPlayerGrounding({ playerName: subjectName, rawMessage: message, isHistorical });
   }
 
@@ -673,7 +673,7 @@ const rateDossier = async (params: {
   }
 
   options?.onStageChange?.(
-    `Calibrating 25-attribute dossier for ${grounding.apiPlayer?.name || subjectName || 'player'}...`,
+    `Writing ${grounding.apiPlayer?.name || subjectName || 'player'}'s dossier...`,
   );
 
   const freshReferencedDossiers = referencedDossiers

@@ -404,7 +404,7 @@ export async function runDebateResearch(
     brief = { ...readDebateBrief(settled.brief, ctx), settled: true };
     options.perf?.(`debate brief (settled ${settled.settledAt.slice(0, 10)}, ${brief.kind}, ${brief.calls.length} lookups)`);
   } else {
-    options.onStage?.('Working out what settles the question...');
+    options.onStage?.('Thinking it through...');
     const early = options.early && !ctx.thread ? options.early.catch(() => null) : null;
     let startedEarly = false;
     const writing = (early ?? Promise.resolve(null)).then((b) => {
@@ -444,7 +444,7 @@ export async function runDebateResearch(
   brief = ensureDebateObjectionCheck(brief, ctx);
   if (!brief.calls.length) return { brief, ledger: await fileReviews(emptyLedger()) };
 
-  options.onStage?.(`Checking ${brief.calls.length} ${brief.calls.length === 1 ? 'record' : 'records'}...`);
+  options.onStage?.('Revisiting the history...');
   const runs = brief.calls.map((c) => prefetched.take(c) ?? executeCall(c, tools));
   // Each season or window looked up has a permanent snapshot: read it alongside, and start
   // building the ones nobody has built yet, for the next person who asks.

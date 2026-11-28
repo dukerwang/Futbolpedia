@@ -363,7 +363,7 @@ export const ScoutDesk: React.FC<ScoutDeskProps> = ({
                     </div>
                   ) : (
                     <p className="mt-0.5 text-xs font-sans text-charcoal/55 dark:text-cream-400/70 truncate" aria-live="polite">
-                      {job.status === 'queued' ? 'Waiting for a free scout…' : job.stage || 'Checking published cards…'}
+                      {job.status === 'queued' ? 'Waiting for a free scout…' : job.stage || 'Getting started…'}
                     </p>
                   )}
                   {job.status !== 'error' && (

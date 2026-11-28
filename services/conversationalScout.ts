@@ -748,7 +748,7 @@ export async function runConversationalScout(
     const challengeManagersPromise = getVerifiedClubManagers([targetDossier.basicInfo.club]);
     let groundingNotes = '';
     if (route.needsSearch) {
-      onStageChange?.(`Verifying ${targetDossier.basicInfo.name}'s ${currentSeason} records...`);
+      onStageChange?.(`Taking another look at ${targetDossier.basicInfo.name}...`);
       try {
         const customQueries =
           route.searchQueries && route.searchQueries.length > 0
@@ -765,7 +765,7 @@ export async function runConversationalScout(
       }
     }
 
-    onStageChange?.(`Evaluating ${targetDossier.basicInfo.name}'s dossier calibration...`);
+    onStageChange?.(`Reconsidering ${targetDossier.basicInfo.name}'s rating...`);
 
     try {
       const challengeManagers = await challengeManagersPromise;

@@ -182,7 +182,7 @@ await run('player_identity', 0, () => getPlayerIdentity('zico'));
 
 await run('coach_lookup', 0, async () => {
   const { month, year } = getCurrentSeasonInfo();
-  // The same request as clubManagers.ts searchCurrentCoach.
+  // The same request as clubManagerServer.ts searchCurrentCoach.
   const res = await getAi().models.generateContent({
     model,
     contents: `As of ${month} ${year}, who is the current first-team head coach (manager) of Chelsea? Use the most recent reliable reports. If a caretaker or interim coach is in charge, name them. Reply with exactly one line and nothing else:

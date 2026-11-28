@@ -12,6 +12,7 @@ import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_KEYS } from '../constants/ratingTiers';
 
 process.env.API_KEY = 'offline-test-key';
+import type { ClubManagerServer } from '../services/clubManagerServer';
 
 interface Scenario {
   /** Reply text for the "still playing professionally?" check. */
@@ -130,6 +131,8 @@ function geminiReply(body: any): string {
   return scenario.search(prompt);
 }
 
+let managers: ClubManagerServer | undefined;
+
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input);
@@ -151,6 +154,13 @@ globalThis.fetch = (async (input: any, init?: any) => {
   }
   if (url.startsWith('/api/football/player') && scenario.apiPlayer) {
     return new Response(JSON.stringify({ player: scenario.apiPlayer }), { status: 200 });
+  }
+  // The coach lookup runs on the server; the real one answers here, with Gemini faked above.
+  if (url.startsWith('/api/clubs/manager')) {
+    const { createClubManagerServer } = await import('../services/clubManagerServer');
+    managers ??= createClubManagerServer({ db: null });
+    const answer = await managers.get(new URL(url, 'http://local').searchParams.get('club'));
+    return new Response(JSON.stringify({ manager: answer }), { status: 200 });
   }
   if (url.startsWith('/api/live/player') && scenario.livePlayer) {
     return new Response(JSON.stringify(scenario.livePlayer), { status: 200 });

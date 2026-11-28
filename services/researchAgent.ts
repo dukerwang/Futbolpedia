@@ -313,17 +313,10 @@ export const liveResearchModel: ResearchModel = {
   },
 };
 
-/** What the turn's progress line says while a round runs. */
+/** What the turn's progress line says while a round runs: who it's about, never what it looks up. */
 export const describeRound = (calls: ResearchCall[]): string => {
   const clubs = calls.filter((c) => c.tool === 'club_recent_team').map((c) => c.subject);
-  const searches = calls.filter((c) => c.tool === 'web_search').length;
-  const others = calls.length - clubs.length - searches;
-  const parts = [
-    ...(clubs.length ? [`${clubs.join(' & ')} recent team${clubs.length > 1 ? 's' : ''}`] : []),
-    ...(searches ? [`${searches} ${searches === 1 ? 'search' : 'searches'}`] : []),
-    ...(others ? [`${others} more ${others === 1 ? 'lookup' : 'lookups'}`] : []),
-  ];
-  return `Checking ${parts.join(', ')}...`;
+  return clubs.length ? `Studying ${clubs.join(' & ')}...` : 'Digging deeper...';
 };
 
 /** Resolves to the promise's value, or null if it hasn't settled within `ms`. Never rejects. */
@@ -454,7 +447,7 @@ export async function runResearch(
         return null;
       })
     : null;
-  options.onStage?.('Working out what the question needs...');
+  options.onStage?.('Thinking it through...');
   const peeked = clubs.length ? await within(Promise.all(clubs.map((j) => j.stored)), STORED_PEEK_MS) : null;
   const storedSnapshots = (peeked ?? []).filter((s): s is ClubSnapshot => s !== null);
   if (clubs.length) options.perf?.(`stored snapshots (${storedSnapshots.length}/${clubs.length})`);
@@ -578,7 +571,7 @@ export async function runResearch(
 
   // Reflect is for a turn with time in hand; one that ran to the deadline goes straight to writing.
   if (!researchedLate && now() - start < REFLECT_CUTOFF_MS) {
-    options.onStage?.('Reading the evidence...');
+    options.onStage?.('Weighing it up...');
     const verdict = await model.reflect(brief, ledger).then(
       (v) => {
         options.perf?.(`reflect (${v.enough ? 'enough' : `${v.calls.length} more`}, ${v.discard.length} set aside)`);

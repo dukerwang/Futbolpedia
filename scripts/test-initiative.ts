@@ -577,7 +577,7 @@ function fakeLoop(script: LoopScript) {
 }
 const says = (text: string) => ({ text, calls: [] as { name: string; args: Record<string, unknown> }[] });
 const OTHER_THREE = ['ask_user', 'prepare_club', 'offer_rating'];
-const FALLBACK_LABEL = 'Taking the standard route...';
+const FALLBACK_LABEL = 'Taking a second look...';
 
 /** A turn with the stage writer scripted (it answers plainly) and the chat loop as given; returns what each side saw. */
 async function loopTurn(loop: ReturnType<typeof fakeLoop>, options: Record<string, unknown>, opts: { message?: string; route?: Record<string, unknown>; chatDeps?: Record<string, unknown> } = {}) {

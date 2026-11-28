@@ -222,7 +222,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             {profile.clubManager && !isPrimeCard(profile) && (
                                 <p
                                     className="mt-1 text-xs text-charcoal/60 dark:text-cream-400 font-sans line-clamp-1"
-                                    title={`Verified by live search on ${profile.clubManager.verifiedOn}`}
+                                    title={`Verified on ${profile.clubManager.verifiedOn}`}
                                 >
                                     Manager: {profile.clubManager.name}
                                 </p>

@@ -204,7 +204,7 @@ export class ChatTurnFailure extends Error {
 }
 
 /** The progress line for a turn whose loop gave up. */
-export const FALLBACK_STAGE_LABEL = 'Taking the standard route...';
+export const FALLBACK_STAGE_LABEL = 'Taking a second look...';
 
 export interface PathInfo {
   path: 'chat' | 'stage';
@@ -440,22 +440,25 @@ const PRESENTATION = new Set(['show_pitch', 'show_table', 'show_comparison', 'sh
  */
 const COUNTED = new Set(Object.keys(RESEARCH_FUNCTIONS));
 
-/** The progress line for one tool call. */
+/**
+ * The progress line for one tool call. Progress lines are public, so they read as a scout at work
+ * and never say how an answer is made: no searches, queries, sources, record names or counts.
+ */
 export function stageLabel(call: ChatFunctionCall): string {
   const a = call.args ?? {};
   switch (call.name) {
     case 'get_club_recent_team':
-      return `Reading ${str(a.team) || 'the club'}'s recent lineups`;
+      return `Studying ${str(a.team) || 'the club'}`;
     case 'get_player_season':
-      return `Reading ${str(a.name) || 'the player'}'s season`;
+      return `Studying ${str(a.name) || 'the player'}`;
     case 'get_league_table':
-      return `Reading the ${str(a.league) || 'league'} table`;
+      return `Sizing up the ${str(a.league) || 'league'}`;
     case 'web_search':
-      return `Searching: ${str(a.query).slice(0, 80)}`;
+      return 'Digging deeper';
     case 'club_season':
-      return `Reading ${str(a.club) || 'the club'}'s ${str(a.season) ? `${str(a.season)} ` : ''}season`;
+      return `Revisiting ${str(a.club) || 'the club'}${str(a.season) ? ` ${str(a.season)}` : "'s past"}`;
     case 'player_career':
-      return `Reading ${str(a.name) || 'the player'}'s career`;
+      return `Revisiting ${str(a.name) || 'the player'}'s career`;
     case 'look_up_dossier':
       return str(a.name) ? `Reading ${str(a.name)}'s card` : 'Reading a card';
     case 'show_dossier':
@@ -469,17 +472,17 @@ export function stageLabel(call: ChatFunctionCall): string {
     case 'show_ranking':
       return `Drawing the ranking${str(a.title) ? `: ${str(a.title).slice(0, 60)}` : ''}`;
     case 'grep_saved_dossiers':
-      return 'Searching your dossiers';
+      return 'Checking your dossiers';
     case 'who_is':
-      return str(a.name) ? `Checking who ${str(a.name)} is` : 'Checking a name';
+      return str(a.name) ? `Studying ${str(a.name)}` : 'Digging deeper';
     case 'grep_gaffa_market':
-      return "Searching your league's market";
+      return "Checking your league's market";
     case 'team_strength':
-      return `Reading ${str(a.club) || 'the club'}'s team strength`;
+      return `Sizing up ${str(a.club) || 'the club'}`;
     case 'commit_verdict':
       return 'Weighing the verdict';
     default:
-      return 'Researching';
+      return 'Digging deeper';
   }
 }
 
@@ -1110,7 +1113,7 @@ ${
   let stop: TurnStats['stop'] = 'answered';
   let viewRounds = 0;
   let commitRounds = 0;
-  params.onStageChange?.('Planning the research...');
+  params.onStageChange?.('Thinking it through...');
   let reply = await conversation.send(prompt, { tools: true, onText: (t) => onText(t, false) });
   while (reply.calls.length > 0) {
     // Drawing is free: a round that only draws costs no round, and keeps its text as part of the answer.
@@ -1150,7 +1153,7 @@ ${
       },
     }));
     for (const r of results) toolResults.push(JSON.stringify(r.response));
-    params.onStageChange?.(over ? 'Writing scouting analysis...' : 'Weighing what came back...');
+    params.onStageChange?.(over ? 'Writing scouting analysis...' : 'Weighing it up...');
     if (commitOpen) {
       reply = await sendCommitOnly(results);
       const commits = reply.calls.filter((c) => c.name === 'commit_verdict');
