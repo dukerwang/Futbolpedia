@@ -324,7 +324,7 @@ await test('grep_gaffa_market reads the bag and costs nothing; get_player_season
   assert.match(String(grep.budget), /11 lookups/, 'one lookup spent: the season record, not the grep');
   assert.equal(t.stats?.calls, 1);
   assert.deepEqual(t.stats?.toolCalls, ['grep_gaffa_market', 'get_player_season']);
-  assert.ok(t.stages.includes("Searching your league's market"));
+  assert.ok(t.stages.includes("Checking your league's market"));
 });
 
 // --- The market rule on a loop reply -----------------------------------------------------------

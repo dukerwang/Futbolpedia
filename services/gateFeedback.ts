@@ -31,7 +31,7 @@ export const GATE_FEEDBACK_CUTOFF_MS = REFLECT_CUTOFF_MS;
 /** Flagged sentences one round sends. The rest are left to the gates, as they were before. */
 export const GATE_FEEDBACK_MAX_FLAGGED = 8;
 /** The progress line while the correction runs. */
-export const GATE_FEEDBACK_STAGE_LABEL = 'Checking the figures...';
+export const GATE_FEEDBACK_STAGE_LABEL = 'Polishing the report...';
 /** The longest the reply, as the prompt carries it. */
 const REPLY_PROMPT_CHARS = 12_000;
 

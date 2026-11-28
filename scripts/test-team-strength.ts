@@ -848,7 +848,7 @@ await test('the chat loop offers team_strength on present, past and Gaffa turns,
     assert.equal(declarations.filter((d) => d.name === 'team_strength').length, 1);
   }
   assert.equal(researchRules(DEFAULT_RESEARCH_BUDGET).split('\n').filter((l) => l.includes('team_strength')).length, 1);
-  assert.equal(stageLabel({ name: 'team_strength', args: { club: 'Northside' } }), "Reading Northside's team strength");
+  assert.equal(stageLabel({ name: 'team_strength', args: { club: 'Northside' } }), 'Sizing up Northside');
 });
 
 const nothing = async () => ({ status: 'empty' as const, result: null, missing: [] });

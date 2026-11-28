@@ -411,7 +411,7 @@ await test('the chat loop runs the round when the budget allows, counts it as a 
   assert.equal(fake.prompts.length, 1);
   assert.equal(stats!.calls, 2, 'the search and the correction');
   assert.equal(stats!.gateFeedback?.fixed, 1);
-  assert.ok(stages.includes('Checking the figures...'));
+  assert.ok(stages.includes('Polishing the report...'));
   assert.ok(perf.some((l) => l.startsWith('gate feedback: flagged 1, fixed 1, dropped 0, removed 0')), perf.join('\n'));
   assert.ok(perf.some((l) => l.startsWith('chat turn:') && l.includes('gate feedback flagged 1, fixed 1, dropped 0, removed 0')), perf.join('\n'));
 });

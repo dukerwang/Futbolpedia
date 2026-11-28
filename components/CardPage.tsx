@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { PlayerProfile } from '../types';
-import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES } from '../constants';
-import { getShortTierLabel, positionCodes } from '../constants/ratingTiers';
+import { ATTRIBUTE_CATEGORIES, GK_ATTRIBUTE_CATEGORIES, getShortTierLabel, positionCodes } from '../constants/ratingTiers';
 import { latestUpdateLabel } from './pills';
 import { AttributeLine, CardSectionTitle, renderCardMarkdown } from './cardParts';
 import { parsePath } from '../services/cardPaths';

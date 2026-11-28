@@ -1,5 +1,5 @@
 import type { GaffaClubContextResponse, GaffaContextBag } from '../types';
-import { GAFFA_RULES_VERSION, emptyGaffaContextBag } from '../constants/gaffaRules';
+import { GAFFA_RULES_VERSION, emptyGaffaContextBag } from '../constants/gaffaBag';
 import { fetchGaffaClubContext } from './gaffaConnect';
 
 /** A conversation's attached Gaffa club. */

@@ -285,7 +285,7 @@ function buildSteps(cards: Showcase[], debate: typeof DEBATE, scoutKey: string):
     {
       kicker: 'Step 2 of 5',
       title: 'Scout',
-      lead: 'Want a player who isn’t rated yet? Scout them. Futbolpedia researches the player and writes their card.',
+      lead: 'Want a player who isn’t rated yet? Scout them. Futbolpedia studies the player and writes their card.',
       points: [
         { icon: 'ads_click', title: 'Open Scout', body: <>Press <b>Scout</b> at the top of the page, or <b>{scoutKey}</b>.</> },
         { icon: 'edit', title: 'Type a name', body: 'Or paste a whole squad, one name per line or separated by commas.' },
@@ -322,7 +322,7 @@ function buildSteps(cards: Showcase[], debate: typeof DEBATE, scoutKey: string):
               </div>
               <div className="pt-2 space-y-2">
                 {[
-                  ['Lamine Yamal', 'Researching…', 'bg-emerald-500 animate-pulse'],
+                  ['Lamine Yamal', 'Scouting…', 'bg-emerald-500 animate-pulse'],
                   ['Pedri', 'Queued', 'bg-cream-400 dark:bg-charcoal-border'],
                 ].map(([n, status, dot]) => (
                   <div key={n} className="flex items-center gap-3 rounded-lg border border-cream-300 dark:border-charcoal-border bg-white dark:bg-charcoal-surface px-3 py-2">

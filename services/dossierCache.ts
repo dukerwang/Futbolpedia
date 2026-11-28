@@ -533,11 +533,14 @@ export async function fetchGlobalHubDossiers(
 }
 
 const SHARE_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+/** The code is all that opens a shared chat, so it has to be too long to guess. */
+const SHARE_CODE_LENGTH = 10;
 
+// 32 characters, so every byte maps to one with equal odds.
 const generateShareCode = (): string =>
   Array.from(
-    { length: 6 },
-    () => SHARE_CODE_CHARS[Math.floor(Math.random() * SHARE_CODE_CHARS.length)],
+    crypto.getRandomValues(new Uint8Array(SHARE_CODE_LENGTH)),
+    (byte) => SHARE_CODE_CHARS[byte % SHARE_CODE_CHARS.length],
   ).join('');
 
 export const shareConversation = async (conv: Conversation): Promise<string> => {
@@ -553,16 +556,18 @@ export const shareConversation = async (conv: Conversation): Promise<string> => 
   throw new Error('Failed to generate a unique share code after 3 attempts.');
 };
 
+/**
+ * One shared conversation by its code. The table can't be selected from: the database function
+ * `get_shared_conversation` returns the conversation with that code and nothing else, so nobody can
+ * list what others have shared.
+ */
 export const getSharedConversation = async (code: string): Promise<Conversation | null> => {
   if (!supabase) return null;
   try {
-    const { data, error } = await supabase
-      .from('shared_conversations')
-      .select('conversation_data')
-      .eq('share_code', code.toUpperCase())
-      .single();
+    const { data, error } = await supabase.rpc('get_shared_conversation', { p_code: code.toUpperCase() });
+    if (error) console.warn('[share] chat read failed:', error.message ?? error);
     if (error || !data) return null;
-    return data.conversation_data as Conversation;
+    return data as Conversation;
   } catch {
     return null;
   }

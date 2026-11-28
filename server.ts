@@ -21,6 +21,8 @@ import { createHistoryFootball, type PermanentStore } from "./services/historyFo
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { supabasePublishableKey, supabaseUrl } from "./services/dossierCache";
 import { createSnapshotServer, inProcessGet, parseAvailabilityNames, supabaseSnapshotDb } from "./services/snapshotServer";
+import { CLUB_MANAGER_LIMITS, clubManagerHandler, createClubManagerServer, supabaseClubManagerDb } from "./services/clubManagerServer";
+import { useServerClubManagers } from "./services/clubManagers";
 import { createXiPredictions, memoryXiStore, supabaseXiStore } from "./services/xiPredictions";
 import { SCOUT_DAY_DEFAULT_CALLS, createScoutDay, createScoutTally, liveScoutActors, liveScoutSources, memoryScoutStores, scoutJournalHandler, supabaseScoutStores } from "./services/scoutDay";
 import { subjectFromTitle } from "./services/eraSnapshots";
@@ -937,6 +939,19 @@ async function startServer() {
   // Code runs the plan within SCOUT_DAY_CALLS model calls (default 30) and writes a journal row.
   // SCOUT_DAY=off stops it; without the secret key nothing it finds could be kept, so it doesn't run.
   const publicClient = createSupabaseClient(supabaseUrl, supabasePublishableKey, { auth: { persistSession: false, autoRefreshToken: false } });
+
+  // Verified head coaches (services/clubManagerServer.ts). Browsers read the `club_managers` table
+  // but can't write it: they send a club name here, and the server searches and stores the answer
+  // with the secret key (in memory only without one). The server's own turns skip the route and its
+  // per-visitor limit.
+  const clubManagers = createClubManagerServer({ db: supabaseClubManagerDb(secretClient ?? publicClient, secretClient) });
+  useServerClubManagers(async (club) => {
+    const answer = await clubManagers.get(club);
+    return answer && "record" in answer ? answer : null;
+  });
+  const managerLimiter = createProxyLimiter(CLUB_MANAGER_LIMITS);
+  app.get("/api/clubs/manager", clubManagerHandler(clubManagers, (req) => managerLimiter.take(disagreementSource(req))));
+
   const scoutStores = secretClient ? supabaseScoutStores(secretClient, secretClient) : { ...supabaseScoutStores(null, publicClient), notes: memoryScoutStores().notes };
   const scoutCalls = Number(process.env.SCOUT_DAY_CALLS) > 0 ? Math.floor(Number(process.env.SCOUT_DAY_CALLS)) : SCOUT_DAY_DEFAULT_CALLS;
   // Card review (services/cardReview.ts): the scout's day for players, on its own budget line

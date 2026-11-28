@@ -1,8 +1,6 @@
 import type { GaffaContextBag, GaffaFreeAgent, PlayerProfile } from '../types';
 import { buildDossierLookupMap, lookupPlayerDossier } from '../services/gaffaLineupAudit';
-
-/** Bump when the snapshot is refreshed from Gaffa's USER_GUIDE. */
-export const GAFFA_RULES_VERSION = '2026-09-15';
+import { GAFFA_RULES_VERSION } from './gaffaBag';
 
 /**
  * Curated rules brief for Gaffa Q&A — distilled from Fantasy Futbol/docs/USER_GUIDE.md.
@@ -115,13 +113,6 @@ export const GAFFA_MANAGER_REASONING = `Reasoning for advice about this club:
 - The weakest starting slot is the starter who adds the fewest points, not the position with the thinnest depth. Compare starters by what they add before choosing a slot to upgrade.
 - Recommend nothing that contradicts the manager's own roster constraints: roster size, IR and academy limits, held players, Club Balance, position eligibility.
 - When a fact the advice depends on can be checked with a tool or from this turn's data, check it before advising. A claim from the manager about a player's fitness or situation is a reason to check, not to defer.`;
-
-export function emptyGaffaContextBag(): GaffaContextBag {
-  return {
-    gaffa_rules_version: GAFFA_RULES_VERSION,
-    connected: false,
-  };
-}
 
 function formatFaPlayerLine(p: GaffaFreeAgent, dossierMap: Map<string, PlayerProfile>): string {
   const alias = p.display_name && p.display_name !== p.name ? ` (aka ${p.display_name})` : '';
