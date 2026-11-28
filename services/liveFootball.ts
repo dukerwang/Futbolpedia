@@ -185,7 +185,8 @@ export interface ClubMatch {
   penaltiesAgainst: number | null;
 }
 
-const scoreValue = (score: any): number | null => {
+/** A score as ESPN writes it: a number, or an object holding one. */
+export const scoreValue = (score: any): number | null => {
   const v = typeof score === 'object' && score !== null ? (score.value ?? score.displayValue) : score;
   const n = typeof v === 'string' ? parseFloat(v) : v;
   return typeof n === 'number' && Number.isFinite(n) ? n : null;
@@ -831,5 +832,5 @@ export function createLiveFootball(getJson: GetJson, now: () => number = Date.no
     return { found: true, lineup };
   }
 
-  return { club, player, table, matchLineup, availability };
+  return { club, player, table, matchLineup, availability, teams: teamIndex };
 }

@@ -19,7 +19,8 @@ export type EvidenceKind =
   | 'era_snapshot'
   | 'identity'
   | 'scout_note'
-  | 'card_review';
+  | 'card_review'
+  | 'team_strength';
 
 /** Facts are the present (who plays, results, transfers, dates); analysis is read against them. */
 export type ResearchStage = 'facts' | 'analysis';
@@ -155,6 +156,7 @@ const KIND_NAMES: Record<EvidenceKind, string> = {
   identity: 'Identity record (Wikidata)',
   scout_note: "The scout's note (a web search run between conversations)",
   card_review: "The scout's card review (a re-rating, with why it was opened)",
+  team_strength: 'Team strength (an Elo rating computed by code from ESPN results)',
 };
 
 const GAP_HEADINGS: Record<GapStatus, string> = {

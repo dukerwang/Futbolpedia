@@ -32,6 +32,9 @@ import { createProxyLimiter, decideProxy } from "./services/geminiProxy";
 import { applyServerKey } from "./services/serverKey";
 import { createKbStore, supabaseKbDb } from "./services/kb/store";
 import { KB_GLOBAL_PER_DAY, KB_PER_DAY, KB_PER_MINUTE, whoIsHandler } from "./services/kb/route";
+import { createTeamStrengthJob } from "./services/kb/teamStrengthBuild";
+import { memoryTeamStrengthStore, supabaseTeamStrengthStore } from "./services/kb/teamStrengthStore";
+import { TEAM_STRENGTH_LIMITS, createTeamStrengthReader, teamStrengthHandler } from "./services/kb/teamStrengthRoute";
 
 /** The site's own hosts, allowed as `Origin` on the Gemini proxy beside the request's own host. */
 const PROXY_SITE_ORIGINS = ["futbolpedia.org", "www.futbolpedia.org", "futbolpedia.ai.studio", "localhost:3000"];
@@ -728,10 +731,9 @@ async function startServer() {
   // season and player articles, and ESPN's results and lineups for seasons from 2003-04 on. Past
   // seasons don't change, so each finished lookup is kept for good in memory and on disk, and
   // survives a restart. Wikipedia asks API clients to name themselves in the User-Agent.
-  const historyDir = path.join(process.cwd(), ".cache", "history");
-  const historyStore: PermanentStore = {
+  const diskStore = (dir: string): PermanentStore => ({
     async get(key) {
-      const file = path.join(historyDir, `${createHash("sha1").update(key).digest("hex")}.json`);
+      const file = path.join(dir, `${createHash("sha1").update(key).digest("hex")}.json`);
       try {
         return JSON.parse(await fs.readFile(file, "utf8"));
       } catch {
@@ -739,11 +741,13 @@ async function startServer() {
       }
     },
     async set(key, value) {
-      await fs.mkdir(historyDir, { recursive: true });
-      const file = path.join(historyDir, `${createHash("sha1").update(key).digest("hex")}.json`);
+      await fs.mkdir(dir, { recursive: true });
+      const file = path.join(dir, `${createHash("sha1").update(key).digest("hex")}.json`);
       await fs.writeFile(file, JSON.stringify({ key, ...value }));
     },
-  };
+  });
+  const historyDir = path.join(process.cwd(), ".cache", "history");
+  const historyStore = diskStore(historyDir);
   const history = createHistoryFootball({
     getJson: async (url) => {
       const res = await axios.get(url, {
@@ -851,6 +855,33 @@ async function startServer() {
     xiLazy = (club) => void predictions.lazy(club);
     firstSweep = predictions.start().firstSweep;
   }
+
+  // The knowledge base's team strength (services/kb/): an Elo rating per club computed by code from
+  // ESPN results, no model calls. The first build reads every season from 2003-04 and takes a while;
+  // after that the season in progress is rebuilt once a day. Settled seasons' results are kept under
+  // .cache/team-strength. With the secret key it's stored in `kb_team_strength` (nothing is built
+  // until that table exists); without it, in this process's memory.
+  const strengthStore = secretClient ? supabaseTeamStrengthStore(secretClient) : memoryTeamStrengthStore();
+  createTeamStrengthJob({
+    getJson: async (url) => {
+      const res = await axios.get(url, {
+        timeout: 30_000,
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; Futbolpedia/3.0)", Accept: "application/json" },
+      });
+      return res.data;
+    },
+    store: strengthStore,
+    cache: diskStore(path.join(process.cwd(), ".cache", "team-strength")),
+  }).start();
+  const strengthReader = createTeamStrengthReader({ store: strengthStore, teams: () => live.teams() });
+  const strengthSalt = randomBytes(16).toString("hex");
+  app.get(
+    "/api/kb/team-strength",
+    teamStrengthHandler(strengthReader, createProxyLimiter(TEAM_STRENGTH_LIMITS), (req) => {
+      const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "";
+      return createHash("sha256").update(`${strengthSalt}|${forwarded}|${req.socket.remoteAddress ?? ""}`).digest("hex").slice(0, 16);
+    }),
+  );
 
   app.get("/api/predictions/club", async (req, res) => {
     const name = liveQuery(req.query.name);
