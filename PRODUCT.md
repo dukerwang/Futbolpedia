@@ -33,7 +33,7 @@ Ratings are the model's judgment of footballing ability on one all-era scale, pl
 
 ## Capabilities and Constraints
 
-- React + Express, Gemini models, hosted on Google AI Studio (changes go live after merge, the AI Studio pull script and Publish).
+- React + Express, Gemini models, hosted on Google AI Studio (changes go live after merge, a pull into AI Studio and Publish).
 - The system instruction must stay byte-stable for prompt caching.
 - Prompts carry no specific examples (player names, sample phrases, rating anchors).
 - Undecided: accounts beyond the current local-storage model; how the product introduces itself to a first-time visitor.
