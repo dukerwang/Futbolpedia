@@ -3,7 +3,8 @@
  * Offline checks for the knowledge base's team strength (`services/kb/`): parsing ESPN's schedules
  * (fixtures trimmed from real answers, both shapes of a penalty shoot-out among them), the Elo
  * update on hand-built matches, burn-in, how a European match links two leagues, the stored
- * snapshots and the build that writes them (ESPN faked), the Supabase store (client faked), the
+ * snapshots and the build that writes them (ESPN faked), the backfill's pacing, daily allowance,
+ * carry-over and pause (clock faked), the Supabase store (client faked), the
  * public route and its limits, and `team_strength` in the chat loop (model and tools faked). No
  * network, Supabase or API keys.
  *
@@ -30,7 +31,15 @@ import {
   type Snapshot,
   type StrengthMatch,
 } from '../services/kb/teamStrength';
-import { createTeamStrengthJob } from '../services/kb/teamStrengthBuild';
+import {
+  BACKFILL_DELAY_MS,
+  BACKFILL_REQUESTS_PER_DAY,
+  BUILD_CONCURRENCY,
+  BUILD_DELAY_MS,
+  PAUSE_AFTER,
+  PAUSE_MS,
+  createTeamStrengthJob,
+} from '../services/kb/teamStrengthBuild';
 import { MARKER_TEAM, memoryTeamStrengthStore, supabaseTeamStrengthStore, type TeamStrengthStore } from '../services/kb/teamStrengthStore';
 import { createTeamStrengthReader, teamStrengthHandler } from '../services/kb/teamStrengthRoute';
 import { lookUpTeamStrength, runTeamStrength, TEAM_STRENGTH_DECLARATION } from '../services/kb/teamStrengthTool';
@@ -250,14 +259,18 @@ const espnEvent = (match: StrengthMatch) => ({
   ],
 });
 
+const timedOut = () => Object.assign(new Error('timed out'), { code: 'ECONNABORTED' });
+const answered = (status: number) => () => Object.assign(new Error(`HTTP ${status}`), { response: { status } });
+
 /**
- * ESPN with two clubs in each league's table, seasons 2003-2006. Club 5 is in neither league: it
- * is met only in Europe, so only following opponents finds it, and club 9 only its schedule sees.
+ * ESPN with two clubs in each league's table, seasons 2003 to `lastYear`. Club 5 is in neither
+ * league: it is met only in Europe, so only following opponents finds it, and club 9 only its
+ * schedule sees. A season is 7 requests. A URL holding one of `fail`'s strings gets `failure`.
  */
-function fakeEspn() {
+function fakeEspn(lastYear = 2006) {
   const tables: Record<string, string[]> = { 'eng.1': ['1', '2'], 'esp.1': ['3', '4'] };
   const season: Record<number, StrengthMatch[]> = {};
-  for (const y of [2003, 2004, 2005, 2006]) {
+  for (let y = 2003; y <= lastYear; y++) {
     season[y] = [
       m(`${y}-09-01`, '1', '2', [2, 0]),
       m(`${y}-09-08`, '3', '4', [1, 0], 'esp.1'),
@@ -269,9 +282,10 @@ function fakeEspn() {
   }
   const asked: string[] = [];
   const fail = new Set<string>();
+  const settings = { failure: timedOut as () => Error };
   const getJson = async (url: string): Promise<any> => {
     asked.push(url);
-    if ([...fail].some((f) => url.includes(f))) throw Object.assign(new Error('timed out'), { code: 'ECONNABORTED' });
+    if ([...fail].some((f) => url.includes(f))) throw settings.failure();
     const table = url.match(/soccer\/([^/]+)\/standings\?season=(\d+)/);
     if (table) {
       const ids = season[Number(table[2])] ? tables[table[1]] ?? [] : [];
@@ -283,7 +297,7 @@ function fakeEspn() {
     if (!own.length) throw Object.assign(new Error('not found'), { response: { status: 404 } });
     return { events: own.map(espnEvent) };
   };
-  return { getJson, asked, fail, season };
+  return { getJson, asked, fail, settings, season };
 }
 
 const jobLeagues = LIVE_LEAGUES.filter((l) => l.slug === 'eng.1' || l.slug === 'esp.1');
@@ -351,6 +365,7 @@ await test('a build carried on from a season end gives the same ratings as a ful
 await test('each finished season is stored as the build goes, so a build that fails later keeps it', async () => {
   const espn = fakeEspn();
   espn.fail.add('season=2006');
+  espn.settings.failure = answered(403);
   const store = memoryTeamStrengthStore();
   const built = job(espn, store, '2006-12-15');
   const summary = await built.build();
@@ -363,6 +378,7 @@ await test('each finished season is stored as the build goes, so a build that fa
 await test('unread club schedules past the limit store nothing from that point; a 404 is just no data', async () => {
   const espn = fakeEspn();
   espn.fail.add('teams/5/schedule?season=2004');
+  espn.settings.failure = answered(403);
   const store = memoryTeamStrengthStore();
   const summary = await job(espn, store, '2005-08-15').build();
   assert.equal(summary.status, 'aborted');
@@ -402,6 +418,215 @@ await test('the daily tick builds once a day, and not at all while the table is 
   await waiting.tick();
   assert.equal(missing.asked.length, 0);
   assert.equal(waiting.lines.length, 1);
+});
+
+// --- Pacing, the daily allowance and the pause --------------------------------------------------
+
+const mapCache = () => {
+  const kept = new Map<string, any>();
+  const cache: PermanentStore = { get: async (k) => kept.get(k), set: async (k, v) => void kept.set(k, JSON.parse(JSON.stringify(v))) };
+  return cache;
+};
+/** A job on a clock the test moves. */
+function timed(espn: ReturnType<typeof fakeEspn>, store: TeamStrengthStore, clock: { t: number }, extra: Partial<Parameters<typeof createTeamStrengthJob>[0]> = {}) {
+  return job(espn, store, '2000-01-01', { now: () => clock.t, ...extra });
+}
+const noon = (day: string) => Date.parse(`${day}T12:00:00Z`);
+const seasonAsked = (url: string) => Number(url.match(/season=(\d+)/)![1]);
+const sameRatings = async (a: TeamStrengthStore, b: TeamStrengthStore, date: string) => {
+  const [left, right] = [await ratingsIn(a, date), await ratingsIn(b, date)];
+  assert.deepEqual([...left.keys()].sort(), [...right.keys()].sort(), date);
+  for (const [id, row] of left) {
+    close(row.rating, right.get(id)!.rating, 0.05);
+    assert.equal(row.matches, right.get(id)!.matches, `${id} on ${date}`);
+  }
+};
+
+await test('the backfill goes one request at a time, a second apart; the season in progress keeps three at once', async () => {
+  assert.deepEqual([BACKFILL_DELAY_MS, BUILD_CONCURRENCY, BUILD_DELAY_MS, BACKFILL_REQUESTS_PER_DAY, PAUSE_AFTER, PAUSE_MS], [1_000, 3, 250, 1_500, 3, 3_600_000]);
+  const espn = fakeEspn();
+  const events: { start?: number; end?: number; sleep?: number }[] = [];
+  const inFlight = { backfill: 0, current: 0 };
+  const most = { backfill: 0, current: 0, mixed: 0 };
+  const getJson = async (url: string) => {
+    const kind = seasonAsked(url) < 2005 ? 'backfill' : 'current';
+    inFlight[kind]++;
+    most[kind] = Math.max(most[kind], inFlight[kind]);
+    if (inFlight.backfill && inFlight.current) most.mixed++;
+    events.push({ start: seasonAsked(url) });
+    await new Promise((r) => setImmediate(r));
+    try {
+      return await espn.getJson(url);
+    } finally {
+      inFlight[kind]--;
+      events.push({ end: seasonAsked(url) });
+    }
+  };
+  await job(espn, memoryTeamStrengthStore(), '2005-12-15', { getJson, delayMs: undefined, sleep: async (ms) => void events.push({ sleep: ms }) }).build();
+  assert.deepEqual([most.backfill, most.current, most.mixed], [1, 3, 0]);
+  // Between one backfill answer and the next backfill request there is always a pause of a second or more.
+  let waited = Infinity;
+  for (const e of events) {
+    if (e.end !== undefined && e.end < 2005) waited = 0;
+    if (e.sleep !== undefined) waited += e.sleep;
+    if (e.start !== undefined && e.start < 2005) assert.ok(waited >= 1_000, `a backfill request ${waited} ms after the last`);
+  }
+  const sleeps = events.flatMap((e) => (e.sleep !== undefined ? [e.sleep] : []));
+  assert.deepEqual([...new Set(sleeps)].sort((a, b) => a - b), [250, 1_000]);
+});
+
+await test("the backfill spends at most a day's requests, and carries on from there on the next days", async () => {
+  const espn = fakeEspn();
+  const store = memoryTeamStrengthStore();
+  const cache = mapCache();
+  const clock = { t: noon('2006-12-15') };
+  const built = timed(espn, store, clock, { cache, backfillPerDay: 10 });
+  const settledAsked: string[] = [];
+  const day = async (date: string) => {
+    clock.t = noon(date);
+    espn.asked.length = 0;
+    await built.tick();
+    const settled = espn.asked.filter((u) => seasonAsked(u) < 2006);
+    settledAsked.push(...settled);
+    return { settled: settled.length, current: espn.asked.length - settled.length };
+  };
+  assert.deepEqual(await day('2006-12-15'), { settled: 10, current: 0 });
+  assert.match(built.lines.at(-1)!, /^\[kb\] team strength: 0 clubs, \d+ matches read, \d+ s; today's 10 backfill requests are spent, nothing stored yet, carrying on tomorrow \(UTC\)/);
+  // Later the same day there is nothing left to spend, so nothing runs at all.
+  clock.t += 5 * PAUSE_MS;
+  espn.asked.length = 0;
+  await built.tick();
+  assert.equal(espn.asked.length, 0);
+  assert.deepEqual(await day('2006-12-16'), { settled: 10, current: 0 });
+  assert.deepEqual(await day('2006-12-17'), { settled: 1, current: 7 }, 'the last backfill request, then the season in progress, which is outside the cap');
+  assert.equal(await store.latestDate(), '2006-12-17');
+  assert.equal(new Set(settledAsked).size, 21);
+  assert.equal(settledAsked.length, 21, 'no settled season is fetched twice');
+  const full = memoryTeamStrengthStore();
+  await job(fakeEspn(), full, '2006-12-17').build();
+  for (const date of ['2005-06-30', '2006-06-30', '2006-12-17']) await sameRatings(store, full, date);
+});
+
+await test("a restart keeps the day's count with the disk cache", async () => {
+  const cache = mapCache();
+  const store = memoryTeamStrengthStore();
+  await job(fakeEspn(), store, '2006-12-15', { cache, backfillPerDay: 10 }).build();
+  const espn = fakeEspn();
+  const summary = await job(espn, store, '2006-12-15', { cache, backfillPerDay: 10 }).build();
+  assert.deepEqual([summary.status, summary.halt, espn.asked.length], ['deferred', 'budget', 0]);
+});
+
+await test("without a disk cache the backfill still moves on each day, because it doesn't fetch the stored season again", async () => {
+  const store = memoryTeamStrengthStore();
+  const run = async (date: string, backfillPerDay: number) => {
+    const espn = fakeEspn(2008);
+    const summary = await job(espn, store, date, { backfillPerDay }).build();
+    return { summary, seasons: [...new Set(espn.asked.map(seasonAsked))] };
+  };
+  const first = await run('2008-12-15', 21);
+  assert.deepEqual([first.summary.halt, (await store.checkpoint())!.date], ['budget', '2005-06-30']);
+  // 14 requests are two seasons: enough only if 2004-05, already stored, isn't fetched again.
+  const second = await run('2008-12-16', 14);
+  assert.deepEqual([second.summary.halt, (await store.checkpoint())!.date], ['budget', '2006-06-30']);
+  assert.ok(!second.seasons.includes(2004), String(second.seasons));
+  const third = await run('2008-12-17', 14);
+  assert.equal(third.summary.status, 'stored');
+  assert.deepEqual(third.seasons, [2006, 2007, 2008]);
+  const full = memoryTeamStrengthStore();
+  await job(fakeEspn(2008), full, '2008-12-17').build();
+  for (const date of ['2006-06-30', '2007-06-30', '2008-06-30', '2008-12-17']) await sameRatings(store, full, date);
+  // Caught up, the daily update reads the season just ended again, from ESPN if the disk is gone.
+  const daily = await run('2008-12-18', 1_500);
+  assert.deepEqual([daily.summary.status, daily.seasons], ['stored', [2007, 2008]]);
+});
+
+for (const [what, failure] of [['timeouts', timedOut], ['429s', answered(429)], ['5xx answers', answered(503)]] as const) {
+  await test(`three ${what} in a row pause the backfill for an hour`, async () => {
+    const espn = fakeEspn();
+    espn.fail.add('season=2004');
+    espn.settings.failure = failure;
+    const store = memoryTeamStrengthStore();
+    const clock = { t: noon('2005-12-15') };
+    const built = timed(espn, store, clock, { cache: mapCache() });
+    await built.tick();
+    assert.equal(espn.asked.filter((u) => u.includes('season=2004')).length, 3, 'nothing is asked after the third');
+    assert.equal(espn.asked.length, 10, "2003-04's seven, then the three");
+    assert.ok(built.lines.some((l) => l.startsWith('[kb] team strength paused until 2005-12-15T13:00:00.000Z: 3 timeouts, 429s or 5xx answers in a row')), built.lines.join('\n'));
+    espn.fail.clear();
+    espn.asked.length = 0;
+    clock.t += PAUSE_MS - 1;
+    await built.tick();
+    assert.equal((await built.build()).halt, 'paused');
+    assert.equal(espn.asked.length, 0, 'nothing is asked during the pause');
+    clock.t += 1;
+    await built.tick();
+    assert.equal(await store.latestDate(), '2005-12-15');
+    assert.ok(espn.asked.every((u) => seasonAsked(u) > 2003), 'the season read before the pause comes from disk');
+  });
+}
+
+await test('the season in progress obeys the same pause', async () => {
+  const espn = fakeEspn();
+  const store = memoryTeamStrengthStore();
+  const cache = mapCache();
+  const clock = { t: noon('2005-12-15') };
+  const built = timed(espn, store, clock, { cache });
+  await built.tick();
+  espn.fail.add('season=2005');
+  espn.settings.failure = answered(502);
+  espn.asked.length = 0;
+  clock.t = noon('2005-12-16');
+  await built.tick();
+  assert.ok(espn.asked.every((u) => seasonAsked(u) === 2005) && espn.asked.length >= 3 && espn.asked.length <= 4, String(espn.asked.length));
+  assert.ok(built.lines.some((l) => l.startsWith('[kb] team strength paused until')));
+  espn.fail.clear();
+  espn.asked.length = 0;
+  clock.t += PAUSE_MS / 2;
+  await built.tick();
+  assert.equal(espn.asked.length, 0);
+  clock.t += PAUSE_MS / 2;
+  await built.tick();
+  assert.equal(await store.latestDate(), '2005-12-16');
+});
+
+await test('only troubles in a row pause: an answer between them starts the count again, and a refusal is no trouble', async () => {
+  const espn = fakeEspn();
+  const tries = new Map<string, number>();
+  const flaky = async (url: string) => {
+    const n = (tries.get(url) ?? 0) + 1;
+    tries.set(url, n);
+    if (n < 3) throw answered(503)();
+    return espn.getJson(url);
+  };
+  const built = job(espn, memoryTeamStrengthStore(), '2005-08-15', { getJson: flaky, concurrency: 1 });
+  assert.equal((await built.build()).status, 'stored');
+  assert.ok(!built.lines.some((l) => l.includes('paused')));
+  const refused = fakeEspn();
+  refused.fail.add('season=2004');
+  refused.settings.failure = answered(403);
+  const other = job(refused, memoryTeamStrengthStore(), '2005-08-15');
+  assert.equal((await other.build()).status, 'aborted');
+  assert.ok(!other.lines.some((l) => l.includes('paused')));
+});
+
+await test("addresses that always fail can't pause the backfill for good, even side by side", async () => {
+  const espn = fakeEspn();
+  for (const id of ['2', '3', '4']) espn.fail.add(`teams/${id}/schedule?season=2004`);
+  espn.settings.failure = answered(500);
+  // 2004-05 is settled by December, so it is read one request at a time.
+  const clock = { t: noon('2005-12-15') };
+  const built = timed(espn, memoryTeamStrengthStore(), clock, { cache: mapCache() });
+  const ends: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    espn.asked.length = 0;
+    const summary = await built.build();
+    ends.push(summary.halt ?? summary.status);
+    clock.t += PAUSE_MS;
+  }
+  // Each pauses once; after that it gets one try and doesn't count towards another pause.
+  assert.deepEqual(ends, ['paused', 'paused', 'paused', 'aborted']);
+  for (const id of ['2', '3', '4']) assert.equal(espn.asked.filter((u) => u.includes(`teams/${id}/schedule?season=2004`)).length, 1);
+  assert.ok(espn.asked.some((u) => u.includes('season=2005')), 'the build goes on past them to the next season');
 });
 
 // --- The Supabase store -----------------------------------------------------------------------
