@@ -198,7 +198,7 @@ const PINS: Record<string, string> = {
   "stage past single": 'a6d6afd823cd8b5ab7477dd3f43ea65a9bfb968b8fb9a84dc52be8b485bde74b',
   "stage past other": '89c071de1fdcec6cd7395db1ea77dbb2dc44e15e9e3a3133e864cd4abc3c0849',
   "challenge": 'd3b2ca787c9f683300e84d96dc35684d871b9da2e7920a33f467ec71d5e44485',
-  "researchRules": '6d6834f01d2f873976cd7ac4561dcbd31eb962ef8feab172a4c76ac7232095bb', // one line for team_strength (2026-11-27-football-knowledge-base-design.md)
+  "researchRules": 'fb114f7ce3290463980a515f8d4683133ae997dbd248c76d20a5d12194edbb37', // the who_is and team_strength lines together (2026-11-27-football-knowledge-base-design.md)
   "lockedDossiers": '3ffe99ef18557cdb462c8ba157a36603189bd3f41db0476f8a20db8cbe37992f',
   "savedDossiers": '97c351563c4a3e9f56e9f25df0be73f1876c69dab353401289bc837383d491ee',
   "savedArchive": '5a8a8e5a33893fd8c4ccd22894c0c1a2fd2d8e34abe71f7372c62445aabc2177',
@@ -207,7 +207,7 @@ const PINS: Record<string, string> = {
   "need": 'bfcc163544f552921dc2f6bc26d47395d640d53326a93625400fe469ec06a718',
   "gaffaReasoning": '328d7195266c84a6668fe3c348e8d46a7259b4021de9f17ed849d45c466db63f',
   "initiativeTools": '1773e9ace68a304ee5d48177ea35393c9d5b7acd446ea92b81b98a6817820612',
-  "chatTools": '50f4ac72b37025a43804fa974368cdfb2e2161939950febe0756abb1fb66d19e', // team_strength appended (2026-11-27-football-knowledge-base-design.md)
+  "chatTools": 'a9de23edbdb18e35a6e22acfb044eb2095dff5936e6e509c4e4ca953967ffcf5', // the who_is and team_strength declarations together (2026-11-27-football-knowledge-base-design.md)
 };
 
 await test('every path builds the instructions it always did', () => {

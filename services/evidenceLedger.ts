@@ -17,6 +17,7 @@ export type EvidenceKind =
   | 'season_record'
   | 'career_record'
   | 'era_snapshot'
+  | 'identity'
   | 'scout_note'
   | 'card_review'
   | 'team_strength';
@@ -152,6 +153,7 @@ const KIND_NAMES: Record<EvidenceKind, string> = {
   season_record: 'Past season record (Wikipedia, ESPN)',
   career_record: 'Career record (Wikipedia)',
   era_snapshot: 'Era snapshot (built from the sources and stored)',
+  identity: 'Identity record (Wikidata)',
   scout_note: "The scout's note (a web search run between conversations)",
   card_review: "The scout's card review (a re-rating, with why it was opened)",
   team_strength: 'Team strength (an Elo rating computed by code from ESPN results)',

@@ -242,6 +242,16 @@ const evalSettler = () =>
     });
   })());
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+// The knowledge base's identities, read from Wikidata and kept in memory for the run.
+const { createKbStore } = await import('../services/kb/store');
+const kb = createKbStore({
+  getJson: async (url, { headers, timeoutMs }) => {
+    const res = await realFetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+  db: null,
+});
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input);
   if (url.startsWith('/api/live/')) {
@@ -262,6 +272,10 @@ globalThis.fetch = (async (input: any, init?: any) => {
     if (u.pathname === '/api/snapshots/club/research') return json({ research: await snapshots.clubResearch(q('club')) });
     if (u.pathname === '/api/snapshots/club') return json({ snapshot: await snapshots.club(q('club')) });
     if (u.pathname === '/api/snapshots/era') return json({ snapshot: await snapshots.era(q('kind') as 'club_season' | 'player_window', q('subject'), q('period')) });
+  }
+  if (url.startsWith('/api/kb/who-is?')) {
+    const u = new URL(url, 'http://local');
+    return json((await kb.whoIs(u.searchParams.get('name') ?? '', u.searchParams.get('hint') ?? '')).result);
   }
   // Settled verdicts, served in-process against the run's own in-memory store (never Supabase).
   if (url === '/api/debates/settle' || url === '/api/debates/departure') {
