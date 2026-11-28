@@ -90,29 +90,26 @@ export function placementRange(resolved: ResolvedPlacement): { min: number; max:
   return range(true) ?? range(false);
 }
 
-const describe = (cards: PlayerProfile[]): string[] =>
-  cards.map((p) => `${p.basicInfo.name}${isPrimeCard(p) ? ` (${p.version?.seasonOrEra || 'prime'})` : ''}`);
+/** A peer as a placement names him: "Name (window)" for a historical card, the bare name for a current one. */
+export const describePeer = (p: PlayerProfile): string =>
+  `${p.basicInfo.name}${isPrimeCard(p) ? ` (${p.version?.seasonOrEra || 'prime'})` : ''}`;
+
+const describe = (cards: PlayerProfile[]): string[] => cards.map(describePeer);
+
+const placedCount = (r: ResolvedPlacement) => r.betterThan.length + r.levelWith.length + r.notAsGoodAs.length;
 
 /**
- * Moves the Overall into the range the model's own placement allows and records the placement on
- * the card. A historical card keeps Potential equal to Overall; a current card never has
- * Potential below it. A self-contradictory placement is not recorded and changes nothing.
+ * Moves the Overall into the range a resolved placement allows and records it on the card. Null
+ * when the placement is empty or contradicts itself, so the caller decides what happens then.
  */
-export function applyPeerPlacement(
+export function applyResolvedPlacement(
   profile: PlayerProfile,
-  placement: PeerPlacement | undefined,
-  ledger: PlayerProfile[],
+  resolved: ResolvedPlacement,
   isHistorical: boolean,
-): PlayerProfile {
-  const resolved = resolvePlacement(placement, ledger, profile);
-  if (resolved.betterThan.length + resolved.levelWith.length + resolved.notAsGoodAs.length === 0) {
-    return profile;
-  }
+): PlayerProfile | null {
+  if (placedCount(resolved) === 0) return null;
   const range = placementRange(resolved);
-  if (!range) {
-    console.warn('[RatingPlacement] Placement contradicts itself; Overall left as rated.', placement);
-    return profile;
-  }
+  if (!range) return null;
   const overall = Math.min(range.max, Math.max(range.min, profile.ratings.overall));
   return {
     ...profile,
@@ -126,6 +123,24 @@ export function applyPeerPlacement(
       notAsGoodAs: describe(resolved.notAsGoodAs),
     },
   };
+}
+
+/**
+ * Moves the Overall into the range the model's own placement allows and records the placement on
+ * the card. A historical card keeps Potential equal to Overall; a current card never has
+ * Potential below it. A self-contradictory placement is not recorded and changes nothing.
+ */
+export function applyPeerPlacement(
+  profile: PlayerProfile,
+  placement: PeerPlacement | undefined,
+  ledger: PlayerProfile[],
+  isHistorical: boolean,
+): PlayerProfile {
+  const resolved = resolvePlacement(placement, ledger, profile);
+  if (placedCount(resolved) === 0) return profile;
+  const placed = applyResolvedPlacement(profile, resolved, isHistorical);
+  if (!placed) console.warn('[RatingPlacement] Placement contradicts itself; Overall left as rated.', placement);
+  return placed ?? profile;
 }
 
 /**

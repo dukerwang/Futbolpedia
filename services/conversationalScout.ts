@@ -64,7 +64,16 @@ import { expandTables, gateFigureFindings, gateUnsupportedFigures, type FigureCl
 import { figureBudget, formatDebateBriefForWriter, runDebateResearch, type DebateBrief } from './debateBrief';
 import { standingsFor, type CardStanding } from './debateConsistency';
 import { liveDebateRecords, liveEraSnapshots } from './eraSnapshots';
-import { placeRevisedOverall, resolvePlacement } from './ratingPlacement';
+import { applyResolvedPlacement, placeRevisedOverall } from './ratingPlacement';
+import {
+  comparePeers,
+  comparisonRange,
+  formatComparisonLines,
+  placementFromComparisons,
+  serializePeerForComparison,
+  toStoredComparisons,
+  type ComparedPeer,
+} from './peerComparison';
 
 /**
  * What a conversation's last turn found, so a follow-up ("Which full-back is tucking in?") keeps
@@ -284,17 +293,17 @@ const CHALLENGE_TURN_SCHEMA: Record<string, unknown> = {
         },
         peerPlacement: {
           type: Type.OBJECT,
-          nullable: true,
           description:
-            'Required when overall changes: the <calibrated_peer_ledger> peers (other players, names exactly as listed) this version is now a better footballer than, level with, and not as good as. The new overall must agree with it.',
+            'Always present. When overall changes: the <calibrated_peer_ledger> peers (other players, names exactly as listed) this version is now a better footballer than, level with, and not as good as; the new overall must agree with it. Empty arrays when overall does not change.',
           properties: {
             betterThan: { type: Type.ARRAY, items: { type: Type.STRING } },
             levelWith: { type: Type.ARRAY, items: { type: Type.STRING } },
             notAsGoodAs: { type: Type.ARRAY, items: { type: Type.STRING } },
           },
+          required: ['betterThan', 'levelWith', 'notAsGoodAs'],
         },
       },
-      required: ['targetPlayerName'],
+      required: ['targetPlayerName', 'peerPlacement'],
     },
   },
   required: ['replyProse', 'revisedDossier'],
@@ -663,32 +672,59 @@ The user is challenging, questioning, or requesting an adjustment to the dossier
 2. Check your own earlier replies in <ongoing_thread>. If they ranked these players differently from what the dossiers' Overall ratings show, say so in your opening paragraph before anything else.
 3. If the current dossier rating/attribute is justified, set \`revisedDossier: false\` and explain why with concrete tactical/statistical reasoning in \`replyProse\`, addressing the user's specific argument.
 4. If the user makes a valid evidence-backed point (or explicitly asks to adjust a rating/attribute), set \`revisedDossier: true\`, populate \`dossierPatch\` with the exact updated values so the UI card updates live, and explain the revision clearly in \`replyProse\`.
-   The Overall is your judgment of how good a footballer this version was against his peers, never a sum of attributes: correcting an attribute does not by itself move it, and the Overall is never explained as the result of one attribute. Change the Overall only when you now judge him a better or worse footballer than the card says, and then fill \`dossierPatch.peerPlacement\` with the ledger peers he is now better than, level with, and not as good as; the new Overall must sit above, level with and below them, and the reply says where he now stands among them.
-5. Ensure every number you mention in \`replyProse\` matches the dossiers above (the active one and any in <locked_dossiers>) or your \`dossierPatch\`. Quote another player's attributes only from his dossier.
+   The Overall is your judgment of how good a footballer this version was against his peers, never a sum of attributes: correcting an attribute does not by itself move it, and the Overall is never explained as the result of one attribute. Change the Overall only when you now judge him a better or worse footballer than the card says. \`dossierPatch.peerPlacement\` is always filled: when the Overall moves, with the ledger peers he is now better than, level with, and not as good as, so the new Overall sits above, level with and below them and the reply says where he now stands among them; when it doesn't, with empty arrays. A moved Overall is then judged head to head against his closest peers, and the card shows the Overall those comparisons allow.
+5. Ensure every number you mention in \`replyProse\` matches the dossiers above (the active one and any in <locked_dossiers>) or your \`dossierPatch\`, and never state an Overall for him other than the one in your patch. Quote another player's attributes only from his dossier.
 </instructions>`;
 
 /**
- * What a challenge's correction round is told when its Overall and its placement disagree: the
- * number it proposed, the placement that applied (its own, or the card's stored one when it gave
- * none) with each peer's Overall, and the range that placement allows.
+ * What a challenge's second round is told when the Overall it proposed falls outside the range its
+ * head-to-head comparisons allow: the comparisons with their reasons, the range, and the Overall
+ * the card will show, so the reply is written for that number.
  */
-export function placementCheckBlock(
-  base: PlayerProfile,
-  patch: DossierPatch,
+export function comparisonCheckBlock(
+  compared: ComparedPeer[],
+  range: { min: number; max: number },
   proposed: number,
   placed: number,
-  ledger: PlayerProfile[],
 ): string {
-  const given = patch.peerPlacement;
-  const gave = Boolean(given && (given.betterThan?.length ?? 0) + (given.levelWith?.length ?? 0) + (given.notAsGoodAs?.length ?? 0) > 0);
-  const resolved = resolvePlacement(gave ? given : base.peerPlacement, ledger, base);
-  const list = (cards: PlayerProfile[]) =>
-    cards.map((p) => `${p.basicInfo.name}${isPrimeCard(p) ? ` (${p.version?.seasonOrEra ?? 'prime'})` : ''} ${p.ratings.overall}`).join(', ') || 'none';
-  return `<placement_check>
-Your dossierPatch set the Overall to ${proposed}, but ${gave ? 'the peerPlacement you gave' : "you gave no peerPlacement, so the card's stored placement applied, and it"} puts him better than: ${list(resolved.betterThan)}; level with: ${list(resolved.levelWith)}; not as good as: ${list(resolved.notAsGoodAs)}. That allows ${placed}, not ${proposed}.
-Answer again in full. Either keep ${proposed} and give the peerPlacement that supports it (the peers in <calibrated_peer_ledger> he is now better than, level with and not as good as, names exactly as listed), or set the Overall that the placement you judge right allows. replyProse states the Overall the card will show, and every number in it matches the patch.
-</placement_check>`;
+  const lines = formatComparisonLines(toStoredComparisons(compared))
+    .map((l, i) => `- ${l} (${compared[i].peer.ratings.overall} Overall)`)
+    .join('\n');
+  return `<peer_comparisons>
+Judged head to head against his closest peers, with the user's argument in view and no rating shown, he was:
+${lines}
+Those comparisons allow an Overall from ${range.min} to ${range.max}. Your dossierPatch set ${proposed}; the card will show ${placed}. Answer again in full: set \`dossierPatch.overall\` to ${placed} and \`dossierPatch.peerPlacement\` to these comparisons, and write \`replyProse\` for ${placed}, explaining where he now stands from these comparisons. It states no other Overall for him.
+</peer_comparisons>`;
 }
+
+/**
+ * Replaces the Overall a reply proposed with the one the card shows, where the reply states it as
+ * his rating ("**91**", "91 Overall", "to 91"). The last resort after the second round was told the
+ * number and still wrote another.
+ */
+export function alignStatedOverall(reply: string, proposed: number, placed: number): string {
+  if (proposed === placed) return reply;
+  const n = String(proposed);
+  return reply
+    .replace(new RegExp(`\\*\\*${n}\\*\\*`, 'g'), `**${placed}**`)
+    .replace(new RegExp(`\\b${n}(\\s*(?:Overall|OVR)\\b)`, 'gi'), `${placed}$1`)
+    .replace(new RegExp(`\\b((?:Overall|OVR|rating|rated|to|at)\\s+(?:of\\s+)?)${n}\\b`, 'gi'), `$1${placed}`);
+}
+
+/** The player a challenge is about, as the comparison sees him: his card with no number on it, and any new evidence. */
+const challengeSubject = (card: PlayerProfile, groundingNotes: string): string =>
+  [serializePeerForComparison(card, 'PLAYER'), groundingNotes ? `New evidence:\n${groundingNotes}` : ''].filter(Boolean).join('\n\n');
+
+/** The challenge's argument and the card's earlier comparisons, for the comparison step. */
+const challengeContext = (message: string, card: PlayerProfile): string =>
+  [
+    `The user's argument: ${message}`,
+    card.peerComparisons?.length
+      ? `His card's earlier comparisons:\n${formatComparisonLines(card.peerComparisons).map((l) => `- ${l}`).join('\n')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 
 export async function runConversationalScout(
   params: ConversationalScoutParams,
@@ -775,11 +811,10 @@ export async function runConversationalScout(
       const libraryOptions = { wholeLibrary: true, exclude: (p: PlayerProfile) => toBasePlayerSlug(p.basicInfo.name) === targetSlug };
       const library = selectPositionalPeerLedger(savedDossiers, conversationDossiers, libraryOptions);
       const placementLedger = [...otherCards, ...library];
+      const closestPeers = selectClosestPeers(library, { position: targetDossier.basicInfo.position, centre: targetDossier.ratings.overall });
       const challengeLedgerBlock = library.length
         ? buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers, libraryOptions, library) +
-          buildClosestPeersBlock(
-            selectClosestPeers(library, { position: targetDossier.basicInfo.position, centre: targetDossier.ratings.overall }),
-          )
+          buildClosestPeersBlock(closestPeers)
         : (peerLedgerBlock ?? '');
       const challengePrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${challengeThread}
@@ -801,52 +836,69 @@ ${challengeInstructions()}
           schema: CHALLENGE_TURN_SCHEMA,
           thinkingLevelOverride: 'low',
         });
-      // A moved Overall is placed against the ledger like a new rating (`ratingPlacement.ts`).
-      const settle = (r: ChallengeTurnResponse) => {
-        const patched = r.revisedDossier && r.dossierPatch ? applyDossierPatch(targetDossier, r.dossierPatch) : targetDossier;
-        if (patched === targetDossier || !r.dossierPatch) return { revised: patched, placement: null };
-        const placement = placeRevisedOverall(targetDossier, patched, r.dossierPatch.peerPlacement, placementLedger);
-        return { revised: placement.profile, placement };
-      };
+      const patchOf = (r: ChallengeTurnResponse) =>
+        r.revisedDossier && r.dossierPatch ? applyDossierPatch(targetDossier, r.dossierPatch) : targetDossier;
 
       let result = await askChallenge(challengePrompt);
-      let settled = settle(result);
-      if (settled.placement && settled.placement.placed !== settled.placement.proposed) {
-        // The reply's number and its placement disagree. One round to make them agree, so the
-        // reply never says one Overall while the card shows another.
-        const first = settled.placement;
-        console.warn(
-          `[ChallengePlacement] ${targetDossier.basicInfo.name}: proposed ${first.proposed}, placement allows ${first.placed}; asking again`,
-        );
-        try {
-          const retry = await askChallenge(
-            `${challengePrompt}\n${placementCheckBlock(targetDossier, result.dossierPatch!, first.proposed, first.placed, placementLedger)}`,
-          );
-          const again = settle(retry);
-          if (!again.placement || again.placement.placed === again.placement.proposed) {
-            result = retry;
-            settled = again;
+      let revisedTarget = patchOf(result);
+      let reply = result.replyProse;
+      const proposed = revisedTarget.ratings.overall;
+      if (revisedTarget !== targetDossier && proposed !== targetDossier.ratings.overall) {
+        // A moved Overall is judged head to head against the closest peers, with the user's
+        // argument in view and no number shown, and the card shows the Overall those comparisons
+        // allow (services/peerComparison.ts).
+        const comparison = await comparePeers({
+          subjectName: targetDossier.basicInfo.name,
+          subjectEvidence: challengeSubject(targetDossier, groundingNotes),
+          task: `Judge ${targetDossier.basicInfo.name}, ${targetDossier.version?.label ?? 'Current Form'}.`,
+          peers: closestPeers,
+          context: challengeContext(message, targetDossier),
+        });
+        const range = comparisonRange(comparison.compared);
+        if (range) {
+          const nearest = (n: number) => Math.min(range.max, Math.max(range.min, n));
+          const placed = nearest(proposed);
+          if (placed !== proposed) {
+            // The reply argued for a number the comparisons don't allow. One more round writes it
+            // for the number the card will show, so the reply and the card agree.
+            console.warn(
+              `[ChallengePlacement] ${targetDossier.basicInfo.name}: proposed ${proposed}, comparisons allow ${range.min}-${range.max}; asking again for ${placed}`,
+            );
+            try {
+              const retry = await askChallenge(`${challengePrompt}\n${comparisonCheckBlock(comparison.compared, range, proposed, placed)}`);
+              const again = patchOf(retry);
+              if (again !== targetDossier && retry.replyProse?.trim()) {
+                result = retry;
+                revisedTarget = again;
+                reply = retry.replyProse;
+              }
+            } catch (e) {
+              console.warn('[ChallengePlacement] second round failed:', e);
+            }
+            reply = alignStatedOverall(alignStatedOverall(reply, revisedTarget.ratings.overall, placed), proposed, placed);
           }
-        } catch (e) {
-          console.warn('[ChallengePlacement] correction failed:', e);
+          const held = applyResolvedPlacement(
+            { ...revisedTarget, ratings: { ...revisedTarget.ratings, overall: placed } },
+            placementFromComparisons(comparison.compared),
+            isPrimeCard(targetDossier),
+          );
+          if (held) revisedTarget = { ...held, peerComparisons: toStoredComparisons(comparison.compared) };
+        } else {
+          // No comparison stood, or they contradict each other: the model's own placement places
+          // the Overall, as a rating's does (`ratingPlacement.ts`).
+          const placement = placeRevisedOverall(targetDossier, revisedTarget, result.dossierPatch?.peerPlacement, placementLedger);
+          revisedTarget = placement.profile;
+          reply = alignStatedOverall(reply, placement.proposed, placement.placed);
         }
-      }
-      let revisedTarget = settled.revised;
-      let placementNote = '';
-      if (settled.placement && settled.placement.placed !== settled.placement.proposed) {
-        console.warn(
-          `[ChallengePlacement] ${targetDossier.basicInfo.name}: still proposed ${settled.placement.proposed}, card shows ${settled.placement.placed}`,
-        );
-        placementNote = `\n\nThe card's placement among the rated peers holds this version at **${settled.placement.placed}** Overall, so that is what the card now shows.`;
       }
       if (revisedTarget !== targetDossier) {
         // The challenger keeps this as their revision; the shared card weighs it at its next re-rating.
-        void recordDossierRevision(targetDossier, revisedTarget, result.replyProse, groundingNotes);
+        void recordDossierRevision(targetDossier, revisedTarget, reply, groundingNotes);
         onDossierUpdated?.(revisedTarget);
       }
 
       const cleanedReply = sanitizeScoutProse(
-        placementNote ? `${result.replyProse}${placementNote}` : result.replyProse,
+        reply,
         {
           verifiedFacts: groundingNotes ? [groundingNotes] : [],
           clubManagers: challengeManagers,

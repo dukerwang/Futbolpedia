@@ -3,6 +3,7 @@ import type { Attributes, ChatMessage, GoalkeeperAttributes, PlayerProfile } fro
 import { ATTRIBUTE_LABELS, GK_ATTRIBUTE_LABELS } from '../constants/ratingTiers';
 import { dataUrlToInlinePart } from './aiClient';
 import { blockHistory } from './replyBlocks/registry';
+import { formatComparisonLines } from './peerComparisonText';
 import {
   formatIsoDate,
   foldPlayerName,
@@ -79,6 +80,9 @@ const serializeCard = (p: PlayerProfile, header: string, compact = false): strin
         ]
           .filter(Boolean)
           .join(' | ')
+      : '',
+    p.peerComparisons?.length && !compact
+      ? `Head to head, before any rating was set: ${formatComparisonLines(p.peerComparisons).join('; ')}`
       : '',
     `Archetype: ${p.playstyleAndRole?.playstyle?.archetype} | Best Roles: ${roles}`,
     `${p.goalkeeperAttributes ? 'Goalkeeper Attributes' : 'Attributes'} (0-99): ${attrs}`,

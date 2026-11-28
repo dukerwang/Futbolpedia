@@ -3,7 +3,8 @@
  * Offline checks for the bridge check (`scripts/bridge-check.ts` and its runner), with the model
  * faked and nothing sent: each player's season draft compared with his current card, a player with
  * no current card costing no call, a spending limit ending the run, the estimate, and the runner
- * refusing to start without EVAL_GEMINI_API_KEY. The blind season draft itself is checked end to
+ * refusing to start without EVAL_GEMINI_API_KEY; and the prime order check's re-rates, report,
+ * estimate and runner the same way. The blind season draft itself is checked end to
  * end, with Gemini faked at fetch, in scripts/test-dossier-pipeline.ts.
  *
  * Usage:
@@ -15,6 +16,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlayerProfile } from '../types';
 import { bridgeMarkdown, estimateBridge, parsePlayers, runBridge, summarizeBridge, type BridgeCurrentCard, type BridgeRow } from './bridge-check';
+import { estimatePrimeOrder, primeOrderMarkdown, runPrimeOrder } from './prime-order';
 
 let passes = 0;
 let failures = 0;
@@ -102,9 +104,9 @@ await test('a spending limit ends the run with what finished', async () => {
   assert.equal(seen.at(-1)!.length, 2);
 });
 
-await test('the estimate counts a synthesis, a trait rewrite and two grounded calls a player, with a higher ceiling', () => {
+await test('the estimate counts a comparison, a synthesis, a trait rewrite and two grounded calls a player, with a higher ceiling', () => {
   const e = estimateBridge(8);
-  assert.equal(e.expected.total.calls, 1 + 8 * 4);
+  assert.equal(e.expected.total.calls, 1 + 8 * 5);
   assert.equal(e.expected.total.grounded, 16);
   assert.equal(e.expected.components.find((c) => c.name === 'Season card synthesis')!.calls, 8);
   assert.ok(e.ceiling.total.calls > e.expected.total.calls && e.ceiling.total.usd > e.expected.total.usd);
@@ -133,6 +135,60 @@ await test('the dry run prices the players with no key, and no players is refuse
   assert.match(dry.stdout, /Dry run, bridge check: 2 players/);
   assert.match(dry.stdout, /Ceiling: /);
   assert.equal(runner(['--dry-run']).status, 1);
+});
+
+// --- The prime order check -----------------------------------------------------------------
+
+await test('the prime order check reports each held prime with its comparisons, and stops at a spending limit', async () => {
+  let stop: string | null = null;
+  const drafted: string[] = [];
+  const { rows, stoppedEarly } = await runPrimeOrder({
+    players: ['Ana One', 'Ben Two', 'Cy Three'],
+    publishedOverall: async (p) => (p === 'Ana One' ? 90 : null),
+    async draft(p) {
+      drafted.push(p);
+      if (p === 'Ben Two') stop = 'a 429 came back';
+      return {
+        basicInfo: { name: p, age: 27, nationality: 'N/A', club: 'Club', position: 'Central Midfielder' },
+        ratings: { overall: p === 'Ana One' ? 92 : 93, potential: 92 },
+        version: { id: p, type: 'prime', label: 'Prime Zenith (2008-10)', evaluationDate: '2010-05-01', seasonOrEra: '2008-10' },
+        peerComparisons: [{ peer: 'Peer Maestro (2011-13)', judgment: 'better', reason: 'He found the pass a beat earlier.' }],
+        confidence: { grade: 'A', sampleSize: 's', dataGaps: [], verdict: 'Solid.' },
+      } as unknown as PlayerProfile;
+    },
+    stopReason: () => stop,
+  });
+  assert.deepEqual(drafted, ['Ana One', 'Ben Two']);
+  assert.equal(stoppedEarly, 'a 429 came back');
+  assert.deepEqual(rows.map((r) => [r.player, r.published, r.draft?.overall]), [['Ana One', 90, 92], ['Ben Two', null, 93]]);
+  const md = primeOrderMarkdown({ rows, today: '2026-11-28', model: 'm', stoppedEarly });
+  assert.match(md, /Order of the re-rated cards: Ben Two 93, Ana One 92\./);
+  assert.match(md, /- better than Peer Maestro \(2011-13\): He found the pass a beat earlier\./);
+  assert.match(md, /\*\*Stopped early:\*\* a 429 came back/);
+});
+
+await test('the prime order estimate counts a comparison, a synthesis, a trait rewrite and two grounded calls a prime', () => {
+  const e = estimatePrimeOrder(5);
+  assert.equal(e.expected.total.calls, 1 + 5 * 5);
+  assert.equal(e.ceiling.total.calls, 1 + 5 * 7);
+  assert.equal(e.expected.total.grounded, 10);
+});
+
+const primeRunner = (args: string[]) =>
+  spawnSync('npx', ['tsx', join(root, 'scripts/eval-prime-order.ts'), ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, EVAL_GEMINI_API_KEY: '', GEMINI_API_KEY: '', API_KEY: '' },
+    timeout: 60_000,
+  });
+
+await test('the prime order runner refuses to start without the eval key, and its dry run needs none', () => {
+  const out = primeRunner(['--players', 'Ana One']);
+  assert.equal(out.status, 1);
+  assert.match(out.stderr, /EVAL_GEMINI_API_KEY is not set/);
+  const dry = primeRunner(['--dry-run', '--players', 'Ana One,Ben Two']);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /Dry run, prime order check: 2 primes/);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

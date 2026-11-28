@@ -155,11 +155,15 @@ await test('the most recently shown card is found through its stub', () => {
 interface GeminiCall {
   prompt: string;
   structured: boolean;
+  /** The request body as sent, for checks on its schema. */
+  raw: string;
 }
 let calls: GeminiCall[] = [];
 let challengeReply = '';
 let challengePatch: Record<string, unknown> | null = null;
-// What a correction round (a prompt carrying <placement_check>) answers; the first answer when unset.
+// What the head-to-head comparison answers (by peer label); unset, it fails.
+let comparisonReply: Array<{ peer: string; judgment: string; reason: string }> | null = null;
+// What a second round (a prompt carrying <peer_comparisons>) answers; the first answer when unset.
 let retryReply = '';
 let retryPatch: Record<string, unknown> | null = null;
 let proseReply = '';
@@ -176,13 +180,16 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const raw = JSON.stringify(body);
   const prompt = JSON.stringify([body.contents ?? '', body.systemInstruction ?? '']);
   const structured = raw.includes('responseSchema') || raw.includes('responseJsonSchema');
-  calls.push({ prompt, structured });
+  calls.push({ prompt, structured, raw });
   let text = '';
   if (prompt.includes('first-team head coach')) {
     text = 'COACH: UNKNOWN | SINCE: UNKNOWN | PREVIOUS: UNKNOWN | SOURCE_DATE: UNKNOWN';
   } else if (structured && prompt.includes('Classify the user')) {
     text = JSON.stringify(route);
-  } else if (structured && prompt.includes('active_dossier') && prompt.includes('placement_check') && retryPatch) {
+  } else if (structured && prompt.includes('<peers>') && prompt.includes('which was the better footballer')) {
+    if (!comparisonReply) return new Response('{"error":{"message":"boom"}}', { status: 500 });
+    text = JSON.stringify({ comparisons: comparisonReply });
+  } else if (structured && prompt.includes('active_dossier') && prompt.includes('<peer_comparisons>') && retryPatch) {
     text = JSON.stringify({ replyProse: retryReply, revisedDossier: true, dossierPatch: retryPatch });
   } else if (structured && prompt.includes('active_dossier')) {
     text = JSON.stringify(
@@ -295,6 +302,7 @@ await test('a debate turn locks both prime cards and corrects misquotes', async 
 const LEVEL_RONALDINHO: PlayerProfile = {
   ...RONALDINHO,
   peerPlacement: { betterThan: [], levelWith: ['Mohamed Salah (2017-18)'], notAsGoodAs: [] },
+  peerComparisons: [{ peer: 'Mohamed Salah (2017-18)', judgment: 'level', reason: 'Neither decided big matches more often from the right side.' }],
 };
 const challengeRoute = {
   intent: 'challenge_or_revise',
@@ -307,14 +315,17 @@ const challengeRoute = {
   wantsRegeneration: false,
   needsSearch: false,
 };
-const runChallenge = async (patch: Record<string, unknown>): Promise<{ reply: string; updated?: PlayerProfile }> => {
+const runChallenge = async (
+  patch: Record<string, unknown>,
+  reply = 'Fair point: I am revising his card.',
+): Promise<{ reply: string; updated?: PlayerProfile }> => {
   calls = [];
   route = challengeRoute;
-  challengeReply = 'Fair point: I am revising his card.';
+  challengeReply = reply;
   challengePatch = patch;
   let updated: PlayerProfile | undefined;
   try {
-    const reply = await quietly(() =>
+    const answer = await quietly(() =>
       sendMessageToAI(PUSHBACK, debateHistory, undefined, [LEVEL_RONALDINHO, SALAH], [], {
         challengeCardKey: getCardKey(LEVEL_RONALDINHO),
         onDossierUpdated: (p: PlayerProfile) => {
@@ -322,84 +333,110 @@ const runChallenge = async (patch: Record<string, unknown>): Promise<{ reply: st
         },
       }),
     );
-    return { reply: reply as string, updated };
+    return { reply: answer as string, updated };
   } finally {
     challengePatch = null;
     retryPatch = null;
     retryReply = '';
+    comparisonReply = null;
   }
 };
 const challengeCalls = () => calls.filter((c) => c.structured && c.prompt.includes('active_dossier'));
+const comparisonCalls = () => calls.filter((c) => c.structured && c.prompt.includes('<peers>') && c.prompt.includes('which was the better footballer'));
+const NO_PLACEMENT = { betterThan: [], levelWith: [], notAsGoodAs: [] };
 
 await test('a challenge prompt says the Overall is a judgment placed against peers, not a sum of attributes', async () => {
-  await runChallenge({ targetPlayerName: 'Ronaldinho', attributes: { consistency: 92 } });
-  const challengePrompt = calls.find((c) => c.structured && c.prompt.includes('active_dossier'))?.prompt ?? '';
+  await runChallenge({ targetPlayerName: 'Ronaldinho', attributes: { consistency: 92 }, peerPlacement: NO_PLACEMENT });
+  const challengePrompt = challengeCalls()[0]?.prompt ?? '';
   assert.match(challengePrompt, /never a sum of attributes/);
-  assert.match(challengePrompt, /peerPlacement/);
+  assert.match(challengePrompt, /peerPlacement.{0,4} is always filled/);
   assert.match(challengePrompt, /Availability is never footballing quality/);
   assert.match(challengePrompt, /Availability and Team Success/);
+  // The card's earlier comparisons are in view, with their reasons.
+  assert.match(challengePrompt, /Head to head, before any rating was set: level with Mohamed Salah \(2017-18\): Neither decided big matches/);
 });
 
-await test('an attribute fix leaves the Overall where it was', async () => {
-  const { updated, reply } = await runChallenge({ targetPlayerName: 'Ronaldinho', attributes: { consistency: 92 } });
+await test("the challenge schema requires the patch's placement, with empty arrays allowed", async () => {
+  await runChallenge({ targetPlayerName: 'Ronaldinho', attributes: { consistency: 92 }, peerPlacement: NO_PLACEMENT });
+  const raw = challengeCalls()[0]?.raw ?? '';
+  assert.match(raw, /"required":\["targetPlayerName","peerPlacement"\]/);
+  assert.match(raw, /"required":\["betterThan","levelWith","notAsGoodAs"\]/);
+});
+
+await test('an attribute fix leaves the Overall where it was, with no comparison', async () => {
+  const { updated, reply } = await runChallenge({ targetPlayerName: 'Ronaldinho', attributes: { consistency: 92 }, peerPlacement: NO_PLACEMENT });
   assert.equal(updated?.attributes.consistency, 92);
   assert.equal(updated?.ratings.overall, 95);
-  assert.doesNotMatch(reply, /holds this version at/);
-});
-
-await test('a raised Overall with no new placement is asked once more, then held by the placement on the card', async () => {
-  const { updated, reply } = await runChallenge({ targetPlayerName: 'Ronaldinho', overall: 96, potential: 96 });
-  // One correction round, told what applied and what it allows.
-  assert.equal(challengeCalls().length, 2);
-  const check = challengeCalls()[1].prompt;
-  assert.match(check, /placement_check/);
-  assert.match(check, /you gave no peerPlacement, so the card's stored placement applied/);
-  assert.match(check, /level with: Mohamed Salah \(2017-18\) 95/);
-  assert.match(check, /allows 95, not 96/);
-  // The model kept its number without a placement: the card holds, and the reply says so.
-  assert.equal(updated?.ratings.overall, 95);
-  assert.equal(updated?.ratings.potential, 95);
-  assert.match(reply, /holds this version at \*\*95\*\* Overall/);
-});
-
-await test('a correction round that gives the placement keeps the raised Overall and its own reply', async () => {
-  retryReply = 'Revised: he was the better footballer, so the card now reads 96.';
-  retryPatch = {
-    targetPlayerName: 'Ronaldinho',
-    overall: 96,
-    potential: 96,
-    peerPlacement: { betterThan: ['Mohamed Salah'], levelWith: [], notAsGoodAs: [] },
-  };
-  const { updated, reply } = await runChallenge({ targetPlayerName: 'Ronaldinho', overall: 96, potential: 96 });
-  assert.equal(challengeCalls().length, 2);
-  assert.equal(updated?.ratings.overall, 96);
-  assert.deepEqual(updated?.peerPlacement?.betterThan, ['Mohamed Salah (2017-18)']);
-  assert.match(reply, /card now reads 96/);
-  assert.doesNotMatch(reply, /holds this version at/);
-});
-
-await test('a correction round can settle on the Overall the placement allows instead', async () => {
-  retryReply = 'He sits level with Salah, so the card stays at 95.';
-  retryPatch = { targetPlayerName: 'Ronaldinho', overall: 95, potential: 95, attributes: { consistency: 92 } };
-  const { updated, reply } = await runChallenge({ targetPlayerName: 'Ronaldinho', overall: 96, potential: 96 });
-  assert.equal(updated?.ratings.overall, 95);
-  assert.equal(updated?.attributes.consistency, 92);
-  assert.match(reply, /stays at 95/);
-  assert.doesNotMatch(reply, /holds this version at/);
-});
-
-await test('a raised Overall with a placement that allows it is kept, and the placement recorded', async () => {
-  const { updated, reply } = await runChallenge({
-    targetPlayerName: 'Ronaldinho',
-    overall: 96,
-    potential: 96,
-    peerPlacement: { betterThan: ['Mohamed Salah'], levelWith: [], notAsGoodAs: [] },
-  });
-  assert.equal(updated?.ratings.overall, 96);
-  assert.deepEqual(updated?.peerPlacement?.betterThan, ['Mohamed Salah (2017-18)']);
-  assert.doesNotMatch(reply, /holds this version at/);
-  // Agreed the first time: no correction round.
+  assert.equal(comparisonCalls().length, 0);
   assert.equal(challengeCalls().length, 1);
+  assert.doesNotMatch(reply, /holds this version at/);
+});
+
+await test('a raised Overall the comparisons allow is kept, with the comparisons as its placement', async () => {
+  comparisonReply = [{ peer: 'P1', judgment: 'better', reason: 'His dribbling took two men out of every attack the peer only finished.' }];
+  const { updated, reply } = await runChallenge(
+    { targetPlayerName: 'Ronaldinho', overall: 96, potential: 96, peerPlacement: { betterThan: ['Mohamed Salah'], levelWith: [], notAsGoodAs: [] } },
+    'Fair point: he was the better footballer, so the card moves to **96**.',
+  );
+  // One comparison, with the user's argument and the earlier comparisons in view and no number.
+  assert.equal(comparisonCalls().length, 1);
+  const compare = comparisonCalls()[0].prompt;
+  assert.match(compare, /\[P1\] Mohamed Salah \| Prime Zenith \(2017-18\)/);
+  assert.match(compare, /near blasphemous/);
+  assert.match(compare, /earlier comparisons:\\n- level with Mohamed Salah \(2017-18\): Neither decided/);
+  assert.doesNotMatch(compare, /\b9[56]\b|Flair \d|OVR|Overall:/);
+  assert.equal(challengeCalls().length, 1, 'agreed the first time: no second round');
+  assert.equal(updated?.ratings.overall, 96);
+  assert.equal(updated?.ratings.potential, 96);
+  assert.deepEqual(updated?.peerPlacement, { betterThan: ['Mohamed Salah (2017-18)'], levelWith: [], notAsGoodAs: [] });
+  assert.deepEqual(updated?.peerComparisons?.map((c) => [c.peer, c.judgment]), [['Mohamed Salah (2017-18)', 'better']]);
+  assert.match(reply, /moves to \*\*96\*\*/);
+});
+
+await test("a raised Overall the comparisons don't allow takes the range's value, and the reply is written for it", async () => {
+  comparisonReply = [{ peer: 'P1', judgment: 'level', reason: 'Neither decided big matches more often.' }];
+  retryReply = 'Having weighed him against Salah again, they were level, so the card stays at **95**.';
+  retryPatch = { targetPlayerName: 'Ronaldinho', overall: 95, potential: 95, attributes: { consistency: 92 }, peerPlacement: { betterThan: [], levelWith: ['Mohamed Salah'], notAsGoodAs: [] } };
+  const { updated, reply } = await runChallenge(
+    { targetPlayerName: 'Ronaldinho', overall: 96, potential: 96, peerPlacement: NO_PLACEMENT },
+    'He was clearly better, so the card moves to **96**.',
+  );
+  assert.equal(challengeCalls().length, 2);
+  const second = challengeCalls()[1].prompt;
+  assert.match(second, /<peer_comparisons>/);
+  assert.match(second, /- level with Mohamed Salah \(2017-18\): Neither decided big matches more often\. \(95 Overall\)/);
+  assert.match(second, /allow an Overall from 95 to 95/);
+  assert.match(second, /Your dossierPatch set 96; the card will show 95/);
+  assert.equal(updated?.ratings.overall, 95);
+  assert.equal(updated?.attributes.consistency, 92);
+  assert.deepEqual(updated?.peerPlacement?.levelWith, ['Mohamed Salah (2017-18)']);
+  assert.match(reply, /card stays at \*\*95\*\*/);
+  assert.doesNotMatch(reply, /96|holds this version at/);
+});
+
+await test('a second round that still states another Overall has the number put right in place', async () => {
+  comparisonReply = [{ peer: 'P1', judgment: 'level', reason: 'Neither decided big matches more often.' }];
+  retryReply = 'Revised: the card now reads **96**, and his 96 Overall reflects it.';
+  retryPatch = { targetPlayerName: 'Ronaldinho', overall: 96, potential: 96, peerPlacement: NO_PLACEMENT };
+  const { updated, reply } = await runChallenge({ targetPlayerName: 'Ronaldinho', overall: 96, potential: 96, peerPlacement: NO_PLACEMENT });
+  assert.equal(updated?.ratings.overall, 95);
+  assert.equal(reply, 'Revised: the card now reads **95**, and his 95 Overall reflects it.');
+});
+
+await test('with no comparison to go on, the placement the challenge gave places the Overall, and the reply matches the card', async () => {
+  const kept = await runChallenge(
+    { targetPlayerName: 'Ronaldinho', overall: 96, potential: 96, peerPlacement: { betterThan: ['Mohamed Salah'], levelWith: [], notAsGoodAs: [] } },
+    'The card moves to **96**.',
+  );
+  assert.equal(kept.updated?.ratings.overall, 96);
+  assert.deepEqual(kept.updated?.peerPlacement?.betterThan, ['Mohamed Salah (2017-18)']);
+  assert.match(kept.reply, /moves to \*\*96\*\*/);
+
+  // No placement given: the card's own (level with Salah) holds 95, and the reply says 95, with no sentence added.
+  const held = await runChallenge({ targetPlayerName: 'Ronaldinho', overall: 96, potential: 96, peerPlacement: NO_PLACEMENT }, 'The card moves to **96**.');
+  assert.equal(held.updated?.ratings.overall, 95);
+  assert.equal(held.reply, 'The card moves to **95**.');
+  assert.doesNotMatch(held.reply, /holds this version at/);
 });
 
 await test('card trait rules say an injury record is not a weakness', async () => {

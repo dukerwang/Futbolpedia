@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import type { PlayerProfile } from '../types';
 import {
   applyTraitRevisions,
+  findDebateCasesToRewrite,
   findStockTraits,
   findTraitsToReview,
   formatTrait,
@@ -387,6 +388,64 @@ await test('applying writes only rows that still hold the proposed-from lines, a
   assert.deepEqual(writes, ['a', 'frozen']);
   assert.deepEqual(rows.get('a')!.weaknesses, ['**New:** n.']);
   assert.equal(rows.get('a')!.ratings.overall, 88);
+});
+
+// --- The case for higher and lower argues football ------------------------------------------
+
+const withDebate = (base: PlayerProfile, caseForHigher: string, caseForLower: string): PlayerProfile => ({
+  ...base,
+  scoutingDebate: { caseForHigher, caseForLower },
+});
+const FOOTBALL_HIGHER = 'His passing broke lines no other midfielder in the window could, and he set the tempo of every big match.';
+const INJURY_LOWER = 'A 12-week muscle injury cost him a third of the season, so his body of work is thinner than the peers above him.';
+
+await test('a case for lower that rests on an injury is found, and one that argues football is left alone', () => {
+  const subject = withDebate(card('Subject', [], []), FOOTBALL_HIGHER, INJURY_LOWER);
+  assert.deepEqual(
+    findDebateCasesToRewrite(subject).map((d) => [d.id, d.kind]),
+    [['DEBATE_LOWER', 'availability']],
+  );
+  const trophies = withDebate(card('Subject', [], []), 'He won three league titles and the Champions League in the window.', 'His first touch let him down under a high press.');
+  assert.deepEqual(findDebateCasesToRewrite(trophies).map((d) => [d.id, d.kind]), [['DEBATE_HIGHER', 'team_success']]);
+  assert.deepEqual(findDebateCasesToRewrite(withDebate(card('Subject', [], []), FOOTBALL_HIGHER, 'He scored in the final but drifted out of tight matches.')), []);
+});
+
+await test('an availability case for lower is rewritten in the same call as the traits', async () => {
+  const subject = withDebate(card('Subject', ['**Own Strength:** kept.'], ['**Own Weakness:** kept.', '**Other Weakness:** kept.']), FOOTBALL_HIGHER, INJURY_LOWER);
+  geminiReplyText = JSON.stringify({
+    revisions: [{ id: 'DEBATE_LOWER', drop: false, title: '', detail: 'His decisions in the final third were a beat slower than the peers above him, and he rarely changed a game on his own.', consequence: '' }],
+  });
+  const revised = await reviseCardTraits(subject, pool, 'EVIDENCE TEXT');
+  assert.equal(geminiPrompts.length, 1, 'one call covers the traits and the case');
+  assert.match(geminiPrompts[0], /DEBATE_LOWER \[REWRITE\]: Case for lower: A 12-week muscle injury/);
+  assert.doesNotMatch(geminiPrompts[0], /DEBATE_HIGHER/);
+  assert.match(geminiPrompts[0], /W1 \[CHECK\]/);
+  assert.match(geminiPrompts[0], /argue from availability/);
+  assert.equal(revised.scoutingDebate?.caseForLower, 'His decisions in the final third were a beat slower than the peers above him, and he rarely changed a game on his own.');
+  assert.equal(revised.scoutingDebate?.caseForHigher, FOOTBALL_HIGHER);
+  assert.deepEqual(revised.weaknesses, subject.weaknesses);
+});
+
+await test('a flagged case alone still gets the call, and a rewrite that still argues availability is ignored', async () => {
+  const subject = withDebate(card('Subject', ['**Own Strength:** kept.'], []), FOOTBALL_HIGHER, INJURY_LOWER);
+  assert.deepEqual(findTraitsToReview(subject, pool), []);
+  geminiReplyText = JSON.stringify({
+    revisions: [{ id: 'DEBATE_LOWER', drop: false, title: '', detail: 'He missed too many matches to be rated above them.', consequence: '' }],
+  });
+  const { warn } = console;
+  console.warn = () => {};
+  try {
+    const revised = await reviseCardTraits(subject, pool, '');
+    assert.equal(geminiPrompts.length, 1);
+    assert.equal(revised.scoutingDebate?.caseForLower, INJURY_LOWER);
+  } finally {
+    console.warn = warn;
+  }
+  // A card whose case argues football and whose traits need nothing makes no call.
+  geminiPrompts = [];
+  const clean = withDebate(card('Subject', ['**Own Strength:** kept.'], []), FOOTBALL_HIGHER, 'His first touch let him down under a high press.');
+  assert.equal(await reviseCardTraits(clean, pool, ''), clean);
+  assert.equal(geminiPrompts.length, 0);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

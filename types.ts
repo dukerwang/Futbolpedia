@@ -142,6 +142,19 @@ export interface PeerPlacement {
   notAsGoodAs: string[];
 }
 
+/** How a version compared, head to head, with one of his closest peers before any number was set. */
+export type PeerJudgment = 'better' | 'level' | 'not_as_good';
+
+export interface PeerComparison {
+  /** The peer as the card names him: "Name (window)" for a historical card. */
+  peer: string;
+  /** The peer's card key when the comparison was made (`getCardKey`). */
+  peerKey?: string;
+  judgment: PeerJudgment;
+  /** One sentence of football reasoning. */
+  reason: string;
+}
+
 export interface PlayerProfile {
   basicInfo: BasicInfo;
   ratings: Ratings;
@@ -176,6 +189,11 @@ export interface PlayerProfile {
   peerBenchmark?: string;
   /** Calibrated peers this version was judged better than, level with, or below */
   peerPlacement?: PeerPlacement;
+  /**
+   * The head-to-head comparisons the placement came from (services/peerComparison.ts), each with
+   * its reason, kept also when they were mixed. Absent on cards rated before comparisons.
+   */
+  peerComparisons?: PeerComparison[];
   /** Evidence grade and sample size evaluation */
   confidence?: DossierConfidence;
   /**

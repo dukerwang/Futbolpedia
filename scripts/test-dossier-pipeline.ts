@@ -23,6 +23,8 @@ interface Scenario {
   window?: (prompt: string) => { startSeason: string; endSeason: string };
   /** The model's peer placement on the synthesized card. */
   placement?: { betterThan: string[]; levelWith: string[]; notAsGoodAs: string[] };
+  /** What the head-to-head comparison call answers, by peer name; a peer not named is not compared. */
+  comparisons?: Record<string, { judgment: string; reason: string }>;
   /** The name and club the model puts on the card. */
   name?: string;
   club?: string;
@@ -99,6 +101,7 @@ function fakeProfile(prompt: string) {
     playstyleAndRole: { playstyle: { archetype: 'Test Archetype Mould', description: 'Prose.' }, bestRoles: ['Role'] },
     shortBio: 'Bio.',
     latestUpdate: 'Update.',
+    confidence: { grade: 'A', sampleSize: 'Three full seasons.', dataGaps: [], verdict: 'The sample is deep.' },
     version,
   };
 }
@@ -124,6 +127,12 @@ function geminiReply(body: any): string {
     });
   }
   if (structured && prompt.includes('synthesis_instructions')) return JSON.stringify(fakeProfile(prompt));
+  if (structured && prompt.includes('<peers>') && prompt.includes('which was the better footballer')) {
+    const labels = [...prompt.matchAll(/\[(P\d+)\] ([^|]+?) \|/g)].map((m) => [m[1], m[2].trim()] as const);
+    return JSON.stringify({
+      comparisons: labels.flatMap(([peer, name]) => (scenario.comparisons?.[name] ? [{ peer, ...scenario.comparisons[name] }] : [])),
+    });
+  }
   if (structured && prompt.includes('Rewrite the Latest Update')) {
     return JSON.stringify({ latestUpdate: 'Fresh news line.' });
   }
@@ -187,6 +196,7 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 }
 
 const synthesisPrompt = () => calls.find((c) => c.structured && c.prompt.includes('synthesis_instructions'))?.prompt ?? '';
+const comparisonCalls = () => calls.filter((c) => c.structured && c.prompt.includes('<peers>') && c.prompt.includes('which was the better footballer'));
 const statusCalls = () => calls.filter((c) => c.prompt.includes('still playing professionally'));
 const managerCalls = () => calls.filter((c) => c.prompt.includes('first-team head coach'));
 
@@ -546,6 +556,96 @@ async function main() {
     assert.equal(card.ratings.overall, 92);
     assert.equal(card.ratings.potential, 92);
     assert.deepEqual(card.peerPlacement?.betterThan, ['Peer Maestro (2008-09)']);
+  });
+
+  const peerPrime = async (name: string, overall: number, window: string): Promise<PlayerProfile> => {
+    const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
+    const { CALIBRATION_EPOCH_MS } = await import('../services/dossierStore');
+    return {
+      ...sanitizeProfileData({
+        basicInfo: { name, age: 27, nationality: 'Spain', club: 'FC Barcelona', position: 'Centre-Back' },
+        ratings: { overall, potential: overall },
+        strengths: [`**Strength of ${name}:** what he did.`],
+      }),
+      evaluationDate: '2009-05-27',
+      createdAt: CALIBRATION_EPOCH_MS + 1,
+      version: { id: `${name}-prime`, type: 'prime', label: `Prime Zenith (${window})`, evaluationDate: '2009-05-27', seasonOrEra: window },
+    };
+  };
+  // His own earlier prime gives the position the closest peers are chosen at, and never joins them.
+  const ownPrime = () => peerPrime('Andrés Iniesta', 92, '2009-11');
+
+  await test('a rating compares him head to head before any number, and the card is written inside the range', async () => {
+    const peers = [await peerPrime('Peer Maestro', 92, '2008-10'), await peerPrime('Peer Pivot', 94, '2011-13')];
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      // The model's own placement says otherwise; the comparisons decide.
+      placement: { betterThan: ['Peer Pivot [Prime 2011-13]'], levelWith: [], notAsGoodAs: [] },
+      comparisons: {
+        'Peer Maestro': { judgment: 'better', reason: 'He found the pass between the lines a beat earlier.' },
+        'Peer Pivot': { judgment: 'not_as_good', reason: 'The peer controlled tempo against any press.' },
+      },
+    };
+    const card = await rate('rerate prime Andrés Iniesta', [await ownPrime(), ...peers]);
+    // One comparison, before synthesis, with no number in view.
+    assert.equal(comparisonCalls().length, 1);
+    const compare = comparisonCalls()[0].prompt;
+    assert.ok(calls.indexOf(comparisonCalls()[0]) < calls.findIndex((c) => c.prompt.includes('synthesis_instructions')));
+    assert.match(compare, /Peer Maestro[\s\S]*Strength of Peer Maestro/);
+    assert.doesNotMatch(compare, /\] Andrés Iniesta \|/, 'his own card is never a peer');
+    assert.doesNotMatch(compare, /\b9[24]\b|OVR|Overall/);
+    // Synthesis is told the range: above the 92, below the 94.
+    assert.match(synthesisPrompt(), /<peer_comparisons>[\s\S]*allow an Overall from 93 to 93 exactly/);
+    assert.match(synthesisPrompt(), /better than Peer Maestro \(2008-10\): He found the pass/);
+    // The fake rates every card 91: the card is held inside the range, and the comparisons are its placement.
+    assert.equal(card.ratings.overall, 93);
+    assert.equal(card.ratings.potential, 93);
+    assert.deepEqual(card.peerPlacement, { betterThan: ['Peer Maestro (2008-10)'], levelWith: [], notAsGoodAs: ['Peer Pivot (2011-13)'] });
+    assert.deepEqual(
+      card.peerComparisons?.map((c) => [c.peer, c.judgment, c.reason]),
+      [
+        ['Peer Pivot (2011-13)', 'not_as_good', 'The peer controlled tempo against any press.'],
+        ['Peer Maestro (2008-10)', 'better', 'He found the pass between the lines a beat earlier.'],
+      ],
+    );
+    assert.doesNotMatch(card.confidence?.verdict ?? '', /mixed/);
+  });
+
+  await test('comparisons that contradict each other leave the placement to synthesis, and the verdict says it was mixed', async () => {
+    const peers = [await peerPrime('Peer Maestro', 92, '2008-10'), await peerPrime('Peer Pivot', 90, '2011-13')];
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      placement: { betterThan: ['Peer Pivot [Prime 2011-13]'], levelWith: [], notAsGoodAs: [] },
+      comparisons: {
+        'Peer Maestro': { judgment: 'better', reason: 'He found the pass between the lines a beat earlier.' },
+        'Peer Pivot': { judgment: 'not_as_good', reason: 'The peer controlled tempo against any press.' },
+      },
+    };
+    const card = await rate('rerate prime Andrés Iniesta', [await ownPrime(), ...peers]);
+    assert.match(synthesisPrompt(), /<peer_comparisons>[\s\S]*leave no single range/);
+    // The model's own placement (better than the 90) holds the fake's 91.
+    assert.equal(card.ratings.overall, 91);
+    assert.deepEqual(card.peerPlacement?.betterThan, ['Peer Pivot (2011-13)']);
+    assert.equal(card.peerComparisons?.length, 2);
+    assert.match(card.confidence?.verdict ?? '', /^The sample is deep\. His head-to-head comparisons with the closest peers were mixed/);
+  });
+
+  await test('a reason that rests on an injury is sent back, and a pair still flagged is not counted', async () => {
+    const peers = [await peerPrime('Peer Maestro', 92, '2008-10')];
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      comparisons: { 'Peer Maestro': { judgment: 'not_as_good', reason: 'He missed half a season with a muscle injury.' } },
+    };
+    const card = await rate('rerate prime Andrés Iniesta', [await ownPrime(), ...peers]);
+    // The fake gives the same reason twice: one follow-up, then the pair is dropped.
+    assert.equal(comparisonCalls().length, 2);
+    assert.match(comparisonCalls()[1].prompt, /<reason_check>[\s\S]*rests on availability/);
+    assert.doesNotMatch(synthesisPrompt(), /head-to-head comparisons were made/);
+    assert.equal(card.peerComparisons, undefined);
+    assert.equal(card.ratings.overall, 91);
   });
 
   await test("a current card is rated from his live season record, with the gaps the lookups left", async () => {
