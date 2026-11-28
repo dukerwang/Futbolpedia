@@ -691,6 +691,8 @@ const rateDossier = async (params: {
     ...peerLedgerOptions,
     positionHint: grounding.apiPlayer?.position,
     wholeLibrary: true,
+    // A prime, era or season rating is placed on the historical scale alone.
+    historical: isHistorical,
     exclude: blind || reratingPrime() ? (p: PlayerProfile) => ownSlugs.has(toBasePlayerSlug(p.basicInfo.name)) : undefined,
   };
   // The peers are chosen now, from the whole served library: the turn's context was built before

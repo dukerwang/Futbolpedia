@@ -1,7 +1,7 @@
 import type { Attributes, PlayerProfile } from '../types';
 import { ATTRIBUTE_LABELS } from '../constants/ratingTiers';
-import { cardEdition, getCardKey, isConfidentDossier, isPrimeCard, latestCardPerPlayer, toBasePlayerSlug } from './dossierCards';
-import { CALIBRATION_EPOCH_MS, getSupabaseCalibratedPool } from './dossierCache';
+import { cardEdition, getCardKey, getDossierEvaluationDate, isConfidentDossier, isPrimeCard, latestCardPerPlayer, toBasePlayerSlug } from './dossierCards';
+import { CALIBRATION_EPOCH_MS, CURRENT_FORM_RULES_EPOCH_MS, getSupabaseCalibratedPool } from './dossierCache';
 import { findReferencedDossiers, formatTopAttributes, serializePeerCard } from './dossierContext';
 
 /**
@@ -174,6 +174,27 @@ export function mergeAllCalibratedDossiers(
   );
 }
 
+const CURRENT_FORM_RULES_DAY = new Date(CURRENT_FORM_RULES_EPOCH_MS).toISOString().slice(0, 10);
+
+/**
+ * A current card rated before the current form rules (`CURRENT_FORM_RULES_EPOCH_MS`), which no
+ * rating reads as a peer. A challenge stamps a new `createdAt` on a personal revision without
+ * rating the player again, so a revision also goes by the evaluation date it kept. That is a day,
+ * so a revision of a card dated the day the rules changed counts as rated before them.
+ */
+export const isQuarantinedCurrentCard = (p: PlayerProfile): boolean =>
+  !isPrimeCard(p) &&
+  (!((p.createdAt ?? 0) >= CURRENT_FORM_RULES_EPOCH_MS) ||
+    (Boolean(p.revision) && (getDossierEvaluationDate(p) ?? '') <= CURRENT_FORM_RULES_DAY));
+
+/**
+ * The cards a rating may be placed against. A prime, era or season rating (`historical`) reads only
+ * prime, era and season cards, however few there are; a current rating reads every card that isn't
+ * quarantined.
+ */
+export const ratingPeers = (cards: PlayerProfile[], historical: boolean): PlayerProfile[] =>
+  cards.filter((p) => (historical ? isPrimeCard(p) : !isQuarantinedCurrentCard(p)));
+
 export interface PeerLedgerOptions {
   targetPlayers?: string[];
   positionHint?: string;
@@ -181,10 +202,12 @@ export interface PeerLedgerOptions {
   /** Cards never to include, such as the player's own on a re-rating. */
   exclude?: (p: PlayerProfile) => boolean;
   /**
-   * A rating: every card in the library is in the ledger, so a new card is placed against the whole
-   * of the one all-era scale rather than a sample of it (`exclude` still applies).
+   * A rating: every card a rating may read (`ratingPeers`) is in the ledger, so a new card is placed
+   * against the whole of the one all-era scale rather than a sample of it (`exclude` still applies).
    */
   wholeLibrary?: boolean;
+  /** With `wholeLibrary`: the version being rated is a prime, an era or a season. */
+  historical?: boolean;
 }
 
 const inferPositionalFilterFromText = (text: string): string | null => {
@@ -245,7 +268,7 @@ const inferQueriedAttributesFromText = (text: string): Array<keyof Attributes> =
  * Picks a compact, position-aware peer calibration ledger from the user's freshly calibrated dossiers
  * (across Supabase global pool, local saved archive, and active conversation): the target's own
  * cards, up to 10 same-position peers, then the top-rated anchors, 18 cards in all. A rating asks
- * for the whole library instead (`wholeLibrary`).
+ * for the whole library instead (`wholeLibrary`), less what it may not read (`ratingPeers`).
  */
 export function selectPositionalPeerLedger(
   savedDossiers: PlayerProfile[],
@@ -270,7 +293,7 @@ export function selectPositionalPeerLedger(
     (options?.message ? inferPositionalFilterFromText(options.message) : null);
 
   const sortedAll = [...allCalibrated].sort((a, b) => b.ratings.overall - a.ratings.overall);
-  if (options?.wholeLibrary) return sortedAll;
+  if (options?.wholeLibrary) return ratingPeers(sortedAll, Boolean(options.historical));
   const selectedBySlug = new Map<string, PlayerProfile>();
 
   // 1. Prioritize direct target matches so their exact ratings are always visible
@@ -381,7 +404,9 @@ const NEAR_PEER_RANGE = 4;
  * spread across the range of Overalls at the position so the model can find his level among them.
  * Prime, era and season cards come first: a player's historical card stands for him over his
  * current one, and near historical cards are taken before near current ones, so the scale a new
- * card is read against is the one the historical cards set. `exclude` drops the player's own cards.
+ * card is read against is the one the historical cards set. `exclude` drops the player's own cards,
+ * and a quarantined current card is never a peer. For a historical rating the ledger passed in
+ * already holds no current card, so with too few peers it picks fewer.
  */
 export function selectClosestPeers(
   ledger: PlayerProfile[],
@@ -393,7 +418,7 @@ export function selectClosestPeers(
   const byOverall = (a: PlayerProfile, b: PlayerProfile) => b.ratings.overall - a.ratings.overall;
   const onePerPlayer = new Map<string, PlayerProfile>();
   for (const p of ledger) {
-    if (options.exclude?.(p)) continue;
+    if (options.exclude?.(p) || isQuarantinedCurrentCard(p)) continue;
     if (![...positionGroups(p.basicInfo?.position)].some((g) => groups.has(g))) continue;
     const key = toBasePlayerSlug(p.basicInfo.name);
     const held = onePerPlayer.get(key);

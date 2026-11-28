@@ -24,6 +24,7 @@ import {
   getCardKey,
   isPrimeCard,
   mergeAllCalibratedDossiers,
+  ratingPeers,
   mostRecentlyShownCard,
   pickCardPerPlayer,
   selectClosestPeers,
@@ -808,14 +809,14 @@ export async function runConversationalScout(
       // A challenge places a moved Overall the way a rating places a new card: against the whole
       // library, with the closest peers at his position in full.
       await fetchSupabaseCalibratedPool().catch(() => []);
-      const libraryOptions = { wholeLibrary: true, exclude: (p: PlayerProfile) => toBasePlayerSlug(p.basicInfo.name) === targetSlug };
+      const libraryOptions = { wholeLibrary: true, historical: isPrimeCard(targetDossier), exclude: (p: PlayerProfile) => toBasePlayerSlug(p.basicInfo.name) === targetSlug };
       const library = selectPositionalPeerLedger(savedDossiers, conversationDossiers, libraryOptions);
-      const placementLedger = [...otherCards, ...library];
+      const placementLedger = ratingPeers([...otherCards, ...library], isPrimeCard(targetDossier));
       const closestPeers = selectClosestPeers(library, { position: targetDossier.basicInfo.position, centre: targetDossier.ratings.overall });
       const challengeLedgerBlock = library.length
         ? buildPositionalPeerLedgerBlock(savedDossiers, conversationDossiers, libraryOptions, library) +
           buildClosestPeersBlock(closestPeers)
-        : (peerLedgerBlock ?? '');
+        : '';
       const challengePrompt = `<context>System Date: ${month} ${year}. Season: ${currentSeason}</context>
 ${challengeThread}
 ${formatVerifiedManagersBlock(challengeManagers)}
