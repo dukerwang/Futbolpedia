@@ -41,6 +41,7 @@ import {
   formatLedger,
   hasEvidence,
   seasonStartDate,
+  type EvidenceEntry,
   type EvidenceLedger,
 } from './evidenceLedger';
 import { expandTables, type FigureClaim } from './figureGate';
@@ -77,6 +78,7 @@ import {
 import {
   executeCall,
   fileOutcomes,
+  getLive,
   liveToolset,
   RESEARCH_COVERAGE_NOTE,
   RESEARCH_TOOL_GUIDE,
@@ -84,6 +86,8 @@ import {
   type ResearchToolset,
   type ToolOutcome,
 } from './researchTools';
+import { lookUpTeamStrength, runTeamStrength, TEAM_STRENGTH_DECLARATION } from './kb/teamStrengthTool';
+import type { TeamStrengthResult } from './kb/teamStrength';
 import {
   applyStory,
   coresFromLedger,
@@ -372,6 +376,7 @@ export const CHAT_DECLARATIONS: FunctionDeclaration[] = [
   SHOW_DOSSIER_DECLARATION,
   ...NETWORK_FUNCTION_DECLARATIONS,
   ...CHAT_FUNCTION_DECLARATIONS,
+  TEAM_STRENGTH_DECLARATION,
 ] as FunctionDeclaration[];
 
 /** The research call behind each function that reads a source, so its result lands in the ledger. */
@@ -406,7 +411,8 @@ const PRESENTATION = new Set(['show_pitch', 'show_table', 'show_comparison', 'sh
 
 /**
  * Tools that cost a lookup: the ones that fetch a feed, a record or a search. The local greps
- * (dossiers, the Gaffa market), card reads (up to `MAX_CARD_READS`) and the presentation tools are free.
+ * (dossiers, the Gaffa market), card reads (up to `MAX_CARD_READS`), the stored team-strength
+ * ratings and the presentation tools are free.
  */
 const COUNTED = new Set(Object.keys(RESEARCH_FUNCTIONS));
 
@@ -442,6 +448,8 @@ export function stageLabel(call: ChatFunctionCall): string {
       return 'Searching your dossiers';
     case 'grep_gaffa_market':
       return "Searching your league's market";
+    case 'team_strength':
+      return `Reading ${str(a.club) || 'the club'}'s team strength`;
     case 'commit_verdict':
       return 'Weighing the verdict';
     default:
@@ -469,6 +477,7 @@ How to research:
 - An answer about who is missing or doubtful reads team news as well as the injury list: no free source records knocks between list updates, and news reports them first.
 - Each result also lists what is still unchecked for the clubs and players in the question. Spend on those only where the answer needs them.
 - ${viewRules()}
+- team_strength reads a stored Elo rating that code computed from match results, free of the budget: it says how strong a club's results were on a date or at a season's end, not how good its squad was; ratings start in 2004-05, and one from few counted matches is rough.
 - Write nothing to the user while you look things up: text you write in a round that also calls a lookup is discarded. When research is done, write the answer. To place a view inside it, write the part that leads into the view, call the view tool in that same turn, and carry on with the rest after its result; a turn that only draws views keeps its text.
 
 ${RESEARCH_COVERAGE_NOTE}`;
@@ -614,6 +623,8 @@ export interface ChatTurnDeps {
   onStats?: (stats: TurnStats) => void;
   /** The gate feedback round's model, for tests. */
   gateFeedback?: CorrectionModel;
+  /** Reads a stored team-strength rating, for tests. Defaults to the app's route. */
+  teamStrength?: (args: { club: string; date?: string; season?: string }) => Promise<TeamStrengthResult>;
   /** Reads a Gaffa squad's FPL availability, for tests. */
   gaffaAvailability?: AvailabilityFetcher;
   /** Called with the Gaffa turn the loop built, for tests. */
@@ -931,7 +942,7 @@ ${
 
   /** Runs one round: refuses what the budget can't cover, runs the rest in parallel, files the results. */
   const runRound = async (round: ChatFunctionCall[]): Promise<ChatToolResponse[]> => {
-    const jobs = round.map(async (call): Promise<{ response: Record<string, unknown>; filed?: { call: ResearchCall; outcome: ToolOutcome } }> => {
+    const jobs = round.map(async (call): Promise<{ response: Record<string, unknown>; filed?: { call: ResearchCall; outcome: ToolOutcome }; evidence?: Omit<EvidenceEntry, 'id'> | null }> => {
       const args = call.args ?? {};
       const research = RESEARCH_FUNCTIONS[call.name];
       if (call.name === 'look_up_dossier' && ++cardReads > MAX_CARD_READS) {
@@ -978,6 +989,10 @@ ${
           case 'grep_gaffa_market':
             if (!gaffaBag) return { response: { error: 'No Gaffa club is attached to this conversation.' } };
             return { response: grepGaffaBag(gaffaBag, args as GaffaMarketGrepParams, dossiersPool) as unknown as Record<string, unknown> };
+          case 'team_strength': {
+            const read = await within(runTeamStrength(args, deps.teamStrength ?? ((a) => lookUpTeamStrength(a, getLive))), timeLeft);
+            return read ?? { response: { status: 'failed', reason: 'too slow: the time budget ran out' } };
+          }
           case 'commit_verdict':
             if (!commitTool) return { response: { error: `Unknown tool: ${call.name}` } };
             await resolveCommitCards(args);
@@ -994,6 +1009,7 @@ ${
     const filed = done.flatMap((d) => (d.filed ? [d.filed] : []));
     ledger = fileOutcomes(ledger, filed.map((f) => f.call), filed.map((f) => f.outcome));
     if (past) startEraBuild(filed);
+    for (const d of done) if (d.evidence) ledger = addEvidence(ledger, d.evidence);
     // A card the model read is evidence too.
     round.forEach((call, i) => {
       const card = done[i].response.card;

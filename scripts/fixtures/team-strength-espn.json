@@ -1,0 +1,240 @@
+{
+ "note": "Events trimmed from ESPN's /all/teams/{id}/schedule answers, read 2026-11-27.",
+ "shootout": {
+  "id": "183634",
+  "date": "2005-05-25T18:45Z",
+  "league": {
+   "slug": "uefa.champions"
+  },
+  "seasonType": {
+   "name": "Final"
+  },
+  "competitions": [
+   {
+    "neutralSite": false,
+    "status": {
+     "type": {
+      "name": "STATUS_FINAL_PEN",
+      "completed": true
+     }
+    },
+    "competitors": [
+     {
+      "homeAway": "home",
+      "winner": false,
+      "team": {
+       "id": "103",
+       "displayName": "AC Milan"
+      },
+      "score": {
+       "value": 3.0,
+       "displayValue": "3",
+       "shootoutScore": 2.0
+      }
+     },
+     {
+      "homeAway": "away",
+      "winner": false,
+      "team": {
+       "id": "364",
+       "displayName": "Liverpool"
+      },
+      "score": {
+       "value": 3.0,
+       "displayValue": "3",
+       "shootoutScore": 3.0
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "shootoutNoScore": {
+  "id": "182632",
+  "date": "2005-05-21T14:00Z",
+  "league": {
+   "slug": "eng.fa"
+  },
+  "seasonType": {
+   "name": "Final"
+  },
+  "competitions": [
+   {
+    "neutralSite": false,
+    "status": {
+     "type": {
+      "name": "STATUS_FINAL_PEN",
+      "completed": true
+     }
+    },
+    "competitors": [
+     {
+      "homeAway": "home",
+      "winner": false,
+      "team": {
+       "id": "359",
+       "displayName": "Arsenal"
+      },
+      "score": {
+       "value": 0.0,
+       "displayValue": "0"
+      }
+     },
+     {
+      "homeAway": "away",
+      "winner": false,
+      "team": {
+       "id": "360",
+       "displayName": "Manchester United"
+      },
+      "score": {
+       "value": 0.0,
+       "displayValue": "0"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "extraTimeFinal": {
+  "id": "173466",
+  "date": "2005-02-27T15:00Z",
+  "league": {
+   "slug": "eng.league_cup"
+  },
+  "seasonType": {
+   "name": "Final"
+  },
+  "competitions": [
+   {
+    "neutralSite": false,
+    "status": {
+     "type": {
+      "name": "STATUS_FINAL_AET",
+      "completed": true
+     }
+    },
+    "competitors": [
+     {
+      "homeAway": "home",
+      "winner": false,
+      "team": {
+       "id": "364",
+       "displayName": "Liverpool"
+      },
+      "score": {
+       "value": 2.0,
+       "displayValue": "2"
+      }
+     },
+     {
+      "homeAway": "away",
+      "winner": true,
+      "team": {
+       "id": "363",
+       "displayName": "Chelsea"
+      },
+      "score": {
+       "value": 3.0,
+       "displayValue": "3"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "friendly": {
+  "id": "682689",
+  "date": "2023-08-07T18:15Z",
+  "league": {
+   "slug": "club.friendly"
+  },
+  "seasonType": {
+   "name": "2023 Club Friendly"
+  },
+  "competitions": [
+   {
+    "neutralSite": false,
+    "status": {
+     "type": {
+      "name": "STATUS_FULL_TIME",
+      "completed": true
+     }
+    },
+    "competitors": [
+     {
+      "homeAway": "home",
+      "winner": true,
+      "team": {
+       "id": "364",
+       "displayName": "Liverpool"
+      },
+      "score": {
+       "value": 3.0,
+       "displayValue": "3"
+      }
+     },
+     {
+      "homeAway": "away",
+      "winner": false,
+      "team": {
+       "id": "3812",
+       "displayName": "SV Darmstadt 98"
+      },
+      "score": {
+       "value": 1.0,
+       "displayValue": "1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "league": {
+  "id": "179852",
+  "date": "2005-05-15T14:00Z",
+  "league": {
+   "slug": "eng.1"
+  },
+  "seasonType": {
+   "name": "2004-2005 Barclays Premier League"
+  },
+  "competitions": [
+   {
+    "neutralSite": false,
+    "status": {
+     "type": {
+      "name": "STATUS_FULL_TIME",
+      "completed": true
+     }
+    },
+    "competitors": [
+     {
+      "homeAway": "home",
+      "winner": true,
+      "team": {
+       "id": "364",
+       "displayName": "Liverpool"
+      },
+      "score": {
+       "value": 2.0,
+       "displayValue": "2"
+      }
+     },
+     {
+      "homeAway": "away",
+      "winner": false,
+      "team": {
+       "id": "362",
+       "displayName": "Aston Villa"
+      },
+      "score": {
+       "value": 1.0,
+       "displayValue": "1"
+      }
+     }
+    ]
+   }
+  ]
+ }
+}
