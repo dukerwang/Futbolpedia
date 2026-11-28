@@ -30,6 +30,8 @@ import { readDisagreementReport, setDisagreementSink } from "./services/cardDisa
 import { readCardRows, servedPool } from "./services/cardReview";
 import { createProxyLimiter, decideProxy } from "./services/geminiProxy";
 import { applyServerKey } from "./services/serverKey";
+import { createKbStore, supabaseKbDb } from "./services/kb/store";
+import { KB_GLOBAL_PER_DAY, KB_PER_DAY, KB_PER_MINUTE, whoIsHandler } from "./services/kb/route";
 
 /** The site's own hosts, allowed as `Origin` on the Gemini proxy beside the request's own host. */
 const PROXY_SITE_ORIGINS = ["futbolpedia.org", "www.futbolpedia.org", "futbolpedia.ai.studio", "localhost:3000"];
@@ -804,6 +806,26 @@ async function startServer() {
     const { useServerSupabaseWriter } = await import("./services/dossierCache");
     useServerSupabaseWriter(secretClient);
   }
+  // The football knowledge base, phase 1 (services/kb/): who a name means, read from Wikidata by
+  // code. The store answers first; a miss asks Wikidata and keeps the answer. Without the secret key
+  // (or before the migration is applied) answers are kept in this process's memory.
+  const kb = createKbStore({
+    getJson: async (url, { headers, timeoutMs }) => (await axios.get(url, { headers, timeout: timeoutMs })).data,
+    db: secretClient ? supabaseKbDb(secretClient) : null,
+  });
+  const kbSalt = randomBytes(16).toString("hex");
+  app.get(
+    "/api/kb/who-is",
+    whoIsHandler<express.Request>({
+      store: kb,
+      limiter: createProxyLimiter({ perMinute: KB_PER_MINUTE, perDay: KB_PER_DAY, globalPerDay: KB_GLOBAL_PER_DAY }),
+      sourceOf: (req) => {
+        const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "";
+        return createHash("sha256").update(`${kbSalt}|${forwarded}|${req.socket.remoteAddress ?? ""}`).digest("hex").slice(0, 16);
+      },
+    }),
+  );
+
   const liveGet = inProcessGet({ live, history });
   const snapshots = createSnapshotServer({
     get: liveGet,
