@@ -22,14 +22,17 @@ export const parsePlayers = (value: string | undefined): string[] => [
  * served cards) and the closest peers 17k, plus the season's career record, search digest and card
  * instructions, at about four characters a token. The rest is modelled.
  */
-const CALLS = {
+export const CALLS = {
   identity: { input: 300, output: 600 },
   search: { input: 1_500, output: 1_500 },
+  // The head-to-head comparison (services/peerComparison.ts): his evidence and up to six peers with
+  // no numbers, about 9,000 tokens; its follow-up resends the same prompt with the flagged pairs.
+  comparison: { input: 9_000, output: 1_500 },
   synthesis: { input: 29_000, output: 6_000 },
   traits: { input: 5_000, output: 1_800 },
 };
 
-const component = (name: string, calls: number, per: { input: number; output: number }, grounded = 0): EstimateComponent => ({
+export const component = (name: string, calls: number, per: { input: number; output: number }, grounded = 0): EstimateComponent => ({
   name,
   calls,
   inputTokens: calls * per.input,
@@ -39,7 +42,7 @@ const component = (name: string, calls: number, per: { input: number; output: nu
 
 export interface BridgeEstimate {
   expected: { components: EstimateComponent[]; total: EstimateTotals };
-  /** Every card failing validation once and every grounded call running four searches. */
+  /** Every card failing validation once, every comparison sending a reason back, and every grounded call running four searches. */
   ceiling: { components: EstimateComponent[]; total: EstimateTotals };
   prices: Prices;
 }
@@ -49,6 +52,7 @@ export function estimateBridge(players: number, prices: Prices = ASSUMED_PRICES)
     component('Cap check', 1, { input: 10, output: 1 }),
     component('Player identity (grounded)', players, CALLS.identity, players * searchesPerGrounded),
     component('Season web search (grounded)', players, CALLS.search, players * searchesPerGrounded),
+    component('Head-to-head comparison', players * synthesesEach, CALLS.comparison),
     component('Season card synthesis', players * synthesesEach, CALLS.synthesis),
     component('Strengths and weaknesses rewrite', players, CALLS.traits),
   ];

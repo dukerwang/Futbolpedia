@@ -71,6 +71,7 @@ import {
   wantsSavedDossierAccess,
 } from './dossierStore';
 import { synthesizePlayerDossier } from './dossierSynthesizer';
+import { comparePeers } from './peerComparison';
 import { getClubManager, isSameClub } from './clubManagers';
 import { attachVerifiedManager } from './profileManagerGrounding';
 import { reviseCardTraits } from './cardTraits';
@@ -736,6 +737,17 @@ const rateDossier = async (params: {
     ? Promise.resolve(null)
     : getClubManager(grounding.apiPlayer?.currentClub).catch(() => null);
 
+  // Comparison first: who was the better footballer, against each closest peer, before any number
+  // is in view. The comparisons set the range the card is written within (services/peerComparison.ts).
+  options?.onStageChange?.(`Weighing ${grounding.apiPlayer?.name || subjectName || 'him'} against his peers...`);
+  const comparison = await comparePeers({
+    subjectName: subjectName || grounding.apiPlayer?.name || 'the player',
+    subjectEvidence: grounding.foundationText,
+    task: message,
+    peers: closestPeers,
+  });
+  perf('peer comparison');
+
   const synthesized = await synthesizePlayerDossier({
     rawMessage: message,
     isHistorical: isHistorical,
@@ -747,6 +759,7 @@ const rateDossier = async (params: {
     savedDossiersBlock,
     peerLedgerBlock: synthesisPeerLedgerBlock,
     peerLedgerCards: synthesisPeerLedger,
+    peerComparisons: comparison.compared,
     priorTrajectoryBlock,
     requestedSeason: season,
     requestedEra: era,
@@ -1054,7 +1067,7 @@ export const ratePlayer = async (
  */
 export const draftPrimeRerate = async (name: string, reviewNote: string): Promise<string | PlayerProfile> => {
   const request: RatingRequest = { name, edition: 'prime' };
-  const message = `${ratingTask(request)}\n\n${reviewNote}`;
+  const message = reviewNote.trim() ? `${ratingTask(request)}\n\n${reviewNote}` : ratingTask(request);
   const route: TurnRoute = { ...routeForRating(request), rerate: true };
   await fetchSupabaseCalibratedPool();
   const context = buildTurnContext(message, route, [], []);

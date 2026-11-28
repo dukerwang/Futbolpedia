@@ -10,13 +10,13 @@ For the eight players below:
 
 | | Calls | Input tokens | Output tokens (thinking included) | Grounded searches | Cost |
 | --- | --- | --- | --- | --- | --- |
-| Expected | 33 | about 286,000 | about 79,000 | 16 | about $0.60 |
-| Ceiling | 41 | about 518,000 | about 127,000 | 64 | about $1.54 |
+| Expected | 41 | about 358,000 | about 91,000 | 16 | about $0.68 |
+| Ceiling | 57 | about 662,000 | about 151,000 | 64 | about $1.68 |
 
 The calls are one cap check, then for each player: one identity lookup (grounded), one season web
-search (grounded), one card synthesis and one strengths and weaknesses rewrite. The ceiling assumes
-every card fails validation once, so it's synthesized twice, and every grounded call runs four
-searches.
+search (grounded), one head-to-head comparison with the closest peers, one card synthesis and one
+strengths and weaknesses rewrite. The ceiling assumes every comparison sends a reason back and every
+card fails validation once, so each is made twice, and every grounded call runs four searches.
 
 The synthesis input, about 29,000 tokens, was sized on 2026-11-27 from the real prompt with 209
 served cards in the library. It grows with the library. Output tokens are modeled, not measured. The

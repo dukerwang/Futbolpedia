@@ -1,4 +1,5 @@
 import { Type } from '@google/genai';
+import { OFF_FOOTBALL_LABEL, offFootballReason, type OffFootballKind } from './reasonCheck';
 import type { PlayerProfile } from '../types';
 import { ATTRIBUTE_LABELS } from '../constants/ratingTiers';
 import { CARD_TRAIT_RULES } from '../prompts/dossierPrompt';
@@ -337,6 +338,33 @@ const takenBlock = (taken: TakenTitles): string => {
   ].join('\n');
 };
 
+/** A case for a higher or lower rating that argues from something other than football. */
+export interface DebateCase {
+  id: 'DEBATE_HIGHER' | 'DEBATE_LOWER';
+  field: 'caseForHigher' | 'caseForLower';
+  text: string;
+  kind: OffFootballKind;
+}
+
+/**
+ * The card's case for a higher and a lower rating that rest on availability, team success or fame
+ * (`reasonCheck.ts`). They go to the same call as the traits, so a card's argument about its
+ * rating is about his football.
+ */
+export function findDebateCasesToRewrite(profile: PlayerProfile): DebateCase[] {
+  const debate = profile.scoutingDebate;
+  if (!debate) return [];
+  const cases: DebateCase[] = [];
+  for (const [id, field] of [
+    ['DEBATE_HIGHER', 'caseForHigher'],
+    ['DEBATE_LOWER', 'caseForLower'],
+  ] as const) {
+    const kind = offFootballReason(debate[field]);
+    if (kind) cases.push({ id, field, text: debate[field], kind });
+  }
+  return cases;
+}
+
 /** How long the rewrite may take before the card keeps the lines it has. */
 export const TRAIT_REWRITE_TIMEOUT_MS = 15_000;
 /** The fewest weaknesses a card keeps: a drop that would go below it is ignored, and a NEW line is added to reach it. */
@@ -399,6 +427,7 @@ export function buildTraitRewritePrompt(
   items: ReviewTrait[],
   evidence: string,
   taken: TakenTitles,
+  debate: DebateCase[] = [],
 ): string {
   const marks = new Map(items.map((t) => [traitId(t), t.review === 'rewrite' ? ' [REWRITE]' : ' [CHECK]']));
   const list = (lines: string[], kind: TraitKind) =>
@@ -417,7 +446,11 @@ Playstyle: ${profile.playstyleAndRole?.playstyle?.description ?? ''}
 Strengths:
 ${list(profile.strengths ?? [], 'strength')}
 Weaknesses:
-${list(profile.weaknesses ?? [], 'weakness')}
+${list(profile.weaknesses ?? [], 'weakness')}${
+    debate.length
+      ? `\nRating debate:\n${debate.map((d) => `${d.id} [REWRITE]: ${d.field === 'caseForHigher' ? 'Case for higher' : 'Case for lower'}: ${d.text}`).join('\n')}`
+      : ''
+  }
 </card>
 <evidence>
 ${evidence.slice(0, EVIDENCE_CHARS)}
@@ -434,7 +467,11 @@ The lines marked [CHECK] are his other weaknesses. Test each against the rules: 
 <taken_lines> lists the lines already on other players' cards: the most common ones, and those at his position. No new line may make the same point as one of them, even in other words or about a different part of the pitch, unless the evidence shows it is distinctively his; then name what is his alone. A team sitting deep, crowding him or marking him tightly happens to most good players: it is his only when the evidence says how it beat him in particular.
 Set drop to true only for a weakness that breaks the rules when the evidence gives no real limitation to put in its place, and only when the card keeps two other weaknesses that meet the rules; otherwise replace it. Never replace a weakness with one another line already names.
 The card ends with at least two weaknesses. When it has fewer, add one with id NEW: a limitation particular to his game, from the card and the evidence. It can be a recurring pattern in how he plays rather than one match, as long as it is his and the evidence supports it. It names a different part of his game from the weaknesses he already has, never the same point in other words. A limitation many players at his position share may stay when the evidence shows it cost him, but never as his only weakness, so the NEW line is never that kind. Nor is it about opponents defending deep, compactly or in numbers against him: that point is already on many cards.
-Each title is two to four plain words a football fan would use, in title case; the sentences carry the detail. Keep each new line about as long as the one it replaces. Don't repeat anything the card's other lines already say, and keep every claim consistent with the card and the evidence: no figures, results or events the evidence doesn't give. Return revisions only for marked ids, and NEW.
+Each title is two to four plain words a football fan would use, in title case; the sentences carry the detail. Keep each new line about as long as the one it replaces. Don't repeat anything the card's other lines already say, and keep every claim consistent with the card and the evidence: no figures, results or events the evidence doesn't give. Return revisions only for marked ids, and NEW.${
+    debate.length
+      ? `\nThe rating debate lines marked [REWRITE] argue from ${[...new Set(debate.map((d) => OFF_FOOTBALL_LABEL[d.kind]))].join(' and ')}, which says nothing about how good a footballer he was. For each, return a revision with its id and the whole case in detail (title and consequence empty): the strongest argument from his football, in the card and the evidence, that he was ${debate.length === 2 ? 'better or worse' : debate[0].field === 'caseForHigher' ? 'better' : 'worse'} than the card says, about as long as the line it replaces.`
+      : ''
+  }
 </task>`;
 }
 
@@ -456,19 +493,21 @@ export async function reviseCardTraits(
   { written = [] }: TraitRewriteOptions = {},
 ): Promise<PlayerProfile> {
   const items = findTraitsToReview(profile, pool);
-  if (items.length === 0) return profile;
+  const debate = findDebateCasesToRewrite(profile);
+  if (items.length === 0 && debate.length === 0) return profile;
   const stock = items.filter((t) => t.review === 'rewrite');
   console.log(
     `[CardTraits] ${profile.basicInfo.name}: ` +
       (stock.length ? `rewriting ${stock.map((s) => `"${traitTitle(s.line)}"`).join(', ')}; ` : '') +
-      `checking ${items.length - stock.length} other weakness${items.length - stock.length === 1 ? '' : 'es'}`,
+      `checking ${items.length - stock.length} other weakness${items.length - stock.length === 1 ? '' : 'es'}` +
+      (debate.length ? `; rewriting ${debate.map((d) => d.field).join(' and ')}` : ''),
   );
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const result = await Promise.race([
     generateStructured<{ revisions?: TraitRevision[] }>({
       task: 'synthesis',
-      prompt: buildTraitRewritePrompt(profile, items, evidence, takenTraitTitles(profile, pool, written)),
+      prompt: buildTraitRewritePrompt(profile, items, evidence, takenTraitTitles(profile, pool, written), debate),
       schema: REVISION_SCHEMA,
     }).catch((err) => {
       console.warn('[CardTraits] Rewrite failed; keeping the card as written.', err);
@@ -482,7 +521,27 @@ export async function reviseCardTraits(
     }),
   ]);
   clearTimeout(timer);
-  return applyTraitRevisions(profile, items, result?.revisions ?? []);
+  return applyDebateRevisions(applyTraitRevisions(profile, items, result?.revisions ?? []), debate, result?.revisions ?? []);
+}
+
+/**
+ * Puts a rewritten case for a higher or lower rating in place of the one it answers. A rewrite that
+ * still argues from availability, team success or fame is ignored, and the case stays as written.
+ */
+export function applyDebateRevisions(profile: PlayerProfile, debate: DebateCase[], revisions: TraitRevision[]): PlayerProfile {
+  if (debate.length === 0 || !profile.scoutingDebate) return profile;
+  const byId = new Map(revisions.filter((r) => r && typeof r.id === 'string').map((r) => [r.id.trim(), r]));
+  const next = { ...profile.scoutingDebate };
+  for (const d of debate) {
+    const text = (byId.get(d.id)?.detail ?? '').trim();
+    if (!text) continue;
+    if (offFootballReason(text)) {
+      console.warn(`[CardTraits] ${profile.basicInfo.name}: the rewritten ${d.field} still rests on ${d.kind}; kept as written.`);
+      continue;
+    }
+    next[d.field] = text;
+  }
+  return { ...profile, scoutingDebate: next };
 }
 
 /** Puts revised lines in place of the reviewed ones they answer; anything else in the reply is ignored. */

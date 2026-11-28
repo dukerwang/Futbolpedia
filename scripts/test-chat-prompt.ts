@@ -50,12 +50,15 @@ async function test(name: string, fn: () => void | Promise<void>): Promise<void>
 
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 
-/** The hashes of the prompts as they stood before the core was split into sections. */
+/**
+ * The hashes of the prompts as they stood before the core was split into sections. `chat` and
+ * `chatWithEafc` changed on 2026-11-28 for one deliberate line (Explain the Cards' Order Honestly).
+ */
 const PINNED = {
   core: '7f1e030e3dc2ada8e55ec302121b1cde7d588e3b3bd5ae9ed4d56348cab22846',
   synthesis: '1e89aafbc31da085ba1f7376b59604cf0b68ccfc37753365058aafa6c59e8b8d',
-  chat: 'b3d05e4be56d4138504de106dc53bff9f3dd435b05ac2d0fdb1f98656ed05ea1',
-  chatWithEafc: '029ff9623763d0a89a569af404b6c3680d1d73a2962e9ca2736a80885af01d72',
+  chat: 'ea37a2363b2e80905cf0020dd76d99763f5d932c89c4a894143c79905fb0722b',
+  chatWithEafc: '177472e0b2f5b0fb22c3aa7e9a7c5b94a93b0d85a3aa68e65f41a65e7f26ce9f',
 };
 
 await test('the scouting core is byte-identical to the single string it was', () => {
@@ -69,6 +72,14 @@ await test('card synthesis reads the same system instruction as before', () => {
 await test("chat's system instruction is unchanged, with and without the EAFC directory", () => {
   assert.equal(sha(buildConversationalScoutInstruction(false)), PINNED.chat);
   assert.equal(sha(buildConversationalScoutInstruction(true)), PINNED.chatWithEafc);
+});
+
+await test("chat explains an order between carded players from the cards, never a new criterion", () => {
+  const chat = buildConversationalScoutInstruction(false);
+  assert.match(chat, /Explain the Cards' Order Honestly/);
+  assert.match(chat, /head-to-head comparisons and the reasons given/);
+  assert.match(chat, /Never introduce a criterion the cards don't state in order to defend it/);
+  assert.match(chat, /point them to Challenge on the card/);
 });
 
 await test('the sections compose the core in order, each starting with its heading', () => {
@@ -197,7 +208,8 @@ const PINS: Record<string, string> = {
   "stage past ranking": 'a6d6afd823cd8b5ab7477dd3f43ea65a9bfb968b8fb9a84dc52be8b485bde74b',
   "stage past single": 'a6d6afd823cd8b5ab7477dd3f43ea65a9bfb968b8fb9a84dc52be8b485bde74b',
   "stage past other": '89c071de1fdcec6cd7395db1ea77dbb2dc44e15e9e3a3133e864cd4abc3c0849',
-  "challenge": 'd3b2ca787c9f683300e84d96dc35684d871b9da2e7920a33f467ec71d5e44485',
+  // 2026-11-28: the placement is always filled, and a moved Overall is checked head to head.
+  "challenge": '1377d084a4818c3887835a8b1e06314eec96823220824f0caba264b7ec5604e6',
   "researchRules": 'fb114f7ce3290463980a515f8d4683133ae997dbd248c76d20a5d12194edbb37', // the who_is and team_strength lines together (2026-11-27-football-knowledge-base-design.md)
   "lockedDossiers": '3ffe99ef18557cdb462c8ba157a36603189bd3f41db0476f8a20db8cbe37992f',
   "savedDossiers": '97c351563c4a3e9f56e9f25df0be73f1876c69dab353401289bc837383d491ee',

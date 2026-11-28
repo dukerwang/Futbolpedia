@@ -49,7 +49,16 @@ import {
   todayIso,
   toBasePlayerSlug,
 } from './dossierCards';
-import { applyPeerPlacement } from './ratingPlacement';
+import { applyPeerPlacement, applyResolvedPlacement } from './ratingPlacement';
+import {
+  MIXED_PLACEMENT_NOTE,
+  buildComparisonsBlock,
+  comparisonRange,
+  placementFromComparisons,
+  saysMixed,
+  toStoredComparisons,
+  type ComparedPeer,
+} from './peerComparison';
 
 const OUTFIELD_ATTRIBUTES_SCHEMA = {
   type: Type.OBJECT,
@@ -128,7 +137,7 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
           type: Type.STRING,
           nullable: true,
           description:
-            'For prime dossiers: concise analytical explanation of why this stretch was the player at his best (his level, role and the evidence for it). For era dossiers: what defined this version of him in those seasons. Null for current players.',
+            'For prime dossiers: concise analytical explanation of why this stretch was the player at his best (his level, role and the evidence for it). For era dossiers: what defined this version of him in those seasons. Argues his football: never matches missed, durability, team trophies or fame. Null for current players.',
         },
       },
       required: ['type', 'label', 'evaluationDate', 'seasonOrEra'],
@@ -283,22 +292,24 @@ export const PLAYER_PROFILE_SYNTHESIS_SCHEMA: Record<string, unknown> = {
         },
         verdict: {
           type: Type.STRING,
-          description: '1 concise sentence evaluating data confidence and rating stability.',
+          description:
+            '1 concise sentence on how sure the card is of its rating, from the evidence and the sample. A thin sample makes it less sure; it is never an argument for a higher or lower rating.',
         },
       },
       required: ['grade', 'sampleSize', 'dataGaps', 'verdict'],
     },
     scoutingDebate: {
       type: Type.OBJECT,
-      description: 'Dialectical arguments for +2 OVR higher rating vs -2 OVR lower rating.',
+      description:
+        'The strongest football arguments that this version was a better footballer than the card says, and a worse one. Each rests on how he played: never on matches or minutes missed, injuries, durability, the trophies or results his team won, or fame.',
       properties: {
         caseForHigher: {
           type: Type.STRING,
-          description: 'Sharpest analytical and metric argument for a +2 OVR bump.',
+          description: 'The sharpest argument, from his football, that he was better than this rating.',
         },
         caseForLower: {
           type: Type.STRING,
-          description: 'Sharpest analytical and metric counter-argument for a -2 OVR discount.',
+          description: 'The sharpest argument, from his football, that he was worse than this rating.',
         },
       },
       required: ['caseForHigher', 'caseForLower'],
@@ -1043,6 +1054,12 @@ export interface SynthesizeDossierParams {
   peerLedgerBlock?: string;
   /** The cards behind peerLedgerBlock, which the model's peer placement is checked against. */
   peerLedgerCards?: PlayerProfile[];
+  /**
+   * The head-to-head comparisons with the closest peers, made before any number was in view
+   * (services/peerComparison.ts). When they allow a range, the card is written within it and they
+   * are its placement; when they contradict each other, the model places him as before.
+   */
+  peerComparisons?: ComparedPeer[];
   priorTrajectoryBlock?: string;
   /** A past season to rate instead of the player's prime ("2005-06" or a bare "2006"). */
   requestedSeason?: string | null;
@@ -1099,15 +1116,16 @@ ${params.foundationText}
 </factual_foundation>
 ${params.verifiedFactsBlock}
 ${params.priorTrajectoryBlock ?? ''}
-${params.peerLedgerBlock ?? ''}
+${params.peerLedgerBlock ?? ''}${buildComparisonsBlock(params.peerComparisons ?? [])}
 ${params.lockedDossiersBlock}
 ${params.savedDossiersBlock}
 <synthesis_instructions>
 ${temporalRules}
 - In <factual_foundation>, the live feed entries (his live season record, his club's live data and the club situation worked out from it) and his career record settle the facts they cover: his club, how often and where he has played, his numbers and his honours. A web entry that contradicts them describes another time. Lookups listed as not found, not covered or failed are unknowns: never fill them from memory, and list the ones the rating depends on in \`confidence.dataGaps\`.
 - Those records settle facts, not how good he is. The tier, Overall, peer placement and every attribute are your scouting judgment of his football: his technique, decisions, movement, physical and mental qualities, and how he shapes matches, as an expert watching him play would judge them. Numbers and honours are evidence for that judgment, read against his role, team, league and minutes, never a formula for it, and a fuller record is no reason to lean on figures more. Where the figures and the football point different ways, the football decides, and the card says why. For a prime or era window, the record shows when he played and what he produced; choose the seasons when he played his best football, which his output may or may not track.
-- Complete the \`calibration\` block first: choose the exact \`tierBand\` from Section III by how good a footballer this version of the player is (positional rank and honours are evidence, not the criterion), name 1-2 positional peers in \`peerBenchmark\`, fill \`peerPlacement\` against <calibrated_peer_ledger>, and identify \`signatureSpikes\` and \`genuineFlaws\`.
+- Complete the \`calibration\` block first: choose the exact \`tierBand\` from Section III by how good a footballer this version of the player is (positional rank and honours are evidence, not the criterion), name 1-2 positional peers in \`peerBenchmark\`, fill \`peerPlacement\` (from <peer_comparisons> when it gives a range, otherwise against <calibrated_peer_ledger>), and identify \`signatureSpikes\` and \`genuineFlaws\`.
 - Ensure \`ratings.overall\` sits inside the integer range of your chosen \`calibration.tierBand\` and agrees with \`calibration.peerPlacement\`.
+- \`scoutingDebate\`, \`version.peakContext\` and \`confidence.verdict\` argue his football. Matches or minutes missed, injuries, durability, the trophies and results his team won, and fame are never a case for a higher or lower rating; a thin sample belongs in \`confidence.grade\` and \`confidence.sampleSize\`.
 - Make the 25 attributes reflect a realistic, spiky scouting profile where \`signatureSpikes\` are high and \`genuineFlaws\` stay low.${
     params.cardName ? `\n- Set \`basicInfo.name\` = "${params.cardName}", the name football coverage commonly calls him by.` : ''
   }
@@ -1165,13 +1183,24 @@ ${temporalRules}
 
     // Enforce calibration invariants deterministically in 0ms
     profile = enforceCalibrationInvariants(raw, profile, params.isHistorical);
-    // The Overall agrees with the model's own judgment of who was the better footballer.
-    profile = applyPeerPlacement(
-      profile,
-      raw.calibration?.peerPlacement,
-      params.peerLedgerCards ?? [],
-      params.isHistorical,
-    );
+    // The Overall agrees with who was the better footballer: the head-to-head comparisons when
+    // they allow a range, else the model's own placement.
+    const compared = params.peerComparisons ?? [];
+    const placed = comparisonRange(compared)
+      ? applyResolvedPlacement(profile, placementFromComparisons(compared), params.isHistorical)
+      : null;
+    profile =
+      placed ??
+      applyPeerPlacement(profile, raw.calibration?.peerPlacement, params.peerLedgerCards ?? [], params.isHistorical);
+    if (compared.length > 0) {
+      profile = { ...profile, peerComparisons: toStoredComparisons(compared) };
+      if (!placed && profile.confidence && !saysMixed(profile.confidence.verdict)) {
+        profile.confidence = {
+          ...profile.confidence,
+          verdict: `${profile.confidence.verdict.trim()} ${MIXED_PLACEMENT_NOTE}`.trim(),
+        };
+      }
+    }
 
     const effectiveVerifiedFacts = resolveEffectiveVerifiedFacts(
       raw,
