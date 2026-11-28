@@ -1,0 +1,329 @@
+{
+  "model": "gemini-4-hydrogen",
+  "rows": [
+    {
+      "player": "Reece James",
+      "published": 90,
+      "draft": {
+        "overall": 91,
+        "window": "2020-22",
+        "comparisons": [
+          {
+            "peer": "Trent Alexander-Arnold (2018-20)",
+            "peerKey": "trent-alexander-arnold:prime:2020-07-26",
+            "judgment": "not_as_good",
+            "reason": "Alexander-Arnold's extraordinary playmaking vision, whipped early crossing, and 50-yard diagonals from deep half-spaces decided matches at a higher creative level, even though James was a stronger 1v1 defender."
+          },
+          {
+            "peer": "Andy Robertson (2018-21)",
+            "peerKey": "andy-robertson:prime:2021-05-23",
+            "judgment": "level",
+            "reason": "James matched Robertson's two-way flank impact with superior 1v1 ball-carrying, physicality, and final-third goal threat, while Robertson's relentless overlapping engine and first-time delivery were equally decisive."
+          },
+          {
+            "peer": "Patrice Evra (2007-10)",
+            "peerKey": "patrice-evra:prime:2010-05-09",
+            "judgment": "level",
+            "reason": "James's superior crossing trajectory and shooting threat balanced Evra's sharper tight-space press resistance and relentless front-foot duel snapping."
+          },
+          {
+            "peer": "Javier Zanetti (1997-00)",
+            "peerKey": "javier-zanetti:prime:2000-05-14",
+            "judgment": "not_as_good",
+            "reason": "Zanetti's unmatched linear ball-carrying under pressure, clean 1v1 ball-winning, and unbroken two-way flank control gave him greater command over matches, even if James offered a more varied final ball."
+          },
+          {
+            "peer": "Maicon Douglas Sisenando (2008-10)",
+            "peerKey": "maicon-douglas-sisenando:prime:2010-05-22",
+            "judgment": "not_as_good",
+            "reason": "Maicon's explosive straight-line power, relentless overlapping surges, and devastating ball-striking on the run broke open matches more decisively than James's more measured two-way game."
+          },
+          {
+            "peer": "Giuseppe Bergomi (1988-91)",
+            "peerKey": "giuseppe-bergomi:prime:1991-05-22",
+            "judgment": "level",
+            "reason": "James's far greater creative and goal-scoring influence in the final third balanced Bergomi's superior pure 1v1 stopping and defensive anticipation."
+          }
+        ],
+        "verdict": "High confidence in this prime rating given the substantial Premier League and Champions League sample across two consecutive seasons.",
+        "placement": {
+          "betterThan": [],
+          "levelWith": [
+            "Andy Robertson (2018-21)",
+            "Patrice Evra (2007-10)",
+            "Giuseppe Bergomi (1988-91)"
+          ],
+          "notAsGoodAs": [
+            "Trent Alexander-Arnold (2018-20)",
+            "Javier Zanetti (1997-00)",
+            "Maicon Douglas Sisenando (2008-10)"
+          ]
+        }
+      }
+    },
+    {
+      "player": "Maicon Douglas Sisenando",
+      "published": 91,
+      "draft": {
+        "overall": 92,
+        "window": "2008-10",
+        "comparisons": [
+          {
+            "peer": "Trent Alexander-Arnold (2018-20)",
+            "peerKey": "trent-alexander-arnold:prime:2020-07-26",
+            "judgment": "better",
+            "reason": "While Alexander-Arnold possessed superior deep-lying passing range and set-piece delivery, Maicon combined high-level final-third production with explosive ball-carrying, a lethal shooting threat, and far greater 1v1 defensive security."
+          },
+          {
+            "peer": "Andy Robertson (2018-21)",
+            "peerKey": "andy-robertson:prime:2021-05-23",
+            "judgment": "better",
+            "reason": "Maicon matched Robertson's relentless touchline engine while offering far superior 1v1 dribbling, physical power, and a genuine goal-scoring threat from distance and late runs."
+          },
+          {
+            "peer": "Patrice Evra (2007-10)",
+            "peerKey": "patrice-evra:prime:2010-05-09",
+            "judgment": "better",
+            "reason": "Maicon brought greater physical authority, superior crossing quality, and a far more dangerous shooting threat in the final third than Evra, while matching his two-way flank dominance."
+          },
+          {
+            "peer": "Javier Zanetti (1997-00)",
+            "peerKey": "javier-zanetti:prime:2000-05-14",
+            "judgment": "level",
+            "reason": "Maicon offered more explosive final-third incision and goal threat against settled defences, but Zanetti countered with unmatched transition ball-retention and cleaner 1v1 defensive security."
+          },
+          {
+            "peer": "Giuseppe Bergomi (1988-91)",
+            "peerKey": "giuseppe-bergomi:prime:1991-05-22",
+            "judgment": "level",
+            "reason": "Bergomi was the superior pure defensive stopper and 1v1 marker, whereas Maicon was a far more expansive, game-breaking attacking force from the right flank."
+          },
+          {
+            "peer": "Reece James (2020-22)",
+            "peerKey": "reece-james:prime:2022-05-22",
+            "judgment": "better",
+            "reason": "Both combined physical power with elite ball-striking, but Maicon sustained a more relentless box-to-box engine and was more dynamic when carrying the ball at pace in open space."
+          }
+        ],
+        "verdict": "High confidence in the overall tier based on extensive top-flight and Champions League minutes, though his placement among the closest peers was mixed.",
+        "placement": {
+          "betterThan": [
+            "Andy Robertson (2018-21)",
+            "Patrice Evra (2007-10)",
+            "Javier Zanetti (1997-00)",
+            "Giuseppe Bergomi (1988-91)",
+            "Reece James (2020-22)"
+          ],
+          "levelWith": [
+            "Trent Alexander-Arnold (2018-20)",
+            "Lúcio (2008-10)"
+          ],
+          "notAsGoodAs": [
+            "Cafu (1999-02)",
+            "Dani Alves (2009-12)",
+            "Philipp Lahm (2011-14)"
+          ]
+        }
+      }
+    },
+    {
+      "player": "Andy Robertson",
+      "published": 91,
+      "draft": {
+        "overall": 90,
+        "window": "2018-21",
+        "comparisons": [
+          {
+            "peer": "Trent Alexander-Arnold (2018-20)",
+            "peerKey": "trent-alexander-arnold:prime:2020-07-26",
+            "judgment": "not_as_good",
+            "reason": "While Robertson offered superior defensive recovery and relentless overlapping, Alexander-Arnold's generational passing range, set-piece precision, and deep-lying playmaking shaped matches at a higher creative level."
+          },
+          {
+            "peer": "Patrice Evra (2007-10)",
+            "peerKey": "patrice-evra:prime:2010-05-09",
+            "judgment": "not_as_good",
+            "reason": "Robertson's whipped crossing and stamina were elite, but Evra's tight-space press resistance, interior combination play, and front-foot 1v1 duel dominance made him the more complete two-way left-back."
+          },
+          {
+            "peer": "Javier Zanetti (1997-00)",
+            "peerKey": "javier-zanetti:prime:2000-05-14",
+            "judgment": "not_as_good",
+            "reason": "Although Robertson delivered more incisive final-third crosses, Zanetti's unstoppable linear ball-carrying, physical retention, and imperious 1v1 defending gave him greater control over his flank."
+          },
+          {
+            "peer": "Maicon Douglas Sisenando (2008-10)",
+            "peerKey": "maicon-douglas-sisenando:prime:2010-05-22",
+            "judgment": "not_as_good",
+            "reason": "Robertson matched Maicon's relentless engine, but Maicon's explosive physical overmatch, ball-striking on the run, and goal threat allowed him to break open matches more decisively."
+          },
+          {
+            "peer": "Giuseppe Bergomi (1988-91)",
+            "peerKey": "giuseppe-bergomi:prime:1991-05-22",
+            "judgment": "level",
+            "reason": "Bergomi's elite 1v1 stopping and defensive anticipation at right-back balance out Robertson's relentless two-way overlapping, pressing, and high-volume chance creation."
+          },
+          {
+            "peer": "Reece James (2020-22)",
+            "peerKey": "reece-james:prime:2022-05-22",
+            "judgment": "not_as_good",
+            "reason": "Robertson's aerobic engine and crossing volume were formidable, but James's superior 1v1 physicality, press resistance, and penalty-box ball-striking made him more dominant in both boxes."
+          }
+        ],
+        "verdict": "High-confidence assessment backed by three full seasons of elite domestic and European football, though his placement among the closest peers was mixed.",
+        "placement": {
+          "betterThan": [
+            "Gary Neville (1998-01)",
+            "John Arne Riise (2004-07)"
+          ],
+          "levelWith": [
+            "Reece James (2020-22)",
+            "Nuno Mendes",
+            "Fabinho (2018-21)"
+          ],
+          "notAsGoodAs": [
+            "Patrice Evra (2007-10)",
+            "Trent Alexander-Arnold (2018-20)",
+            "Ashley Cole (2003-06)"
+          ]
+        }
+      }
+    },
+    {
+      "player": "Patrice Evra",
+      "published": 91,
+      "draft": {
+        "overall": 91,
+        "window": "2007-10",
+        "comparisons": [
+          {
+            "peer": "Trent Alexander-Arnold (2018-20)",
+            "peerKey": "trent-alexander-arnold:prime:2020-07-26",
+            "judgment": "level",
+            "reason": "Evra offered far superior 1v1 defending, recovery pace, and two-way balance, which offsets Alexander-Arnold's generational deep-lying playmaking and crossing range."
+          },
+          {
+            "peer": "Andy Robertson (2018-21)",
+            "peerKey": "andy-robertson:prime:2021-05-23",
+            "judgment": "level",
+            "reason": "Robertson's relentless counter-pressing and early touchline crossing are matched by Evra's superior close control, 1v1 dribbling in tight spaces, and defensive composure."
+          },
+          {
+            "peer": "Javier Zanetti (1997-00)",
+            "peerKey": "javier-zanetti:prime:2000-05-14",
+            "judgment": "not_as_good",
+            "reason": "Zanetti's unmatched physical ball-retention, linear carrying power, and 1v1 defensive lockdown gave him greater control over his entire flank than Evra."
+          },
+          {
+            "peer": "Maicon Douglas Sisenando (2008-10)",
+            "peerKey": "maicon-douglas-sisenando:prime:2010-05-22",
+            "judgment": "not_as_good",
+            "reason": "Maicon's explosive physical power, dynamic ball-striking on the run, and match-winning final-third incision outweighed Evra's superior defensive discipline."
+          },
+          {
+            "peer": "Giuseppe Bergomi (1988-91)",
+            "peerKey": "giuseppe-bergomi:prime:1991-05-22",
+            "judgment": "level",
+            "reason": "Bergomi's uncompromising 1v1 defensive stopping and anticipation balance out Evra's far greater overlapping threat and progressive link-up play."
+          },
+          {
+            "peer": "Reece James (2020-22)",
+            "peerKey": "reece-james:prime:2022-05-22",
+            "judgment": "level",
+            "reason": "Evra's superior agility, recovery speed, and tight-space combination play match James's greater upper-body power, press resistance, and penalty-box ball-striking."
+          }
+        ],
+        "verdict": "High confidence in the 91 rating based on an extensive elite-level sample, though his placement among the closest peers was mixed.",
+        "placement": {
+          "betterThan": [
+            "Reece James (2020-22)",
+            "Gary Neville (1998-01)",
+            "John Arne Riise (2004-07)"
+          ],
+          "levelWith": [
+            "Andy Robertson (2018-21)",
+            "Javier Zanetti (1997-00)",
+            "Maicon Douglas Sisenando (2008-10)",
+            "Giuseppe Bergomi (1988-91)"
+          ],
+          "notAsGoodAs": [
+            "Trent Alexander-Arnold (2018-20)",
+            "Ashley Cole (2003-06)",
+            "Roberto Carlos (1999-02)",
+            "Paolo Maldini (1993-96)"
+          ]
+        }
+      }
+    },
+    {
+      "player": "Trent Alexander-Arnold",
+      "published": 92,
+      "draft": {
+        "overall": 91,
+        "window": "2019-22",
+        "comparisons": [
+          {
+            "peer": "Ashley Cole (2003-06)",
+            "peerKey": "ashley-cole:prime:2006-05-17",
+            "judgment": "not_as_good",
+            "reason": "Cole's lockdown 1v1 defending, recovery speed, and two-way completeness outbalance Alexander-Arnold's superior passing range and set-piece creation, which came with notable defensive awareness flaws."
+          },
+          {
+            "peer": "Andy Robertson (2018-21)",
+            "peerKey": "andy-robertson:prime:2021-05-23",
+            "judgment": "better",
+            "reason": "Alexander-Arnold's generational passing range, vision, and set-piece delivery made him a far more decisive primary playmaker than Robertson's relentless overlapping and first-time crossing."
+          },
+          {
+            "peer": "Patrice Evra (2007-10)",
+            "peerKey": "patrice-evra:prime:2010-05-09",
+            "judgment": "level",
+            "reason": "Evra's superior 1v1 defending, press resistance, and two-way balance offset Alexander-Arnold's unmatched creative passing and chance creation from deep."
+          },
+          {
+            "peer": "Javier Zanetti (1997-00)",
+            "peerKey": "javier-zanetti:prime:2000-05-14",
+            "judgment": "not_as_good",
+            "reason": "Zanetti's imperious 1v1 ball-winning, physical ball-carrying, and unbroken two-way control outweigh Alexander-Arnold's superior final-third passing and set-piece delivery."
+          },
+          {
+            "peer": "Maicon Douglas Sisenando (2008-10)",
+            "peerKey": "maicon-douglas-sisenando:prime:2010-05-22",
+            "judgment": "level",
+            "reason": "Maicon's explosive physical power, ball-striking on the run, and goal threat match the match-shaping impact of Alexander-Arnold's elite playmaking and vision."
+          },
+          {
+            "peer": "Giuseppe Bergomi (1988-91)",
+            "peerKey": "giuseppe-bergomi:prime:1991-05-22",
+            "judgment": "level",
+            "reason": "Bergomi's uncompromising 1v1 defensive lockdown and anticipation balance out Alexander-Arnold's far greater creative influence and progressive passing in possession."
+          }
+        ],
+        "verdict": "High-confidence rating backed by over 130 elite senior appearances across domestic title races and deep Champions League runs.",
+        "placement": {
+          "betterThan": [
+            "Andy Robertson (2018-21)"
+          ],
+          "levelWith": [
+            "Patrice Evra (2007-10)",
+            "Maicon Douglas Sisenando (2008-10)",
+            "Giuseppe Bergomi (1988-91)"
+          ],
+          "notAsGoodAs": [
+            "Ashley Cole (2003-06)",
+            "Javier Zanetti (1997-00)"
+          ]
+        }
+      }
+    }
+  ],
+  "usage": {
+    "calls": 26,
+    "inputTokens": 247783,
+    "outputTokens": 20977,
+    "thinkingTokens": 26343,
+    "cachedTokens": 0,
+    "searches": 30,
+    "cacheHits": 0
+  }
+}
