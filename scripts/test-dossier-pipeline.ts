@@ -27,7 +27,7 @@ interface Scenario {
   name?: string;
   club?: string;
   /** API-Football's record for the player, if it has one. */
-  apiPlayer?: { name: string; currentClub: string; age?: number };
+  apiPlayer?: { name: string; currentClub: string; age?: number; position?: string };
   /** The turn classifier's answer, for messages no fast path routes. */
   route?: { intent: string; targetPlayers: string[] };
   /** What /api/live/player and /api/history/player answer; unset, they 404. */
@@ -124,6 +124,7 @@ function geminiReply(body: any): string {
     });
   }
   if (structured && prompt.includes('synthesis_instructions')) return JSON.stringify(fakeProfile(prompt));
+  if (structured && prompt.includes('<active_dossier>')) return JSON.stringify({ replyProse: 'The rating holds.', revisedDossier: false });
   if (structured && prompt.includes('Rewrite the Latest Update')) {
     return JSON.stringify({ latestUpdate: 'Fresh news line.' });
   }
@@ -520,6 +521,105 @@ async function main() {
     assert.doesNotMatch(prompt.slice(prompt.indexOf('<closest_peers>')), /Peer Keeper[\s\S]*<\/closest_peers>/);
     assert.doesNotMatch(prompt, /Weakness of Andrés Iniesta/);
     assert.match(prompt, /their ratings stay as they are/);
+  });
+
+  // The rating ledger and the closest peers, as the synthesis or challenge prompt carries them.
+  const blockOf = (prompt: string, tag: string) => prompt.match(new RegExp(`<${tag}>(?:\\\\n)([\\s\\S]*?)</${tag}>`))?.[1] ?? '';
+  const seeded = async () => {
+    const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
+    const { CALIBRATION_EPOCH_MS, CURRENT_FORM_RULES_EPOCH_MS } = await import('../services/dossierCache');
+    const card = (name: string, type: 'current' | 'prime' | 'era', createdAt: number, overall = 88): PlayerProfile => {
+      const date = type === 'current' ? new Date(createdAt).toISOString().slice(0, 10) : '2010-05-27';
+      return {
+        ...sanitizeProfileData({
+          basicInfo: { name, age: 27, nationality: 'Spain', club: 'FC Barcelona', position: 'Central Midfielder' },
+          ratings: { overall, potential: overall },
+        }),
+        evaluationDate: date,
+        createdAt,
+        version: { id: `${name}-${type}`, type, label: type, evaluationDate: date, seasonOrEra: type === 'current' ? '2026-27' : '2008-10' },
+      };
+    };
+    return {
+      superseded: card('Stale Current', 'current', CURRENT_FORM_RULES_EPOCH_MS - 5 * 86_400_000, 77),
+      fresh: card('Fresh Current', 'current', CURRENT_FORM_RULES_EPOCH_MS + 1000, 86),
+      primePeer: card('Peer Prime', 'prime', CALIBRATION_EPOCH_MS + 1, 93),
+      eraPeer: card('Peer Era', 'era', CALIBRATION_EPOCH_MS + 1, 89),
+      // The rated player's own earlier prime, which says where he plays.
+      ownPrime: card('Andrés Iniesta', 'prime', CALIBRATION_EPOCH_MS + 1, 94),
+      rerated: card('Stale Current', 'current', CURRENT_FORM_RULES_EPOCH_MS + 2000, 84),
+    };
+  };
+
+  await test('a current card from before the current form rules is no peer of any rating, and chat still reads it', async () => {
+    const { superseded, fresh, primePeer, rerated } = await seeded();
+    const { selectPositionalPeerLedger, selectClosestPeers, mergeAllCalibratedDossiers, isQuarantinedCurrentCard } = await import('../services/dossierStore');
+    scenario = { status: 'ACTIVE', search: () => '- [2026-10-20] Recent form digest.', name: 'Ruben Akinde', apiPlayer: { name: 'Ruben Akinde', currentClub: 'FC Barcelona', position: 'Midfielder' } };
+    await rate('Rate Ruben Akinde right now', [superseded, fresh, primePeer]);
+    const prompt = synthesisPrompt();
+    for (const tag of ['calibrated_peer_ledger', 'closest_peers']) {
+      assert.match(blockOf(prompt, tag), /Fresh Current/, tag);
+      assert.match(blockOf(prompt, tag), /Peer Prime/, tag);
+      assert.doesNotMatch(blockOf(prompt, tag), /Stale Current/, tag);
+    }
+    // Chat's cards and its sample keep it.
+    const saved = [superseded, fresh, primePeer];
+    const has = (cards: PlayerProfile[]) => cards.some((p) => p.basicInfo.name === 'Stale Current');
+    assert.ok(has(mergeAllCalibratedDossiers(saved, [])));
+    assert.ok(has(selectPositionalPeerLedger(saved, [], { message: 'how good is he' })));
+    assert.ok(!has(selectPositionalPeerLedger(saved, [], { wholeLibrary: true })));
+    assert.ok(!has(selectClosestPeers(saved, { position: 'Central Midfielder' })));
+    // A challenge restamps a revision without rating him again, so it stays out.
+    assert.ok(isQuarantinedCurrentCard({ ...superseded, createdAt: Date.now(), revision: { baseCardKey: 'k', revisedAt: Date.now() } }));
+    // Re-rated, the same player is a peer again.
+    assert.ok(has(selectPositionalPeerLedger([superseded, rerated], [], { wholeLibrary: true })));
+  });
+
+  await test('a prime rating reads only historical cards, and fewer closest peers rather than a current one', async () => {
+    const { superseded, fresh, primePeer, eraPeer, ownPrime } = await seeded();
+    scenario = {
+      status: 'RETIRED',
+      search: () => '- Summary of the player.',
+      // A current card named in the placement isn't in the ledger, so it holds the card to nothing.
+      placement: { betterThan: [], levelWith: ['Fresh Current'], notAsGoodAs: ['Peer Prime [Prime 2008-10]'] },
+    };
+    const card = await rate('Rate prime Andrés Iniesta', [ownPrime, superseded, fresh, primePeer, eraPeer]);
+    const prompt = synthesisPrompt();
+    assert.match(blockOf(prompt, 'calibrated_peer_ledger'), /Peer Prime/);
+    assert.match(blockOf(prompt, 'calibrated_peer_ledger'), /Peer Era/);
+    assert.match(blockOf(prompt, 'closest_peers'), /Peer Prime/);
+    for (const tag of ['calibrated_peer_ledger', 'closest_peers']) {
+      assert.doesNotMatch(blockOf(prompt, tag), /Stale Current|Fresh Current|Current Form/, tag);
+    }
+    // Every ledger line is a historical card, whatever earlier tests left in the shared pool.
+    const lines = blockOf(prompt, 'calibrated_peer_ledger').split('\\n').filter((l) => l.startsWith('- '));
+    assert.ok(lines.length >= 2 && lines.every((l) => /\[(?:Prime|Era|Season) /.test(l)), lines.join('\n'));
+    assert.equal(card.ratings.overall, 91);
+    assert.deepEqual(card.peerPlacement?.levelWith, []);
+
+    // With too few historical peers at his position it reads fewer, never a current card instead.
+    const { ratingPeers, selectClosestPeers, CLOSEST_PEER_CARDS } = await import('../services/dossierStore');
+    const few = selectClosestPeers(ratingPeers([superseded, fresh, primePeer, eraPeer], true), { position: 'Central Midfielder', centre: 86 });
+    assert.ok(few.length < CLOSEST_PEER_CARDS);
+    assert.deepEqual(few.map((p) => p.basicInfo.name), ['Peer Prime', 'Peer Era']);
+    assert.deepEqual(ratingPeers([superseded, fresh], true), []);
+  });
+
+  await test('a challenge on a prime places it against historical cards only', async () => {
+    const { superseded, fresh, primePeer, eraPeer } = await seeded();
+    const { getCardKey } = await import('../services/dossierStore');
+    const target: PlayerProfile = { ...primePeer, basicInfo: { ...primePeer.basicInfo, name: 'Challenged Prime' } };
+    scenario = { status: 'RETIRED', search: () => '- Summary.', route: { intent: 'challenge_or_revise', targetPlayers: ['Challenged Prime'] } };
+    quiet();
+    try {
+      await sendMessageToAI('I think he is rated too low', [], undefined, [target], [superseded, fresh, eraPeer], { challengeCardKey: getCardKey(target) });
+    } finally {
+      loud();
+    }
+    const prompt = calls.find((c) => c.structured && c.prompt.includes('<active_dossier>'))?.prompt ?? '';
+    assert.match(blockOf(prompt, 'calibrated_peer_ledger'), /Peer Era/);
+    assert.doesNotMatch(blockOf(prompt, 'calibrated_peer_ledger'), /Stale Current|Fresh Current/);
+    assert.doesNotMatch(blockOf(prompt, 'closest_peers'), /Stale Current|Fresh Current/);
   });
 
   await test("a prime card's Overall agrees with its peer placement", async () => {

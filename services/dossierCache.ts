@@ -57,6 +57,14 @@ export const isSupabaseReady = () => !!supabase;
 export const CALIBRATION_EPOCH_MS = Date.parse('2026-10-20T21:15:00Z');
 
 /**
+ * A change of rules, not of scale: when the 12-month current form window reached `main`. A current
+ * card rated before it was rated without same-position peers, with injuries counted and on a few
+ * months of football, so no rating reads it as a peer (`isQuarantinedCurrentCard` in
+ * `dossierLedger.ts`). It is still served everywhere else, and re-rating it ends its quarantine.
+ */
+export const CURRENT_FORM_RULES_EPOCH_MS = Date.parse('2026-11-27T23:41:04-05:00');
+
+/**
  * Whether a card was rated on the current scale. Uses the card's own creation stamp, falling back
  * to its row time, because re-sharing an old card gives its row a fresh timestamp. Cards rated
  * before the recalibration must never feed trajectory memory, the Hub, or the shared store: their
