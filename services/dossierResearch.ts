@@ -1,7 +1,7 @@
-import { getCurrentSeasonInfo } from './aiClient';
 import { liveClubSnapshots, type SnapshotSource } from './clubSnapshots';
+import { formWindowFor, todayIso } from './dossierCards';
 import { eraEntry, liveEraSnapshots, type EraSnapshotSource } from './eraSnapshots';
-import { addEvidence, emptyLedger, formatLedger, seasonStartDate, type EvidenceLedger } from './evidenceLedger';
+import { addEvidence, emptyLedger, formatLedger, type EvidenceLedger } from './evidenceLedger';
 import {
   executeCall,
   fileOutcomes,
@@ -15,10 +15,11 @@ import { applyStory, deriveClubCore, formatClubSituation } from './situationSnap
 /**
  * The facts a dossier is rated from, gathered with the chat research's tools and filed in an
  * evidence ledger, so a card reads the same live feeds and history routes a chat answer does and
- * knows which lookups came back empty. A current card reads the player's live season record, his
- * club's recent XIs (worked into a first-choice XI, with the club's stored snapshot story when
- * there is one) and the web searches; a past version reads his career record, the web search, and
- * a stored era snapshot for a requested season. No model call beyond the searches, and nothing is
+ * knows which lookups came back empty. A current card rates the last 12 months, so it reads the
+ * player's live season record, his career record (the seasons before this one, last season among
+ * them), his club's recent XIs (worked into a first-choice XI, with the club's stored snapshot
+ * story when there is one) and the web searches; a past version reads his career record, the web
+ * search, and a stored era snapshot for a requested season. No model call beyond the searches, and nothing is
  * built: snapshots are read only when someone has already stored them.
  */
 
@@ -58,8 +59,8 @@ const byDeadline = <T>(p: Promise<T>, deadline: Promise<void>, fallback: T): Pro
 
 /** The ledger as the synthesis prompt's <factual_foundation> reads it, with the club's situation first. */
 export function formatDossierResearch(research: DossierResearch, options: { current: boolean }): string {
-  const { seasonStartYear } = getCurrentSeasonInfo();
-  const ledger = formatLedger(research.ledger, options.current ? { seasonStart: seasonStartDate(seasonStartYear) } : {});
+  // A current card flags only the sources from before the window it rates (see formWindowFor).
+  const ledger = formatLedger(research.ledger, options.current ? { windowStart: formWindowFor(todayIso()).from } : {});
   return [
     research.clubSituation &&
       `[CLUB SITUATION — worked out in code from the live club data below: who has started where]\n${research.clubSituation}`,
@@ -69,7 +70,7 @@ export function formatDossierResearch(research: DossierResearch, options: { curr
     .join('\n\n');
 }
 
-/** A current card's facts: his live season, his club's live data and situation, and the searches. */
+/** A current card's facts: his live season and career records, his club's live data and situation, and the searches. */
 export async function researchCurrentPlayer(args: {
   name: string;
   searches: string[];
@@ -80,9 +81,11 @@ export async function researchCurrentPlayer(args: {
 }): Promise<DossierResearch> {
   const deps = args.deps ?? liveDossierResearch();
   const playerCall: ResearchCall = { tool: 'player_season', subject: args.name };
+  const careerCall: ResearchCall = { tool: 'player_career', subject: args.name };
   const searchCalls: ResearchCall[] = args.searches.map((subject) => ({ tool: 'web_search', subject }));
 
   const player = executeCall(playerCall, deps.tools);
+  const career = executeCall(careerCall, deps.tools);
   const clubName = player.then(async (o) => o.result?.team ?? (await args.registeredClub.catch(() => null)) ?? null);
   const club = clubName.then((name) => (name ? executeCall({ tool: 'club_recent_team', subject: name }, deps.tools) : null));
   const snapshot = clubName.then((name) =>
@@ -91,8 +94,9 @@ export async function researchCurrentPlayer(args: {
   const searches = await Promise.all(searchCalls.map((c) => executeCall(c, deps.tools)));
 
   const deadline = sleep(args.graceMs ?? LIVE_GRACE_MS);
-  const [playerOutcome, name, clubOutcome, stored] = await Promise.all([
+  const [playerOutcome, careerOutcome, name, clubOutcome, stored] = await Promise.all([
     byDeadline(player, deadline, TOO_SLOW),
+    byDeadline(career, deadline, TOO_SLOW),
     byDeadline(clubName, deadline, null),
     byDeadline<ToolOutcome | null | undefined>(club, deadline, undefined),
     byDeadline(snapshot, deadline, null),
@@ -104,6 +108,8 @@ export async function researchCurrentPlayer(args: {
     calls.push({ tool: 'club_recent_team', subject: name });
     outcomes.push(clubOutcome ?? TOO_SLOW);
   }
+  calls.push(careerCall);
+  outcomes.push(careerOutcome);
   const ledger = fileOutcomes(emptyLedger(), [...calls, ...searchCalls], [...outcomes, ...searches]);
 
   const report = clubOutcome?.result?.club;

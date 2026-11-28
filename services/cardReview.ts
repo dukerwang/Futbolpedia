@@ -20,6 +20,7 @@ import {
   toDossierCardSlug,
   toVersionedSlug,
 } from './dossierCards';
+import { positionGroups } from './dossierLedger';
 import { eraEntry, normalizePeriod, rowToSnapshot as eraRowToSnapshot, type EraRow } from './eraSnapshots';
 import { samePlayerName } from './liveFootball';
 import { placementRange, resolvePlacement } from './ratingPlacement';
@@ -29,8 +30,9 @@ import type { DisagreementHit, DisagreementPath } from './cardDisagreements';
 /**
  * Card review: the scout's day for players. Code finds the cards whose facts or rating no longer
  * hold (current cards past their window, current cards whose situation moved, historical cards
- * whose data gaps a stored record now covers, and placements that contradict each other), the
- * day's planning call chooses which to act on, and code carries it out under the card rules:
+ * whose data gaps a stored record now covers, placements that contradict each other, and positions
+ * where the best current card sits below the whole recent historical scale), the day's planning
+ * call chooses which to act on, and code carries it out under the card rules:
  *
  * - `rerate_current` runs the dossier pipeline for a current card past its window, and the new
  *   card publishes exactly as a visitor's request would.
@@ -69,6 +71,12 @@ export const MAX_WINDOW_SEASONS = 3;
 export const MIN_WINDOW_SEASONS = 2;
 /** A card rating him at least an everyday starter is contradicted by a first-choice XI without him. */
 export const STARTER_MIN_OVERALL = RATING_TIERS.find((t) => t.id === '80_83_QUALITY_STARTER')!.min;
+/** A historical card is on the recent scale when its window ended within this many years. */
+export const RECENT_HISTORICAL_YEARS = 15;
+/** A position is checked for a calibration gap only with this many current cards: one card is the best by default. */
+export const GAP_MIN_CURRENT_CARDS = 2;
+/** The most historical cards a calibration gap lists; it also counts them all. */
+export const GAP_CARDS_LISTED = 8;
 /** A disagreement pair enters the signals with at least this many counted reports (each source once a day). */
 export const DISAGREEMENT_MIN_REPORTS = 2;
 /** How long a re-rated current card is waited for: the pipeline publishes without awaiting the write. */
@@ -281,6 +289,81 @@ export function findCoherence(pool: PlayerProfile[], cap: number = CARD_LIST_CAP
 }
 
 // ---------------------------------------------------------------------------------------------
+// Calibration gaps
+
+/** The position groups a rating's closest peers are picked in (positionGroups), as the signals name them. */
+const POSITION_GROUP_NAMES: Record<string, string> = {
+  gk: 'Goalkeeper',
+  cb: 'Centre-Back',
+  fb: 'Full-Back and Wing-Back',
+  dm: 'Defensive Midfielder',
+  cm: 'Central Midfielder',
+  am: 'Attacking Midfielder',
+  wide: 'Winger and Wide Midfielder',
+  cf: 'Centre Forward',
+};
+
+export interface CalibrationGap {
+  position: string;
+  /** The best current card at the position. */
+  current: CardRef;
+  /** The day its window ends and it can be re-rated. */
+  windowEnds: string;
+  /** Other players' recent prime, era and season cards there, all rated above it: the nearest first. */
+  above: CardRef[];
+  /** How many there are, listed or not. */
+  recent: number;
+}
+
+/** The day a historical card's window closed: 30 June after its last split season, or its calendar year's end. */
+const windowClosed = (card: PlayerProfile): string | null => {
+  const text = card.version?.seasonOrEra?.trim();
+  const span = seasonSpan(text);
+  if (!text || !span) return null;
+  return /^\d{4}\s*[-/–]/.test(text) ? `${span[1] + 1}-06-30` : `${span[1]}-12-31`;
+};
+
+/**
+ * Finds, by code, the positions where current cards sit below the recent historical scale: the
+ * best current card at a position (grouped as closest peers are, so full-backs on either flank are
+ * one position) rated below every other player's prime, era and season card there whose window
+ * ended in the last RECENT_HISTORICAL_YEARS. A position with fewer than GAP_MIN_CURRENT_CARDS
+ * current cards isn't checked: a low lone card says the library is missing players, nothing about
+ * how current cards are rated. Tied best cards are each reported. A gap is a figure about the
+ * pool: nothing here changes a rating.
+ */
+export function findCalibrationGaps(pool: PlayerProfile[], nowMs: number, cap: number = CARD_LIST_CAP): CalibrationGap[] {
+  const cutoff = new Date(nowMs);
+  cutoff.setUTCFullYear(cutoff.getUTCFullYear() - RECENT_HISTORICAL_YEARS);
+  const since = cutoff.toISOString().slice(0, 10);
+  const rated = pool.filter((p) => (Number(p.ratings?.overall) || 0) > 0);
+  const recent = rated.filter((p) => isPrimeCard(p) && (windowClosed(p) ?? '') >= since);
+  const gaps: CalibrationGap[] = [];
+  for (const [group, position] of Object.entries(POSITION_GROUP_NAMES)) {
+    const here = (p: PlayerProfile) => positionGroups(p.basicInfo?.position).has(group);
+    const current = rated.filter((p) => !isPrimeCard(p) && here(p));
+    if (current.length < GAP_MIN_CURRENT_CARDS) continue;
+    const best = Math.max(0, ...current.map((p) => p.ratings.overall));
+    const historical = recent.filter(here);
+    for (const card of current.filter((p) => p.ratings.overall === best)) {
+      const base = toBasePlayerSlug(card.basicInfo.name);
+      // His own historical cards are another version of him, not the scale he is read against.
+      const others = historical.filter((p) => toBasePlayerSlug(p.basicInfo.name) !== base);
+      const windowEnds = windowEndOf(card);
+      if (!windowEnds || others.length === 0 || others.some((p) => p.ratings.overall <= best)) continue;
+      gaps.push({
+        position,
+        current: refOf(card),
+        windowEnds,
+        above: [...others].sort((a, b) => a.ratings.overall - b.ratings.overall).slice(0, GAP_CARDS_LISTED).map(refOf),
+        recent: others.length,
+      });
+    }
+  }
+  return gaps.slice(0, cap);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Signals
 
 /** A stored record that covers a club season or a player's window, and when it was built. */
@@ -301,7 +384,7 @@ export interface ExpiredCard {
   evaluated: string;
   days: number;
   asked: number;
-  /** Flagged as moved while inside its window, and queued for re-rating on the day the window ended. */
+  /** Flagged while inside its window (see queuedFromJournal), and queued for re-rating on the day the window ended. */
   queued: boolean;
   queuedReason?: string;
 }
@@ -351,6 +434,8 @@ export interface CardReviewSignals {
   coherence: Coherence;
   /** Absent on journal rows written before disagreements were counted. */
   disagreements?: DisagreementPair[];
+  /** Absent on journal rows written before calibration gaps were reported. */
+  calibrationGaps?: CalibrationGap[];
 }
 
 export interface CardReviewSources {
@@ -362,7 +447,7 @@ export interface CardReviewSources {
   clubXi(club: string): Promise<{ club: string; asOf: string; names: string[] } | null>;
   /** The stored records: era snapshots and the history cache. */
   coverage(): Promise<Coverage[]>;
-  /** Players flagged as moved in the last month's journal rows, with why and when. */
+  /** Current cards the last month's journal rows flagged inside their window, with why and when. */
   queued(): Promise<{ player: string; reason: string; day: string }[]>;
   /** The server's tally of card order disagreements; absent where nothing counts them. */
   disagreements?(): DisagreementHit[] | Promise<DisagreementHit[]>;
@@ -536,6 +621,7 @@ export async function gatherCardSignals(
     historicalGaps: historicalGaps.slice(0, CARD_LIST_CAP),
     coherence: findCoherence(pool),
     disagreements: findDisagreements(hits, pool),
+    calibrationGaps: findCalibrationGaps(pool, nowMs),
   };
 }
 
@@ -545,7 +631,7 @@ const refText = (r: CardRef) => `${r.player} (${r.edition}${r.window ? `, ${r.wi
 export function formatCardSignals(s: CardReviewSignals): string {
   const list = (lines: string[]) => (lines.length ? lines.map((l) => `- ${l}`).join('\n') : 'none');
   const asked = (n: number) => (n > 0 ? `asked ${n} times` : 'not asked about');
-  return `Current cards whose ${CARD_REFRESH_DAYS}-day rating window has closed, so they can be re-rated (queued ones were flagged as moved inside their window):
+  return `Current cards whose ${CARD_REFRESH_DAYS}-day rating window has closed, so they can be re-rated (queued ones were flagged inside their window, for the reason given):
 ${list(s.expiredCurrent.map((c) => `${c.player} (${c.club}): rated ${c.evaluated}, ${c.days} days ago; ${asked(c.asked)}${c.queued ? `; queued: ${c.queuedReason}` : ''}`))}
 
 Current cards inside their window whose situation moved (only the Latest Update can change before the window ends; each is queued for re-rating that day):
@@ -562,6 +648,9 @@ ${list(s.coherence.cycles.map((c) => `${c.cards.map(refText).join(' > ')} > back
 
 Pairs of cards that answers ordered the other way before the cards settled the order (counted reports, each source once a day; only the counts were kept; either card may be the one out of place; a current card here can be re-rated only once its window ends, and is queued for that day):
 ${list((s.disagreements ?? []).map((d) => `answers put ${refText(d.lower)} above ${refText(d.higher)}: ${d.reports} reports on ${d.days} days, ${d.firstDay} to ${d.lastDay} (${describeVia(d.via)})${d.waiting.length ? `; waiting for its window: ${d.waiting.map((w) => `${w.player} until ${w.windowEnds}`).join(', ')}` : ''}`))}
+
+Calibration gaps: positions with at least ${GAP_MIN_CURRENT_CARDS} current cards where the best of them sits below every other player's prime, era and season card there whose window ended in the last ${RECENT_HISTORICAL_YEARS} years (reported by code; it doesn't show which side is out of place and changes no rating; the current card can be re-rated only once its window ends, and is queued for that day):
+${list((s.calibrationGaps ?? []).map((g) => `${g.position}: ${refText(g.current)} sits below all ${g.recent} recent historical cards there, nearest first: ${g.above.map(refText).join(', ')}; window ends ${g.windowEnds}`))}
 
 Each position's Overall distribution against the whole pool (a reported figure, not a reason to review a card):
 ${list(s.coherence.positions.map((p) => `${p.position}: ${p.cards} cards, mean ${p.mean}, median ${p.median} (pool mean ${p.poolMean}, median ${p.poolMedian})`))}`;
@@ -1401,10 +1490,15 @@ export function liveCardReview(deps: LiveCardReviewDeps): { sources: CardReviewS
 
 /**
  * The current cards the journal flagged inside their window, queued for the day it ends: moved
- * cards, and current cards in a disagreement pair.
+ * cards, current cards in a disagreement pair, and current cards in a calibration gap.
  */
 export function queuedFromJournal(rows: { day: string; signals: { cardReview?: CardReviewSignals | null } }[]): { player: string; reason: string; day: string }[] {
   return rows.flatMap((r) => [
+    ...(r.signals?.cardReview?.calibrationGaps ?? []).map((g) => ({
+      player: g.current.player,
+      reason: `the best current card at ${g.position} sat below every recent historical card there (${g.recent} of them)`,
+      day: r.day,
+    })),
     ...(r.signals?.cardReview?.situationMoved ?? []).map((m) => ({ player: m.player, reason: m.reason, day: r.day })),
     ...(r.signals?.cardReview?.disagreements ?? []).flatMap((d) =>
       (d.waiting ?? []).map((w) => {

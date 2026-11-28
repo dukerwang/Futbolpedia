@@ -23,18 +23,36 @@ interface InkLabelProps {
   size?: keyof typeof SIZE;
   /** Phones: keep the name whole and let the window give way. */
   compact?: boolean;
+  /** For a long window (a current card's 12 months): in a narrow place it moves to a second line, whole. */
+  wrap?: boolean;
   className?: string;
 }
 
-export const InkLabel: React.FC<InkLabelProps> = ({ ink, name, when, title, size = 'sm', compact, className = '' }) => {
+export const InkLabel: React.FC<InkLabelProps> = ({ ink, name, when, title, size = 'sm', compact, wrap, className = '' }) => {
   const s = SIZE[size];
+  const layout = wrap ? 'flex-wrap gap-y-0.5' : compact ? 'shrink-0 max-w-[65%]' : '';
+  const whenClass = wrap
+    ? `whitespace-nowrap font-mono ${s.when}`
+    : compact
+      ? `truncate ${s.text}`
+      : `shrink-0 font-mono ${s.when}`;
+  const mark = <span aria-hidden="true" className={`shrink-0 rotate-45 rounded-[1px] ${s.mark} ${INK_DOT[ink]}`} />;
+  const label = <span className={`font-medium ${s.text} ${compact || wrap ? 'shrink-0 whitespace-nowrap' : 'truncate'} ${INK_TEXT[ink]}`}>{name}</span>;
   return (
-    <span className={`inline-flex items-center ${s.gap} min-w-0 font-sans ${compact ? 'shrink-0 max-w-[65%]' : ''} ${className}`} title={title}>
-      <span aria-hidden="true" className={`shrink-0 rotate-45 rounded-[1px] ${s.mark} ${INK_DOT[ink]}`} />
-      <span className={`font-medium ${s.text} ${compact ? 'shrink-0 whitespace-nowrap' : 'truncate'} ${INK_TEXT[ink]}`}>{name}</span>
-      {when && (
-        <span className={`text-charcoal/45 dark:text-cream-400/70 ${compact ? `truncate ${s.text}` : `shrink-0 font-mono ${s.when}`}`}>{when}</span>
+    <span className={`inline-flex items-center ${s.gap} min-w-0 font-sans ${layout} ${className}`} title={title}>
+      {wrap ? (
+        // The mark stays beside the name when the window drops below them.
+        <span className={`inline-flex items-center ${s.gap}`}>
+          {mark}
+          {label}
+        </span>
+      ) : (
+        <>
+          {mark}
+          {label}
+        </>
       )}
+      {when && <span className={`text-charcoal/45 dark:text-cream-400/70 ${whenClass}`}>{when}</span>}
     </span>
   );
 };
@@ -58,6 +76,7 @@ export const EditionLabel: React.FC<EditionLabelProps> = ({ profile, earlierRati
       title={title}
       size={size}
       compact={compact}
+      wrap={Boolean(profile.version?.formWindow)}
       className={className}
     />
   );

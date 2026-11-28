@@ -53,7 +53,7 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 /** The hashes of the prompts as they stood before the core was split into sections. */
 const PINNED = {
   core: '7f1e030e3dc2ada8e55ec302121b1cde7d588e3b3bd5ae9ed4d56348cab22846',
-  synthesis: '23b7c84a0bf7d9fc26a1b22cd123daeb31e053a78c531e405d960f654c26a9f2',
+  synthesis: '1e89aafbc31da085ba1f7376b59604cf0b68ccfc37753365058aafa6c59e8b8d',
   chat: 'b3d05e4be56d4138504de106dc53bff9f3dd435b05ac2d0fdb1f98656ed05ea1',
   chatWithEafc: '029ff9623763d0a89a569af404b6c3680d1d73a2962e9ca2736a80885af01d72',
 };
