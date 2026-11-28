@@ -77,6 +77,11 @@ export interface DossierVersion {
    * best stretch; for an era, the seasons that define the version the user named.
    */
   primeWindow?: { startSeason: string; endSeason: string } | null;
+  /**
+   * The football a current card rates: the 12 months up to its evaluation date (YYYY-MM-DD each),
+   * set by code. Absent on historical cards and on current cards rated before it was recorded.
+   */
+  formWindow?: { from: string; to: string };
   /** An era card's name for its version, as the user put it (a club, role or career phase). */
   qualifier?: string | null;
 }

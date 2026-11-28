@@ -352,7 +352,7 @@ export async function gatherSignals(sources: ScoutSources, nowMs: number = Date.
 export const describeSignals = (s: ScoutSignals): string =>
   `demand ${s.demand.clubs.length} clubs, ${s.demand.players.length} players, ${s.demand.seasons.length} seasons; ${s.staleStories.length} stale stories; ${s.fixtures.length} fixtures (${s.fixtures.filter((f) => f.snapshotOlderThanDay).length} with a snapshot over a day old); cards ${s.cards.nearingRefresh.length} nearing refresh, ${s.cards.staleLatestUpdate.length} with an old Latest Update; ${s.gaps.length} gaps${
     s.cardReview
-      ? `; card review ${s.cardReview.expiredCurrent.length} past their window, ${s.cardReview.situationMoved.length} moved, ${s.cardReview.historicalGaps.length} with covered gaps, ${s.cardReview.coherence.pairs.length} two-way pairs, ${s.cardReview.coherence.cycles.length} circles, ${s.cardReview.disagreements?.length ?? 0} disagreement pairs`
+      ? `; card review ${s.cardReview.expiredCurrent.length} past their window, ${s.cardReview.situationMoved.length} moved, ${s.cardReview.historicalGaps.length} with covered gaps, ${s.cardReview.coherence.pairs.length} two-way pairs, ${s.cardReview.coherence.cycles.length} circles, ${s.cardReview.disagreements?.length ?? 0} disagreement pairs, ${s.cardReview.calibrationGaps?.length ?? 0} calibration gaps`
       : ''
   }${s.unread.length ? `; unread: ${s.unread.join(', ')}` : ''}`;
 
@@ -460,6 +460,7 @@ Cards have a separate budget of ${cardBudget} model calls, spent only on these a
 - fill_facts(cardKey): fills a historical card's data gaps from the stored record that now covers them, without touching its rating. About ${CARD_ACTION_COST.fill_facts} calls. Only for a card key in the list of historical cards with covered gaps.
 - review_prime(player): drafts a new rating of the player's prime with the new record or the contradiction in its evidence, then a separate reviewer decides whether it replaces the card: it may accept, ask for one revision (another ${CARD_ACTION_COST.review_prime} calls), or refuse. About ${CARD_ACTION_COST.review_prime} calls a round. Only for a player whose prime card appears in the covered-gaps list, in a placement contradiction or in a pair answers ordered against the cards, and only when that evidence could change the rating; a gap whose fact can't change how good he was is a fill_facts. A disagreement pair is a count, not a record: either card may be the one out of place, and the more often and on more days it was reported, the more it is worth a review.
 A player in the list of moved current cards gets refresh_latest_update now, whatever his line's age; his re-rating waits for the day his window closes.
+A calibration gap is a figure about the pool and opens no action of its own: its current card waits for its window to close like any other, is queued for that day, and is then re-rated from its evidence like any current card.
 `;
 
 export const buildPlanPrompt = (i: PlanInput): string => `You are the scout of Futbolpedia, a football scouting service. Once a day, between conversations, you choose what to research so that tomorrow's answers rest on fresher facts where people are looking. Today is ${i.today}, in the ${i.season} season.

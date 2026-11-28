@@ -15,6 +15,9 @@ stops at the first 429, saves answers without grading unless you ask, and report
 | Historical questions | `--set historical` | Past seasons and all-time debates, each run once ([historical-questions.md](historical-questions.md)). With `--grade`, scored on figures, blended seasons, myths and criteria. |
 | Conversations | `--conversations` | Multi-turn cases. With `--grade`, graded for conduct. |
 
+The bridge check, which rates last season against each current card, is a separate script with its
+own plan: [current-vs-season-bridge.md](current-vs-season-bridge.md).
+
 ## Setup
 
 Create a Gemini key in a separate Google project with a small spending cap, and put it in
@@ -25,7 +28,8 @@ EVAL_GEMINI_API_KEY=...
 ```
 
 Every eval script reads `EVAL_GEMINI_API_KEY` and refuses to start without it, naming the
-variable. That covers `eval-live-questions.ts` in every mode and `smoke-model.ts`. None of them falls
+variable. That covers `eval-live-questions.ts` in every mode, `smoke-model.ts` and
+`eval-bridge-check.ts`. None of them falls
 back to `GEMINI_API_KEY`, which is the live app's key. The key is set for the eval process only: the
 eval replaces both `API_KEY` and `GEMINI_API_KEY` in its own environment, so nothing it runs can reach
 the app's key, and the app's key handling is unchanged.

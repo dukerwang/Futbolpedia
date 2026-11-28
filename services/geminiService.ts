@@ -338,8 +338,13 @@ const rateDossier = async (params: {
   perf: (label: string) => void;
   /** Card review's prime draft: rated, returned, never published here. */
   hold?: boolean;
+  /**
+   * The bridge check's draft: rated afresh even when a published card answers the request, with
+   * none of the player's own cards in view, so no earlier rating of his anchors it. Set with `hold`.
+   */
+  blind?: boolean;
 }): Promise<string | PlayerProfile> => {
-  const { message, route, context, savedDossiers, imageData, options, perf } = params;
+  const { message, route, context, savedDossiers, imageData, options, perf, blind } = params;
   const {
     conversationDossiers,
     savedResult,
@@ -518,7 +523,7 @@ const rateDossier = async (params: {
   // regeneration request gets the published card while it's in its refresh window. The one
   // exception is consensus: enough people independently challenging it the same way.
   let supersede = false;
-  if (!imageData && season) {
+  if (!imageData && !blind && season) {
     const seasonCard =
       (await getCachedSeasonCard(primaryPlayer, season)) ??
       (await findUnderAnyName((name) => getCachedSeasonCard(name, season)));
@@ -526,7 +531,7 @@ const rateDossier = async (params: {
       perf('supabase season card hit');
       return seasonCard;
     }
-  } else if (!imageData && era) {
+  } else if (!imageData && !blind && era) {
     const eraCard =
       (await getCachedEraCard(primaryPlayer, { qualifier: era })) ??
       (await findUnderAnyName((name) => getCachedEraCard(name, { qualifier: era })));
@@ -534,7 +539,7 @@ const rateDossier = async (params: {
       perf('supabase era card hit');
       return eraCard;
     }
-  } else if (!imageData && !reratingPrime()) {
+  } else if (!imageData && !blind && !reratingPrime()) {
     const rawSlug = toPlayerSlug(primaryPlayer) || extractCandidateSlug(message);
     if (rawSlug) {
       let cached =
@@ -623,7 +628,7 @@ const rateDossier = async (params: {
     (status === 'retired' ||
       (status === 'unknown' &&
         !imageData &&
-        groundingShowsRetirement(grounding.foundationText, grounding.apiPlayer)));
+        groundingShowsRetirement(grounding.statusText ?? grounding.foundationText, grounding.apiPlayer)));
   if (retired) {
     isHistorical = true;
     perf('retired player: rating his prime');
@@ -685,7 +690,7 @@ const rateDossier = async (params: {
     ...peerLedgerOptions,
     positionHint: grounding.apiPlayer?.position,
     wholeLibrary: true,
-    exclude: reratingPrime() ? (p: PlayerProfile) => ownSlugs.has(toBasePlayerSlug(p.basicInfo.name)) : undefined,
+    exclude: blind || reratingPrime() ? (p: PlayerProfile) => ownSlugs.has(toBasePlayerSlug(p.basicInfo.name)) : undefined,
   };
   // The peers are chosen now, from the whole served library: the turn's context was built before
   // the shared pool had loaded, and a rating with no peers of his level has nothing to place
@@ -700,7 +705,7 @@ const rateDossier = async (params: {
   const replacedForPeers = priorDossiers.filter(matchesRequestedEdition).at(-1);
   const closestPeers = selectClosestPeers(synthesisPeerLedger, {
     position: replacedForPeers?.basicInfo.position ?? priorDossiers.at(-1)?.basicInfo.position ?? grounding.apiPlayer?.position,
-    centre: replacedForPeers?.ratings.overall ?? null,
+    centre: blind ? null : replacedForPeers?.ratings.overall ?? null,
     exclude: (p) => ownSlugs.has(toBasePlayerSlug(p.basicInfo.name)),
   });
   const synthesisPeerLedgerBlock =
@@ -717,7 +722,7 @@ const rateDossier = async (params: {
   const replacedSlug = replacedCard ? toVersionedSlug(replacedCard) : null;
   const replacedCardChallenges = challengeRows.filter((r) => r.card_slug === replacedSlug);
 
-  const priorTrajectoryBlock = reratingPrime()
+  const priorTrajectoryBlock = blind || reratingPrime()
     ? ''
     : buildPriorDossierTrajectoryBlock(
         priorDossiers,
@@ -1052,4 +1057,19 @@ export const draftPrimeRerate = async (name: string, reviewNote: string): Promis
   await fetchSupabaseCalibratedPool();
   const context = buildTurnContext(message, route, [], []);
   return rateDossier({ message, route, context, savedDossiers: [], perf: createPerfLogger(), hold: true });
+};
+
+/**
+ * The bridge check's season draft (scripts/eval-bridge-check.ts; the app never calls it): a past
+ * season rated by the historical pipeline with none of the player's own cards in view, so his
+ * current card can't anchor the comparison with it. Never published. `savedDossiers` joins the
+ * peer ledger, minus his own cards.
+ */
+export const draftBlindSeason = async (name: string, season: string, savedDossiers: PlayerProfile[] = []): Promise<string | PlayerProfile> => {
+  const request: RatingRequest = { name, edition: 'season', season };
+  const message = ratingTask(request);
+  const route = routeForRating(request);
+  await fetchSupabaseCalibratedPool();
+  const context = buildTurnContext(message, route, [], []);
+  return rateDossier({ message, route, context, savedDossiers, perf: createPerfLogger(), hold: true, blind: true });
 };

@@ -992,6 +992,17 @@ async function main() {
     assert.equal(getDossierEvaluationDate(q), null, 'no window or date yet: validation asks for them');
   });
 
+  await test('a current card is labelled with the 12 months it rates; an older one with its month', () => {
+    const card = currentCard('Lionel Messi', '2026-11-27');
+    assert.equal(describeCardEdition(card).label, 'Current Form · Nov 2026');
+    const windowed = { ...card, version: { ...card.version!, formWindow: { from: '2025-12-27', to: '2026-11-27' } } };
+    assert.equal(describeCardEdition(windowed).label, 'Current Form · Dec 2025 – Nov 2026');
+    // The window changes what's written, never which card it is.
+    assert.equal(getCardKey(windowed), getCardKey(card));
+    assert.equal(toVersionedSlug(windowed), toVersionedSlug(card));
+    assert.equal(cardReference(windowed), cardReference(card));
+  });
+
   await test('"Ask" names the exact card version the chat should stay on', () => {
     const psg = eraCard('Neymar Jr', 'psg', '2017-20', '2020-05-30');
     assert.equal(cardReference(psg), 'Neymar Jr, Paris Saint-Germain era (2017-20)');
