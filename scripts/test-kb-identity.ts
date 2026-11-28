@@ -355,7 +355,7 @@ await test('lookups of one name share a resolution, and only a few ask Wikidata 
 });
 
 await test('the migration lets anyone read identities, nobody but the server write them, and only the server read what was asked', () => {
-  const sql = readFileSync(new URL('../supabase/migrations/20261127120000_kb_entities.sql', import.meta.url), 'utf8');
+  const sql = readFileSync(new URL('../supabase/migrations/20261127140000_kb_entities.sql', import.meta.url), 'utf8');
   for (const column of ['wikidata_id text primary key', 'kind', 'label', 'aliases', 'birth_date', 'nationality', 'positions', 'wikipedia_title', 'external_ids jsonb', 'spells jsonb', 'fetched_at']) {
     assert.ok(sql.includes(column), column);
   }
