@@ -12,6 +12,7 @@ import {
   researchPastPlayer,
   type DossierResearchDeps,
 } from './dossierResearch';
+import { formWindowFor, todayIso } from './dossierCards';
 import type { EvidenceLedger } from './evidenceLedger';
 import type { FutbolpediaVerifiedFacts } from './profileManagerGrounding';
 import { formatRecentTeamBlock, type TeamAbsence, type TeamLineup } from './teamLineups';
@@ -138,6 +139,11 @@ export interface PlayerGroundingBundle {
   apiPlayer: ApiFootballPlayerFactSheet | null;
   /** What the lookups found and didn't, behind foundationText (see dossierResearch.ts). */
   ledger: EvidenceLedger;
+  /**
+   * A current card's foundation without his career record, for the retirement backup check
+   * (groundingShowsRetirement): a career's history says nothing about whether he plays now.
+   */
+  statusText?: string;
 }
 
 /** Search query that surfaces a club's summer departures and signings, so squad talk skips sold players. */
@@ -185,9 +191,15 @@ export async function gatherPlayerGrounding(params: {
     };
   }
 
+  // A current card rates the 12 months up to today, so both searches ask for that window.
+  const windowFrom = new Date(`${formWindowFor(todayIso()).from}T12:00:00Z`).toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
   const searchQueries = [
-    `${subject} — current club as of ${month} ${year}, recent match appearances, injury status, ${currentSeason} season stats, and major honours ${ANTI_GAME_FILTER}`,
-    `${subject} — tactical scouting report: playing style, positional standing in world football, technical/physical/mental strengths and weaknesses ${ANTI_GAME_FILTER}`,
+    `${subject} — current club as of ${month} ${year}, and the last 12 months since ${windowFrom} (the end of last season and the ${currentSeason} season so far): appearances, form, injuries, season stats, and honours ${ANTI_GAME_FILTER}`,
+    `${subject} — tactical scouting report: playing style, positional standing in world football, technical/physical/mental strengths and weaknesses; and dated assessments of him from the last 12 months: award shortlists and placings, teams of the season, expert rankings at his position ${ANTI_GAME_FILTER}`,
   ];
 
   const apiPlayerPromise = fetchApiFootballPlayer(subject, 2800);
@@ -202,7 +214,13 @@ export async function gatherPlayerGrounding(params: {
   ]);
 
   const apiBlock = formatApiFootballFactSheetBlock(apiPlayer);
-  const foundationText = [apiBlock, formatDossierResearch(research, { current: true })].filter(Boolean).join('\n\n===\n\n');
+  const foundationOf = (read: typeof research) =>
+    [apiBlock, formatDossierResearch(read, { current: true })].filter(Boolean).join('\n\n===\n\n');
+  const foundationText = foundationOf(research);
+  const statusText = foundationOf({
+    ...research,
+    ledger: { ...research.ledger, entries: research.ledger.entries.filter((e) => e.kind !== 'career_record') },
+  });
 
   const verifiedFactsBlock = apiPlayer
     ? `<deterministic_bio_record>
@@ -221,6 +239,7 @@ Authoritative API-Football record for ${apiPlayer.name}:
     verifiedFactsBlock,
     apiPlayer,
     ledger: research.ledger,
+    statusText,
   };
 }
 

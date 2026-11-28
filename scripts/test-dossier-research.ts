@@ -1,10 +1,11 @@
 #!/usr/bin/env npx tsx
 /**
  * Offline checks for a dossier's research (`services/dossierResearch.ts`), with the tools and the
- * snapshot stores faked: a current card reads the player's live season and the club it names (or
- * his registered club when no season record covers him), works the club's XIs into a first-choice
- * XI with a stored snapshot's story, files a slow lookup as too slow instead of waiting for it, and
- * a past version reads his career record and a requested season's stored era snapshot.
+ * snapshot stores faked: a current card reads the player's live season, his career record and the
+ * club the season record names (or his registered club when none covers him), works the club's XIs
+ * into a first-choice XI with a stored snapshot's story, files a slow lookup as too slow instead of
+ * waiting for it, and flags only web sources from before the 12 months it rates; a past version
+ * reads his career record and a requested season's stored era snapshot.
  *
  * Usage:
  *   npx tsx scripts/test-dossier-research.ts
@@ -17,6 +18,7 @@ import {
   researchPastPlayer,
   type DossierResearchDeps,
 } from '../services/dossierResearch';
+import { formWindowFor, todayIso } from '../services/dossierCards';
 import type { ResearchToolset, ToolOutcome } from '../services/researchTools';
 import type { EraSnapshot } from '../services/eraSnapshots';
 import type { ClubSnapshot } from '../services/situationSnapshot';
@@ -162,7 +164,8 @@ await test("a live season record's club is the club whose live data is read", as
   });
   assert.deepEqual(seen.clubRecentTeam, ['Northside']);
   assert.deepEqual(seen.webSearch, ['query one', 'query two']);
-  assert.deepEqual(research.ledger.entries.map((e) => e.kind), ['player_record', 'club_context', 'web', 'web']);
+  assert.deepEqual(seen.playerCareer, ['Test Player']);
+  assert.deepEqual(research.ledger.entries.map((e) => e.kind), ['player_record', 'club_context', 'career_record', 'web', 'web']);
   assert.equal(research.club, 'Northside');
   assert.match(research.clubSituation, /First-choice XI \(4-3-3, from the last 3 starting XIs\)/);
   assert.match(research.clubSituation, /Test Player/);
@@ -219,7 +222,54 @@ await test('a club lookup still running after the searches is filed as too slow,
   assert.ok(Date.now() - start < 1000);
   assert.equal(research.clubSituation, '');
   assert.ok(research.ledger.gaps.some((g) => g.status === 'failed' && /Southside[^]*too slow/.test(g.label)));
-  assert.deepEqual(research.ledger.entries.map((e) => e.kind), ['web']);
+  assert.deepEqual(research.ledger.entries.map((e) => e.kind), ['career_record', 'web']);
+});
+
+await test('a career record still running after the searches is filed as too slow, not waited for', async () => {
+  const { tools } = fakeTools({ playerCareer: () => new Promise(() => {}) });
+  const start = Date.now();
+  const research = await researchCurrentPlayer({
+    name: 'Test Player',
+    searches: ['query one'],
+    registeredClub: Promise.resolve('Southside'),
+    deps: { tools, ...noSnapshots },
+    graceMs: 50,
+  });
+  assert.ok(Date.now() - start < 1000);
+  assert.ok(research.ledger.gaps.some((g) => g.status === 'failed' && /Career record for Test Player[^]*too slow/.test(g.label)));
+  assert.deepEqual(research.ledger.entries.map((e) => e.kind), ['club_context', 'web']);
+  assert.ok(research.ledger.lookups.some((l) => l.tool === 'player_career' && l.status === 'failed'));
+});
+
+await test('a current card flags only sources from before its 12-month window, not last season inside it', async () => {
+  const { from } = formWindowFor(todayIso());
+  const shift = (iso: string, days: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+  const dated = (date: string): ToolOutcome => ({
+    status: 'found',
+    result: { kind: 'web', label: `dated ${date}`, content: `- [${date}] A point.` },
+    missing: [],
+  });
+  const { tools } = fakeTools({ webSearch: async (query) => dated(query) });
+  const research = await researchCurrentPlayer({
+    name: 'Test Player',
+    // The day the window opens is inside it; the day before isn't.
+    searches: [from, shift(from, -1), shift(from, 40)],
+    registeredClub: Promise.resolve(null),
+    deps: { tools, ...noSnapshots },
+  });
+  const text = formatDossierResearch(research, { current: true });
+  const flagged = (date: string) => new RegExp(`dated ${date} \\(every source here predates the 12 months this card rates`).test(text);
+  assert.equal(flagged(from), false);
+  assert.equal(flagged(shift(from, 40)), false);
+  assert.equal(flagged(shift(from, -1)), true);
+  assert.doesNotMatch(text, /predates this season/);
+  assert.doesNotMatch(formatDossierResearch(research, { current: false }), /every source here predates/);
+});
+
+await test("the form window is the 12 months up to the evaluation date, clamped to a month's end", async () => {
+  assert.deepEqual(formWindowFor('2026-11-27'), { from: '2025-11-27', to: '2026-11-27' });
+  assert.deepEqual(formWindowFor('2028-02-29'), { from: '2027-02-28', to: '2028-02-29' });
+  assert.deepEqual(formWindowFor('2027-01-31'), { from: '2026-01-31', to: '2027-01-31' });
 });
 
 await test('a player with no season record and no registered club gets no club lookup', async () => {

@@ -55,10 +55,15 @@ const formatMonth = (isoDate: string): string =>
     timeZone: 'UTC',
   });
 
+/** "Dec 2025 – Nov 2026": the months a current card's form window opens and closes in. */
+const formatFormWindow = (window: { from: string; to: string } | undefined): string =>
+  window?.from && window.to ? `${formatMonth(window.from)} – ${formatMonth(window.to)}` : '';
+
 /**
  * The card's edition and when it describes, for the header pill: "Current form · Oct 2026",
- * "Prime · 2003–06" or "Paris Saint-Germain era · 2017–20". Current cards show their month;
- * historical cards show their season, since a peak is a season or a window of seasons rather
+ * "Prime · 2003–06" or "Paris Saint-Germain era · 2017–20". Current cards show the 12 months they
+ * rate (one rated before cards recorded that window shows its month); historical cards show their
+ * season, since a peak is a season or a window of seasons rather
  * than a day.
  */
 export function describeCardEdition(profile: PlayerProfile): {
@@ -80,10 +85,11 @@ export function describeCardEdition(profile: PlayerProfile): {
     };
   }
   if (edition === 'current') {
+    const when = formatFormWindow(profile.version?.formWindow) || (date ? formatMonth(date) : '');
     return {
       tone: 'emerald',
       icon: 'bolt',
-      label: date ? `${EDITION_NAMES.current} · ${formatMonth(date)}` : EDITION_NAMES.current,
+      label: when ? `${EDITION_NAMES.current} · ${when}` : EDITION_NAMES.current,
     };
   }
   const era = profile.version?.seasonOrEra?.trim();

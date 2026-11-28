@@ -134,7 +134,7 @@ export function sourceDates(text: string): string[] {
 /** The day a season's football starts, for judging which sources predate it: 1 July of its first year. */
 export const seasonStartDate = (seasonStartYear: number): string => `${seasonStartYear}-07-01`;
 
-/** Whether a web entry's sources all predate the season: it dates its points, and every date is earlier. */
+/** Whether a web entry's sources all predate a day (a season's or a window's start): it dates its points, and every date is earlier. */
 export function isFromEarlierSeason(entry: Pick<EvidenceEntry, 'kind' | 'content'>, seasonStart: string): boolean {
   if (entry.kind !== 'web') return false;
   const dates = sourceDates(entry.content);
@@ -165,14 +165,19 @@ const GAP_HEADINGS: Record<GapStatus, string> = {
 /**
  * The ledger as the writer reads it. Gaps are listed even when nothing was found, so an empty
  * research pass reads as "these lookups failed", never as silence the model fills from memory.
- * With `seasonStart`, a web entry whose sources all predate the season says so.
+ * With `seasonStart`, a web entry whose sources all predate the season says so. A current card
+ * passes `windowStart` instead, the first day of the 12 months it rates, so last season's sources
+ * inside that window aren't flagged.
  */
-export function formatLedger(ledger: EvidenceLedger, options: { seasonStart?: string } = {}): string {
+export function formatLedger(ledger: EvidenceLedger, options: { seasonStart?: string; windowStart?: string } = {}): string {
   const blocks = ledger.entries.map((e) => {
     const sources = e.sources?.length ? `\nSources: ${e.sources.join(' | ')}` : '';
+    const cutoff = options.windowStart ?? options.seasonStart;
     const older =
-      options.seasonStart && isFromEarlierSeason(e, options.seasonStart)
-        ? ' (every source here predates this season, so it may describe an earlier team)'
+      cutoff && isFromEarlierSeason(e, cutoff)
+        ? options.windowStart
+          ? ' (every source here predates the 12 months this card rates, so it may describe an earlier version of him or his team)'
+          : ' (every source here predates this season, so it may describe an earlier team)'
         : '';
     return `[${e.id}] ${KIND_NAMES[e.kind]} — ${e.label}${older}\n${e.content.trim()}${sources}`;
   });

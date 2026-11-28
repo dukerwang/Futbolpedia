@@ -69,7 +69,8 @@ function fakeProfile(prompt: string) {
           peakContext: 'Peak note.',
           primeWindow: scenario.window?.(prompt) ?? { startSeason: '2010-11', endSeason: '2011-12' },
         }
-      : { type: 'current', label: 'Current Form', evaluationDate: today, seasonOrEra: '2026-27', peakContext: null };
+      // The model's own window is never used: code sets a current card's, and no other card has one.
+      : { type: 'current', label: 'Current Form', evaluationDate: today, seasonOrEra: '2026-27', peakContext: null, formWindow: { from: '2001-01-01', to: '2002-01-01' } };
   return {
     calibration: {
       tierBand: '90_92_WORLD_CLASS',
@@ -233,6 +234,24 @@ async function main() {
     assert.match(synthesisPrompt(), /CURRENT FORM DATED CARD/);
     assert.equal(card.version?.type, 'current');
     assert.equal(card.clubManager?.name, 'Test Coach');
+    const { formWindowFor, todayIso } = await import('../services/dossierCards');
+    const window = formWindowFor(todayIso());
+    assert.deepEqual(card.version?.formWindow, window);
+    // Keys and the season label are unchanged by the window.
+    assert.match(card.version?.id ?? '', new RegExp(`-current-${todayIso()}$`));
+    assert.match(card.version?.label ?? '', /^Current Form \(/);
+    const prompt = synthesisPrompt();
+    // The rule, in the system instruction and this card's own instructions.
+    assert.match(prompt, /Current form rates the level he has played at over the last 12 months/);
+    assert.ok(prompt.includes(`THE FORM WINDOW (${window.from} to ${window.to})`));
+    assert.match(prompt, /Matches within the window count equally/);
+    assert.match(prompt, /Neither reputation lag nor reputation carry sets the band/);
+    assert.doesNotMatch(prompt, /out of reputation lag/);
+    assert.doesNotMatch(prompt, /do not undersell him/);
+    // Both searches ask for the window, and neither adds a third.
+    const queries = calls.filter((c) => !c.structured).map((c) => c.prompt);
+    assert.equal(queries.filter((q) => q.includes('last 12 months')).length, 2);
+    assert.ok(queries.some((q) => q.includes('award shortlists and placings')));
   });
 
   await test('a new card goes under the name he is known by, whatever he was called', async () => {
@@ -315,6 +334,8 @@ async function main() {
     const card = await rate('Rate Thierry Henry 2006');
     assert.match(synthesisPrompt(), /SEASON DATED CARD EVALUATION \(2006\)/);
     assert.equal(card.version?.type, 'season_snapshot');
+    assert.equal(card.version?.formWindow, undefined);
+    assert.doesNotMatch(synthesisPrompt(), /THE FORM WINDOW/);
     assert.equal(card.version?.seasonOrEra, '2005-06');
     assert.equal(card.clubManager, undefined);
   });
@@ -536,6 +557,57 @@ async function main() {
     // More data never turns the rating into a reading of figures.
     assert.match(prompt, /settle facts, not how good he is/);
     assert.match(prompt, /never a formula for it/);
+  });
+
+  await test("the bridge check's season draft is rated afresh with none of his own cards in view", async () => {
+    const { draftBlindSeason } = await import('../services/geminiService');
+    const { sanitizeProfileData } = await import('../services/dossierSynthesizer');
+    const { CALIBRATION_EPOCH_MS } = await import('../services/dossierStore');
+    const saved = (name: string, overall: number, version: PlayerProfile['version']): PlayerProfile => ({
+      ...sanitizeProfileData({
+        basicInfo: { name, age: 25, nationality: 'Spain', club: 'FC Barcelona', position: 'Central Midfielder' },
+        ratings: { overall, potential: overall },
+        weaknesses: [`**Weakness of ${name} ${overall}:** what he couldn't do.`],
+      }),
+      evaluationDate: version!.evaluationDate,
+      createdAt: CALIBRATION_EPOCH_MS + 1,
+      version,
+    });
+    const own = [
+      saved('Ilan Moreau', 88, { id: 'a', type: 'current', label: 'Current Form', evaluationDate: '2026-10-25', seasonOrEra: '2026-27' }),
+      saved('Ilan Moreau', 87, { id: 'b', type: 'season_snapshot', label: 'Season (2025-26)', evaluationDate: '2026-05-20', seasonOrEra: '2025-26' }),
+    ];
+    const peer = saved('Peer Pivot', 89, { id: 'c', type: 'prime', label: 'Prime Zenith (2018-20)', evaluationDate: '2020-05-20', seasonOrEra: '2018-20' });
+    scenario = { status: 'ACTIVE', search: () => '- That season in summary.', name: 'Ilan Moreau' };
+    quiet();
+    let card: PlayerProfile;
+    try {
+      card = (await draftBlindSeason('Ilan Moreau', '2025-26', [...own, peer])) as PlayerProfile;
+    } finally {
+      loud();
+    }
+    const prompt = synthesisPrompt();
+    assert.match(prompt, /SEASON DATED CARD EVALUATION \(2025-26\)/);
+    assert.match(prompt, /Peer Pivot/);
+    assert.doesNotMatch(prompt, /prior_authored_dossiers/);
+    assert.doesNotMatch(prompt, /Ilan Moreau \[(?:Current|Season|Prime)|Weakness of Ilan Moreau/);
+    // The season's saved card isn't served in place of a fresh draft.
+    assert.equal(card.ratings.overall, 91);
+    assert.equal(card.version?.type, 'season_snapshot');
+  });
+
+  await test("a current card reads his career record too, and its history never reads as a retirement", async () => {
+    scenario = {
+      status: 'STATUS: UNKNOWN',
+      search: () => '- [2026-10-20] Recent form digest.',
+      name: 'Tobias Brandt',
+      career: { found: true, title: 'Tobias Brandt', text: 'Joined after the club legend retired. 2025-26 Northside 34 apps 3 goals.', sources: ['https://example.com/career'], missing: [] },
+    };
+    const card = await rate('Rate Tobias Brandt right now');
+    assert.match(synthesisPrompt(), /Career record \(Wikipedia\)[^\n]*Tobias Brandt/);
+    assert.match(synthesisPrompt(), /2025-26 Northside 34 apps/);
+    assert.match(synthesisPrompt(), /CURRENT FORM DATED CARD/);
+    assert.equal(card.version?.type, 'current');
   });
 
   await test("a prime is rated from his career record", async () => {
