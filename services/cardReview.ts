@@ -3,7 +3,7 @@ import { getTierDefinition, normalizePosition, RATING_TIERS } from '../constants
 import type { PeerPlacement, PlayerProfile } from '../types';
 import { generateStructured } from './aiClient';
 import { isSameClub, toClubKey } from './clubManagers';
-import { isRatedOnCurrentScale } from './dossierCache';
+import { CURRENT_FORM_RULES_EPOCH_MS, isRatedOnCurrentScale } from './dossierCache';
 import {
   CARD_REFRESH_DAYS,
   cardEdition,
@@ -20,7 +20,7 @@ import {
   toDossierCardSlug,
   toVersionedSlug,
 } from './dossierCards';
-import { positionGroups } from './dossierLedger';
+import { isQuarantinedCurrentCard, positionGroups, ratingPeers } from './dossierLedger';
 import { eraEntry, normalizePeriod, rowToSnapshot as eraRowToSnapshot, type EraRow } from './eraSnapshots';
 import { samePlayerName } from './liveFootball';
 import { placementRange, resolvePlacement } from './ratingPlacement';
@@ -30,8 +30,9 @@ import type { DisagreementHit, DisagreementPath } from './cardDisagreements';
 /**
  * Card review: the scout's day for players. Code finds the cards whose facts or rating no longer
  * hold (current cards past their window, current cards whose situation moved, historical cards
- * whose data gaps a stored record now covers, placements that contradict each other, and positions
- * where the best current card sits below the whole recent historical scale), the day's planning
+ * whose data gaps a stored record now covers, placements that contradict each other or name a
+ * superseded card, and positions where the best current card sits below the whole recent
+ * historical scale), the day's planning
  * call chooses which to act on, and code carries it out under the card rules:
  *
  * - `rerate_current` runs the dossier pipeline for a current card past its window, and the new
@@ -85,6 +86,7 @@ const PUBLISH_CONFIRM_MS = 500;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const dayOf = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+const CURRENT_FORM_RULES_DAY = dayOf(CURRENT_FORM_RULES_EPOCH_MS);
 const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 // ---------------------------------------------------------------------------------------------
@@ -364,6 +366,54 @@ export function findCalibrationGaps(pool: PlayerProfile[], nowMs: number, cap: n
 }
 
 // ---------------------------------------------------------------------------------------------
+// Superseded placements
+
+export interface SupersededPlacement {
+  player: string;
+  cardKey: string;
+  edition: string;
+  window: string | null;
+  /** The quarantined current cards its placement names. */
+  names: string[];
+  asked: number;
+}
+
+/** The current cards a placement names: stored bare, where a historical peer carries its window in brackets. */
+const currentNamesIn = (card: PlayerProfile): string[] => {
+  const pl = card.peerPlacement;
+  return [...new Set([...(pl?.betterThan ?? []), ...(pl?.levelWith ?? []), ...(pl?.notAsGoodAs ?? [])])].filter((n) => !n.includes('('));
+};
+
+/** Another player's name among `slugs`: his own current card is another version of him, not a peer. */
+const namedAmong = (card: PlayerProfile, slugs: Set<string>): string[] =>
+  currentNamesIn(card).filter((n) => slugs.has(toBasePlayerSlug(n)) && toBasePlayerSlug(n) !== toBasePlayerSlug(card.basicInfo.name));
+
+/**
+ * Prime, era and season cards placed against a superseded card: their stored placement names a
+ * current card that is quarantined today (`isQuarantinedCurrentCard`), inside its window or past
+ * it. A name leaves once that player's current card is re-rated. Primes come first, since only they
+ * can be reviewed, then the cards that name the most.
+ */
+export function findSupersededPlacements(
+  historical: PlayerProfile[],
+  current: PlayerProfile[],
+  asked: (player: string) => number,
+  cap: number = CARD_LIST_CAP,
+): SupersededPlacement[] {
+  const superseded = new Set(latestCardPerPlayer(current).filter(isQuarantinedCurrentCard).map((p) => toBasePlayerSlug(p.basicInfo.name)));
+  return historical
+    .filter(isPrimeCard)
+    .flatMap((card) => {
+      const names = namedAmong(card, superseded);
+      if (names.length === 0) return [];
+      const { player, cardKey, edition, window } = refOf(card);
+      return [{ player, cardKey, edition, window, names, asked: asked(player) }];
+    })
+    .sort((a, b) => Number(b.edition === 'prime') - Number(a.edition === 'prime') || b.names.length - a.names.length || b.asked - a.asked)
+    .slice(0, cap);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Signals
 
 /** A stored record that covers a club season or a player's window, and when it was built. */
@@ -432,6 +482,8 @@ export interface CardReviewSignals {
   situationMoved: MovedCard[];
   historicalGaps: GapCard[];
   coherence: Coherence;
+  /** Absent on journal rows written before superseded placements were listed. */
+  supersededPlacements?: SupersededPlacement[];
   /** Absent on journal rows written before disagreements were counted. */
   disagreements?: DisagreementPair[];
   /** Absent on journal rows written before calibration gaps were reported. */
@@ -620,6 +672,7 @@ export async function gatherCardSignals(
     situationMoved: situationMoved.slice(0, CARD_LIST_CAP),
     historicalGaps: historicalGaps.slice(0, CARD_LIST_CAP),
     coherence: findCoherence(pool),
+    supersededPlacements: findSupersededPlacements(servedHistorical(rows).map((r) => r.card), current.map((r) => r.card), asked),
     disagreements: findDisagreements(hits, pool),
     calibrationGaps: findCalibrationGaps(pool, nowMs),
   };
@@ -646,6 +699,9 @@ ${list(s.coherence.pairs.map((p) => `${refText(p.a)} and ${refText(p.b)}: ${p.st
 Placements that go round in a circle across three cards:
 ${list(s.coherence.cycles.map((c) => `${c.cards.map(refText).join(' > ')} > back to the first: ${c.statements.join('; ')}`))}
 
+Prime, era and season cards placed against a superseded card: a current card rated before the current form rules changed on ${CURRENT_FORM_RULES_DAY}, which no rating reads as a peer any more (only a prime can be reviewed):
+${list((s.supersededPlacements ?? []).map((c) => `${c.player}, ${c.edition}${c.window ? ` ${c.window}` : ''} [card ${c.cardKey}]: placed against ${countCards(c.names.length)}: ${c.names.join(', ')}; ${asked(c.asked)}`))}
+
 Pairs of cards that answers ordered the other way before the cards settled the order (counted reports, each source once a day; only the counts were kept; either card may be the one out of place; a current card here can be re-rated only once its window ends, and is queued for that day):
 ${list((s.disagreements ?? []).map((d) => `answers put ${refText(d.lower)} above ${refText(d.higher)}: ${d.reports} reports on ${d.days} days, ${d.firstDay} to ${d.lastDay} (${describeVia(d.via)})${d.waiting.length ? `; waiting for its window: ${d.waiting.map((w) => `${w.player} until ${w.windowEnds}`).join(', ')}` : ''}`))}
 
@@ -655,6 +711,8 @@ ${list((s.calibrationGaps ?? []).map((g) => `${g.position}: ${refText(g.current)
 Each position's Overall distribution against the whole pool (a reported figure, not a reason to review a card):
 ${list(s.coherence.positions.map((p) => `${p.position}: ${p.cards} cards, mean ${p.mean}, median ${p.median} (pool mean ${p.poolMean}, median ${p.poolMedian})`))}`;
 }
+
+const countCards = (n: number) => `${n} superseded card${n === 1 ? '' : 's'}`;
 
 const describeVia = (via: Partial<Record<DisagreementPath, number>>): string =>
   [via.debate ? `${via.debate} from debate answers` : '', via.ranking ? `${via.ranking} from drawn rankings` : '', via.commit ? `${via.commit} from committed verdicts` : '']
@@ -676,6 +734,7 @@ export function cardTargets(s: CardReviewSignals | null | undefined) {
       ...primeFrom((s?.coherence.pairs ?? []).flatMap((p) => [p.a, p.b])),
       ...primeFrom((s?.coherence.cycles ?? []).flatMap((c) => c.cards)),
       ...primeFrom((s?.disagreements ?? []).flatMap((d) => [d.higher, d.lower])),
+      ...(s?.supersededPlacements ?? []).filter((c) => c.edition === 'prime').map((c) => toBasePlayerSlug(c.player)),
     ]),
   };
 }
@@ -684,23 +743,35 @@ export function cardTargets(s: CardReviewSignals | null | undefined) {
 // Why a review was opened
 
 export interface Opened {
-  kind: 'new_record' | 'contradiction' | 'disagreement';
+  kind: 'new_record' | 'contradiction' | 'disagreement' | 'superseded';
   /** One line naming the signal. */
   summary: string;
   /** The record's text, or the contradiction as it stands today; null when it could no longer be read. */
   evidence: string | null;
 }
 
+interface OpenedReads {
+  recordText(c: Coverage): Promise<string | null>;
+  pool(): Promise<PlayerProfile[]>;
+}
+
 /**
  * The reason to review a player's prime, from today's signals: a stored record that covers his
- * card's gaps, else a placement contradiction his prime is part of, re-checked against the pool as
- * it stands now. Null when the signals give none, so a rating is never reviewed without one.
+ * card's gaps, else a placement contradiction his prime is part of, else a disagreement pair, else
+ * superseded cards its placement names, each re-checked against the pool as it stands now. The
+ * draft reads its reason, so a contradiction or disagreement is re-checked without quarantined
+ * cards; one that no longer holds gives way to superseded cards. Null when the signals give none,
+ * so a rating is never reviewed without one.
  */
-export async function openedFor(
-  player: string,
-  signals: CardReviewSignals | null | undefined,
-  read: { recordText(c: Coverage): Promise<string | null>; pool(): Promise<PlayerProfile[]> },
-): Promise<Opened | null> {
+export async function openedFor(player: string, signals: CardReviewSignals | null | undefined, read: OpenedReads): Promise<Opened | null> {
+  const first = await openedByRecordOrOrder(player, signals, read);
+  if (first?.evidence || first?.kind === 'new_record') return first;
+  const base = toBasePlayerSlug(player);
+  const listed = signals?.supersededPlacements?.find((c) => c.edition === 'prime' && toBasePlayerSlug(c.player) === base);
+  return listed ? openedForSuperseded(listed, await read.pool()) : first;
+}
+
+async function openedByRecordOrOrder(player: string, signals: CardReviewSignals | null | undefined, read: OpenedReads): Promise<Opened | null> {
   const base = toBasePlayerSlug(player);
   const gap = signals?.historicalGaps.find((g) => g.edition === 'prime' && toBasePlayerSlug(g.player) === base);
   if (gap) {
@@ -713,11 +784,12 @@ export async function openedFor(
   }
   const mine = (r: CardRef) => r.edition === 'prime' && toBasePlayerSlug(r.player) === base;
   const flagged = signals?.coherence.pairs.some((p) => mine(p.a) || mine(p.b)) || signals?.coherence.cycles.some((c) => c.cards.some(mine));
+  const peers = async () => (await read.pool()).filter((p) => !isQuarantinedCurrentCard(p));
   if (!flagged) {
     const d = (signals?.disagreements ?? []).find((x) => mine(x.higher) || mine(x.lower));
-    return d ? openedForDisagreement(d, mine(d.higher) ? d.lower : d.higher, await read.pool()) : null;
+    return d ? openedForDisagreement(d, mine(d.higher) ? d.lower : d.higher, await peers()) : null;
   }
-  const now = findCoherence(await read.pool(), Number.MAX_SAFE_INTEGER);
+  const now = findCoherence(await peers(), Number.MAX_SAFE_INTEGER);
   const pair = now.pairs.find((p) => mine(p.a) || mine(p.b));
   const cycle = now.cycles.find((c) => c.cards.some(mine));
   const evidence = pair
@@ -745,6 +817,29 @@ export function openedForDisagreement(d: DisagreementPair, other: CardRef, pool:
     summary: `Answers about how good the players were ordered his prime card and ${other.player}'s ${other.edition} card the other way from the cards, and code turned the order round to follow the cards.`,
     evidence: holds
       ? `Answers placed ${refText(lower)} above ${refText(higher)} ${d.reports} times on ${d.days} days (${d.firstDay} to ${d.lastDay}; ${describeVia(d.via)}) before code put them in card order. Today the cards still rank ${refText(higher)} above ${refText(lower)}. Only the count was kept, not the answers' reasons, so it settles nothing about either player's football on its own: either card may be the one out of place, and the rating moves only as far as the evidence the draft gathers shows.`
+      : null,
+  };
+}
+
+/**
+ * A review opened on a prime placed against superseded cards, re-checked against today's pool: a
+ * name whose current card has been re-rated since drops out, and so does everything when the prime
+ * itself was re-rated. The evidence names the cards and gives none of their ratings, which are what
+ * the draft must not read.
+ */
+export function openedForSuperseded(listed: SupersededPlacement, pool: PlayerProfile[]): Opened {
+  const prime = pool.find((p) => getCardKey(p) === listed.cardKey);
+  const rerated = new Set(
+    pool.filter((p) => !isPrimeCard(p) && !isQuarantinedCurrentCard(p)).map((p) => toBasePlayerSlug(p.basicInfo.name)),
+  );
+  const was = new Set(listed.names.map(toBasePlayerSlug));
+  const names = prime ? namedAmong(prime, was).filter((n) => !rerated.has(toBasePlayerSlug(n))) : [];
+  const count = countCards(names.length || listed.names.length);
+  return {
+    kind: 'superseded',
+    summary: `His prime card's placement names ${count}: current cards rated before the current form rules changed.`,
+    evidence: names.length
+      ? `The published placement was made against ${count}, the current cards of ${names.join(', ')}. They were rated before the current form rules changed on ${CURRENT_FORM_RULES_DAY}, so no rating reads them as peers any more, and the draft's peer ledger holds prime, era and season cards only. This shows that the published card's placement partly rests on cards that no longer count. It settles nothing about his football: place him from the evidence against the cards in the ledger, and move the rating only as far as that shows.`
       : null,
   };
 }
@@ -793,7 +888,8 @@ export function guardDraft(old: PlayerProfile, draft: PlayerProfile, opened: Ope
   if (crossed > 1 && opened.kind === 'disagreement') {
     return `the Overall moves from ${before} to ${after}, across ${crossed} tier bands, on a review opened by a count of disagreements rather than a new record or a contradiction`;
   }
-  const resolved = resolvePlacement(draft.peerPlacement, pool.filter((p) => getCardKey(p) !== getCardKey(old)), draft);
+  // The draft was placed on the historical scale, so it is held to that scale alone.
+  const resolved = resolvePlacement(draft.peerPlacement, ratingPeers(pool, true).filter((p) => getCardKey(p) !== getCardKey(old)), draft);
   if (resolved.betterThan.length + resolved.levelWith.length + resolved.notAsGoodAs.length > 0) {
     const range = placementRange(resolved);
     if (!range) return "the draft's own peer placement contradicts itself against today's cards";
@@ -934,13 +1030,13 @@ export const liveReviewModel: ReviewModel = {
   review: (input) => generateStructured<unknown>({ task: 'review', prompt: buildReviewPrompt(input), schema: REVIEW_SCHEMA }),
 };
 
-/** The cards nearest the reviewed one: same position, Overall within three of the old card or the draft. */
+/** The cards nearest the reviewed one on the historical scale: same position, Overall within three of the old card or the draft. */
 export function neighboursOf(old: PlayerProfile, draft: PlayerProfile, pool: PlayerProfile[], max = 10): PlayerProfile[] {
   const base = toBasePlayerSlug(old.basicInfo.name);
   const position = primaryPosition(old);
   const [a, b] = [Number(old.ratings?.overall) || 0, Number(draft.ratings?.overall) || 0];
   const near = (o: number) => Math.min(Math.abs(o - a), Math.abs(o - b));
-  return pool
+  return ratingPeers(pool, true)
     .filter((p) => toBasePlayerSlug(p.basicInfo.name) !== base && primaryPosition(p) === position && near(Number(p.ratings?.overall) || 0) <= 3)
     .sort((p, q) => Number(isPrimeCard(q)) - Number(isPrimeCard(p)) || near(Number(p.ratings?.overall) || 0) - near(Number(q.ratings?.overall) || 0))
     .slice(0, max);
@@ -1207,7 +1303,10 @@ export function createCardActors(deps: CardActorDeps): CardActors {
       if (!old || cardEdition(old) !== 'prime' || old.revision) return { ok: false, calls: 0, detail: 'no shared prime card' };
       const opened = await openedFor(player, ctx.signals, { recordText: deps.recordText, pool: deps.pool });
       if (!opened) return { ok: false, calls: 0, detail: 'the signals give no reason to review this card', before: momentOf(old) };
-      if (!opened.evidence && opened.kind !== 'new_record') return { ok: false, calls: 0, detail: `the ${opened.kind} no longer holds in today's pool`, before: momentOf(old) };
+      if (!opened.evidence && opened.kind !== 'new_record') {
+        const what = opened.kind === 'superseded' ? 'superseded placement' : opened.kind;
+        return { ok: false, calls: 0, detail: `the ${what} no longer holds in today's pool`, before: momentOf(old) };
+      }
       return reviewPrimeCard(old, opened, ctx, deps, { now, iso, day, record });
     },
   };

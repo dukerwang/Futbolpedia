@@ -2,7 +2,8 @@
 /**
  * Offline checks for card review, with the model, the rating pipeline, the stores and the clock
  * faked: each signal from seeded card rows (past the window, moved inside it, data gaps a newer
- * record covers, placement contradictions), the calibration gaps on seeded cards and their queue,
+ * record covers, placement contradictions, placements naming a superseded current card and the
+ * reviews they open), the calibration gaps on seeded cards and their queue,
  * the coherence finder on hand-built placements, the
  * planner's card actions validated and budgeted apart from the scout's day budget, a current
  * re-rate that publishes, prime drafts that go to review and are never written first, each review
@@ -19,6 +20,7 @@ import {
   bandsCrossed,
   buildReviewPrompt,
   CARD_ACTION_COST,
+  cardTargets,
   coverageFor,
   createCardActors,
   findCalibrationGaps,
@@ -27,6 +29,8 @@ import {
   gatherCardSignals,
   guardDraft,
   memoryCardReviewStore,
+  neighboursOf,
+  openedFor,
   queuedFromJournal,
   reviewPrimeCard,
   sanitizeReview,
@@ -43,6 +47,7 @@ import {
 } from '../services/cardReview';
 import { cardReviewEntry, fileCardReviews, type CardReviewSource, type PublishedReview } from '../services/cardReviewNotes';
 import { getCardKey, isPrimeCard, toDossierCardSlug } from '../services/dossierCards';
+import { CURRENT_FORM_RULES_EPOCH_MS } from '../services/dossierCache';
 import { emptyLedger, formatLedger } from '../services/evidenceLedger';
 import {
   buildPlanPrompt,
@@ -812,6 +817,96 @@ await test('ledger: a player the turn names gets his newest review per edition; 
 await test('ledger: a slow or missing table leaves the ledger as it was', async () => {
   const down: CardReviewSource = { published: async () => { throw new Error('no table'); } };
   assert.equal((await fileCardReviews(emptyLedger(), { cardKeys: [], players: ['Fa Legend'] }, down, T0)).entries.length, 0);
+});
+
+// --- Superseded placements ------------------------------------------------------------------------
+
+const AFTER = CURRENT_FORM_RULES_EPOCH_MS + 10 * DAY;
+/** A current card dated either side of the current form rules, whatever its window. */
+const ratedAt = (name: string, createdAt: number, overall = 77): PlayerProfile =>
+  ({ ...current(name, 'Northgate FC', dayStr(createdAt), overall), createdAt }) as PlayerProfile;
+const OLD_AT = CURRENT_FORM_RULES_EPOCH_MS - 20 * DAY;
+const subject = () =>
+  prime('Fa Legend', 90, '2002-05', { placement: P(['Qa Old', 'Rb Fresh'], ['Uc Peer (2001-04)'], ['Sd Expired']) });
+const SUPERSEDED_ROWS: StoredCard[] = [
+  row('qa-old', ratedAt('Qa Old', OLD_AT), OLD_AT),
+  // Re-rated since the rules changed: no longer superseded.
+  row('rb-fresh', ratedAt('Rb Fresh', CURRENT_FORM_RULES_EPOCH_MS + DAY, 85), CURRENT_FORM_RULES_EPOCH_MS + DAY),
+  // Past its window and still not re-rated: still superseded.
+  row('sd-expired', ratedAt('Sd Expired', OLD_AT - 8 * DAY), OLD_AT - 8 * DAY),
+  // A current card placed against one isn't listed: it is re-rated when its window closes.
+  row('te-current', { ...ratedAt('Te Current', OLD_AT), peerPlacement: P(['Qa Old']) }, OLD_AT),
+  row('prime-fa-legend', subject()),
+  row('vee-era--era--2005-08', prime('Vee Era', 86, '2005-08', { type: 'era', placement: P([], ['Qa Old']) })),
+  // Named only as a historical card, which its window in brackets shows.
+  row('prime-uc-peer', prime('Uc Peer', 93, '2001-04', { placement: P(['Qa Old (2001-04)']) })),
+];
+const supersededSignals = () => gatherCardSignals(cardSources({ rows: async () => SUPERSEDED_ROWS, coverage: async () => [], queued: async () => [] }), asked, AFTER);
+const READS = (pool: PlayerProfile[]) => ({ recordText: async () => null, pool: async () => pool });
+
+await test('superseded: historical cards naming a superseded current card are listed, primes first, with the names', async () => {
+  const s = await supersededSignals();
+  assert.deepEqual(
+    s.supersededPlacements?.map((c) => [c.player, c.edition, c.names]),
+    [
+      ['Fa Legend', 'prime', ['Qa Old', 'Sd Expired']],
+      ['Vee Era', 'era', ['Qa Old']],
+    ],
+  );
+  const summary = formatCardSignals(s);
+  assert.match(summary, /placed against a superseded card[\s\S]*Fa Legend, prime 2002-05 \[card [^\]]+\]: placed against 2 superseded cards: Qa Old, Sd Expired/);
+  assert.match(summary, /Vee Era, era 2005-08 [^\n]*placed against 1 superseded card: Qa Old/);
+  // Only a prime can be reviewed.
+  assert.deepEqual([...cardTargets(s).review], ['fa-legend']);
+});
+
+await test('superseded: a review opens on the names, quotes none of their ratings, and is re-checked against the pool', async () => {
+  const s = await supersededSignals();
+  const pool = servedPool(SUPERSEDED_ROWS, AFTER);
+  const opened = (await openedFor('Fa Legend', s, READS(pool)))!;
+  assert.equal(opened.kind, 'superseded');
+  assert.match(opened.evidence!, /2 superseded cards, the current cards of Qa Old, Sd Expired/);
+  assert.doesNotMatch(opened.evidence!, /\b77\b|Overall/);
+  // One name re-rated since the signals were gathered drops out; with all of them gone, nothing holds.
+  const oneLeft = await openedFor('Fa Legend', s, READS([...pool, ratedAt('Sd Expired', CURRENT_FORM_RULES_EPOCH_MS + 2 * DAY)]));
+  assert.match(oneLeft!.evidence!, /1 superseded card, the current cards of Qa Old\./);
+  const rerated = pool.map((p) => (p.basicInfo.name === 'Fa Legend' ? prime('Fa Legend', 92, '2002-05', { placement: P([], [], ['Uc Peer (2001-04)']) }) : p));
+  assert.equal((await openedFor('Fa Legend', s, READS(rerated)))!.evidence, null);
+});
+
+await test('superseded: it comes after a contradiction, and one that rests on a superseded card gives way to it', async () => {
+  const s = await supersededSignals();
+  const ref = (p: PlayerProfile) => ({ player: p.basicInfo.name, cardKey: getCardKey(p), edition: isPrimeCard(p) ? 'prime' : 'current', window: null, overall: p.ratings.overall });
+  const rival = prime('Uc Peer', 93, '2001-04', { placement: P(['Fa Legend (2002-05)']) });
+  const mine = prime('Fa Legend', 90, '2002-05', { placement: P(['Uc Peer (2001-04)', 'Qa Old']) });
+  const flagged = { ...s, coherence: { ...s.coherence, pairs: [{ a: ref(mine), b: ref(rival), statements: [] }] } };
+  assert.equal((await openedFor('Fa Legend', flagged, READS([mine, rival])))!.kind, 'contradiction');
+  // The other card of the pair is a superseded current card: the draft must not read its rating.
+  const old = { ...ratedAt('Qa Old', OLD_AT), peerPlacement: P(['Fa Legend']) } as PlayerProfile;
+  const only = prime('Fa Legend', 90, '2002-05', { placement: P(['Qa Old']) });
+  const opened = (await openedFor('Fa Legend', { ...flagged, coherence: { ...s.coherence, pairs: [{ a: ref(only), b: ref(old), statements: [] }] } }, READS([only, old])))!;
+  assert.equal(opened.kind, 'superseded');
+  assert.doesNotMatch(opened.evidence!, /\b77\b/);
+});
+
+await test('superseded: review_prime opens on it, and the guard and reviewer read no current card', async () => {
+  const s = await supersededSignals();
+  const draft = prime('Fa Legend', 91, '2002-05', { placement: P(['Uc Peer (2001-04)']) });
+  const near = ratedAt('Wy Current', CURRENT_FORM_RULES_EPOCH_MS + DAY, 91);
+  const peer = prime('Uc Peer', 90, '2001-04');
+  const pool = [...servedPool(SUPERSEDED_ROWS, AFTER).filter((p) => p.basicInfo.name !== 'Uc Peer'), peer, near];
+  const t = reviewDeps({ drafts: [draft], answers: [ACCEPT], store: fakeStore({ 'prime-fa-legend': subject() }), pool });
+  const out = await createCardActors(t.deps).reviewPrime('Fa Legend', { signals: s, remaining: 24, reason: 'placed against superseded cards' });
+  assert.equal(out.ok, true, out.detail);
+  assert.equal(t.inputs[0].opened.kind, 'superseded');
+  assert.match(t.notes[0], /the current cards of Qa Old, Sd Expired/);
+  assert.ok(t.inputs[0].neighbours.every(isPrimeCard));
+  assert.equal(t.reviews.rows[0].verdict, 'accept');
+
+  // A current card can't hold a prime draft to a range, whatever its date: here it would allow only 78 and up.
+  const below = prime('Fa Legend', 91, '2002-05', { placement: P([], ['Wy Current']) });
+  assert.equal(guardDraft(subject(), { ...below, ratings: { overall: 95, potential: 95 } }, t.inputs[0].opened, [near]), null);
+  assert.deepEqual(neighboursOf({ ...peer, basicInfo: { ...peer.basicInfo, name: 'Fa Legend' } }, draft, [near]), []);
 });
 
 console.log = realLog;
